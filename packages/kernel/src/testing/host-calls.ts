@@ -1,5 +1,5 @@
 /** A fake pilotd for kernel tests: answers only the host calls a test gives, and refuses any other. */
-import type { HostCall, HostCalls, HostMethod } from "../protocol.ts";
+import type { HostCall, HostCalls, HostMethod } from "../worker/protocol.ts";
 
 export type HostCallFakes = {
 	[M in HostMethod]?: (

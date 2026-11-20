@@ -1,8 +1,8 @@
 // Real Day screens over synthetic search and app feeds.
 import { mount } from "nsh";
-import { MockDayScreen } from "./mockFeeds";
-import { day, plans } from "./mockSession";
-import type { SearchHit } from "./workSearch";
+import { MockDayScreen } from "./app/testing/mockFeeds";
+import { day, plans } from "./app/testing/mockSession";
+import type { SearchHit } from "./search/workSearch";
 
 const projects = [
 	{ id: "atlas", name: "Atlas" },

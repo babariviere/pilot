@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { pollLinear } from "../../packages/daemon/src/linear-source.ts";
-import { ProjectStore } from "../../packages/daemon/src/projects.ts";
-import { SourceRegistry } from "../../packages/daemon/src/sources.ts";
-import { TrackedItemStore } from "../../packages/daemon/src/tracked-items.ts";
+import { pollLinear } from "../../packages/daemon/src/sources/linear/linear-source.ts";
+import { ProjectStore } from "../../packages/daemon/src/projects/projects.ts";
+import { SourceRegistry } from "../../packages/daemon/src/sources/sources.ts";
+import { TrackedItemStore } from "../../packages/daemon/src/sources/tracking/tracked-items.ts";
 
 const home = await mkdtemp(join(tmpdir(), "pilot-linear-bench-"));
 const projects = new ProjectStore(home);

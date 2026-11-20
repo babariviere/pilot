@@ -1,0 +1,706 @@
+// The user's feedback about Pilot over the native root: `day.feedback.read`
+// reads saved feedback newest first, Send sends the words once with the
+// exact mission or chat the user kept, and Check only looks up a lost Send's
+// receipt. Rust names the record; the service reads the origin's project and
+// title. Feedback is the user's own words: saving it starts no work, routes
+// nothing and approves nothing. A step (`day.feedback.step`) is one explicit
+// act of the user's on saved feedback: start an agent triage or a small fix
+// in a project the user chose, link a mission, or mark it resolved. Each is
+// sent once; a lost one stays Unknown until Check reads its receipt.
+// An answer is the user's reply to a triage's pending question, sent to that
+// triage chat once. It clarifies the feedback; it starts and approves nothing.
+import type { Signal } from "nsh";
+import { queueOf } from "../sessions/codingQueue";
+import { call, type Reply } from "../sources/bridge";
+import { LOST, type Refusal, readReason, writeRefusal } from "../sources/refusals";
+import { CallOrder, Feed, mirror } from "../sources/source";
+import type {
+	UserFeedback,
+	UserFeedbackOrigin,
+	UserFeedbackOriginRef,
+	UserFeedbackProposal,
+	UserFeedbackQuestion,
+	UserFeedbackWorkView,
+} from "./feedbackContract";
+
+export type {
+	UserFeedback,
+	UserFeedbackOrigin,
+	UserFeedbackOriginRef,
+	UserFeedbackProposal,
+	UserFeedbackQuestion,
+	UserFeedbackWorkView,
+};
+
+/** At most this many UTF-8 bytes of feedback, as the service counts them. */
+export const MAX_FEEDBACK_BYTES = 8192;
+
+/** At most this many characters (UTF-16 units) in an answer, as the service counts them. */
+export const MAX_ANSWER_LENGTH = 8000;
+
+/** One saved piece of feedback, its place in the list and the user's steps on it, oldest first. */
+export type FeedbackItem = UserFeedback & { sequence: number; work: UserFeedbackWorkView[] };
+
+/** One Send whose result Pilot does not know. Pilot looks it up by itself; Check is the fallback. */
+export type FeedbackOp = SendIntent & { operationId: string; state: "unknown" | "checking" };
+
+/** One step whose result Pilot does not know, on one saved item. Pilot looks it up by itself; Check is the fallback. */
+export type FeedbackStepOp = {
+	operationId: string;
+	state: "unknown" | "checking";
+	feedbackId: string;
+	step: string;
+	replyKey?: string;
+};
+
+/** A project agents can work in, as Pilot read it. The ID is the identity. */
+export type FeedbackProject = { projectId: string; name: string; contextDigest: string };
+export type FeedbackResultScope = { kind: "chat" | "mission"; id: string; projectId: string };
+
+/** One explicit step on one saved item. */
+export type StepIntent = { feedbackId: string } & (
+	| {
+			action: "triage";
+			projectId: string;
+			contextDigest: string;
+			/** A screen agent chat of this project that becomes the triage, instead of a new chat. */
+			adoptSessionId?: string;
+	  }
+	| {
+			action: "prototype" | "fix";
+			projectId: string;
+			contextDigest: string;
+			/** The chat whose proposal it starts from: a triage, or for a fix also a prototype. */
+			triageSessionId: string;
+			proposalDigest: string;
+			fixSetupDigest?: string;
+			allowanceMicros?: number;
+	  }
+	| { action: "link"; missionId: string }
+	| { action: "resolve" | "reopen" | "remove" }
+	| { action: "answer"; triageSessionId: string; questionId: number; message: string }
+	| { action: "correct"; triageSessionId: string; proposalDigest: string; message: string }
+);
+
+/** What the feedback page shows. */
+export type FeedbackView = {
+	/** "idle" before the page asked; "unavailable" when no read could be shown. */
+	availability: "idle" | "reading" | "live" | "unavailable";
+	/** Why nothing is shown, or why what is shown is from an earlier read. */
+	reason: string;
+	/** Saved feedback read so far, newest first. */
+	items: FeedbackItem[];
+	/** Whether older feedback is left to read. */
+	more: boolean;
+	/** Sends whose result is not known. */
+	unsettled: FeedbackOp[];
+	/** Steps whose result is not known. Only that item's other steps wait. */
+	unsettledSteps: FeedbackStepOp[];
+	/** The projects agents can work in, or null before a read or when none could be read. */
+	projects: FeedbackProject[] | null;
+	/** A read is on its way. */
+	reading: boolean;
+	/** A Send is on its way. */
+	sending: boolean;
+	/** The feedback a step is on its way for, or null. */
+	stepping: string | null;
+};
+
+/** The words and, when the user kept one, the exact mission or chat they are about. */
+export type SendIntent = {
+	text: string;
+	origin: UserFeedbackOriginRef | null;
+	attachments?: UserFeedback["attachments"];
+	/** The native host pins the exact child before sending either operation. */
+	investigation?: { projectId: string; contextDigest: string };
+};
+
+/** Keep a possible duplicate, or an image it may own, behind its own receipt check. */
+export function sameFeedback(a: SendIntent, b: SendIntent): boolean {
+	const origin = (o: UserFeedbackOriginRef | null) =>
+		!o ? "" : o.kind === "mission" ? `mission/${o.missionId}` : `chat/${o.sessionId}`;
+	return (
+		(a.text === b.text && origin(a.origin) === origin(b.origin)) ||
+		(a.attachments ?? []).some((image) => b.attachments?.some((other) => other.uploadId === image.uploadId))
+	);
+}
+
+/** What a Send or a Check did, for the user. */
+export type SendResult = {
+	status: "accepted" | "rejected" | "unknown";
+	message: string;
+	operationId: string | null;
+	/** The saved feedback, when a receipt carried it. */
+	saved: UserFeedback | null;
+	investigation?: StepResult;
+};
+
+/** The feedback's source. The connected window asks its root; tests use a script. */
+export interface FeedbackSource {
+	view(): FeedbackView;
+	onChange(listener: (view: FeedbackView) => void): () => void;
+	/** Reads the newest page again. Passive: it sends and settles nothing. */
+	read(): Promise<void>;
+	/** Only feedback explicitly linked to this result, including items outside the newest page. */
+	readResult?(scope: FeedbackResultScope, before?: number): Promise<Page | null>;
+	/** Reads the next older page. Passive. */
+	more(): Promise<void>;
+	/** Sends one piece of feedback once. Never resent. */
+	send(intent: SendIntent): Promise<SendResult>;
+	/** Confirms a saved Send and fulfills only its pinned, never-entered investigation. Never replays either. */
+	check(operationId: string): Promise<SendResult>;
+	/** Reads the projects agents can work in. Passive. */
+	readProjects(): Promise<void>;
+	/** Sends one step once. Never resent. */
+	step(intent: StepIntent): Promise<StepResult>;
+	/** Reads one unsettled step's saved receipt. Never sends it again. */
+	checkStep(operationId: string): Promise<StepResult>;
+	dispose(): void;
+}
+
+/** What a step or its Check did, for the user. */
+export type StepResult = { status: "accepted" | "rejected" | "stale" | "unknown"; message: string };
+
+/** The UTF-8 length of `text`, as the service counts its limit. */
+export function utf8Bytes(text: string): number {
+	let n = 0;
+	for (const ch of text) {
+		const c = ch.codePointAt(0) ?? 0;
+		n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+	}
+	return n;
+}
+
+/** Why saved feedback could not be read, in one calm sentence. */
+export function feedbackReason(refusal: Refusal): string {
+	const unavailable = "This Pilot service cannot keep feedback yet.";
+	return readReason(refusal, { denied: unavailable, unavailable, other: "Pilot could not read your feedback." });
+}
+
+/** What a refused or lost Send means. Only a lost or uncertain one may have been saved. */
+export function refusedSend(refusal: Refusal): SendResult {
+	const tooLong = "Pilot cannot send this feedback. Keep it shorter. Nothing was sent.";
+	const unavailable = "This Pilot service cannot keep feedback yet. Nothing was sent; your text stays.";
+	const message = writeRefusal(
+		refusal,
+		{
+			unknown: LOST,
+			capacity: tooLong,
+			invalid: tooLong,
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not send this. Nothing was sent; your text stays.",
+		},
+		"Nothing was sent; your text stays.",
+	);
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : "rejected";
+	return { status, message, operationId: null, saved: null };
+}
+
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+function originOf(x: unknown): UserFeedbackOrigin | null | undefined {
+	if (x === null) return null;
+	const o = x as Record<string, unknown> | undefined;
+	if (!o || typeof o !== "object" || typeof o.projectId !== "string" || typeof o.title !== "string") return undefined;
+	if (o.kind === "mission" && typeof o.missionId === "string" && ID.test(o.missionId))
+		return { kind: "mission", missionId: o.missionId, projectId: o.projectId, title: o.title };
+	if (o.kind === "chat" && typeof o.sessionId === "string" && ID.test(o.sessionId))
+		return { kind: "chat", sessionId: o.sessionId, projectId: o.projectId, title: o.title };
+	return undefined;
+}
+
+/** Saved feedback the page can show. Anything else is not shown. */
+export function feedbackOf(x: unknown): UserFeedback | null {
+	const f = x as Record<string, unknown> | null;
+	if (!f || typeof f !== "object" || typeof f.id !== "string" || typeof f.text !== "string") return null;
+	if (typeof f.operationId !== "string" || typeof f.recordedAt !== "number") return null;
+	const origin = originOf(f.origin);
+	if (origin === undefined) return null;
+	const attachments = f.attachments as UserFeedback["attachments"];
+	if (
+		attachments !== undefined &&
+		(!Array.isArray(attachments) ||
+			attachments.length > 4 ||
+			attachments.some(
+				(r) =>
+					!r ||
+					typeof r.uploadId !== "string" ||
+					!/^[a-f0-9-]{36}$/i.test(r.uploadId) ||
+					typeof r.sha256 !== "string" ||
+					!/^[a-f0-9]{64}$/.test(r.sha256) ||
+					!Number.isSafeInteger(r.bytes) ||
+					r.bytes < 33 ||
+					r.bytes > 8 * 1024 * 1024,
+			))
+	)
+		return null;
+	return {
+		id: f.id,
+		text: f.text,
+		origin,
+		recordedAt: f.recordedAt,
+		operationId: f.operationId,
+		...(attachments ? { attachments } : {}),
+		...(f.investigation ? { investigation: f.investigation as UserFeedback["investigation"] } : {}),
+	};
+}
+
+const STATES = ["starting", "working", "question", "done", "failed", "stopped", "archived", "missing"];
+const NEXT = ["fix", "prototype", "existing-mission", "new-mission", "none"];
+const str = (v: unknown) => typeof v === "string";
+
+/** A saved artifact of a feedback chat at an exact revision. */
+function artifactOf(x: unknown): boolean {
+	const a = x as Record<string, unknown> | null;
+	return !!a && str(a.sessionId) && str(a.artifactId) && str(a.title) && str(a.kind) && typeof a.revision === "number";
+}
+
+function proposalOf(x: unknown): UserFeedbackWorkView["proposal"] | null {
+	const p = x as Record<string, unknown> | null;
+	if (!p || typeof p !== "object") return null;
+	if (str(p.problem))
+		return {
+			problem: p.problem as string,
+			digest: str(p.digest) ? (p.digest as string) : "",
+			...(str(p.raw) ? { raw: p.raw as string } : {}),
+		};
+	const v = p.value as Record<string, unknown> | null;
+	if (!v || typeof v !== "object" || !str(p.digest) || !str(v.summary) || !str(v.detail)) return null;
+	if (!NEXT.includes(v.next as string) || !Array.isArray(v.duplicates) || !v.duplicates.every(str)) return null;
+	if ((v.missionId !== null && !str(v.missionId)) || (v.goal !== null && !str(v.goal))) return null;
+	if (v.directions !== undefined && (!Array.isArray(v.directions) || !v.directions.every(str))) return null;
+	if (v.mockup !== undefined && !artifactOf(v.mockup)) return null;
+	return { value: v as unknown as UserFeedbackProposal, digest: p.digest as string };
+}
+
+/** A feedback chat's pending question, or null when it does not read. */
+function questionOf(x: unknown): UserFeedbackQuestion | null {
+	const q = x as Record<string, unknown> | null;
+	if (!q || typeof q !== "object" || typeof q.id !== "number" || !str(q.question)) return null;
+	if (q.context !== undefined && !str(q.context)) return null;
+	if (!Array.isArray(q.options) || q.options.length > 9) return null;
+	for (const o of q.options as Record<string, unknown>[])
+		if (!o || !str(o.label) || (o.detail !== undefined && !str(o.detail))) return null;
+	if (q.artifacts !== undefined && (!Array.isArray(q.artifacts) || !q.artifacts.every(artifactOf))) return null;
+	return q as unknown as UserFeedbackQuestion;
+}
+
+/** One saved step as a read shows it, or null when it does not read. */
+function workOf(x: unknown): UserFeedbackWorkView | null {
+	const w = x as Record<string, unknown> | null;
+	if (!w || typeof w !== "object" || !str(w.operationId) || typeof w.recordedAt !== "number") return null;
+	if (w.kind === "triage" || w.kind === "prototype" || w.kind === "fix") {
+		const chat = w.chat as Record<string, unknown> | undefined;
+		if (!str(w.sessionId) || !str(w.projectId)) return null;
+		if (chat !== undefined && (!chat || !str(chat.title) || !STATES.includes(chat.state as string))) return null;
+		if (
+			chat?.currentSessionId !== undefined &&
+			(w.kind !== "fix" ||
+				typeof chat.currentSessionId !== "string" ||
+				!/^[A-Za-z0-9_-]{1,128}$/.test(chat.currentSessionId))
+		)
+			return null;
+		if (w.kind !== "triage" && (!str(w.triageSessionId) || !str(w.proposalDigest))) return null;
+		if (w.proposal !== undefined && !proposalOf(w.proposal)) return null;
+		if (w.fixSetup !== undefined) {
+			const s = w.fixSetup as Record<string, unknown> | null;
+			if (
+				!s ||
+				!str(s.model) ||
+				!str(s.thinking) ||
+				typeof s.digest !== "string" ||
+				!/^[a-f0-9]{64}$/.test(s.digest) ||
+				(s.allowanceMicros != null &&
+					(typeof s.allowanceMicros !== "number" ||
+						!Number.isSafeInteger(s.allowanceMicros) ||
+						s.allowanceMicros < 0))
+			)
+				return null;
+		}
+		if (w.question !== undefined && !questionOf(w.question)) return null;
+		// A queue view that does not read is left out; the step still shows.
+		if (chat?.queue !== undefined) {
+			const { queue, ...rest } = chat;
+			const read = queueOf(queue);
+			return { ...w, chat: read ? { ...rest, queue: read } : rest } as unknown as UserFeedbackWorkView;
+		}
+		return w as unknown as UserFeedbackWorkView;
+	}
+	if (w.kind === "mission") {
+		const m = w.mission as Record<string, unknown> | null | undefined;
+		if (!str(w.missionId) || !str(w.projectId)) return null;
+		if (m && (!str(m.title) || !str(m.status) || typeof m.tasksDone !== "number")) return null;
+		return w as unknown as UserFeedbackWorkView;
+	}
+	if (w.kind === "answer")
+		return str(w.sessionId) && typeof w.questionId === "number" && str(w.text)
+			? (w as unknown as UserFeedbackWorkView)
+			: null;
+	if (w.kind === "correction")
+		return str(w.sessionId) && str(w.proposalDigest) && str(w.text) ? (w as unknown as UserFeedbackWorkView) : null;
+	return w.kind === "resolved" || w.kind === "reopened" ? (w as unknown as UserFeedbackWorkView) : null;
+}
+
+/** The root's page: newest first, with its cursor. `older` marks a page after the first. */
+type Page = { items: FeedbackItem[]; more: boolean; before: number | null; older: boolean };
+
+/** A page whose items all read, newest first. Else null. */
+export function pageOf(x: unknown): Page | null {
+	const p = x as Record<string, unknown> | null;
+	if (!p || typeof p !== "object" || p.version !== 1 || !Array.isArray(p.items) || typeof p.more !== "boolean")
+		return null;
+	const items: FeedbackItem[] = [];
+	for (const raw of p.items as Record<string, unknown>[]) {
+		const f = feedbackOf(raw);
+		if (!f || typeof raw.sequence !== "number") return null;
+		// An older service lists no steps; a step that does not read hides nothing else.
+		const work: UserFeedbackWorkView[] = [];
+		for (const w of Array.isArray(raw.work) ? raw.work : []) {
+			const step = workOf(w);
+			if (!step) return null;
+			work.push(step);
+		}
+		items.push({ ...f, sequence: raw.sequence, work });
+	}
+	const before = typeof p.before === "number" ? p.before : null;
+	return { items, more: p.more, before, older: p.older === true };
+}
+
+type Summary = SendIntent & { operationId: string; feedbackId: string | null; step: string | null; replyKey?: string };
+
+function summariesOf(x: unknown): Summary[] | null {
+	if (!Array.isArray(x)) return null;
+	const out: Summary[] = [];
+	for (const raw of x as Record<string, unknown>[]) {
+		if (!raw || typeof raw.operationId !== "string") continue;
+		const step = typeof raw.step === "string" && typeof raw.feedbackId === "string";
+		out.push({
+			operationId: raw.operationId,
+			text: typeof raw.text === "string" ? raw.text : "",
+			origin: (raw.origin ?? null) as UserFeedbackOriginRef | null,
+			attachments: raw.attachments as UserFeedback["attachments"],
+			feedbackId: step ? (raw.feedbackId as string) : null,
+			step: step ? (raw.step as string) : null,
+			...(typeof raw.replyKey === "string" ? { replyKey: raw.replyKey } : {}),
+		});
+	}
+	return out;
+}
+
+/** What a refused or lost step means. Only a lost or uncertain one may have happened. */
+export function refusedStep(refusal: Refusal): StepResult {
+	const unavailable = "This Pilot service cannot triage feedback yet. Nothing was sent.";
+	const message = writeRefusal(refusal, {
+		unknown: "An earlier step is not confirmed. Check it first; nothing was sent.",
+		stale: "This project changed since Pilot read it. Choose it again. Nothing was sent.",
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not send this. Nothing was sent.",
+	});
+	return { status: refusal === "lost" ? "unknown" : refusal === "stale" ? "stale" : "rejected", message };
+}
+
+function stepOutcomeOf(x: unknown): StepResult {
+	const o = x as { state?: unknown; receipt?: { reason?: unknown } | null } | null;
+	if (o?.state === "accepted") return { status: "accepted", message: "" };
+	if (o?.state === "rejected" || o?.state === "not-sent") {
+		const reason = typeof o.receipt?.reason === "string" ? o.receipt.reason : "";
+		return {
+			status: "rejected",
+			message: reason ? `Pilot's service refused it: ${reason}.` : "Pilot did not do it.",
+		};
+	}
+	return { status: "unknown", message: LOST };
+}
+
+function withInvestigation(result: SendResult, outcome: unknown): SendResult {
+	return result.status === "accepted" && result.saved?.investigation
+		? { ...result, investigation: stepOutcomeOf(outcome) }
+		: result;
+}
+
+/** The projects a root's `day.projects.read` lists, or null when they do not read. */
+function projectsOf(x: unknown): FeedbackProject[] | null {
+	const s = x as { projects?: unknown } | null;
+	if (!s || !Array.isArray(s.projects)) return null;
+	const out: FeedbackProject[] = [];
+	for (const p of s.projects as Record<string, unknown>[]) {
+		if (!p || !str(p.projectId) || !str(p.name) || !str(p.contextDigest)) return null;
+		out.push({ projectId: p.projectId as string, name: p.name as string, contextDigest: p.contextDigest as string });
+	}
+	return out;
+}
+
+/** A receipt's outcome. Only an accepted receipt naming the saved feedback proves a Send. */
+function outcomeOf(x: unknown, operationId: string | null): SendResult {
+	const o = x as { state?: unknown; receipt?: { reason?: unknown; result?: unknown } | null } | null;
+	if (o?.state === "accepted") {
+		const saved = feedbackOf(o.receipt?.result);
+		if (saved) return { status: "accepted", message: "Saved. Thank you.", operationId, saved };
+	}
+	if (o?.state === "rejected" || o?.state === "not-sent") {
+		const reason = typeof o.receipt?.reason === "string" ? o.receipt.reason : "";
+		return {
+			status: "rejected",
+			message: reason
+				? `Pilot's service refused it: ${reason}. Your text stays.`
+				: "Pilot did not save it. Your text stays.",
+			operationId,
+			saved: null,
+		};
+	}
+	return { status: "unknown", message: LOST, operationId, saved: null };
+}
+
+/** The connected window's feedback, through its native root. */
+export class ConnectedFeedback implements FeedbackSource {
+	#window: string;
+	#items: FeedbackItem[] | null = null;
+	#more = false;
+	#before: number | null = null;
+	#refusal: Refusal | null = null;
+	#ops: Summary[] = [];
+	#checking = new Set<string>();
+	#freshRequested = false;
+	#asked = false;
+	#sending = false;
+	#stepping: string | null = null;
+	#projects: FeedbackProject[] | null = null;
+	#order = new CallOrder();
+	#operationOrder = new CallOrder();
+	#feed = new Feed(() => this.view());
+	#reads = this.#feed.coalesce(async () => {
+		const fresh = this.#freshRequested;
+		this.#freshRequested = false;
+		await this.#call("day.feedback.read", fresh ? {} : { cached: true });
+		this.#feed.publish();
+	});
+
+	constructor(window: string) {
+		this.#window = window;
+	}
+
+	view(): FeedbackView {
+		const items = this.#items;
+		// With items shown, the screen says nothing about a failed read until the shared old-data rule does.
+		const reason = this.#refusal ? feedbackReason(this.#refusal) : "";
+		return {
+			availability: items ? "live" : this.#refusal ? "unavailable" : this.#asked ? "reading" : "idle",
+			reason,
+			items: items ?? [],
+			more: this.#more,
+			unsettled: this.#ops
+				.filter((o) => o.step === null)
+				.map((o) => ({
+					operationId: o.operationId,
+					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
+					text: o.text,
+					origin: o.origin,
+					attachments: o.attachments,
+				})),
+			unsettledSteps: this.#ops
+				.filter((o) => o.step !== null)
+				.map((o) => ({
+					operationId: o.operationId,
+					state: this.#checking.has(o.operationId) ? "checking" : "unknown",
+					feedbackId: o.feedbackId ?? "",
+					step: o.step ?? "",
+					replyKey: o.replyKey,
+				})),
+			projects: this.#projects,
+			reading: this.#reads.busy(),
+			sending: this.#sending,
+			stepping: this.#stepping,
+		};
+	}
+
+	onChange(listener: (view: FeedbackView) => void): () => void {
+		return this.#feed.onChange(listener);
+	}
+
+	/** One exact call. Only the newest call's first page replaces what is shown. */
+	async #call(name: string, args: unknown): Promise<Reply<unknown>> {
+		const order = this.#order.next();
+		const operationsOrder = this.#operationOrder.next();
+		const r = await call<unknown>(this.#window, name, args);
+		if (this.#feed.closed) return r;
+		const reading = name === "day.feedback.read";
+		if (r.ok) {
+			this.#takeOps(r.value.operations, operationsOrder);
+			const page = pageOf(r.snapshot);
+			if (page?.older) {
+				// An older page continues the list it was asked for, never another one.
+				if (this.#items && this.#before !== null && page.items.every((i) => i.sequence < (this.#before ?? 0))) {
+					this.#items = [...this.#items, ...page.items];
+					this.#more = page.more;
+					this.#before = page.before;
+				}
+			} else if (page && this.#order.apply(order)) {
+				this.#items = page.items;
+				this.#more = page.more;
+				this.#before = page.before;
+				this.#refusal = null;
+			} else if (!page && reading && this.#order.apply(order)) {
+				this.#refusal = "invalid";
+			}
+		} else if (reading && this.#order.apply(order)) {
+			this.#refusal = r.refusal;
+		}
+		return r;
+	}
+
+	#takeOps(operations: unknown, order: number) {
+		const ops = summariesOf(operations);
+		if (ops && this.#operationOrder.apply(order)) this.#ops = ops;
+	}
+
+	read(cached = false): Promise<void> {
+		if (!cached) this.#freshRequested = true;
+		this.#asked = true;
+		const reading = this.#reads().finally(() => this.#feed.publish());
+		this.#feed.publish();
+		return reading;
+	}
+
+	async more(): Promise<void> {
+		if (!this.#more || this.#before === null) return;
+		const r = await this.#call("day.feedback.read", { before: this.#before });
+		if (!r.ok) this.#refusal = r.refusal;
+		this.#feed.publish();
+	}
+
+	async send(intent: SendIntent): Promise<SendResult> {
+		if (this.#sending) return refusedSend("busy");
+		if (this.#ops.some((o) => o.step === null && sameFeedback(o, intent))) {
+			return {
+				status: "unknown",
+				message: "Earlier feedback is not confirmed. Check it first; nothing was sent.",
+				operationId: null,
+				saved: null,
+			};
+		}
+		this.#sending = true;
+		this.#feed.publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.feedback.send", intent);
+		} finally {
+			this.#sending = false;
+		}
+		if (!r.ok) {
+			// A lost answer may hide a saved Send: the read lists it as Unknown.
+			void this.read();
+			this.#feed.publish();
+			return refusedSend(r.refusal);
+		}
+		const outcome = r.value.outcome as { operationId?: unknown } | null;
+		const id = typeof outcome?.operationId === "string" ? outcome.operationId : null;
+		if (!pageOf(r.snapshot)) void this.read();
+		this.#feed.publish();
+		return withInvestigation(outcomeOf(outcome, id), r.value.investigationOutcome);
+	}
+
+	// Native Check can enter an investigation the user requested. Refresh must not call it.
+	async check(operationId: string): Promise<SendResult> {
+		if (this.#checking.has(operationId)) return refusedSend("busy");
+		this.#checking.add(operationId);
+		this.#feed.publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.feedback.check", { operationId });
+		} finally {
+			this.#checking.delete(operationId);
+		}
+		this.#feed.publish();
+		if (!r.ok) {
+			return {
+				status: "unknown",
+				message:
+					"Pilot could not confirm the saved feedback or investigation. Entered work will not be sent again.",
+				operationId,
+				saved: null,
+			};
+		}
+		const result = withInvestigation(outcomeOf(r.value.outcome, operationId), r.value.investigationOutcome);
+		if (result.status === "unknown")
+			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
+		return result;
+	}
+
+	async readProjects(): Promise<void> {
+		const r = await call<unknown>(this.#window, "day.projects.read", {});
+		if (this.#feed.closed) return;
+		// A failed read keeps the projects Pilot read before; none is chosen for the user.
+		const projects = r.ok ? projectsOf(r.snapshot) : null;
+		if (projects) this.#projects = projects;
+		this.#feed.publish();
+	}
+
+	async readResult(result: FeedbackResultScope, before?: number): Promise<Page | null> {
+		const operationsOrder = this.#operationOrder.next();
+		const r = await call<unknown>(this.#window, "day.feedback.read", { result, before });
+		if (!r.ok || this.#feed.closed) return null;
+		this.#takeOps(r.value.operations, operationsOrder);
+		this.#feed.publish();
+		return pageOf(r.snapshot);
+	}
+
+	async step(intent: StepIntent): Promise<StepResult> {
+		if (this.#stepping) return refusedStep("busy");
+		if (this.#ops.some((o) => o.step !== null && o.feedbackId === intent.feedbackId)) return refusedStep("unknown");
+		this.#stepping = intent.feedbackId;
+		this.#feed.publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.feedback.step", intent);
+		} finally {
+			this.#stepping = null;
+		}
+		if (!r.ok) {
+			// A lost answer may hide a sent step: the read lists it as Unknown.
+			void this.read();
+			this.#feed.publish();
+			return refusedStep(r.refusal);
+		}
+		if (!pageOf(r.snapshot)) void this.read();
+		this.#feed.publish();
+		return stepOutcomeOf(r.value.outcome);
+	}
+
+	async checkStep(operationId: string): Promise<StepResult> {
+		if (this.#checking.has(operationId)) return refusedStep("busy");
+		this.#checking.add(operationId);
+		this.#feed.publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.feedback.check", { operationId });
+		} finally {
+			this.#checking.delete(operationId);
+		}
+		this.#feed.publish();
+		if (!r.ok) return { status: "unknown", message: "Pilot could not check it now. Nothing was sent again." };
+		if (!pageOf(r.snapshot)) void this.read();
+		const result = stepOutcomeOf(r.value.outcome);
+		if (result.status === "unknown")
+			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
+		return result;
+	}
+
+	dispose(): void {
+		this.#feed.close();
+	}
+}
+
+/** The feedback's view, mirrored in one signal that only the source's listener sets. */
+export type FeedbackMirror = {
+	source: FeedbackSource;
+	view: Signal<FeedbackView>;
+	close: () => void;
+};
+
+/** Mirrors `source`'s view. Rows that arrive glide to their places. */
+export function mirrorFeedback(source: FeedbackSource): FeedbackMirror {
+	const shape = (v: FeedbackView) => v.items.map((i) => i.id).join(",");
+	return { source, ...mirror(source, source.view(), shape) };
+}

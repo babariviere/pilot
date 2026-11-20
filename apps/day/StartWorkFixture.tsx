@@ -1,7 +1,7 @@
 // Headless control fixture only. No daemon, worker, provider or storage.
 import { mount, signal } from "nsh";
-import { openPlanning } from "./mockFeeds";
-import { StartWork } from "./PlanScreen";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { StartWork } from "./missions/planning/PlanScreen";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("review");

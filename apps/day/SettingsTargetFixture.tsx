@@ -1,14 +1,14 @@
 // Mock data only: Settings opened at a target, as a task line's Change does. No service, provider or storage.
 import { mount, signal, View } from "nsh";
-import type { ConnectionControls } from "./connectionControls";
-import type { DiagnosisControls } from "./diagnosisControls";
-import { scrollOf } from "./kept";
-import { MockDayScreen, openDay } from "./mockFeeds";
-import type { ModelControls, ModelSettings } from "./modelControls";
-import { modelSettingsDemo } from "./modelSettingsDemo";
-import { goSettings } from "./nav";
-import { ScriptedPreferences } from "./preferencesDemo";
-import { mirrorPreferences } from "./preferencesFeed";
+import { scrollOf } from "./app/kept";
+import { goSettings } from "./app/nav";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import type { ConnectionControls } from "./settings/connections/connectionControls";
+import type { DiagnosisControls } from "./settings/diagnostics/diagnosisControls";
+import type { ModelControls, ModelSettings } from "./settings/models/modelControls";
+import { modelSettingsDemo } from "./settings/models/modelSettingsDemo";
+import { ScriptedPreferences } from "./settings/preferencesDemo";
+import { mirrorPreferences } from "./settings/preferencesFeed";
 import { Block, Button, Buttons, Caption } from "./ui";
 
 const settings = signal<ModelSettings | null>(modelSettingsDemo);

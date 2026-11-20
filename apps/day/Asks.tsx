@@ -1,7 +1,7 @@
 // One agent question shaped like a native card: it takes the user's own
 // words, and Pilot has no help to offer for it.
 import { mount } from "nsh";
-import { MockDayScreen, openDay, openMockChat } from "./mockFeeds";
+import { MockDayScreen, openDay, openMockChat } from "./app/testing/mockFeeds";
 
 const day = { ...openDay("asks"), chat: openMockChat() };
 mount(() => <MockDayScreen day={day} />);

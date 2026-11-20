@@ -22,9 +22,9 @@ const { join } = await import('node:path');
 const { ModelRuntime, SettingsManager } = await import('@earendil-works/pi-coding-agent');
 const { InMemoryCredentialStore, InMemoryModelsStore } = await import('@earendil-works/pi-ai');
 const { EmbeddedResourceLoader } = await import('@babariviere/pi-extensions/resource-loader');
-const { bundledAskTools, installBundledAnthropicAuth, ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH } = await import('./packages/kernel/src/bundled-extensions.ts');
+const { bundledAskTools, installBundledAnthropicAuth, ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH } = await import('./packages/kernel/src/runtime/bundled-extensions.ts');
 const { NativeAdapter } = await import('./packages/kernel/src/native-adapter.ts');
-const { createTodoTool } = await import('./packages/kernel/src/todo-tool.ts');
+const { createTodoTool } = await import('./packages/kernel/src/tools/todos/todo-tool.ts');
 const { fauxProvider } = await import('@earendil-works/pi-ai');
 const isolated = await mkdtemp(join(tmpdir(), 'pilot-runtime-profile-'));
 const originalFetch = globalThis.fetch;
@@ -33,11 +33,11 @@ process.env.PI_CODING_AGENT_DIR = isolated;
 let parent;
 globalThis.fetch = () => { throw new Error('Runtime profile smoke test must stay offline'); };
 try {
-  const { loadSdkMcpEditor } = await import('./packages/kernel/src/sdk-mcp-editors.ts');
+  const { loadSdkMcpEditor } = await import('./packages/kernel/src/tools/mcp/sdk-mcp-editors.ts');
   const config = await loadSdkMcpEditor('cli');
   const mcpPath = join(isolated, 'mcp.json');
   config.addMcpServerConfig(mcpPath, 'fixture', { url: 'https://example.test/mcp' });
-  const { McpSetupStore } = await import('./packages/daemon/src/mcp-setup.ts');
+  const { McpSetupStore } = await import('./packages/daemon/src/setup/mcp/mcp-setup.ts');
   const setup = new McpSetupStore(isolated), baseline = await setup.read();
   const saved = await setup.apply({ expectedRevision: baseline.revision,
     entries: [{ name: 'second', config: { url: 'https://example.test/mcp' } }] });
@@ -52,7 +52,7 @@ try {
   const names = loader => loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]);
   for (const name of ['applyPatch', 'web', 'browser', 'todo', 'jobs', 'subagent', 'code_call_paths', 'code_impact', 'code_search', 'code_symbols']) assert.ok(parent.session.getCallableToolNames().includes(name), name);
   await writeFile(join(isolated, 'fixture.tsx'), 'export const RuntimeFixture = () => <button />;');
-  const { runExploration } = await import('./packages/kernel/src/exploration-runner.ts');
+  const { runExploration } = await import('./packages/kernel/src/tools/exploration/exploration-runner.ts');
   const explored = await runExploration({ source: isolated }, { tool: 'code_symbols', path: 'fixture.tsx', query: 'RuntimeFixture', exact: true });
   assert.equal(explored.results[0]?.name, 'RuntimeFixture');
   assert.equal(explored.results[0]?.coverage, 'parsed');

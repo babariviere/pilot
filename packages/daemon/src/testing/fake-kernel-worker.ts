@@ -2,7 +2,7 @@
 import { EventEmitter } from "node:events";
 import type { HostCalls, HostMethod, KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
 import type { AgentEvent, SessionCompletion, SessionState } from "@pilot/protocol";
-import { applyLivePacket, type SessionWorker } from "../kernel-worker.ts";
+import { applyLivePacket, type SessionWorker } from "../sessions/workers/kernel-worker.ts";
 
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
 export type FakeRequest = Extract<KernelCommand, { requestId: string }>;

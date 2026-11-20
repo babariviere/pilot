@@ -24,8 +24,10 @@ use std::{
 };
 
 const OWNER: &str = include_str!("../../../packages/daemon/src/runtime-owner.ts");
-const RESERVATION: &str = include_str!("../../../packages/daemon/src/update-reservation.ts");
-const CHECKPOINT: &str = include_str!("../../../packages/daemon/src/lifecycle-checkpoint.ts");
+const RESERVATION: &str =
+    include_str!("../../../packages/daemon/src/runtime/updates/update-reservation.ts");
+const CHECKPOINT: &str =
+    include_str!("../../../packages/daemon/src/runtime/updates/lifecycle-checkpoint.ts");
 const NODE: &str = r#"
 import {realpath,writeFile,readFile,appendFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -34,7 +36,7 @@ import {existsSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {randomUUID} from 'node:crypto';
 import {ownRuntime} from './runtime-owner.ts';
-import {UpdateReservation} from './update-reservation.ts';
+import {UpdateReservation} from './runtime/updates/update-reservation.ts';
 const root=await realpath(fileURLToPath(new URL('../../../',import.meta.url)));
 const home=process.argv[2],port=Number(process.argv[3]);
 const build=JSON.parse(await readFile(join(root,'runtime-build.json'),'utf8'));
@@ -614,7 +616,7 @@ fn bundle(
     fs::create_dir_all(contents.join("MacOS"))?;
     fs::create_dir_all(contents.join("Helpers"))?;
     fs::create_dir_all(runtime.join("node/bin"))?;
-    fs::create_dir_all(runtime.join("packages/daemon/src"))?;
+    fs::create_dir_all(runtime.join("packages/daemon/src/runtime/updates"))?;
     fs::copy(
         inputs.join("lifecycle-fixture"),
         contents.join("MacOS/pilot-desktop"),
@@ -649,11 +651,11 @@ fn bundle(
     }
     fs::write(runtime.join("packages/daemon/src/runtime-owner.ts"), OWNER)?;
     fs::write(
-        runtime.join("packages/daemon/src/update-reservation.ts"),
+        runtime.join("packages/daemon/src/runtime/updates/update-reservation.ts"),
         RESERVATION,
     )?;
     fs::write(
-        runtime.join("packages/daemon/src/lifecycle-checkpoint.ts"),
+        runtime.join("packages/daemon/src/runtime/updates/lifecycle-checkpoint.ts"),
         CHECKPOINT,
     )?;
     fs::write(runtime.join("packages/daemon/src/fixture-owner.ts"), NODE)?;
@@ -808,7 +810,7 @@ fn bundle(
         "libexec",
         "bin",
         "runtime/node/bin",
-        "runtime/packages/daemon/src",
+        "runtime/packages/daemon/src/runtime/updates",
         "runtime/packages/kernel/src",
     ] {
         fs::create_dir_all(app.join(directory))?;
@@ -847,11 +849,11 @@ fn bundle(
         OWNER,
     )?;
     fs::write(
-        app.join("runtime/packages/daemon/src/update-reservation.ts"),
+        app.join("runtime/packages/daemon/src/runtime/updates/update-reservation.ts"),
         RESERVATION,
     )?;
     fs::write(
-        app.join("runtime/packages/daemon/src/lifecycle-checkpoint.ts"),
+        app.join("runtime/packages/daemon/src/runtime/updates/lifecycle-checkpoint.ts"),
         CHECKPOINT,
     )?;
     fs::write(

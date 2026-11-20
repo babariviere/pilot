@@ -1,0 +1,213 @@
+/** Bounded read protocol, sanitization. No addresses or filesystem selectors. */
+import type {
+	DiagnosticContextRequest,
+	DiagnosticContextResponse,
+	DiagnosticContextValue,
+	OperationHost,
+} from "@pilot/protocol";
+import { FEATURE_NAMES } from "@pilot/protocol";
+import { isCredentialField, redactDiagnosticText } from "./diagnostic-redaction.ts";
+import { Conflict } from "../contracts/errors.ts";
+
+export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest {
+	const invalid = (): never => {
+		throw new Conflict("Invalid diagnostic read selector");
+	};
+	if (!value || typeof value !== "object" || Array.isArray(value)) return invalid();
+	const v = value as Record<string, unknown>;
+	if (
+		Object.keys(v).some(
+			(k) =>
+				![
+					"action",
+					"host",
+					"sessionId",
+					"projectId",
+					"missionId",
+					"query",
+					"since",
+					"until",
+					"channelOffset",
+					"after",
+					"before",
+					"limit",
+					"log",
+				].includes(k),
+		) ||
+		![
+			"hosts",
+			"chats",
+			"chat",
+			"history",
+			"search",
+			"logs",
+			"projects",
+			"missions",
+			"mission",
+			"issues",
+			"features",
+			"performance",
+			"scoped_metrics",
+			"refresh_health",
+		].includes(String(v.action))
+	)
+		return invalid();
+	if (v.action === "scoped_metrics" && Object.keys(v).some((key) => key !== "action" && key !== "sessionId"))
+		return invalid();
+	if (v.action === "performance" && Object.keys(v).some((key) => key !== "action" && key !== "host")) return invalid();
+	if (v.host !== undefined) {
+		const h = v.host as Record<string, unknown>;
+		if (
+			!h ||
+			typeof h !== "object" ||
+			Object.keys(h).length !== 3 ||
+			!["hostId", "daemonId", "lineageId"].every(
+				(k) => typeof h[k] === "string" && h[k].length > 0 && h[k].length <= 200,
+			)
+		)
+			return invalid();
+	}
+	if (v.sessionId !== undefined && (typeof v.sessionId !== "string" || !/^[0-9a-f-]{36}$/i.test(v.sessionId)))
+		return invalid();
+	if (["chat", "history"].includes(String(v.action)) && v.sessionId === undefined) return invalid();
+	for (const key of ["projectId", "missionId"])
+		if (v[key] !== undefined && (typeof v[key] !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(v[key] as string)))
+			return invalid();
+	if ((v.action === "issues" && v.projectId === undefined) || (v.action === "mission" && v.missionId === undefined))
+		return invalid();
+	if (v.query !== undefined && (typeof v.query !== "string" || v.query.length > 200)) return invalid();
+	if (v.action === "refresh_health" && v.query !== undefined && v.query !== "slack" && v.query !== "linear")
+		return invalid();
+	if (
+		v.channelOffset !== undefined &&
+		(v.action !== "refresh_health" ||
+			!Number.isSafeInteger(v.channelOffset) ||
+			(v.channelOffset as number) < 0 ||
+			(v.channelOffset as number) > 100)
+	)
+		return invalid();
+	if (v.action === "features" && v.query !== undefined && !FEATURE_NAMES.includes(v.query as never)) return invalid();
+	for (const key of ["since", "until"])
+		if (
+			v[key] !== undefined &&
+			(v.action !== "features" ||
+				typeof v[key] !== "string" ||
+				!/^\d{4}-\d{2}-\d{2}$/.test(v[key] as string) ||
+				!Number.isFinite(Date.parse(v[key] as string)) ||
+				new Date(v[key] as string).toISOString().slice(0, 10) !== v[key])
+		)
+			return invalid();
+	if (typeof v.since === "string" && typeof v.until === "string" && v.since > v.until) return invalid();
+	if (v.after !== undefined && (typeof v.after !== "string" || !/^[0-9a-f-]{36}$/i.test(v.after))) return invalid();
+	if (v.before !== undefined && (!Number.isSafeInteger(v.before) || (v.before as number) < 0)) return invalid();
+	if (v.action === "issues" && ((v.before as number | undefined) ?? 0) > 10_000) return invalid();
+	if (v.limit !== undefined && (!Number.isSafeInteger(v.limit) || (v.limit as number) < 1 || (v.limit as number) > 20))
+		return invalid();
+	if (v.action === "logs" && (!v.log || typeof v.log !== "object")) return invalid();
+	return v as unknown as DiagnosticContextRequest;
+}
+
+/** Apply to non-transcript metadata too: titles/mission text are user data, not safe structured evidence. */
+export function sanitizeDiagnosticContext(value: unknown): { data: DiagnosticContextValue; truncated: boolean } {
+	let nodes = 2048,
+		bytes = 40 * 1024,
+		truncated = false;
+	const clip = (v: unknown, depth: number, field?: string): DiagnosticContextValue => {
+		if (--nodes < 0 || depth > 10 || bytes <= 0) {
+			truncated = true;
+			return null;
+		}
+		if (v === null || v === undefined) return null;
+		if (typeof v === "number") return Number.isFinite(v) ? v : null;
+		if (typeof v === "boolean") return v;
+		if (typeof v === "string") {
+			if (v.length > 8192) {
+				truncated = true;
+				return "[Oversized evidence text omitted]";
+			}
+			// These are server-issued continuation/provenance fields, not free-text evidence.
+			const opaque =
+				field !== undefined &&
+				["cursor", "nextCursor", "ref"].includes(field) &&
+				v.length <= 768 &&
+				/^[A-Za-z0-9_:../../+=-]+$/.test(v);
+			const citation =
+				field === "chatUrl" && /^pilot:\/\/chat\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(v);
+			const text = opaque || citation ? v : redactDiagnosticText(v);
+			const data = Buffer.from(text);
+			const take = Math.min(data.length, 8192, bytes);
+			bytes -= take;
+			if (take < data.length || v.length > 64 * 1024) truncated = true;
+			return data.subarray(0, take).toString("utf8");
+		}
+		if (Array.isArray(v)) {
+			if (v.length > 128) truncated = true;
+			return v.slice(0, 128).map((x) => clip(x, depth + 1));
+		}
+		if (typeof v !== "object") return null;
+		const result: Record<string, DiagnosticContextValue> = {};
+		const fields = Object.entries(v);
+		if (fields.length > 64) truncated = true;
+		for (const [key, x] of fields.slice(0, 64)) {
+			if (
+				(isCredentialField(key) && typeof x === "string") ||
+				/^(reasoning|thinking|attachment|attachments|images|image|dataUrl|base64)$/i.test(key)
+			)
+				continue;
+			result[key] = clip(x, depth + 1, key);
+		}
+		return result;
+	};
+	const data = clip(value, 0);
+	if (Buffer.byteLength(JSON.stringify(data)) > 60 * 1024) return { data: null, truncated: true };
+	return { data, truncated };
+}
+
+export function diagnosticContextResponse(
+	host: OperationHost,
+	data: unknown,
+	page: Partial<DiagnosticContextResponse["page"]> = {},
+): DiagnosticContextResponse {
+	const safe = sanitizeDiagnosticContext(data);
+	return {
+		schemaVersion: 1,
+		host,
+		collectedAt: new Date().toISOString(),
+		status: safe.truncated ? "partial" : "available",
+		data: safe.data,
+		page: {
+			more: false,
+			scanned: 0,
+			maxScan: 200,
+			maxBytes: 65536,
+			...page,
+			truncated: safe.truncated || page.truncated === true,
+		},
+	};
+}
+
+/** A cancelled cold read may settle in its bounded reader pool, but cannot keep the caller waiting. */
+export function awaitDiagnosticRead<T>(read: Promise<T>, signal?: AbortSignal): Promise<T> {
+	if (!signal) return read;
+	if (signal.aborted) {
+		void read.catch(() => undefined);
+		return Promise.reject(new Error("Diagnostic read cancelled"));
+	}
+	return new Promise((resolve, reject) => {
+		const cancel = () => {
+			signal.removeEventListener("abort", cancel);
+			reject(new Error("Diagnostic read cancelled"));
+		};
+		signal.addEventListener("abort", cancel, { once: true });
+		read.then(
+			(value) => {
+				signal.removeEventListener("abort", cancel);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", cancel);
+				reject(error);
+			},
+		);
+	});
+}

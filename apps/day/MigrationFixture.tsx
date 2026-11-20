@@ -1,9 +1,9 @@
 // Isolated fixture of the production migration controls. No service or executor.
 import { mount, signal } from "nsh";
-import { MigrationControls } from "./MigrationControls";
-import type { MigrationIntent, MigrationView } from "./migration";
-import { PreviousMission } from "./PreviousMission";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
+import { MigrationControls } from "./updates/MigrationControls";
+import type { MigrationIntent, MigrationView } from "./updates/migration";
+import { PreviousMission } from "./updates/PreviousMission";
 
 const mode = signal("lost");
 const sends = signal(0);

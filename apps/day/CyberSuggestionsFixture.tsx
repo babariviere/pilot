@@ -1,7 +1,7 @@
 // Mock data only: Today's cyber question over a scripted project setup. No service or writes outside this window.
 import { mount, signal } from "nsh";
-import { CyberSuggestions } from "./CyberSuggestions";
-import type { ProjectSetup, ProjectsSource } from "./projectSetup";
+import { CyberSuggestions } from "./settings/projects/CyberSuggestions";
+import type { ProjectSetup, ProjectsSource } from "./settings/projects/projectSetup";
 import { Caption, Column, Page, Panel, Section, WindowCanvas } from "./ui";
 
 const actions = signal<string[]>([]);

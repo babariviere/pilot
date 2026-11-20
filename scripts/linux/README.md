@@ -2,7 +2,13 @@
 
 The standalone daemon can run on Linux x86-64 for development. This is not a remote execution
 feature in the macOS app. SSH setup, cross-host sharing/Control, automatic remote updates and
-their workflow fixtures have been removed. See [retained devbox data](../../docs/technical/devboxes.md).
+their workflow fixtures have been removed.
+
+If startup reports **Legacy remote profile data found**, stop the old runtime
+and resolve uncertain work on the original host. Archive remote records and
+their dependent chats, drafts and attachments offline, preserving host and
+storage identity. Start with a verified Local-only profile. Pilot does not
+import the archive, replay requests, or stop remote services.
 
 ## Package
 

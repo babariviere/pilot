@@ -11,16 +11,16 @@
 // viewport, and "Save and reopen" keeps the window as a close or an update
 // saves it and shows it again fresh.
 import { mount, signal, View } from "nsh";
-import { ScriptedDelivery } from "./deliveryDemo";
-import { mirrorDelivery } from "./deliveryFeed";
-import { scrollOf } from "./kept";
-import { MockDayScreen, openDay } from "./mockFeeds";
-import { readingProbe } from "./ThreadScreen";
-import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
-import { mirrorThreads } from "./threadFeed";
-import { openThread, refreshOpenThread } from "./threadView";
+import { scrollOf } from "./app/kept";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import { ScriptedDelivery } from "./missions/delivery/deliveryDemo";
+import { mirrorDelivery } from "./missions/delivery/deliveryFeed";
+import { readingProbe } from "./sessions/ThreadScreen";
+import { ScriptedThreads, type ThreadsDemoNext } from "./sessions/threadDemo";
+import { mirrorThreads } from "./sessions/threadFeed";
+import { openThread, refreshOpenThread } from "./sessions/threadView";
 import { Block, Button, Buttons, Caption } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 const threads = new ScriptedThreads();
 const day = { ...openDay(), threads: mirrorThreads(threads), delivery: mirrorDelivery(new ScriptedDelivery()) };

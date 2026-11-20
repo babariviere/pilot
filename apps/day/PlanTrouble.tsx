@@ -1,7 +1,7 @@
 // Planning trouble: changed questions and a lost submission, a topic
 // interview whose map changed, and a plan that changes during review.
 import { mount } from "nsh";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
 
 const day = openDay("quiet");
 const plans = openPlanning("trouble");

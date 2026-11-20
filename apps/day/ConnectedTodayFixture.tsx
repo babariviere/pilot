@@ -2,9 +2,9 @@
 // the trouble world's first read. The test scripts every root reply.
 import { host, mount, View } from "nsh";
 import { TodayFeed } from "pilot-day/native";
-import { ConnectedToday } from "./todayFeed";
-import { mirrorDay } from "./day";
-import { MockDayScreen } from "./mockFeeds";
+import { mirrorDay } from "./app/day";
+import { MockDayScreen } from "./app/testing/mockFeeds";
+import { ConnectedToday } from "./today/todayFeed";
 import { Block, Button, WindowCanvas } from "./ui";
 
 const first = new TodayFeed("trouble").snapshot();

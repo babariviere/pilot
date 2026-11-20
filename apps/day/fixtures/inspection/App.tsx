@@ -1,5 +1,5 @@
 import { mount, signal, View } from "nsh";
-import { InspectInWindow } from "../../InspectionWindow";
+import { InspectInWindow } from "../../artifacts/InspectionWindow";
 import { TextField } from "../../ui/field";
 
 mount(() => {

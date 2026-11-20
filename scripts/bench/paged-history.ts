@@ -7,9 +7,9 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { AgentEvent } from "@pilot/protocol";
-import { ChatStreams } from "../../packages/daemon/src/chat-streams.ts";
-import { HeldInputsDoc } from "../../packages/kernel/src/held-inputs-doc.ts";
-import { openSessionStorage } from "../../packages/kernel/src/storage.ts";
+import { ChatStreams } from "../../packages/daemon/src/day/chat/chat-streams.ts";
+import { HeldInputsDoc } from "../../packages/kernel/src/session/input/held-inputs-doc.ts";
+import { openSessionStorage } from "../../packages/kernel/src/history/storage.ts";
 
 const directory = await mkdtemp(join(tmpdir(), "pilot-paged-bench-"));
 const owned = await openSessionStorage(directory);
@@ -63,7 +63,7 @@ try {
 					workerData: {
 						directory,
 						recent,
-						module: new URL("../../packages/kernel/src/snapshot.ts", import.meta.url).href,
+						module: new URL("../../packages/kernel/src/history/snapshot.ts", import.meta.url).href,
 					},
 				},
 			);

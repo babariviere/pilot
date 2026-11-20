@@ -3,6 +3,6 @@
 // it is not connected and shows nothing else. App.tsx, the default entry,
 // mounts the same window (ConnectedDay.tsx).
 import { mount } from "nsh";
-import { Connected } from "./ConnectedDay";
+import { Connected } from "./app/ConnectedDay";
 
 mount(() => <Connected />);

@@ -54,7 +54,7 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   They explain a change, never decorate it.
 - **Dithered gradients are Pilot's signature.** Prefer ordered (Bayer) dithering with hard square pixels over smooth
   gradients, glows and blurs. Dither is atmosphere, with a soft palette, and keeps text readable over it. In Day it
-  is the one decoration: the sky shown when nothing needs the user (see [Pilot Day](#decoration)). In Pilot Next it
+  is the one decoration: the sky shown when nothing needs the user (see [Pilot Day](#pilot-day)). In Pilot Next it
   is atmosphere only: rows show state with still marks and words (see State vocabulary), never dither.
   Swift (historical): the Home sky and the empty Inbox's coast (`DitherScene`, with the procedural `DitherSky` as
   fallback) set the tone, and chat rows had status corners (`DitherCorner`).

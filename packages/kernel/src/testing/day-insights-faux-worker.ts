@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { NativeAdapter } from "../native-adapter.ts";
-import { runKernelWorker } from "../worker.ts";
+import { runKernelWorker } from "../worker/worker.ts";
 import { offlineModels } from "./offline-models.ts";
 
 globalThis.fetch = () => assert.fail("The Day Insights fixture must not use the network");

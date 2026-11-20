@@ -13,7 +13,7 @@ fn insights_fixture(mode: &str) -> Fixture {
         import { once } from "node:events";
         import { pathToFileURL } from "node:url";
         const { seedDayInsightsTracking, startDayInsightsFixture } =
-            await import(pathToFileURL(join(process.cwd(), "src/testing/day-insights.ts")).href);
+            await import(pathToFileURL(join(process.cwd(), "src/day/insights/testing/day-insights.ts")).href);
         const { createDaemonServer } =
             await import(pathToFileURL(join(process.cwd(), "src/server.ts")).href);
         const fresh = process.argv[2] === "fresh";
@@ -35,12 +35,12 @@ fn insights_fixture(mode: &str) -> Fixture {
             let services = f.server.services;
             if (fresh) {
                 const fromDaemon = (name) => import(pathToFileURL(join(process.cwd(), "src", name + ".ts")).href);
-                const { ModelCatalog } = await fromDaemon("models");
-                const { ScheduleService } = await fromDaemon("schedules");
-                const { ScheduleStore } = await fromDaemon("schedule-store");
-                const { DayInsights } = await fromDaemon("day-insights");
-                const { DayInsightsExecution } = await fromDaemon("day-insights-execution");
-                const { InsightsWorkspace } = await fromDaemon("insights-workspace");
+                const { ModelCatalog } = await fromDaemon("models/models");
+                const { ScheduleService } = await fromDaemon("schedules/schedules");
+                const { ScheduleStore } = await fromDaemon("schedules/schedule-store");
+                const { DayInsights } = await fromDaemon("day/insights/day-insights");
+                const { DayInsightsExecution } = await fromDaemon("day/insights/day-insights-execution");
+                const { InsightsWorkspace } = await fromDaemon("insights/ownership/insights-workspace");
                 const { ModelRuntime } = await import(import.meta.resolve("@earendil-works/pi-coding-agent",
                     pathToFileURL(join(process.cwd(), "package.json")).href));
                 const { requiredAuthRegistration } = await fromDaemon("testing/required-auth");
@@ -121,7 +121,7 @@ fn insights_fixture(mode: &str) -> Fixture {
                             payload: action === "unlisted-refusal" ? null : {},
                         };
                     if (action === "legacy-journal") {
-                        const { payloadHash } = await fromDaemon("operation-journal");
+                        const { payloadHash } = await fromDaemon("transport/operations/operation-journal");
                         for (const [index, kind] of ["insights-create", "insights-revoke"].entries()) {
                             const op = {
                                 schemaVersion: 1, operationId: "synthetic-legacy-" + index,

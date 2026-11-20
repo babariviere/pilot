@@ -3,12 +3,12 @@
 // keeps the focus), and the window's automatic reads on a test clock.
 import { keymap, mount, Scroll, signal, View } from "nsh";
 import { type Today, TodayFeed } from "pilot-day/native";
-import { mirrorDay } from "./day";
-import type { DayFeed } from "./feeds";
-import { autoRead, type Clock, type ReadResult } from "./freshness";
-import { MockDayScreen } from "./mockFeeds";
+import { mirrorDay } from "./app/day";
+import { MockDayScreen } from "./app/testing/mockFeeds";
+import { anchors } from "./app/view";
+import type { DayFeed } from "./sources/feeds";
+import { autoRead, type Clock, type ReadResult } from "./sources/freshness";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
-import { anchors } from "./view";
 
 // The asks world: two questions that take the user's own words.
 const real = new TodayFeed("asks");

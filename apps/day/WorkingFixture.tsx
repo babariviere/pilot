@@ -1,10 +1,10 @@
 // Scripted transport, real Today/chat views. No service, provider or execution.
 import { keymap, mount, Scroll, signal, View } from "nsh";
 import { TodayFeed } from "pilot-day/native";
-import { mirrorDay } from "./day";
-import { MockDayScreen } from "./mockFeeds";
-import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
-import { mirrorScope, type ScopeMirror, todayProject } from "./todayScope";
+import { mirrorDay } from "./app/day";
+import { MockDayScreen } from "./app/testing/mockFeeds";
+import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessions/sessionChat";
+import { mirrorScope, type ScopeMirror, todayProject } from "./today/todayScope";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const feed = new TodayFeed("decisions");

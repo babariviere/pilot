@@ -381,7 +381,8 @@ fn standalone_lost_ack_after_transport_port_change_checks_original_outcome_only(
 fn typed_ts_facade_uses_the_real_public_channel_without_node_sdk_imports() {
     let mut f = fixture();
     let b = f.bridge();
-    let adapter = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deliveryBridge.ts");
+    let adapter =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../missions/delivery/deliveryBridge.ts");
     let source = format!(
         r#"
 import {{host,mount,signal,Text}} from 'nsh';

@@ -26,7 +26,7 @@ and ends the turn without waiting inside the tool. This is agent guidance,
 not a new enforced start gate. Answers never grant permissions or change mission
 approvals. Mission workflows are unchanged.
 
-See [shared interviews](technical/shared-interviews.md) for durability and recovery.
+See [shared interviews](../packages/daemon/src/missions/interviews/shared-interviews.md) for durability and recovery.
 
 In Day, open an issue to start linked work or prefill a mission draft. **Manage
 status** is off unless you turn it on. A reference keeps the link without

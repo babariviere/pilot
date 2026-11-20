@@ -25,7 +25,7 @@ export async function discoverTests(root: string): Promise<string[]> {
 	);
 	const groups = await Promise.all([
 		...packages.map(({ name }) => testFiles(root, `packages/${name}/src`, true)),
-		testFiles(root, "apps/day/node-tests", false),
+		testFiles(root, "apps/day/node-tests", true),
 		testFiles(root, "scripts", false),
 	]);
 	return groups.flat();
@@ -33,17 +33,17 @@ export async function discoverTests(root: string): Promise<string[]> {
 
 // Repeat OS-sensitive paths on Darwin while the broad suite runs on Linux.
 const macosCoverage = new Set([
-	"packages/kernel/src/ask.integration.test.ts",
-	"packages/daemon/src/coordinator-role.test.ts",
-	"packages/daemon/src/main-view.test.ts",
-	"packages/daemon/src/platform.test.ts",
-	"packages/daemon/src/schedule-detection.fast.test.ts",
-	"packages/daemon/src/terminals.test.ts",
-	"packages/daemon/src/pty-input.test.ts",
-	"packages/daemon/src/terminal-output.test.ts",
-	"packages/daemon/src/workspace-terminal-server.test.ts",
-	"packages/kernel/src/bundled-extensions.integration.test.ts",
-	"packages/kernel/src/runtime-environment.test.ts",
+	"packages/kernel/src/tools/ask/ask.integration.test.ts",
+	"packages/daemon/src/runtime/coordination/coordinator-role.test.ts",
+	"packages/daemon/src/projects/dashboard/main-view.test.ts",
+	"packages/daemon/src/runtime/platform/platform.test.ts",
+	"packages/daemon/src/schedules/schedule-detection.fast.test.ts",
+	"packages/daemon/src/sessions/terminals/terminals.test.ts",
+	"packages/daemon/src/sessions/terminals/pty-input.test.ts",
+	"packages/daemon/src/sessions/terminals/terminal-output.test.ts",
+	"packages/daemon/src/sessions/terminals/workspace-terminal-server.test.ts",
+	"packages/kernel/src/runtime/bundled-extensions.integration.test.ts",
+	"packages/kernel/src/runtime/runtime-environment.test.ts",
 ]);
 
 /** Known subprocess-heavy files start first to avoid a long serial tail. Concurrency stays limited. */

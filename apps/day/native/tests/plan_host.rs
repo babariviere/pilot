@@ -35,7 +35,7 @@ impl Fixture {
     }
     fn with_quiet_events(quiet: bool) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures/day-native-planning.ts");
+            .join("../../../packages/daemon/src/fixtures/day/planning/day-native-planning.ts");
         let mut command = Command::new("node");
         command.arg(script);
         if quiet {

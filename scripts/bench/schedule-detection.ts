@@ -7,9 +7,9 @@ import {
 	probeReachability,
 	ScheduleDetection,
 	sampleSystemWake,
-} from "../../packages/daemon/src/schedule-detection.ts";
-import { SubprocessPool } from "../../packages/daemon/src/subprocess.ts";
-import { SystemEventsDetection } from "../../packages/daemon/src/system-events-detection.ts";
+} from "../../packages/daemon/src/schedules/schedule-detection.ts";
+import { SubprocessPool } from "../../packages/daemon/src/runtime/process/subprocess.ts";
+import { SystemEventsDetection } from "../../packages/daemon/src/runtime/power/system-events-detection.ts";
 
 const seconds = Number(process.argv[2] ?? 65);
 const mode = process.argv[3] ?? "all";

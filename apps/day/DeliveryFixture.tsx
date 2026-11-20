@@ -6,17 +6,17 @@
 // notes and sends nothing. Inspect source reads one exact pin's saved
 // source once and shows it as plain text; nothing runs it.
 import { keymap, mount, Scroll, signal, View } from "nsh";
-import { FullArtifact } from "./ArtifactViewer";
-import { DeliveryScreen } from "./DeliveryScreen";
-import { ScriptedDelivery } from "./deliveryDemo";
-import { mirrorDelivery } from "./deliveryFeed";
-import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
-import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
-import { openDay } from "./mockFeeds";
-import { resultReviewDemo } from "./resultReviewDemo";
-import { ToCheck } from "./ToCheck";
+import { openDay } from "./app/testing/mockFeeds";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import { FullArtifact } from "./artifacts/ArtifactViewer";
+import { ConnectedFeedback, mirrorFeedback } from "./feedback/feedbackFeed";
+import { DeliveryScreen } from "./missions/delivery/DeliveryScreen";
+import { ScriptedDelivery } from "./missions/delivery/deliveryDemo";
+import { mirrorDelivery } from "./missions/delivery/deliveryFeed";
+import { type DeliveryPlace, deliveryRoute } from "./missions/delivery/deliveryView";
+import { resultReviewDemo } from "./missions/review/resultReviewDemo";
+import { ToCheck } from "./today/ToCheck";
 import { Block, Button, Buttons, Caption, Column, Page, Panel, WindowCanvas } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 const source = new ScriptedDelivery();
 const review = resultReviewDemo();

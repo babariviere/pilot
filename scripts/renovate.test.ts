@@ -19,7 +19,7 @@ test("SDK upgrades keep patch selectors aligned and avoid custom MCP writer coup
 			assert.ok(patch.includes('var undici=__toESM(require("undici"),1);'));
 		}
 	}
-	const setup = readFileSync(new URL("../packages/daemon/src/mcp-setup.ts", import.meta.url), "utf8");
+	const setup = readFileSync(new URL("../packages/daemon/src/setup/mcp/mcp-setup.ts", import.meta.url), "utf8");
 	assert.doesNotMatch(setup, /config-writer|mcpConfigWriteProtocol/);
 });
 

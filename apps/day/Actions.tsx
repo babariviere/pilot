@@ -2,7 +2,7 @@
 // user can do. The agent replaces the zip before the first report lands,
 // and the answer to the next report is lost until a check reads it.
 import { mount } from "nsh";
-import { MockDayScreen, openDay } from "./mockFeeds";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
 
 const day = openDay("actions");
 mount(() => <MockDayScreen day={day} />);

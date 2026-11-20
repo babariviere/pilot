@@ -50,7 +50,7 @@ export async function bootstrapRuntime(): Promise<void> {
 		build ? await realpath(fileURLToPath(new URL("../../../", import.meta.url))) : undefined,
 	);
 	try {
-		const { assertLocalProfile } = await import("./profile-cutover.ts");
+		const { assertLocalProfile } = await import("./runtime/updates/profile-cutover.ts");
 		await assertLocalProfile(config.home);
 		if (bundled) await activateRuntime(runtimeOwner);
 	} catch (error) {

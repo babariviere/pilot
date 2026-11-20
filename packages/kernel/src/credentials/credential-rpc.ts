@@ -1,0 +1,138 @@
+/** Private same-host auth protocol. No paths, URLs to fetch, commands, or arbitrary file operations. */
+import { connect, type Socket } from "node:net";
+import { CATALOG_FRAME_LIMIT } from "../models/shared-model-catalog.ts";
+export const AUTH_FRAME_LIMIT = 64 * 1024;
+export interface CredentialEndpoint {
+	socket: string;
+	token: string;
+	/** Canonical same-host agent directory whose discovery this capability can read. */
+	catalogAgentDir?: string;
+	/** Requests from this capability must reserve against their host-owned funding scope. */
+	metered?: true;
+	/** Dedicated Insights AND allowances. No background/global-off bypass. */
+	insightsMetered?: true;
+}
+export type CredentialNamespace = "pi" | "mcp";
+export type CredentialOperation =
+	| "read"
+	| "peek"
+	| "list"
+	| "status"
+	| "statuses"
+	| "begin"
+	| "commit"
+	| "delete"
+	| "catalog"
+	| "funding-reserve"
+	| "funding-settle";
+/** Metadata only. Configured does not prove provider acceptance or include ambient/config auth. */
+export interface CredentialStatus {
+	state: "missing" | "configured" | "reauthentication_required";
+}
+export type CredentialStatuses = Array<CredentialStatus & { providerId: string }>;
+export interface CredentialRequest {
+	op: CredentialOperation;
+	namespace: CredentialNamespace;
+	key?: string;
+	mode?: "refresh" | "login";
+	value?: unknown;
+	changed?: boolean;
+}
+export class CredentialBrokerError extends Error {
+	readonly code: string;
+	constructor(code: string) {
+		const safe = ["invalid", "unauthorized", "uncertain", "stale", "busy", "funding"].includes(code)
+			? code
+			: "unavailable";
+		super(
+			safe === "funding"
+				? "Allowance hold. Check funding, catalog prices and request bounds in Settings."
+				: `Credential broker ${safe}. Sign in again if a refresh outcome is uncertain.`,
+		);
+		this.code = safe;
+	}
+}
+export function authError(code = "unavailable"): CredentialBrokerError {
+	return new CredentialBrokerError(code);
+}
+export class CredentialChannel {
+	private socket: Socket;
+	/** Why the channel closed. A stale endpoint needs a fresh one, a broken broker does not. */
+	private code?: string;
+	private pending?: { resolve(value: unknown): void; reject(error: Error): void };
+	private deadline?: NodeJS.Timeout;
+	private buffer = Buffer.alloc(0);
+	private closed = false;
+	private responseLimit = AUTH_FRAME_LIMIT;
+	private readonly endpoint: CredentialEndpoint;
+	constructor(endpoint: CredentialEndpoint) {
+		this.endpoint = endpoint;
+		this.socket = connect(endpoint.socket);
+		this.socket.setTimeout(310_000, () => this.close());
+		this.socket.on("error", () => {
+			// The socket failed: the daemon that issued this endpoint is gone, restarting, or its
+			// socket cannot be reached. The endpoint is stale, not a broken broker, and the daemon
+			// issues a fresh one. A broker that answers with a code keeps that code.
+			this.close("stale");
+		});
+		this.socket.on("close", () => {
+			// The peer closed the channel: it exited or restarted, so the endpoint is stale. The
+			// daemon can issue a fresh one, and this worker must not fail the chat for it.
+			this.close("stale");
+		});
+		this.socket.on("data", (bytes) => {
+			this.buffer = Buffer.concat([this.buffer, typeof bytes === "string" ? Buffer.from(bytes) : bytes]);
+			if (this.buffer.length > this.responseLimit) return this.close();
+			const end = this.buffer.indexOf(10);
+			if (end < 0) return;
+			const waiter = this.pending;
+			clearTimeout(this.deadline);
+			this.pending = undefined;
+			try {
+				const reply = JSON.parse(this.buffer.subarray(0, end).toString()) as {
+					ok?: boolean;
+					value?: unknown;
+					code?: string;
+				};
+				this.buffer = this.buffer.subarray(end + 1);
+				if (reply.ok === true) waiter?.resolve(reply.value);
+				else waiter?.reject(authError(reply.code));
+			} catch {
+				waiter?.reject(authError());
+				this.close();
+			}
+		});
+	}
+	request(request: CredentialRequest): Promise<unknown> {
+		// A closed channel never answers again: the daemon that issued the endpoint is gone.
+		if (this.closed || this.pending) return Promise.reject(authError(this.code ?? "stale"));
+		this.responseLimit = request.op === "catalog" ? CATALOG_FRAME_LIMIT : AUTH_FRAME_LIMIT;
+		const frame = JSON.stringify({ ...request, token: this.endpoint.token }) + "\n";
+		if (Buffer.byteLength(frame) > AUTH_FRAME_LIMIT) return Promise.reject(authError("invalid"));
+		return new Promise((resolve, reject) => {
+			this.pending = { resolve, reject };
+			this.deadline = setTimeout(() => this.close(), 35_000);
+			this.socket.write(frame, (error) => {
+				if (error) this.close("stale");
+			});
+		});
+	}
+	/** A channel that closes without a broker reply lost its daemon: the endpoint is stale. */
+	close(code?: string): void {
+		if (this.closed) return;
+		this.closed = true;
+		clearTimeout(this.deadline);
+		if (code) this.code = code;
+		this.pending?.reject(authError(this.code ?? "stale"));
+		this.pending = undefined;
+		this.socket.destroy();
+	}
+}
+export async function credentialRequest(endpoint: CredentialEndpoint, request: CredentialRequest): Promise<unknown> {
+	const channel = new CredentialChannel(endpoint);
+	try {
+		return await channel.request(request);
+	} finally {
+		channel.close();
+	}
+}

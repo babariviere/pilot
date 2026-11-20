@@ -5,11 +5,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { RepositoryChanges } from "../../packages/daemon/src/changes.ts";
-import { MissionStore } from "../../packages/daemon/src/missions.ts";
-import { type ProcessOptions, subprocesses } from "../../packages/daemon/src/subprocess.ts";
+import { RepositoryChanges } from "../../packages/daemon/src/changes/changes.ts";
+import { MissionStore } from "../../packages/daemon/src/missions/missions.ts";
+import { type ProcessOptions, subprocesses } from "../../packages/daemon/src/runtime/process/subprocess.ts";
 import { hermeticGitEnv } from "../../packages/daemon/src/testing/git-env.ts";
-import { untrackedStats } from "../../packages/daemon/src/untracked-stats.ts";
+import { untrackedStats } from "../../packages/daemon/src/workspaces/untracked-stats.ts";
 
 const root = mkdtempSync(join(tmpdir(), "pilot-metadata-bench-"));
 const git = (...args: string[]) =>

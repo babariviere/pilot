@@ -1,7 +1,7 @@
 //! The planning page reads the shared Wayfinder map (`view.map`), the same
 //! projection the daemon gives the planning coordinator. Pure mapping: no
 //! daemon, host or provider. The daemon's own tests build that projection
-//! (packages/daemon/src/mission-plans.test.ts).
+//! (packages/daemon/src/missions/planning/mission-plans.test.ts).
 use pilot_day_native::{
     plan::{ExploreKind, ExploreState, PlanRoute},
     plan_host::{self, Local},

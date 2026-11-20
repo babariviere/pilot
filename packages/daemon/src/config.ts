@@ -1,5 +1,5 @@
 import { DEFAULT_PORT } from "@pilot/protocol";
-import { pilotHome } from "./workspace-environment.ts";
+import { pilotHome } from "./workspaces/workspace-environment.ts";
 
 export interface DaemonConfig {
 	home: string;

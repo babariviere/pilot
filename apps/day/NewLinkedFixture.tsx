@@ -2,15 +2,13 @@
 // existing New draft. Mock data. No service, provider or real creation.
 import { mount, signal } from "nsh";
 import type { NewIntent, PlanOutcome } from "pilot-day/native";
-import type { ScriptedChats } from "./chatDemo";
-import type { FeedbackItem } from "./feedbackFeed";
-import type { ChatStep } from "./feedbackSteps";
-import { feedbackOpen } from "./feedbackView";
-import type { PlanningFeed } from "./feeds";
-import { draftLinkedMission } from "./linkedMission";
-import { MissionScreen } from "./MissionScreen";
-import { openDay, openPlanning } from "./mockFeeds";
-import { NewScreen } from "./NewScreen";
+import { openDay, openPlanning } from "./app/testing/mockFeeds";
+import type { FeedbackItem } from "./feedback/feedbackFeed";
+import type { ChatStep } from "./feedback/feedbackSteps";
+import { feedbackOpen } from "./feedback/feedbackView";
+import { draftLinkedMission } from "./missions/intake/linkedMission";
+import { NewScreen } from "./missions/intake/NewScreen";
+import { MissionScreen } from "./missions/MissionScreen";
 import {
 	capturePlanningDraft,
 	chatPick,
@@ -21,7 +19,9 @@ import {
 	requestDraft,
 	resetPlanningView,
 	restorePlanningDraft,
-} from "./planView";
+} from "./missions/planning/planView";
+import type { ScriptedChats } from "./sessions/chatDemo";
+import type { PlanningFeed } from "./sources/feeds";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("fresh");

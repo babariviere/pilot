@@ -1,13 +1,13 @@
 // Test-only: the real connected threads adapter and thread page over the injected native host channel. A
 // day.changed for this window reads what is on screen again, as connection.ts does.
 import { host, mount, signal, View } from "nsh";
-import { ScriptedDelivery } from "./deliveryDemo";
-import { mirrorDelivery } from "./deliveryFeed";
-import { scrollOf } from "./kept";
-import { MockDayScreen, openDay } from "./mockFeeds";
-import { readingProbe } from "./ThreadScreen";
-import { ConnectedThreads, mirrorThreads } from "./threadFeed";
-import { refreshOpenThread } from "./threadView";
+import { scrollOf } from "./app/kept";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { ScriptedDelivery } from "./missions/delivery/deliveryDemo";
+import { mirrorDelivery } from "./missions/delivery/deliveryFeed";
+import { readingProbe } from "./sessions/ThreadScreen";
+import { ConnectedThreads, mirrorThreads } from "./sessions/threadFeed";
+import { refreshOpenThread } from "./sessions/threadView";
 import { Block, Button, Buttons, Caption } from "./ui";
 
 const day = {

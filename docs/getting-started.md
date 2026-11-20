@@ -11,8 +11,7 @@ is deferred. Old Pilot Next downloads are not Day installers.
 Removing Pilot Next source does not remove an installed app, stop a service, or
 change profiles, history, workspaces, or drafts. Day can use the existing
 profile, but does not import Pilot Next's private window drafts. Keep those
-files. See [historical first handoff and recovery notes](technical/day-install.md)
-if you need to inspect an earlier install attempt.
+files.
 
 ## Connect your tools
 

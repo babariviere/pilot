@@ -11,10 +11,10 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { createSession, LiveDoc, UserEntry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { collectChangeSummary } from "../../packages/daemon/src/changes.ts";
-import { subprocesses } from "../../packages/daemon/src/subprocess.ts";
+import { collectChangeSummary } from "../../packages/daemon/src/changes/changes.ts";
+import { subprocesses } from "../../packages/daemon/src/runtime/process/subprocess.ts";
 import { hermeticGitEnv } from "../../packages/daemon/src/testing/git-env.ts";
-import { untrackedStats } from "../../packages/daemon/src/untracked-stats.ts";
+import { untrackedStats } from "../../packages/daemon/src/workspaces/untracked-stats.ts";
 import { loadBaseline } from "./baseline.ts";
 
 const { assignJson } = await import(
@@ -35,7 +35,7 @@ try {
 	if (baseline) {
 		const loaded = await loadBaseline<{ collectChangeSummary: typeof collectChangeSummary }>(
 			baseline,
-			new URL("../../packages/daemon/src/changes.ts", import.meta.url),
+			new URL("../../packages/daemon/src/changes/changes.ts", import.meta.url),
 		);
 		cleanupBaseline = loaded.cleanup;
 		const { collectChangeSummary: collect } = loaded.module;

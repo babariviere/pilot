@@ -6,7 +6,7 @@ fn preferences_follow_the_explicit_project_not_window_focus() {
     let mut command = Command::new("node");
     command.arg(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures/day-native-planning.ts"),
+            .join("../../../packages/daemon/src/fixtures/day/planning/day-native-planning.ts"),
     );
     command.args(["--quiet-events", "--preference-projects"]);
     let mut f = Fixture::with_command(command);

@@ -1,10 +1,10 @@
 // Test-only: the screen agent's bar over a few controls, with a scripted conversation. Every word is invented.
 import { mount, signal, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
-import { ScreenAgentBar } from "./ScreenAgentBar";
-import type { ScreenAgentSource } from "./screenAgent";
-import type { ScreenPicture } from "./screenAgentContract";
-import type { SessionChat } from "./sessionChat";
+import { ScreenAgentBar } from "./screen-agent/ScreenAgentBar";
+import type { ScreenAgentSource } from "./screen-agent/screenAgent";
+import type { ScreenPicture } from "./screen-agent/screenAgentContract";
+import type { SessionChat } from "./sessions/sessionChat";
 import { Block, Button, Caption, Notice, WindowCanvas } from "./ui";
 
 /** What the scripted agent heard, for the test to read. */

@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ToolHooks } from "@earendil-works/pi-durable";
 import { messageFormatBlock } from "./message-format.ts";
-import { withPilotPolicy } from "./policy.ts";
-import { commandArguments, nativeToolPolicy } from "./tool-policy.ts";
+import { withPilotPolicy } from "./runtime/policy.ts";
+import { commandArguments, nativeToolPolicy } from "./tools/codemode/tool-policy.ts";
 
 const bad = [
 	String.raw`jj describe -m "feat: change\n\nDetails"`,

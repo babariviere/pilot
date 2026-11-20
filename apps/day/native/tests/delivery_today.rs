@@ -10,8 +10,6 @@
 //! stays "not confirmed" across a reopen; Check reads it once and nothing is
 //! sent again.
 #![allow(dead_code)]
-#[path = "support/day_library.rs"]
-mod day_library;
 include!("support/intake_fixture.rs");
 #[path = "support/app_source.rs"]
 mod app_source;
@@ -26,17 +24,7 @@ fn entry() -> PathBuf {
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = std::env::temp_dir().join(format!("day-delivery-today-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    // The component library lives in ui/; screens import it as "./ui".
-    day_library::copy(&app, &dir);
-    for file in std::fs::read_dir(&app).unwrap() {
-        let path = file.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
-            && !name.ends_with(".test.tsx")
-        {
-            app_source::copy(&path, &dir.join(&name));
-        }
-    }
+    app_source::copy(&app, &dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,8 +60,11 @@ try {
 	const node = process.execPath;
 	const hashes = {};
 	const sources = {};
+	const daemonSource = join(root, "packages/daemon/src");
+	// An explicit checkout root may refer to a revision before the layout move.
+	const usagePath = existsSync(join(daemonSource, "models")) ? "models/usage" : ".";
 	for (const name of [...modules, "usage-history.bench"]) {
-		const bytes = await readFile(join(root, `packages/daemon/src/${name}.ts`));
+		const bytes = await readFile(join(daemonSource, usagePath, `${name}.ts`));
 		hashes[`${name}.ts`] = hash(bytes);
 		sources[name] = bytes.toString("utf8");
 	}
@@ -85,10 +89,12 @@ try {
 			},
 		}),
 	);
+	const daemonRoot = (variant) => join(directory, variant, "runtime/packages/daemon");
+	const usageRoot = (variant) => join(daemonRoot(variant), "src", usagePath);
 	for (const variant of selected) {
-		const src = join(directory, variant, "runtime/packages/daemon/src");
+		const src = usageRoot(variant);
 		await mkdir(src, { recursive: true });
-		await writeFile(join(src, "../package.json"), '{"type":"module"}');
+		await writeFile(join(daemonRoot(variant), "package.json"), '{"type":"module"}');
 		for (const [name, original] of Object.entries(sources)) {
 			let code = original;
 			if (name === "usage-history" && variant.includes("nursery1")) {
@@ -102,12 +108,12 @@ try {
 		}
 		if (variant.startsWith("js_worker")) {
 			await buildUsageWorker(src);
-			await run(node, [generatorFile, "check", src]);
+			await run(node, [generatorFile, "check", src, "--usage-only"]);
 		}
 	}
 	const now = Date.now();
 	const seed = join(directory, "seed");
-	const bench = (variant) => join(directory, variant, "runtime/packages/daemon/src/usage-history.bench.ts");
+	const bench = (variant) => join(usageRoot(variant), "usage-history.bench.ts");
 	// A separate exited process seeds; no measured process ever loads the 50k fixture into its allocator.
 	await run(node, [bench(selected[0]), "--seed", seed, String(now)]);
 	const results = [];

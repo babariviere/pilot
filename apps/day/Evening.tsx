@@ -1,7 +1,7 @@
 // A calm evening: nothing waits, results came in since the afternoon and
 // two missions keep moving. Today offers the end of the day.
 import { mount } from "nsh";
-import { MockDayScreen, openDay } from "./mockFeeds";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
 
 const day = openDay("evening");
 mount(() => <MockDayScreen day={day} />);

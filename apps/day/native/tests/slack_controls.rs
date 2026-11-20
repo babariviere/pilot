@@ -1,11 +1,11 @@
 //! Released JSON bridge and real daemon/storage. No live Slack account or model.
-#[path = "support/day_library.rs"]
-mod day_library;
+#[path = "support/app_source.rs"]
+mod app_source;
 include!("support/intake_fixture.rs");
 
 #[test]
 fn paged_report_beyond_first_intake_page_starts_only_after_explicit_native_start() {
-    let mut f = Fixture::with_daemon("day-slack-controls.ts");
+    let mut f = Fixture::with_daemon("day/day-slack-controls.ts");
     f.stats("many");
     let b = f.bridge();
     let page = f.call(&b, "day.slack.read", json!({"offset":100}));
@@ -50,7 +50,7 @@ fn paged_report_beyond_first_intake_page_starts_only_after_explicit_native_start
 
 #[test]
 fn real_report_screen_saves_corrections_through_the_released_bridge_and_storage() {
-    let f = Fixture::with_daemon("day-slack-controls.ts");
+    let f = Fixture::with_daemon("day/day-slack-controls.ts");
     let b = f.bridge();
     let first = f.call(&b, "day.slack.read", json!({}));
     let added = f.call(&b,"day.slack.write",json!({"binding":first["value"]["snapshot"]["binding"],"action":"import","value":{"url":"https://example.slack.com/archives/COTHER/p1794843000000001"}}));
@@ -58,18 +58,7 @@ fn real_report_screen_saves_corrections_through_the_released_bridge_and_storage(
         .as_str()
         .unwrap();
     let day = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    // The released bundler requires imported SVGs to live inside the app root.
-    for entry in std::fs::read_dir(&day).unwrap() {
-        let p = entry.unwrap().path();
-        let name = p.file_name().unwrap().to_str().unwrap();
-        if p.is_file()
-            && (name.ends_with(".ts") || name.ends_with(".tsx"))
-            && !name.ends_with(".test.tsx")
-        {
-            std::fs::copy(&p, f.dir.join(name)).unwrap();
-        }
-    }
-    day_library::copy(&day, &f.dir);
+    app_source::copy(&day, &f.dir).unwrap();
     let source = format!(
         r#"import {{mount,host}} from 'nsh';
 import {{SlackReportsScreen}} from {};
@@ -77,9 +66,9 @@ import {{connectedSlackControls}} from {};
 import {{selectedSlackReport}} from {};
 selectedSlackReport.set({});
 mount(()=> <SlackReportsScreen day={{{{slack:connectedSlackControls(host.params.day.window,()=>{{}})}}}}/>);"#,
-        json!("./SlackReportsScreen.tsx"),
-        json!("./slackControls.ts"),
-        json!("./slackView.ts"),
+        json!("./sources/slack/SlackReportsScreen.tsx"),
+        json!("./settings/connections/slackControls.ts"),
+        json!("./sources/slack/slackView.ts"),
         json!(id)
     );
     let path = f.dir.join("Reports.tsx");
@@ -119,7 +108,7 @@ mount(()=> <SlackReportsScreen day={{{{slack:connectedSlackControls(host.params.
 #[test]
 fn source_open_pins_report_identity_and_refuses_stale_display() {
     use std::sync::{Arc, Mutex};
-    let mut f = Fixture::with_daemon("day-slack-controls.ts");
+    let mut f = Fixture::with_daemon("day/day-slack-controls.ts");
     let opened = Arc::new(Mutex::new(Vec::<String>::new()));
     let capture = opened.clone();
     let source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
@@ -151,7 +140,7 @@ fn source_open_pins_report_identity_and_refuses_stale_display() {
 
 #[test]
 fn report_tackled_is_explicit_fenced_and_kept_across_reopen() {
-    let mut f = Fixture::with_daemon("day-slack-controls.ts");
+    let mut f = Fixture::with_daemon("day/day-slack-controls.ts");
     let b = f.bridge();
     let first = f.call(&b, "day.slack.read", json!({}));
     let added = f.call(&b, "day.slack.write", json!({"binding":first["value"]["snapshot"]["binding"],"action":"import","value":{"url":"https://example.slack.com/archives/COTHER/p1794843000000001"}}));
@@ -180,7 +169,7 @@ fn report_tackled_is_explicit_fenced_and_kept_across_reopen() {
 
 #[test]
 fn a_send_lost_before_daemon_admission_can_be_set_aside_without_sending_again() {
-    let mut f = Fixture::with_daemon("day-slack-controls.ts");
+    let mut f = Fixture::with_daemon("day/day-slack-controls.ts");
     let b = f.bridge();
     let read = f.call(&b, "day.slack.read", json!({}));
     f.stats("drop");
@@ -208,7 +197,7 @@ fn a_send_lost_before_daemon_admission_can_be_set_aside_without_sending_again() 
 
 #[test]
 fn slack_tracking_and_independent_import_are_fenced_and_unknown_never_replays() {
-    let mut f = Fixture::with_daemon("day-slack-controls.ts");
+    let mut f = Fixture::with_daemon("day/day-slack-controls.ts");
     let b = f.bridge();
     let first = f.call(&b, "day.slack.read", json!({}));
     let s = &first["value"]["snapshot"];

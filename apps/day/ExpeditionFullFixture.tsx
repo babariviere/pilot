@@ -2,8 +2,8 @@
 // full window from the start. Every record is invented mock data.
 import { computed, mount, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { FullChart } from "./ExpeditionChart";
-import { openPlanning } from "./mockFeeds";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { FullChart } from "./missions/planning/ExpeditionChart";
 import { Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("wayfinder");

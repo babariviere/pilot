@@ -1,6 +1,6 @@
 //! The read-only Linear page (`Connected.tsx`) on the released host channel,
 //! one `Bridge` over the canonical `DayRoot` and an isolated real daemon with
-//! synthetic saved Linear issues (`packages/daemon/src/fixtures/day-intake.ts`,
+//! synthetic saved Linear issues (`packages/daemon/src/fixtures/day/day-intake.ts`,
 //! needs the repository's Node dependencies). Headless: no visible window,
 //! provider, live source poll or external write.
 //!
@@ -9,8 +9,6 @@
 //! the earlier saved copy, a lost read, and a replaced checkpoint that hides
 //! every row. Reading never polls Linear and sends nothing.
 #![allow(dead_code)]
-#[path = "support/day_library.rs"]
-mod day_library;
 include!("support/intake_fixture.rs");
 #[path = "support/app_source.rs"]
 mod app_source;
@@ -23,19 +21,7 @@ fn entry() -> PathBuf {
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = std::env::temp_dir().join(format!("day-linear-today-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    for file in std::fs::read_dir(&app).unwrap() {
-        let path = file.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
-            && !name.ends_with(".test.tsx")
-        {
-            app_source::copy(&path, &dir.join(&name));
-        }
-    }
-    // Shared chrome imports its packaged SVGs. Keep this isolated source copy
-    // complete rather than removing icons or granting filesystem capabilities.
-    // The component library lives in ui/; screens import it as "./ui".
-    day_library::copy(&app, &dir);
+    app_source::copy(&app, &dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

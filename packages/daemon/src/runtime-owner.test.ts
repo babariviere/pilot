@@ -6,9 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import release from "../../../package.json" with { type: "json" };
-import { daemonHello } from "./hello.ts";
+import { daemonHello } from "./transport/hello.ts";
 import { inspectRuntime, OWNER_FILE, ownRuntime, type RuntimeBuild } from "./runtime-owner.ts";
-import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
+import { type ReservationReceipt, UpdateReservation } from "./runtime/updates/update-reservation.ts";
 
 const build: RuntimeBuild = {
 	schema: 1,

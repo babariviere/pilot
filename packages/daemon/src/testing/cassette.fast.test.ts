@@ -45,7 +45,7 @@ test("cassette documents are versioned and non-JSON values cannot silently match
 	cycle.self = cycle;
 	for (const response of [NaN, Infinity, () => {}, new Map(), new Date(), [undefined], cycle])
 		assert.throws(() => new Cassette("invalid", [{ request: {}, response: response as never }]), /JSON/);
-	const cassette = await loadCassette(new URL("../fixtures/cassettes/github-discovery.json", import.meta.url));
+	const cassette = await loadCassette(new URL("../sources/github/fixtures/cassettes/github-discovery.json", import.meta.url));
 	assert.throws(() => cassette.assertDone(), /unused/);
 	const root = await mkdtemp(join(tmpdir(), "pilot-cassette-validation-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

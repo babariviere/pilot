@@ -19,12 +19,12 @@ Docs to use when the task touches them:
 
 - [README.md](README.md) is a short product introduction and setup entry point. Keep it short.
   Update concise feature guides in [docs/README.md](docs/README.md) when user-facing behavior changes.
-- Keep lasting contracts and runbooks beside the code they cover.
+- Keep lasting contracts, runbooks and live fixtures beside their owners.
+  For feature folders and stable entry points, see [Development](DEVELOPMENT.md#find-code-by-feature).
 - [DESIGN.md](DESIGN.md) holds the UI intent, state vocabulary and review checklist for UI changes.
-- Benchmarks for hot-path changes live in `scripts/bench` (reopen, workspace, daemon stalls and more),
-  `packages/*/src/*.bench.ts` and `packages/kernel/scripts/bench-*`;
-  [docs/technical/performance-check.md](docs/technical/performance-check.md) records a past CPU and memory audit and its method.
-- Agent-facing text (the Pilot prompt in `packages/kernel/src/policy.ts`, tool descriptions and the bundled
+- For hot-path changes, use [local measurements](scripts/testing.md#local-measurements)
+  and the benchmarks in `scripts/bench` or beside the affected code.
+- Agent-facing text (the Pilot prompt in `packages/kernel/src/runtime/policy.ts`, tool descriptions and the bundled
   `pilot-artifacts` skill) is loaded on every turn or tool listing. Keep it short, state boundaries plainly,
   and move detail into skill references or tool descriptions that load only when needed.
 
@@ -91,7 +91,7 @@ Single context: consult the glossary and relevant ADRs before design or refactor
   package's `package.json`; pnpm does not expose undeclared transitive dependencies.
 - Biome: tabs, width 120. `pnpm fmt` / `pnpm fmt:check`.
 - Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
-- See [testing.md](docs/technical/testing.md) for suite selection, replay-only fixtures, timeouts and concurrency.
+- See [testing.md](scripts/testing.md) for suite selection, replay-only fixtures, timeouts and concurrency.
   Use `pnpm test:fast` for quick feedback and `pnpm test` for the full suite.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
   your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test`.

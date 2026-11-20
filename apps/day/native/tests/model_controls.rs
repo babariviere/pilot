@@ -3,7 +3,7 @@ include!("support/intake_fixture.rs");
 
 #[test]
 fn native_settings_keep_exact_ack_and_unknown_is_lookup_only_across_reopen() {
-    let mut f = Fixture::with_daemon("day-model-controls.ts");
+    let mut f = Fixture::with_daemon("day/day-model-controls.ts");
     let b = f.bridge();
     let first = f.call(&b, "day.models.read", json!({}));
     let s = &first["value"]["snapshot"];

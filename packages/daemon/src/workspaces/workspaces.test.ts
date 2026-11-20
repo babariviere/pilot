@@ -1,0 +1,785 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readlinkSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { collectChanges } from "../changes/changes.ts";
+import {
+	createWorkspace as createWorkspaceReal,
+	dissociateWorkspace,
+	listRemoteBranches,
+	pruneRegenerable,
+	type Runner,
+	run,
+	trustWorkspaceMise,
+	workspaceBorrowsObjects,
+	workspaceBranch,
+	workspaceLeftovers,
+} from "./workspaces.ts";
+
+// Tests must never write to the host's mise trust database.
+const testRunner: Runner = (file, ...args) => (file === "mise" ? Promise.resolve("") : run(file, ...args));
+const createWorkspace: typeof createWorkspaceReal = (source, destination, runner = testRunner, ...args) =>
+	createWorkspaceReal(source, destination, runner, ...args);
+
+test("trusts only regular workspace mise configs, including local copies", async () => {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "pilot-mise-")));
+	try {
+		const cwd = join(root, "workspace");
+		mkdirSync(cwd);
+		const calls: string[][] = [];
+		const runner: Runner = async (file, args, directory) => {
+			assert.equal(file, "mise");
+			assert.equal(directory, cwd);
+			calls.push(args);
+			return "";
+		};
+		await trustWorkspaceMise(cwd, runner);
+		assert.deepEqual(calls, []);
+		writeFileSync(join(cwd, "mise.toml"), "[tools]\n");
+		writeFileSync(join(cwd, "mise.local.toml"), "[env]\n");
+		writeFileSync(join(root, "outside.toml"), "[env]\n");
+		symlinkSync(join(root, "outside.toml"), join(cwd, ".mise.toml"));
+		mkdirSync(join(root, "outside"));
+		writeFileSync(join(root, "outside/config.toml"), "[env]\n");
+		symlinkSync(join(root, "outside"), join(cwd, ".mise"));
+		writeFileSync(join(cwd, "mise"), "not a directory");
+		await trustWorkspaceMise(cwd, runner);
+		assert.deepEqual(calls, [
+			["trust", join(cwd, "mise.toml")],
+			["trust", join(cwd, "mise.local.toml")],
+		]);
+		await trustWorkspaceMise(cwd, async () => {
+			throw Object.assign(new Error("missing"), { code: "ENOENT" });
+		});
+		await assert.rejects(
+			trustWorkspaceMise(cwd, async () => {
+				throw new Error("trust failed");
+			}),
+			/trust failed/,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+const git = (cwd: string, ...args: string[]) =>
+	execFileSync("git", args, {
+		cwd,
+		encoding: "utf8",
+		env: {
+			...process.env,
+			GIT_AUTHOR_NAME: "t",
+			GIT_AUTHOR_EMAIL: "t@t",
+			GIT_COMMITTER_NAME: "t",
+			GIT_COMMITTER_EMAIL: "t@t",
+		},
+	}).trim();
+
+const jj = (cwd: string, ...args: string[]) => execFileSync("jj", args, { cwd, encoding: "utf8" }).trim();
+const hasJj = (() => {
+	try {
+		execFileSync("jj", ["--version"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+})();
+
+test("lists only origin's live heads and symbolic default without changing the checkout", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-remote-branches-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "release", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "a.txt"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "base");
+		git(source, "push", "--quiet", "origin", "HEAD:release", "HEAD:z-topic", "HEAD:a/topic", "HEAD:deleted");
+		git(remote, "update-ref", "refs/heads/HEAD", "refs/heads/release");
+		git(source, "push", "--quiet", "origin", ":deleted");
+		git(source, "update-ref", "refs/remotes/origin/deleted", "HEAD");
+		git(source, "branch", "local-only");
+		git(source, "tag", "tag-only");
+		git(source, "push", "--quiet", "origin", "tag-only");
+		git(root, "init", "--quiet", "--bare", join(root, "other.git"));
+		git(source, "remote", "add", "other", join(root, "other.git"));
+		git(source, "push", "--quiet", "other", "HEAD:other-only");
+		writeFileSync(join(source, "a.txt"), "dirty\n");
+		const refs = git(source, "show-ref");
+		const status = git(source, "status", "--porcelain");
+		const fetchHead = existsSync(join(source, ".git", "FETCH_HEAD"))
+			? readFileSync(join(source, ".git", "FETCH_HEAD"), "utf8")
+			: undefined;
+		assert.deepEqual(await listRemoteBranches(source), {
+			branches: ["a/topic", "release", "z-topic"],
+			defaultBranch: "release",
+		});
+		assert.equal(git(source, "show-ref"), refs);
+		assert.equal(git(source, "status", "--porcelain"), status);
+		assert.equal(
+			existsSync(join(source, ".git", "FETCH_HEAD"))
+				? readFileSync(join(source, ".git", "FETCH_HEAD"), "utf8")
+				: undefined,
+			fetchHead,
+		);
+		git(remote, "symbolic-ref", "HEAD", "refs/heads/missing");
+		assert.deepEqual(await listRemoteBranches(source), { branches: ["a/topic", "release", "z-topic"] });
+		rmSync(remote, { recursive: true, force: true });
+		await assert.rejects(listRemoteBranches(source), /Unable to list origin branches/);
+		git(source, "remote", "remove", "origin");
+		assert.deepEqual(await listRemoteBranches(source), { branches: [] });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("selected origin branch starts at its fresh remote tip detached and supplies the diff base", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-selected-base-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "a.txt"), "main\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "main");
+		git(source, "push", "--quiet", "origin", "HEAD:main", "HEAD:release/stable");
+		const publisher = join(root, "publisher");
+		git(root, "clone", "--quiet", remote, publisher);
+		git(publisher, "switch", "--quiet", "release/stable");
+		writeFileSync(join(publisher, "a.txt"), "selected tip\n");
+		git(publisher, "commit", "--quiet", "-am", "selected");
+		git(publisher, "push", "--quiet", "origin", "HEAD");
+		const tip = git(publisher, "rev-parse", "HEAD");
+		assert.notEqual(git(source, "rev-parse", "origin/release/stable"), tip);
+		writeFileSync(join(source, "a.txt"), "user dirty\n");
+		const refs = git(source, "show-ref");
+		const workspace = await createWorkspace(source, join(root, "workspace"), undefined, undefined, "release/stable");
+		assert.equal(workspace.base, "origin/release/stable");
+		assert.equal(git(workspace.path, "rev-parse", "HEAD"), tip);
+		assert.equal(git(workspace.path, "branch", "--show-current"), "");
+		assert.equal(readFileSync(join(workspace.path, "a.txt"), "utf8"), "selected tip\n");
+		git(workspace.path, "switch", "--quiet", "-c", "agent-topic");
+		writeFileSync(join(workspace.path, "a.txt"), "agent edit\n");
+		const changes = await collectChanges(workspace.path, workspace.base);
+		assert.match(changes.base, /^origin\/release\/stable/);
+		assert.match(changes.diff, /-selected tip\n\+agent edit/);
+		assert.doesNotMatch(changes.diff, /-main/);
+		assert.equal(git(source, "show-ref"), refs);
+		assert.equal(readFileSync(join(source, "a.txt"), "utf8"), "user dirty\n");
+		// These are real head names, not remote-tracking refs, full ref paths or command options.
+		const literalNames = ["origin/main", "refs/heads/main", "--upload-pack=bad"];
+		git(publisher, "push", "--quiet", "origin", ...literalNames.map((name) => `HEAD:refs/heads/${name}`));
+		const advertised = await listRemoteBranches(source);
+		assert.deepEqual(advertised.branches, [
+			"--upload-pack=bad",
+			"main",
+			"origin/main",
+			"refs/heads/main",
+			"release/stable",
+		]);
+		for (const [index, name] of advertised.branches.entries()) {
+			const selected = await createWorkspace(source, join(root, `literal-${index}`), undefined, undefined, name);
+			assert.equal(selected.base, `origin/${name}`);
+			assert.equal(git(selected.path, "rev-parse", "HEAD"), git(remote, "rev-parse", `refs/heads/${name}`));
+		}
+		assert.equal(git(source, "show-ref"), refs);
+		assert.equal(readFileSync(join(source, "a.txt"), "utf8"), "user dirty\n");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("explicit bases reject deleted, missing, local-only, tag-only and invalid references instead of falling back", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-invalid-base-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "a.txt"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "base");
+		git(source, "push", "--quiet", "origin", "HEAD:main", "HEAD:deleted");
+		git(source, "push", "--quiet", "origin", ":deleted");
+		git(source, "update-ref", "refs/remotes/origin/deleted", "HEAD");
+		git(source, "branch", "local-only");
+		git(source, "tag", "tag-only");
+		git(source, "push", "--quiet", "origin", "tag-only");
+		let index = 0;
+		for (const name of [
+			"deleted",
+			"nonexistent",
+			"local-only",
+			"tag-only",
+			"origin/main",
+			"refs/heads/main",
+			"--upload-pack=bad",
+			git(source, "rev-parse", "HEAD"),
+		])
+			await assert.rejects(
+				createWorkspace(source, join(root, `w${index++}`), undefined, undefined, name),
+				/Origin branch unavailable/,
+			);
+		for (const name of [
+			"",
+			"HEAD",
+			"main~1",
+			"main^{commit}",
+			"main:other",
+			"a..b",
+			"a b",
+			"a\n",
+			"@{-1}",
+			"a*",
+			"a.lock",
+		])
+			await assert.rejects(
+				createWorkspace(source, join(root, `w${index++}`), undefined, undefined, name),
+				/valid exact origin branch name/,
+			);
+		rmSync(remote, { recursive: true, force: true });
+		await assert.rejects(
+			createWorkspace(source, join(root, `w${index++}`), undefined, undefined, "main"),
+			/Origin branch unavailable/,
+		);
+		git(source, "remote", "remove", "origin");
+		await assert.rejects(
+			createWorkspace(source, join(root, `w${index++}`), undefined, undefined, "main"),
+			/no origin remote/,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("clones a project into a private workspace detached from the remote default, leaving the branch choice to the agent", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "README.md"), "hello\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "init");
+		git(source, "push", "--quiet", "origin", "HEAD:main");
+		// Uncommitted work in the user's checkout must not leak into the workspace.
+		writeFileSync(join(source, "README.md"), "dirty\n");
+		git(source, "switch", "--quiet", "-c", "local-topic");
+
+		const destination = join(root, "workspace");
+		const workspace = await createWorkspace(source, destination);
+		assert.equal(workspace.branch, undefined);
+		assert.equal(workspace.base, "origin/main");
+		assert.equal(workspace.upstream, remote);
+		assert.equal(workspace.jj, false);
+		assert.equal(git(destination, "branch", "--show-current"), "");
+		assert.equal(await workspaceBranch(destination), undefined);
+		git(destination, "switch", "--quiet", "-c", "fix-readme");
+		assert.equal(await workspaceBranch(destination), "fix-readme");
+		assert.equal(git(destination, "remote", "get-url", "origin"), remote);
+		assert.equal(readFileSync(join(destination, "README.md"), "utf8"), "hello\n");
+		assert.ok(existsSync(join(source, "README.md")));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workspaces borrow the source's objects, then become self-contained after dissociation", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-dissociate-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		for (const content of ["one\n", "two\n"]) {
+			writeFileSync(join(source, "README.md"), content);
+			git(source, "add", ".");
+			git(source, "commit", "--quiet", "-m", content.trim());
+		}
+		git(source, "push", "--quiet", "origin", "HEAD:main");
+		const workspace = await createWorkspace(source, join(root, "workspace"));
+		assert.equal(workspaceBorrowsObjects(workspace.path), true);
+		// Nothing was copied: every commit object lives in the source.
+		assert.equal(git(workspace.path, "count-objects", "-v").match(/^in-pack: (\d+)/m)?.[1], "0");
+		assert.equal(await dissociateWorkspace(workspace.path), true);
+		assert.equal(workspaceBorrowsObjects(workspace.path), false);
+		assert.equal(await dissociateWorkspace(workspace.path), true, "dissociation is idempotent");
+		rmSync(source, { recursive: true, force: true });
+		rmSync(remote, { recursive: true, force: true });
+		git(workspace.path, "fsck", "--connectivity-only", "--no-dangling");
+		assert.equal(git(workspace.path, "log", "--format=%s", "HEAD"), "two\none");
+		assert.equal(readFileSync(join(workspace.path, "README.md"), "utf8"), "two\n");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("refuses folders that are not git repositories", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
+	try {
+		await assert.rejects(createWorkspace(root, join(root, "w")), /not a git repository/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("local-only clones pin their base before the agent creates and commits on a branch", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-local-"));
+	try {
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "-b", "main", source);
+		writeFileSync(join(source, "README.md"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "init");
+		const base = git(source, "rev-parse", "HEAD");
+		const workspace = await createWorkspace(source, join(root, "workspace"));
+		assert.equal(workspace.base, base);
+		assert.equal(await workspaceBranch(workspace.path), undefined);
+		git(workspace.path, "switch", "--quiet", "-c", "improve-readme");
+		writeFileSync(join(workspace.path, "README.md"), "updated\n");
+		git(workspace.path, "commit", "--quiet", "-am", "update");
+		assert.notEqual(git(workspace.path, "rev-parse", "HEAD"), workspace.base);
+		assert.equal(git(source, "branch", "--show-current"), "main");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("jj clones inherit no task bookmark and detect the agent's chosen bookmark after commits", {
+	skip: !hasJj,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-jj-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "README.md"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "init");
+		git(source, "push", "--quiet", "origin", "HEAD:main");
+		jj(source, "git", "init", "--colocate");
+		const workspace = await createWorkspace(source, join(root, "workspace"));
+		assert.equal(workspace.jj, true);
+		assert.equal(await workspaceBranch(workspace.path), undefined);
+		assert.equal(jj(workspace.path, "bookmark", "list"), "");
+		jj(workspace.path, "bookmark", "create", "fix-readme", "-r", "@");
+		assert.equal(await workspaceBranch(workspace.path), "fix-readme");
+		writeFileSync(join(workspace.path, "README.md"), "updated\n");
+		jj(workspace.path, "commit", "-m", "update");
+		jj(workspace.path, "bookmark", "set", "fix-readme", "-r", "@-");
+		assert.equal(await workspaceBranch(workspace.path), "fix-readme");
+		jj(workspace.path, "bookmark", "create", "other-fix", "-r", "@-");
+		assert.equal(await workspaceBranch(workspace.path), undefined, "ambiguous bookmarks must not be guessed");
+		assert.equal(await workspaceBranch(workspace.path, "fix-readme"), "fix-readme");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+for (const ignoreLocation of ["repository", "local", "global"]) {
+	test(`copies ignored mise local configs (${ignoreLocation} rules) without other uncommitted files`, async () => {
+		const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
+		try {
+			const source = join(root, "source");
+			const destination = join(root, "workspace");
+			git(root, "init", "--quiet", "-b", "main", source);
+			writeFileSync(join(source, "README.md"), "committed\n");
+			const configs = ["mise.local.toml", ".mise.local.toml", "mise/config.local.toml", ".mise/config.local.toml"];
+			const rules = [...configs, "node_modules/", "dist/", ".env", ".jj/"].join("\n");
+			if (ignoreLocation === "repository") writeFileSync(join(source, ".gitignore"), rules);
+			else if (ignoreLocation === "local") writeFileSync(join(source, ".git/info/exclude"), rules);
+			else {
+				const globalIgnore = join(root, "global-ignore");
+				writeFileSync(globalIgnore, rules);
+				git(source, "config", "core.excludesFile", globalIgnore);
+			}
+			git(source, "add", ".");
+			git(source, "commit", "--quiet", "-m", "init");
+			mkdirSync(join(source, "mise"));
+			mkdirSync(join(source, ".mise"));
+			for (const path of configs) writeFileSync(join(source, path), `# ${path}\n[env]\nLOCAL = 'yes'\n`);
+			for (const path of ["node_modules", "dist"]) {
+				mkdirSync(join(source, path));
+				writeFileSync(join(source, path, "output"), "ignored\n");
+			}
+			writeFileSync(join(source, ".env"), "SECRET=not-copied\n");
+			writeFileSync(join(source, "untracked.txt"), "untracked\n");
+			writeFileSync(join(source, "README.md"), "dirty\n");
+
+			const trusted: string[] = [];
+			await createWorkspace(source, destination, async (file, args, ...rest) => {
+				if (file !== "mise") return run(file, args, ...rest);
+				assert.equal(args[0], "trust");
+				assert.ok(existsSync(args[1]!), "local config is copied before trust");
+				trusted.push(args[1]!);
+				return "";
+			});
+			assert.deepEqual(trusted.sort(), configs.map((path) => join(realpathSync(destination), path)).sort());
+			for (const path of configs) {
+				assert.equal(readFileSync(join(destination, path), "utf8"), readFileSync(join(source, path), "utf8"));
+				assert.equal(git(destination, "check-ignore", "--", path), path);
+			}
+			assert.equal(git(destination, "status", "--porcelain"), "");
+			assert.equal(readFileSync(join(destination, "README.md"), "utf8"), "committed\n");
+			assert.equal(readFileSync(join(source, "README.md"), "utf8"), "dirty\n");
+			for (const path of ["node_modules", "dist", ".env", "untracked.txt"]) {
+				assert.equal(existsSync(join(destination, path)), false);
+			}
+			writeFileSync(join(destination, "mise.local.toml"), "workspace-only\n");
+			assert.match(readFileSync(join(source, "mise.local.toml"), "utf8"), /LOCAL = 'yes'/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
+
+test("does not copy tracked, unignored or symlinked local configs", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
+	try {
+		const source = join(root, "source");
+		const destination = join(root, "workspace");
+		git(root, "init", "--quiet", "-b", "main", source);
+		writeFileSync(join(source, ".gitignore"), "mise.local.toml\n.mise.local.toml\n");
+		writeFileSync(join(source, "mise.local.toml"), "committed\n");
+		git(source, "add", "--force", "mise.local.toml", ".gitignore");
+		git(source, "commit", "--quiet", "-m", "init");
+		writeFileSync(join(source, "mise.local.toml"), "dirty\n");
+		const external = join(root, "external");
+		writeFileSync(external, "external\n");
+		symlinkSync(external, join(source, ".mise.local.toml"));
+		mkdirSync(join(source, "mise"));
+		writeFileSync(join(source, "mise/config.local.toml"), "unignored\n");
+
+		await createWorkspace(source, destination);
+		assert.equal(readFileSync(join(destination, "mise.local.toml"), "utf8"), "committed\n");
+		assert.equal(existsSync(join(destination, ".mise.local.toml")), false);
+		assert.equal(existsSync(join(destination, "mise/config.local.toml")), false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("does not overwrite remote files or copy through checked-out symlinks", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		const destination = join(root, "workspace");
+		const external = join(root, "external");
+		const dangling = join(root, "missing");
+		mkdirSync(external);
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "mise.local.toml"), "remote config\n");
+		writeFileSync(join(source, "mise"), "remote file\n");
+		symlinkSync(dangling, join(source, ".mise.local.toml"));
+		symlinkSync(external, join(source, ".mise"));
+		git(source, "add", "--force", "mise.local.toml", ".mise.local.toml", "mise", ".mise");
+		git(source, "commit", "--quiet", "-m", "init");
+		git(source, "push", "--quiet", "origin", "HEAD:main");
+		git(source, "switch", "--quiet", "-c", "local-topic");
+		git(source, "rm", "--quiet", "mise.local.toml", ".mise.local.toml", "mise", ".mise");
+		writeFileSync(join(source, ".git/info/exclude"), "mise.local.toml\n.mise.local.toml\nmise/\n.mise/\n");
+		mkdirSync(join(source, "mise"));
+		mkdirSync(join(source, ".mise"));
+		for (const path of ["mise.local.toml", ".mise.local.toml", "mise/config.local.toml", ".mise/config.local.toml"]) {
+			writeFileSync(join(source, path), "local config\n");
+		}
+
+		await createWorkspace(source, destination);
+		assert.equal(readFileSync(join(destination, "mise.local.toml"), "utf8"), "remote config\n");
+		assert.equal(readFileSync(join(destination, "mise"), "utf8"), "remote file\n");
+		assert.equal(readlinkSync(join(destination, ".mise.local.toml")), dangling);
+		assert.equal(readlinkSync(join(destination, ".mise")), external);
+		assert.equal(existsSync(dangling), false);
+		assert.equal(existsSync(join(external, "config.local.toml")), false);
+		assert.equal(git(destination, "status", "--porcelain"), "");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("cancelled fetch never proceeds to checkout", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-cancel-"));
+	const signal = new AbortController();
+	const commands: string[] = [];
+	await assert.rejects(
+		createWorkspace(
+			root,
+			join(root, "destination"),
+			async (_file, args, _cwd, _timeout, received) => {
+				assert.equal(received, signal.signal);
+				commands.push(args.find((arg) => !arg.startsWith("-") && !arg.includes("="))!);
+				if (args[0] === "rev-parse") return "true";
+				if (args[0] === "remote" && args[1] === "get-url") return "remote";
+				if (args.includes("fetch") && args.includes("origin")) {
+					signal.abort();
+					throw new Error("aborted fetch");
+				}
+				return "";
+			},
+			signal.signal,
+		),
+	);
+	rmSync(root, { recursive: true, force: true });
+	assert.equal(commands.includes("checkout"), false);
+});
+
+test("aborting workspace preparation waits for its fetch process and helpers to close", {
+	skip: process.platform === "win32",
+	timeout: 20_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-abort-"));
+	const bin = join(root, "bin");
+	mkdirSync(bin);
+	const helperPid = join(root, "helper.pid");
+	const fetchPid = join(root, "fetch.pid");
+	const fetchScript = join(root, "fetch.cjs");
+	const helper = `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(helperPid)}, String(process.pid)); setInterval(() => {}, 1000);`;
+	writeFileSync(
+		fetchScript,
+		`
+const fs = require('node:fs');
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(fetchPid)}, String(process.pid));
+require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(helper)}], { stdio: 'inherit' })
+ .once('error', error => { console.error(error); process.exit(1); });
+setInterval(() => {}, 1000);
+`,
+	);
+	writeFileSync(
+		join(bin, "git"),
+		`#!/bin/sh
+case "$1" in
+ rev-parse) echo true ;;
+ remote) if [ "$2" = get-url ]; then echo fake-upstream; fi ;;
+ -c) exec "${process.execPath}" "${fetchScript}" ;;
+ fetch) exec "${process.execPath}" "${fetchScript}" ;;
+esac
+`,
+		{ mode: 0o700 },
+	);
+	const oldPath = process.env.PATH;
+	process.env.PATH = `${bin}:${oldPath}`;
+	const signal = new AbortController();
+	const preparing = createWorkspace(root, join(root, "workspace"), undefined, signal.signal);
+	let completed = false;
+	let preparationError: unknown;
+	preparing.then(
+		() => {
+			completed = true;
+		},
+		(error) => {
+			completed = true;
+			preparationError = error;
+		},
+	);
+	try {
+		// Wait for the helper's own handshake, after its SIGTERM handler is installed.
+		// Shell builtins above avoid several cold Node starts unrelated to the cancellation assertion.
+		const deadline = Date.now() + 10_000;
+		while (!existsSync(helperPid)) {
+			assert.equal(completed, false, `Preparation ended before helper startup: ${String(preparationError)}`);
+			assert.ok(Date.now() < deadline, "fetch helper did not start");
+			await delay(5);
+		}
+		signal.abort();
+		await assert.rejects(preparing, /aborted/);
+		for (const file of [fetchPid, helperPid]) {
+			const pid = Number(readFileSync(file, "utf8"));
+			// A terminated helper can briefly remain a zombie until its new parent reaps it.
+			const reapingDeadline = Date.now() + 3_000;
+			for (;;) {
+				try {
+					process.kill(pid, 0);
+				} catch (error) {
+					assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
+					break;
+				}
+				assert.ok(Date.now() < reapingDeadline, `Cancelled process ${pid} was not reaped`);
+				await delay(5);
+			}
+		}
+	} finally {
+		signal.abort();
+		await preparing.catch(() => undefined);
+		process.env.PATH = oldPath;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("prune keeps tracked, unignored and symlinked Ghostty vendor checkouts", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-vendor-"));
+	const vendor = "apps/macos/Vendor/libghostty-spm";
+	try {
+		for (const mode of ["tracked", "unignored", "symlink", "parent-symlink"] as const) {
+			const cwd = join(root, mode);
+			mkdirSync(cwd);
+			git(cwd, "init", "--quiet");
+			writeFileSync(join(cwd, ".gitignore"), mode === "unignored" ? "" : "apps/macos/Vendor/\n");
+			const outside = join(root, `outside-${mode}`);
+			mkdirSync(outside);
+			writeFileSync(join(outside, "input"), "keep outside\n");
+			mkdirSync(join(cwd, "apps/macos"), { recursive: true });
+			if (mode === "parent-symlink") {
+				mkdirSync(join(outside, "libghostty-spm"));
+				writeFileSync(join(outside, "libghostty-spm/input"), "keep parent target\n");
+				symlinkSync(outside, join(cwd, "apps/macos/Vendor"));
+			} else {
+				mkdirSync(join(cwd, "apps/macos/Vendor"));
+				if (mode === "symlink") symlinkSync(outside, join(cwd, vendor));
+				else {
+					mkdirSync(join(cwd, vendor));
+					writeFileSync(join(cwd, vendor, "input"), "keep input\n");
+					if (mode === "tracked") git(cwd, "add", "-f", `${vendor}/input`);
+				}
+			}
+			assert.deepEqual(await pruneRegenerable(cwd), [], mode);
+			assert.ok(existsSync(join(cwd, vendor, "input")), mode);
+			assert.equal(readFileSync(join(outside, "input"), "utf8"), "keep outside\n");
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("prune deletes only ignored regenerable directories without tracked files or symlinks", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-"));
+	try {
+		git(root, "init", "--quiet");
+		writeFileSync(
+			join(root, ".gitignore"),
+			"node_modules/\napps/*/.build/\ndist/\nsecret/\nvendor/\napps/macos/Vendor/\n",
+		);
+		mkdirSync(join(root, "dist"));
+		writeFileSync(join(root, "dist", "keep.js"), "tracked output\n");
+		git(root, "add", ".");
+		git(root, "add", "-f", "dist/keep.js");
+		git(root, "commit", "--quiet", "-m", "base");
+		mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(root, "node_modules", "pkg", "index.js"), "dep\n");
+		mkdirSync(join(root, "apps", "mac", ".build"), { recursive: true });
+		writeFileSync(join(root, "apps", "mac", ".build", "out"), "binary\n");
+		writeFileSync(join(root, "dist", "extra.js"), "ignored next to tracked\n");
+		mkdirSync(join(root, "apps/macos/Vendor/libghostty-spm"), { recursive: true });
+		writeFileSync(join(root, "apps/macos/Vendor/libghostty-spm/.gitattributes"), "generated\n");
+		mkdirSync(join(root, "apps/macos/Vendor/other-dependency"));
+		writeFileSync(join(root, "apps/macos/Vendor/other-dependency/input"), "keep\n");
+		mkdirSync(join(root, "secret"));
+		writeFileSync(join(root, "secret", "token"), "keep\n");
+		mkdirSync(join(root, "build"));
+		writeFileSync(join(root, "build", "notes.txt"), "unignored build directory\n");
+		const outside = mkdtempSync(join(tmpdir(), "pilot-prune-outside-"));
+		mkdirSync(join(outside, "node_modules"));
+		writeFileSync(join(outside, "node_modules", "kept"), "outside\n");
+		mkdirSync(join(root, "vendor"));
+		symlinkSync(join(outside, "node_modules"), join(root, "vendor", "node_modules"));
+		try {
+			assert.deepEqual((await pruneRegenerable(root)).sort(), [
+				"apps/mac/.build",
+				"apps/macos/Vendor/libghostty-spm",
+				"node_modules",
+			]);
+			assert.ok(existsSync(join(root, "apps/macos/Vendor/other-dependency/input")));
+			assert.equal(existsSync(join(root, "node_modules")), false);
+			assert.equal(existsSync(join(root, "apps", "mac", ".build")), false);
+			assert.ok(existsSync(join(root, "apps", "mac")));
+			assert.equal(readFileSync(join(root, "dist", "keep.js"), "utf8"), "tracked output\n");
+			assert.ok(existsSync(join(root, "dist", "extra.js")), "directories with tracked files are kept");
+			assert.ok(existsSync(join(root, "secret", "token")), "other ignored inputs are kept");
+			assert.ok(existsSync(join(root, "build", "notes.txt")), "unignored directories are kept");
+			assert.ok(existsSync(join(outside, "node_modules", "kept")), "symlinks are never followed");
+			assert.equal(git(root, "status", "--porcelain", "--untracked-files=no"), "", "tracked files are untouched");
+			assert.deepEqual(await pruneRegenerable(root), [], "pruning is idempotent");
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("pruning discovers build outputs beneath collapsed ignored parents without deleting other inputs", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-collapsed-"));
+	const outside = mkdtempSync(join(tmpdir(), "pilot-prune-collapsed-outside-"));
+	try {
+		git(root, "init", "--quiet");
+		writeFileSync(join(root, ".gitignore"), "scratch/\n");
+		git(root, "add", ".gitignore");
+		git(root, "commit", "--quiet", "-m", "base");
+		for (const path of [
+			"scratch/rust/target",
+			"scratch/swift/.build",
+			"scratch/nested/target",
+			"scratch/target/.git",
+			"scratch/metadata/.jj/target",
+		]) {
+			mkdirSync(join(root, path), { recursive: true });
+			writeFileSync(join(root, path, "output"), "generated\n");
+		}
+		mkdirSync(join(root, "scratch/nested/.git"));
+		writeFileSync(join(root, "scratch", "secret"), "keep\n");
+		mkdirSync(join(outside, "target"));
+		writeFileSync(join(outside, "target", "output"), "outside\n");
+		symlinkSync(outside, join(root, "scratch", "linked"));
+		assert.deepEqual((await pruneRegenerable(root)).sort(), ["scratch/rust/target", "scratch/swift/.build"]);
+		for (const path of [
+			"scratch/secret",
+			"scratch/nested/target/output",
+			"scratch/metadata/.jj/target/output",
+			"scratch/target/.git/output",
+		])
+			assert.ok(existsSync(join(root, path)), path);
+		assert.ok(existsSync(join(outside, "target", "output")));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
+	}
+});
+
+test("leftover discovery reports extra checkouts, not managed data or symlink targets", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-leftovers-"));
+	try {
+		for (const path of ["workspace/.jj", "durable/.git", "artifacts/.git", "extra/.jj", "plain"])
+			mkdirSync(join(root, path), { recursive: true });
+		mkdirSync(join(root, "worktree"));
+		writeFileSync(join(root, "worktree", ".git"), "gitdir: elsewhere\n");
+		symlinkSync(join(root, "extra"), join(root, "linked"));
+		assert.deepEqual(await workspaceLeftovers(root), ["extra", "worktree"]);
+		assert.ok(existsSync(join(root, "extra", ".jj")), "discovery is read-only");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("build-output discovery fails boundedly before deleting any candidates", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-limit-"));
+	try {
+		mkdirSync(join(root, "target"));
+		writeFileSync(join(root, "target", "output"), "keep until discovery completes\n");
+		await assert.rejects(
+			pruneRegenerable(root, async () => "target/\0".repeat(10_001)),
+			/discovery limit reached/,
+		);
+		assert.ok(existsSync(join(root, "target", "output")));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

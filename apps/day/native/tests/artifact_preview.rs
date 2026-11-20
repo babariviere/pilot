@@ -97,7 +97,7 @@ fn main() {
         &entry,
         r#"
 import {mount,Text,View,signal,host} from 'nsh';
-import {ArtifactPreview} from './ArtifactPreview';
+import {ArtifactPreview} from './artifacts/ArtifactPreview';
 const inspected=signal(null);
 host.on('fixture.show',value=>inspected.set(value));
 mount(()=><View class="flex-1"><Text>Parent stays connected</Text>

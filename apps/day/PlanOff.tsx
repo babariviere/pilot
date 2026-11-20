@@ -1,6 +1,6 @@
 // Planning is not connected: New shows why and sends nothing.
 import { mount } from "nsh";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
 
 const day = openDay("quiet");
 const plans = openPlanning("unavailable");

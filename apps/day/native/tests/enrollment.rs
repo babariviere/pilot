@@ -26,7 +26,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures/day-planning-enrollment.ts");
+            .join("../../../packages/daemon/src/fixtures/day/planning/day-planning-enrollment.ts");
         let mut child = Command::new("node")
             .arg(script)
             .env_remove("PILOT_HOME")

@@ -3,10 +3,11 @@
 Pilot Day is the only Pilot desktop app. It uses Native Shell (NSH) TSX and a Rust
 core in `native/`. The desktop target is Apple Silicon macOS; Linux desktop is deferred.
 
-The default entry (`App.tsx`) runs `Connected.tsx`. It shows only what the
-window's native root reads from the Pilot service, never examples. The root comes from the native
+Both `App.tsx` (the default entry) and `Connected.tsx` mount `app/ConnectedDay.tsx`.
+The connected window shows only what its native root reads from the Pilot service, never examples.
+The root comes from the native
 host in a separately verified distribution. Its
-[connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
+[connected launch requirements](scripts/day-package-inputs.md#connected-launch)
 include explicit native selection and a compatible existing daemon. Build inputs
 are not a connected daily-driver candidate.
 The native launcher selects the profile/service, not a project or model. Today
@@ -18,7 +19,7 @@ its configured model and trusted planning setup. Plan a mission and Start as one
 chat remain separate explicit actions. Saved drafts keep their chosen project.
 Command+K opens a palette over any screen. It goes to Day's places and to the
 missions Today and Planning list; it only navigates and never starts work.
-Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
+Use the [connected candidate recipe](scripts/day-connected-candidate.md)
 to prepare the real native app without installing or updating it.
 For private use, follow [installation and setup](../../docs/getting-started.md).
 The repository cutover does not install Day, uninstall Pilot Next, change user data,
@@ -39,8 +40,7 @@ Prerequisites: macOS arm64, Command Line Tools, Rust 1.99.1, Cargo on `PATH`,
 and installed NSH 0.6.1 (`2f51d86`). `NSH_DAY_CLI` can
 select a local official distribution without changing a global installation. Prepare the
 workspace dependencies before running checks. Cargo may download locked crates.
-Local commands use Cargo on `PATH`. The wrapper accepts an explicit
-`NSH_DAY_REAL_CARGO` for CI. Cargo and NSH choose their own target paths.
+Day commands use Cargo on `PATH`. Cargo and NSH choose their own target paths.
 
 From the repository root:
 
@@ -65,7 +65,7 @@ Cargo. This runs a snapshot of the current UI sources; rerun after edits.
 
 ```sh
 apps/day/nsh.sh mock run RecoveryFixture.tsx
-apps/day/nsh.sh mock test ScreenAgentBar.test.tsx
+apps/day/nsh.sh mock test screen-agent/ScreenAgentBar.test.tsx
 ```
 
 Use the regular commands for `MockApp.tsx`, Rust-backed fixtures and native
@@ -81,29 +81,29 @@ apps/day/nsh.sh test App.test.tsx
 (cd apps/day/native && ../scripts/cargo test --locked)
 ```
 
-Run the matching `*.test.tsx` file for the feature you change. Headless tests
-check behavior, not native appearance, keyboard input or IME support.
+Run the matching `*.test.tsx` file using its path relative to `apps/day`.
+Headless tests check behavior, not native appearance, keyboard input or IME support.
 `nsh check` is Day's TypeScript check. `scripts/typecheck.sh` checks the
 workspace packages only, not `apps/day`.
 
 ### Screen captures
 
 `*Visual.test.tsx` files capture screens on the macOS host.
-`TodayVisual.test.tsx` is the model: it opens a mock-data entry in light and
+`today/TodayVisual.test.tsx` is the model: it opens a mock-data entry in light and
 dark, at 1100 and 480 points wide, and saves PNGs under `output/`.
 Headless runs draw nothing:
 
 ```sh
-apps/day/nsh.sh test TodayVisual.test.tsx --target macos
+apps/day/nsh.sh test today/TodayVisual.test.tsx --target macos
 ```
 
 ### Before and after captures
 
 For a change users can see, capture the real views before and after it. Write or reuse a capture test that calls
-`app.screenshot("output/<name>.png")` on a fixture (see `Native.test.tsx`), then run:
+`app.screenshot("output/<name>.png")` on a fixture (see `app/Native.test.tsx`), then run:
 
 ```sh
-apps/day/scripts/before-after.sh -r <landed revision> --filter '<test name>' Native.test.tsx
+apps/day/scripts/before-after.sh -r <landed revision> --filter '<test name>' app/Native.test.tsx
 ```
 
 It runs that test from the landed revision in two temporary jj workspaces, at the revision and at its parent
@@ -116,7 +116,9 @@ For a new screen with no Before, use `--new-screen` to avoid building an unused 
 
 - [AGENTS.md](AGENTS.md) has the shared development rules.
 - `native/` owns read models, rules and native service access.
-- TSX files hold the screens. They compose parts from the design library in
+- `app/` holds the connected window and shared navigation. Screen code and NSH
+  tests live in feature directories such as `today/` and `missions/planning/`.
+  Screens compose parts from the design library in
   `ui/` ([guide](ui/README.md)) and write no look classes.
   [DESIGN.md](../../DESIGN.md#pilot-day) has the design intent.
 - `theme.json` holds the colour, radius and font tokens for light and dark.
@@ -124,5 +126,6 @@ For a new screen with no Before, use `--new-screen` to avoid building an unused 
 - `fonts/` bundles Geist and Geist Mono under the SIL Open Font License
   (`fonts/OFL.txt`). `ui/fonts.ts` registers them.
 - NSH artifacts import the same library from `pilot-day/ui`
-  ([Day design system](../../docs/technical/day-design-system.md)).
+  ([Day design system](ui/day-design-system.md)).
 - `fixtures/` contains optional comparisons and design prototypes, not app code.
+- `node-tests/` holds Node tests for the data adapters and Today logic.

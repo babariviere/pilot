@@ -37,4 +37,4 @@ Reading saved history does not restart an agent.
 
 Linux desktop is deferred. The old KDE Wayland helper requests automatic-suspend inhibition only. Display sleep,
 manual sleep, and lid behavior are not macOS equivalents; real-hardware behavior
-remains unqualified. See [platform limits](technical/agent-sleep.md#linux-kde-wayland).
+remains unqualified. See [platform limits](../crates/power/agent-sleep.md#linux-kde-wayland).

@@ -106,7 +106,7 @@ impl Fixture {
     }
     fn with_native(native: bool) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures/day-planning-inventory.ts");
+            .join("../../../packages/daemon/src/fixtures/day/planning/day-planning-inventory.ts");
         let mut child = Command::new("node")
             .arg(script)
             .arg(if native { "available" } else { "unavailable" })

@@ -46,7 +46,7 @@ separate explicit start; there is no continuous AI monitor.
 evidence from this app writer. Other app processes, OS logs, retained stdout, exports,
 backups, previous agent replies and uploaded data can remain. Service receipts do
 not prove another writer physically deleted its files. See
-[native diagnostics controls](technical/native-diagnostics-controls.md) for limits.
+[native diagnostics controls](../apps/day/native/src/diagnostics/native-diagnostics-controls.md) for limits.
 
 ## Private updates
 

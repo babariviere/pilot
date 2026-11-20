@@ -2,7 +2,7 @@
 // change every 100 ms, 300 times (`Desk::pulse`; the Rust screen's
 // `PulseApp` runs the same).
 import { mount } from "nsh";
-import { MockDayScreen, openDay } from "./mockFeeds";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
 
 const day = openDay("large");
 void day.feed.pulse();

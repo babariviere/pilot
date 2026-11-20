@@ -1,7 +1,7 @@
 // The real Settings screen and preference feed, with every host reply supplied by the test.
 import { mount, signal, View } from "nsh";
-import { MockDayScreen, openDay } from "./mockFeeds";
-import { connectedPreferences } from "./preferencesFeed";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { connectedPreferences } from "./settings/preferencesFeed";
 import { Button } from "./ui";
 
 const preferences = connectedPreferences("fixture");

@@ -15,8 +15,6 @@
 //! cannot be read said as such.
 //! `support/ritual_joined.rs` joins those two sides over a readable synthetic
 //! HTTP/WS service: real Connected.tsx, Bridge, host clock and durable journal.
-#[path = "support/day_library.rs"]
-mod day_library;
 #[path = "support/app_source.rs"]
 mod app_source;
 use nsh_core::{platform::Lifecycle, prelude::*};
@@ -401,17 +399,7 @@ fn entry() -> PathBuf {
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = std::env::temp_dir().join(format!("day-ritual-ui-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    for file in std::fs::read_dir(&app).unwrap() {
-        let path = file.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
-            && !name.ends_with(".test.tsx")
-        {
-            app_source::copy(&path, &dir.join(&name));
-        }
-    }
-    // The component library lives in ui/; screens import it as "./ui".
-    day_library::copy(&app, &dir);
+    app_source::copy(&app, &dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

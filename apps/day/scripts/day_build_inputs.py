@@ -22,7 +22,7 @@ CLI_VERSION = f"{ARTIFACT_RUNTIME} ({bundle.NSH_RELEASE['source'][:7]})"
 CLI_SHA256 = "96066fadf2a578216cf5d2692be56b1db1af7523c2ddeab6e1bf951b352b75d5"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
 ARTIFACT_HOST = "pilot-artifact-host"
-HOST_MODULE = "packages/artifacts/src/nsh-host.ts"
+HOST_MODULE = "packages/artifacts/src/nsh/nsh-host.ts"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
 # crates.io 0.6.1 archive SHA-256s. Each archive's .cargo_vcs_info.json names
 # the peeled release commit bundle.NSH_RELEASE["source"].
@@ -83,19 +83,17 @@ def tool(path):
 
 
 def build_tools(env):
-    def selected(name, override):
-        return tool(env.get(override) or shutil.which(name, path=env.get("PATH", os.defpath)) or "")
-
+    path = env.get("PATH", os.defpath)
     return {"nsh": tool(env["NSH_DAY_CLI"]),
-            "cargo": selected("cargo", "NSH_DAY_REAL_CARGO"),
-            "rustc": selected("rustc", "RUSTC")}
+            "cargo": tool(shutil.which("cargo", path=path) or ""),
+            "rustc": tool(env.get("RUSTC") or shutil.which("rustc", path=path) or "")}
 
 
 def environment(work, tools, inherited, production):
     """No ambient trust, package hooks or Cargo tuning."""
     env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT", "DEVELOPER_DIR") if name in inherited}
     env.update(NSH_DAY_CLI=str(tools["nsh"]), TMPDIR=str(work),
-               NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
+               RUSTC=str(tools["rustc"]),
                RUSTUP_AUTO_INSTALL="0",
                CARGO_NET_OFFLINE="true",
                MACOSX_DEPLOYMENT_TARGET="15.0", npm_config_ignore_scripts="true",

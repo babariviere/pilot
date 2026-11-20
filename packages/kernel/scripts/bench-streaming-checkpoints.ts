@@ -14,7 +14,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness, UserEntry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { watchEvents } from "../src/agent-events.ts";
+import { watchEvents } from "../src/session/activity/agent-events.ts";
 import { NativeAdapter } from "../src/native-adapter.ts";
 import { offlineModels } from "../src/testing/offline-models.ts";
 

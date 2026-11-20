@@ -2,9 +2,9 @@
 import { realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { NativeReviewReader } from "../native-review.ts";
-import { ReviewSnapshotStore } from "../review-snapshots.ts";
-import { WorkerReviewDelivery } from "../worker-review-delivery.ts";
+import { NativeReviewReader } from "../reviews/native/native-review.ts";
+import { ReviewSnapshotStore } from "../reviews/snapshots/review-snapshots.ts";
+import { WorkerReviewDelivery } from "../reviews/requests/worker-review-delivery.ts";
 import { fixture, jj } from "./shared-workspace.ts";
 
 export async function retainedReviewFixture() {

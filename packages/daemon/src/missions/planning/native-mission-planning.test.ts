@@ -1,0 +1,533 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { test } from "node:test";
+import type { InterviewWrite, MissionInterview } from "@pilot/protocol";
+import { WebSocket } from "ws";
+import { interviewDigest } from "../interviews/mission-interview-contract.ts";
+import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
+import { OperationJournal } from "../../transport/operations/operation-journal.ts";
+
+const expected = (i: MissionInterview) => ({ fence: i.fence, revision: i.revision });
+
+test("Revisit native submit preserves agreement and exact receipt across reopen", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const brief = f.store.brief(f.missionId);
+	const q = { ...f.question, id: "revisit-gap", prompt: "Which new constraint changes the agreement?" };
+	await f.questions([q], "revisit");
+	let read = await (await f.read()).json();
+	assert.equal(read.view.interview.kind, "revisit");
+	const save = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(read.view.interview),
+			answers: [
+				{
+					questionId: q.id,
+					questionDigest: interviewDigest(q),
+					selectedOption: q.options[0],
+					text: " exact gap\n ",
+				},
+			],
+		} as InterviewWrite,
+		read.contextDigest,
+	);
+	assert.equal((await (await f.post(save)).json()).state, "accepted");
+	read = await (await f.read()).json();
+	const submit = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(read.view.interview) } as InterviewWrite,
+		read.contextDigest,
+	);
+	const receipt = await (await f.post(submit)).json();
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.deepEqual(f.store.brief(f.missionId), brief);
+	assert.equal(f.store.workflowConfirmations.latest(f.missionId, false), undefined);
+	await f.restart();
+	assert.deepEqual(await (await f.post(submit, true)).json(), receipt);
+	read = await (await f.read()).json();
+	assert.equal(read.view.interview.submission.kind, "revisit");
+	assert.equal(read.view.interviewHistory[0].interview.answers[0].text, " exact gap\n ");
+	assert.deepEqual(f.store.brief(f.missionId), brief);
+});
+
+test("native capability, exact project/home/owner and purpose are required for reads and receipts", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	assert.equal((await f.read("")).status, 403);
+	assert.equal((await f.read(f.capability, "other-project")).status, 404);
+	const read = await (await f.read()).json();
+	assert.equal(read.capabilities.continuation, "unavailable");
+	assert.equal(read.capabilities.enrollment, "unavailable");
+	assert.equal(read.capabilities.admission, "unavailable");
+	assert.equal(read.capabilities.coordinatorProfile, "not-configured");
+	assert.equal(read.view.plan, null, "configured saved interview with no map differs from unavailable");
+	const op = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(read.view.interview) } as InterviewWrite,
+		read.contextDigest,
+	);
+	assert.equal((await f.post(op, false, "")).status, 403);
+	assert.equal((await f.post(op, true, "")).status, 403);
+	assert.deepEqual(await (await f.post(op, true)).json(), { state: "unknown" });
+	assert.equal((await f.post({ ...op, origin: { ...op.origin, daemonId: "other" } })).status, 400);
+	for (const purpose of [
+		"interview-create",
+		"interview-continue",
+		"agreement-start",
+		"plan-map",
+		"plan-publish",
+		"plan-prototype-result",
+		"small-ask-start",
+	]) {
+		const denied = f.operation(f.missionId, { purpose }, read.contextDigest);
+		assert.equal((await f.post(denied)).status, 400, purpose);
+	}
+	const unavailable = f.operation(f.missionId, { purpose: "prototype-execute" }, read.contextDigest);
+	assert.equal((await f.post(unavailable)).status, 400);
+	assert.deepEqual(await (await f.post(unavailable, true)).json(), { state: "unknown" });
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+	f.coordinator = { ...f.coordinator!, mode: "ask" };
+	assert.equal((await f.read()).status, 409);
+	assert.equal((await f.post(op, true)).status, 409);
+});
+
+test("native and agent reads share prototype records without enabling preview execution", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	await f.plan({
+		purpose: "plan-map",
+		expectedRevision: 0,
+		destination: "Resolve one design uncertainty",
+		sources: [],
+		fog: [],
+		questions: [
+			{
+				id: "preview",
+				title: "Draft navigation",
+				question: "Does this navigation keep context?",
+				kind: "prototype",
+				options: [],
+				recommendedOptionId: null,
+				dependsOn: [],
+				sources: [],
+				prototype: {
+					context: "Moving between interview steps",
+					experimentType: "ui",
+					smallestExperiment: "Two mock native variants",
+					maxMinutes: 15,
+					maxCostUsd: 1,
+				},
+			},
+		],
+	} as { purpose: string });
+	let read = await (await f.read()).json();
+	assert.equal(read.capabilities.prototype, "unavailable");
+	assert.deepEqual(read.view.plan, f.store.plans.get(f.missionId));
+	assert.equal(read.view.exploration[0].status, "needs-prototype");
+	assert.equal(read.view.exploration[0].evidence, "missing");
+	f.store.linkArtifact(f.missionId, {
+		sessionId: f.owner,
+		artifactId: "preview",
+		revision: 3,
+		title: "Historical native preview",
+		kind: "nsh",
+	});
+	const result = {
+		planRevision: read.view.plan.revision,
+		questionDigest: read.view.exploration[0].questionDigest,
+		contextDigest: read.view.exploration[0].contextDigest,
+		artifact: { sessionId: f.owner, artifactId: "preview", revision: 3 },
+		observations: ["Both mock variants keep context"],
+		verdict: "inconclusive",
+		unresolvedQuestions: ["Which does the user prefer?"],
+	};
+	await f.plan({ purpose: "plan-prototype-result", expectedRevision: 1, questionId: "preview", result } as {
+		purpose: string;
+	});
+	await f.restart();
+	read = await (await f.read()).json();
+	assert.deepEqual(read.view.plan.questions[0].prototypeResult, result);
+	assert.equal(read.view.exploration[0].evidence, "current");
+	assert.equal(read.view.plan.questions[0].resolution, null);
+	assert.equal(read.capabilities.prototype, "unavailable");
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+});
+
+test("exact choices/text survive daemon restart; complete submission is separate and never dispatches", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	let read = await (await f.read()).json();
+	const question = read.view.interview.questions[0];
+	const save = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(read.view.interview),
+			answers: [
+				{
+					questionId: question.id,
+					questionDigest: interviewDigest(question),
+					selectedOption: question.options[0],
+					text: "  exact\n💬 detail  ",
+				},
+			],
+		} as InterviewWrite,
+		read.contextDigest,
+	);
+	const receipt = await (await f.post(save)).json();
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	await f.restart();
+	assert.deepEqual(await (await f.post(save, true)).json(), receipt);
+	assert.deepEqual(await (await f.post(save)).json(), receipt);
+	read = await (await f.read()).json();
+	assert.equal(read.view.interview.answers[0].text, "  exact\n💬 detail  ");
+	assert.equal(read.view.interview.submission, null);
+	const submit = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(read.view.interview) } as InterviewWrite,
+		read.contextDigest,
+	);
+	const submitted = await (await f.post(submit)).json();
+	assert.equal(submitted.state, "accepted", JSON.stringify(submitted));
+	assert.equal((await (await f.read()).json()).view.interview.submission.operationId, submit.operationId);
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+	assert.equal(f.store.workflowConfirmations.latest(f.missionId, false), undefined);
+	assert.deepEqual(await (await f.post(submit)).json(), submitted);
+});
+
+test("Revisit after publication is inert; topic/context/proposal changes refuse stale review answers", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	await f.plan({
+		purpose: "plan-map",
+		expectedRevision: 0,
+		destination: "Importer",
+		sources: [],
+		questions: [],
+		fog: [
+			{
+				id: "later",
+				area: "Large archives",
+				why: "May exceed memory",
+				readyWhen: "After initial fixture",
+				dependsOn: [],
+				sources: [],
+			},
+		],
+	} as { purpose: string });
+	await f.plan({
+		purpose: "plan-propose",
+		expectedRevision: 1,
+		spec: {
+			problem: "Exact problem",
+			solution: "Exact solution",
+			stories: [{ id: "story", text: "Read imports" }],
+			implementation: ["Existing parser"],
+			testing: ["Corrupt archive fixture"],
+			exclusions: ["No format changes"],
+		},
+		slices: [
+			{
+				id: "slice",
+				title: "Importer",
+				outcome: "Read an archive",
+				acceptance: ["Correct bytes"],
+				storyIds: ["story"],
+				dependsOn: [],
+				owners: ["sol-backend"],
+			},
+		],
+	} as { purpose: string });
+	await f.plan({ purpose: "plan-review", expectedRevision: 2 } as { purpose: string });
+	const read = await (await f.read()).json();
+	assert.equal(read.view.plan.spec.testing[0], "Corrupt archive fixture");
+	assert.equal(read.view.plan.slices[0].acceptance[0], "Correct bytes");
+	assert.equal(read.view.activeFog[0].why, "May exceed memory");
+	assert.equal(read.view.plan.review.questionSetRevision, read.view.interview.fence.questionSetRevision);
+	const request: InterviewWrite = { purpose: "interview-save", expected: expected(read.view.interview), answers: [] };
+	const stale = f.operation(f.missionId, request, read.contextDigest);
+	await f.plan({
+		purpose: "plan-propose",
+		expectedRevision: 3,
+		spec: { ...read.view.plan.spec, solution: "Changed proposal" },
+		slices: read.view.plan.slices,
+	} as { purpose: string });
+	const r = await (await f.post(stale)).json();
+	assert.equal(r.state, "rejected", JSON.stringify(r));
+	assert.match(r.reason, /context changed/);
+	assert.equal(f.store.interviews.latest(f.missionId)!.answers.length, 0);
+	await f.plan({ purpose: "plan-review", expectedRevision: 4 } as { purpose: string });
+	let current = await (await f.read()).json();
+	const question = current.view.interview.questions[0];
+	const save = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(current.view.interview),
+			answers: [
+				{
+					questionId: question.id,
+					questionDigest: current.questionDigests[question.id],
+					selectedOption: question.options.find((o: { id: string }) => o.id === "approve"),
+					text: "Reviewed the full proposal",
+				},
+			],
+		} as InterviewWrite,
+		current.contextDigest,
+	);
+	assert.equal((await (await f.post(save)).json()).state, "accepted");
+	current = await (await f.read()).json();
+	assert.equal(current.view.interview.submission, null, "saved review is not complete submission");
+	const submit = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(current.view.interview) } as InterviewWrite,
+		current.contextDigest,
+	);
+	assert.equal((await (await f.post(submit)).json()).state, "accepted");
+	assert.equal(f.store.tasks(f.missionId).length, 0, "human proposal submission neither publishes nor admits workers");
+	await f.plan({ purpose: "plan-publish", expectedRevision: 5 });
+	const agreement = f.store.brief(f.missionId);
+	const tasks = f.store.tasks(f.missionId);
+	const gap = {
+		...f.question,
+		id: "post-publication-gap",
+		prompt: "Which new constraint changes this published agreement?",
+	};
+	await f.questions([gap]); // No caller-supplied kind can silently restart creation.
+	current = await (await f.read()).json();
+	assert.equal(current.view.interview.kind, "revisit");
+	const gapSave = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(current.view.interview),
+			answers: [
+				{
+					questionId: gap.id,
+					questionDigest: interviewDigest(gap),
+					selectedOption: gap.options[0],
+					text: "Gap only",
+				},
+			],
+		} as InterviewWrite,
+		current.contextDigest,
+	);
+	assert.equal((await (await f.post(gapSave)).json()).state, "accepted");
+	current = await (await f.read()).json();
+	const gapSubmit = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(current.view.interview) } as InterviewWrite,
+		current.contextDigest,
+	);
+	assert.equal((await (await f.post(gapSubmit)).json()).state, "accepted");
+	assert.deepEqual(f.store.brief(f.missionId), agreement);
+	assert.deepEqual(f.store.tasks(f.missionId), tasks);
+});
+
+test("authorization is checked after asynchronous durability; late changes cannot return accepted", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const old = f.store.durable.bind(f.store);
+	let change = false;
+	t.mock.method(f.store, "durable", async () => {
+		await old();
+		if (change) f.coordinator = undefined;
+	});
+	change = true;
+	assert.equal((await f.read()).status, 409);
+});
+
+test("topic rounds bind native human submissions and cannot answer a different topic", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const topic = (id: string) => ({
+		id,
+		title: id,
+		question: `Choose ${id}`,
+		kind: "human",
+		options: [],
+		recommendedOptionId: null,
+		dependsOn: [],
+		sources: [],
+	});
+	await f.plan({
+		purpose: "plan-map",
+		expectedRevision: 0,
+		destination: "Two choices",
+		sources: [],
+		questions: [topic("first"), topic("second")],
+		fog: [],
+	} as { purpose: string });
+	await f.plan({ purpose: "plan-ask", expectedRevision: 1, topicId: "first", questions: [f.question] } as {
+		purpose: string;
+	});
+	const first = await (await f.read()).json();
+	await f.plan({ purpose: "plan-ask", expectedRevision: 2, topicId: "second", questions: [f.question] } as {
+		purpose: string;
+	});
+	const op = f.operation(
+		f.missionId,
+		{ purpose: "interview-submit", expected: expected(first.view.interview) } as InterviewWrite,
+		first.contextDigest,
+	);
+	const r = await (await f.post(op)).json();
+	assert.equal(r.state, "rejected");
+	assert.equal((await (await f.read()).json()).view.plan.round.topicId, "second");
+	assert.equal(f.store.interviews.latest(f.missionId)!.submission, null);
+});
+
+test("changed owner after a saved effect stays uncertain until exact restart recovery", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const read = await (await f.read()).json();
+	const coordinator = f.coordinator;
+	const q = read.view.interview.questions[0];
+	const op = f.operation(
+		f.missionId,
+		{
+			purpose: "interview-save",
+			expected: expected(read.view.interview),
+			answers: [
+				{ questionId: q.id, questionDigest: interviewDigest(q), selectedOption: q.options[0], text: "committed" },
+			],
+		} as InterviewWrite,
+		read.contextDigest,
+	);
+	const durable = f.store.durable.bind(f.store);
+	t.mock.method(f.store, "durable", async () => {
+		await durable();
+		f.coordinator = undefined;
+	});
+	assert.notEqual((await f.post(op)).status, 200);
+	assert.equal(f.store.interviews.lookup(op)!.answers[0]!.text, "committed");
+	t.mock.restoreAll();
+	f.coordinator = coordinator;
+	await f.restart();
+	// Recovery may settle the exact stored effect, but does not execute a fresh human write.
+	const receipt = await (await f.post(op)).json();
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.equal(f.store.interviews.latest(f.missionId)!.revision, 2);
+});
+
+test("legacy missions are explicitly not enrolled, not empty or automatically adopted", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const old = f.store.create({ projectId: f.project.id, title: "Historical mission" });
+	const r = await fetch(`${f.root}/api/projects/${f.project.id}/missions/${old.id}/planning`, {
+		headers: { "x-pilot-github-capability": f.capability },
+	});
+	assert.equal(r.status, 200);
+	const read = await r.json();
+	assert.equal(read.status, "not-enrolled");
+	assert.equal(read.view, null);
+	assert.equal(read.capabilities.answers, "unavailable");
+	assert.equal(read.capabilities.enrollment, "unavailable");
+	assert.equal(read.capabilities.continuation, "unavailable");
+	assert.equal(read.capabilities.admission, "unavailable");
+	assert.equal(f.store.interviews.latest(old.id), undefined);
+	assert.equal(f.store.require(old.id).planningVersion, undefined);
+});
+
+test("Stop/configuration change during journal I/O refuses before saving human answers", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const read = await (await f.read()).json();
+	const op = f.operation(
+		f.missionId,
+		{ purpose: "interview-save", expected: expected(read.view.interview), answers: [] } as InterviewWrite,
+		read.contextDigest,
+	);
+	const checkpoint = OperationJournal.prototype.checkpoint;
+	t.mock.method(
+		OperationJournal.prototype,
+		"checkpoint",
+		async function (this: OperationJournal, ...args: Parameters<typeof checkpoint>) {
+			await checkpoint.apply(this, args);
+			f.coordinator = { ...f.coordinator!, inputGeneration: 1 };
+		},
+	);
+	const receipt = await (await f.post(op)).json();
+	assert.equal(receipt.state, "rejected", JSON.stringify(receipt));
+	assert.match(receipt.reason, /context changed/);
+	assert.equal(f.store.interviews.latest(f.missionId)!.revision, read.view.interview.revision);
+});
+
+test("planning reads carry the coordinator's live step; its chat and notices are passive", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	const idle = await (await f.read()).json();
+	assert.equal(idle.activity.working, false);
+	assert.equal(idle.activity.step, null);
+	assert.equal(idle.activity.sessionId, f.owner);
+	f.coordinator = { ...f.coordinator!, state: "working", working: true };
+	const reads: number[] = [];
+	t.mock.method(f.sessions, "liveRun", () => ({ workingSince: 1_000 }));
+	t.mock.method(f.sessions, "history", async (_id: string, before: number, limit: number) => {
+		reads.push(before, limit);
+		return {
+			entries: [
+				{ id: 7, kind: "pi.user", model: [{ role: "user", content: "Plan it" }] },
+				{
+					id: 8,
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							timestamp: 2_000,
+							content: [
+								{ type: "text", text: "Reading the guide." },
+								{ type: "toolCall", id: "c", name: "read", arguments: { path: `${f.project.path}/docs/a.md` } },
+							],
+						},
+					],
+				},
+			],
+			more: false,
+		};
+	});
+	const live = await (await f.read()).json();
+	assert.deepEqual(live.activity, {
+		sessionId: f.owner,
+		working: true,
+		workingSince: 1_000,
+		lastStepAt: 2_000,
+		step: { tool: "read", running: true, failed: false, target: "docs/a.md" },
+	});
+	const chat = (path: string, token = f.capability, method = "GET") =>
+		fetch(`${f.root}/api/projects/${f.project.id}/missions/${f.missionId}/planning/history${path}`, {
+			method,
+			headers: { "x-pilot-github-capability": token },
+		});
+	assert.equal((await chat("", "")).status, 403);
+	assert.equal((await chat("", f.capability, "POST")).status, 405);
+	assert.notEqual((await chat("?limit=500")).status, 200);
+	const page = await (await chat("?before=9&limit=2")).json();
+	assert.deepEqual(reads.slice(-2), [9, 2]);
+	assert.equal(page.sessionId, f.owner);
+	assert.deepEqual(
+		page.rows.map((r: { role: string }) => r.role),
+		["you", "pilot", "step"],
+	);
+	assert.equal(page.rows[2].step.running, false, "an older page never claims a running step");
+	assert.equal(page.nextBefore, 7);
+
+	const ws = new WebSocket(`${f.root.replace("http", "ws")}/api/ws`);
+	const notice = new Promise<unknown>((resolve) =>
+		ws.on("message", (raw) => {
+			const message = JSON.parse(String(raw));
+			if (message.type === "planning.activity") resolve(message);
+		}),
+	);
+	await once(ws, "open");
+	const listeners = (f.sessions as unknown as { toolActivityListeners: Set<(id: string) => void> })
+		.toolActivityListeners;
+	for (const listener of listeners) listener("unrelated-chat");
+	for (const listener of listeners) listener(f.owner);
+	assert.deepEqual(await notice, { type: "planning.activity", missionId: f.missionId });
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+	// The server waits for open sockets on close.
+	ws.close();
+	await once(ws, "close");
+});

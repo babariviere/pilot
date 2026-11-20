@@ -1,0 +1,1420 @@
+//! The read models and intents of New, mission interviews and mission
+//! planning, as the TSX screens see them. They mirror the daemon's
+//! interview and planning records (`packages/protocol/src/missions/mission-interview.ts`
+//! and `mission-plan.ts`) for display. TSX names ids and the revisions it
+//! showed; Rust adds operation IDs, owners and fences, and TSX never sees a
+//! transport. Saving, submitting, approving, publishing and starting work
+//! are separate states here, as they are in the daemon.
+
+use nsh_core::prelude::*;
+use serde::Serialize;
+
+pub use crate::model::{Delivery, OutcomeStatus};
+
+/// Which mock planning world the feed starts from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanScenario {
+    /// One mission interview, three of seven questions answered.
+    #[default]
+    Interview,
+    /// No planning yet: only New.
+    Fresh,
+    /// A Wayfinder map: questions to grill and research, fog, a topic
+    /// interview, and a second mission's interview.
+    Wayfinder,
+    /// A finished interview whose plan waits for the user's review.
+    Review,
+    /// A changed question, a removed option and a lost submission; a topic
+    /// interview whose context changed; a plan that changes during review.
+    Trouble,
+    /// Planning is not connected. Nothing can be sent.
+    Unavailable,
+    /// One mission interview whose submission is kept, but Pilot cannot
+    /// continue from it yet.
+    Held,
+    /// One mission interview with 40 questions, the most one round holds.
+    Long,
+    /// An older mission with a published plan, offered a Revisit: new
+    /// questions for its gaps, then the exact revision to review.
+    Revisit,
+    /// Revisits in trouble: a revision the mission outgrew, one that needs
+    /// a paused mission, and a confirmation whose answer is lost.
+    RevisitTrouble,
+    /// A new mission whose planning agent is still writing its first
+    /// questions, with its steps and chat.
+    Working,
+}
+
+/// Whether planning can be used at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanAvailability {
+    /// Mock data in this app. Nothing reaches a daemon.
+    #[default]
+    Mock,
+    /// Connected to the selected daemon.
+    Live,
+    /// An earlier complete read, kept while changes or a failed read are checked.
+    /// Display only. Never authority to submit or start work.
+    Stale,
+    /// Not connected or not supported. Nothing can be sent.
+    Unavailable,
+}
+
+/// The project and settings a new chat or mission would use, as shown on New.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Setup {
+    /// Pending creations stay visible until their exact receipt settles.
+    #[prop(default)]
+    pub creations: Vec<NewCreation>,
+    /// Catalog-value default shown before planning. No default means the user must choose.
+    #[prop(default)]
+    pub allowance_micros: Option<u64>,
+    /// The connected service enforces mission funding.
+    #[prop(default)]
+    pub allowance_required: bool,
+    /// The project, as the user knows it.
+    pub project: String,
+    /// The model a new chat would use.
+    pub model: String,
+    /// What a new chat may do, in a few words.
+    pub access: String,
+    /// Changes whenever any of the above changes. New intents name it.
+    pub digest: String,
+    /// An earlier creation from this window is not confirmed. It can be
+    /// checked; it does not block a new one.
+    pub unconfirmed: bool,
+}
+
+/// One uncertain creation, supplied by the native journal, never a new operation.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewCreation {
+    pub operation_id: String,
+    pub goal: String,
+    pub project_id: String,
+    /// The feedback and exact proposal the creation links, as it was sent.
+    /// New ends only that linked draft when Check confirms this creation.
+    #[prop(default)]
+    pub feedback: Option<PlanFeedback>,
+}
+
+/// Where a mission's planning is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanStage {
+    /// Questions wait for the user's answers.
+    #[default]
+    Questions,
+    /// Pilot works on the plan. Nothing waits for the user.
+    Planning,
+    /// The plan waits for the user's review.
+    Review,
+    /// The user approved the plan; it is not published yet.
+    Approved,
+    /// The plan is published as tasks. No work started from it.
+    Published,
+    /// Submitted, but Pilot cannot continue from it yet. The answers are kept.
+    Submitted,
+    /// An outcome is not confirmed. Only a check settles it.
+    Unknown,
+}
+
+/// Passive round and plan identity from the complete authenticated inventory.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanIdentity {
+    /// Enrollment plus question-list revision, as on the selected planning page.
+    pub interview_id: String,
+    /// Current saved interview revision. Never permission to save or submit.
+    pub interview_revision: u32,
+    /// Current plan revision, or null when no plan exists.
+    pub plan_revision: Option<u32>,
+}
+
+/// One mission in planning, as a row.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanRow {
+    /// The mission.
+    pub mission_id: String,
+    /// The mission's title.
+    pub title: String,
+    /// Where its planning is.
+    pub stage: PlanStage,
+    /// One line, such as "3 of 7 answered".
+    pub line: String,
+    /// Whether it waits for the user.
+    pub needs_you: bool,
+    /// The planning agent's last message, when it ended its turn while the plan
+    /// is open: it may be a request to the user. Empty otherwise.
+    pub planner_says: String,
+    /// The planning agent ended its turn while the plan is open and may wait
+    /// for the user's reply. Its planning page offers Reply and Continue.
+    pub reply: bool,
+    /// Current passive row identity; absent on mock and legacy single-page projections.
+    pub identity: Option<PlanIdentity>,
+    /// How many current interview questions still need a saved answer, when known.
+    pub pending_questions: Option<u32>,
+}
+
+/// One chat started directly from New, without a mission.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartedChat {
+    /// Stable for the request's life.
+    pub id: String,
+    /// The text it started with, exactly.
+    pub text: String,
+    /// One line about where it is.
+    pub line: String,
+}
+
+/// Everything New and Today show about planning.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Planning {
+    /// Changes with every change.
+    pub revision: u32,
+    /// Whether planning can be used.
+    pub availability: PlanAvailability,
+    /// Why not, when unavailable. Empty otherwise.
+    pub reason: String,
+    /// What a new chat or mission would use.
+    pub setup: Setup,
+    /// Whether New can create a mission interview here. Not direct chat admission.
+    pub can_create: bool,
+    /// Why not, when it cannot. Empty otherwise.
+    pub create_reason: String,
+    /// Whether New can start a standalone Build chat. Separate from mission planning.
+    pub can_start: bool,
+    /// Why direct chat start is unavailable. Empty when supported.
+    pub start_reason: String,
+    /// Missions in planning, newest first.
+    pub plans: Vec<PlanRow>,
+    /// Chats started directly from New in this app.
+    pub started: Vec<StartedChat>,
+}
+
+/// The part of the mission a question is about. The daemon's sections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QuestionSection {
+    /// What the mission should achieve.
+    #[default]
+    Outcome,
+    /// What it should not do.
+    NonGoals,
+    /// Limits it must respect.
+    Constraints,
+    /// How the user will know it is done.
+    Acceptance,
+    /// What Pilot may do on its own.
+    Authority,
+}
+
+/// A suggested answer to a question.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Choice {
+    /// Stable within its question.
+    pub id: String,
+    /// What choosing it means, exactly as saved.
+    pub meaning: String,
+    /// Whether Pilot recommends it. A recommendation is not an answer.
+    pub recommended: bool,
+}
+
+/// Whether a question has the user's answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QuestionState {
+    /// No answer yet, or only a draft with nothing in it.
+    #[default]
+    Open,
+    /// Answered: a suggestion was chosen, or the user wrote an answer.
+    Answered,
+    /// The question or its chosen suggestion changed after the user
+    /// answered. The earlier answer is kept but does not count.
+    Changed,
+}
+
+/// One question of an interview, with the user's saved answer.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Question {
+    /// Stable within the interview.
+    pub id: String,
+    /// The part of the mission it is about.
+    pub section: QuestionSection,
+    /// The question, exactly as Pilot asked it.
+    pub prompt: String,
+    /// Background in plain words, shown when the user asks for more. Empty when Pilot gave none.
+    pub context: String,
+    /// The user's questions about this question, oldest first, with their answers.
+    pub asks: Vec<QuestionAsk>,
+    /// Changes when the question's meaning or suggestions change. Saves name it.
+    pub digest: String,
+    /// Suggested answers. Pilot may mark one as recommended.
+    pub choices: Vec<Choice>,
+    /// The chosen suggestion, as saved. Null when none was chosen.
+    pub chosen: Option<String>,
+    /// The user's own answer, or detail added to a suggestion, exactly as saved.
+    pub text: String,
+    /// Whether it has the user's answer.
+    pub state: QuestionState,
+    /// While changed: the earlier answer, in words. Empty otherwise.
+    pub earlier: String,
+    /// Whether this question arrived in the latest round.
+    pub new: bool,
+    /// Where the latest save of this question is.
+    pub saving: Delivery,
+}
+
+/// What an interview is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoundKind {
+    /// The mission's own interview.
+    #[default]
+    Mission,
+    /// One topic of a Wayfinder map. It cannot answer another topic.
+    Topic,
+    /// The user's review of a proposed plan.
+    Review,
+    /// New questions for the gaps a Revisit found. Submitting them changes
+    /// nothing; only a confirmed revision does.
+    Revisit,
+}
+
+/// Where an interview's one submission is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SubmitState {
+    /// Not submitted. Answers save as drafts.
+    #[default]
+    Open,
+    /// Submitted; waiting for the service to confirm.
+    Submitting,
+    /// Submitted and confirmed. The answers are fixed.
+    Submitted,
+    /// Submitted, but no confirmation came back. Only a check settles it.
+    Unknown,
+    /// Reading whether the submission landed. Changes nothing.
+    Checking,
+}
+
+/// A saved interview: the full current list of questions.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Interview {
+    /// Stable for the interview's life.
+    pub id: String,
+    /// What it is for.
+    pub kind: RoundKind,
+    /// For a topic interview: the topic it answers. Empty otherwise.
+    pub topic: String,
+    /// The round, from 1. A new round comes only from earlier answers.
+    pub round: u32,
+    /// The saved answers' revision. Submit names it.
+    pub revision: u32,
+    /// The question list's revision. Saves name it.
+    pub question_set: u32,
+    /// Whether the plan it was asked about is unchanged. A changed one
+    /// keeps the answers but cannot be submitted.
+    pub current: bool,
+    /// Every question, in the order Pilot asked them.
+    pub questions: Vec<Question>,
+    /// How many questions are answered.
+    pub answered: u32,
+    /// Where its one submission is.
+    pub submit: SubmitState,
+    /// For a review: the plan it reviews. Submit names it. Empty otherwise.
+    pub proposal: String,
+    /// Whether an earlier save or submission was sent but not confirmed.
+    /// Nothing more is sent until a check settles it.
+    pub unconfirmed: bool,
+    /// Room left for all answers together, in bytes. A save past it is refused.
+    pub room: u32,
+    /// Whether answers can be saved now. Pilot may not be ready to wait for them yet.
+    pub accepting: bool,
+}
+
+/// How an earlier interview round ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoundState {
+    /// The user submitted it. Its answers are fixed history.
+    #[default]
+    Submitted,
+    /// It closed without counting, such as a review whose plan changed.
+    Closed,
+}
+
+/// One answer of an earlier round, exactly as submitted.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundAnswer {
+    /// The question, as Pilot asked it then.
+    pub prompt: String,
+    /// The answer in words: the chosen suggestion, then the user's text.
+    pub answer: String,
+}
+
+/// One earlier interview round. Submitting a round completes that round only:
+/// it is not the mission's agreement or approval to build.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoundLine {
+    /// Stable.
+    pub id: String,
+    /// What it was, such as "Round 1".
+    pub title: String,
+    /// One line, such as "7 answers, submitted".
+    pub line: String,
+    /// How it ended.
+    pub state: RoundState,
+    /// Its answers as submitted. Empty when it closed without counting.
+    pub answers: Vec<RoundAnswer>,
+}
+
+/// How a mission is planned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlanRoute {
+    /// One interview, then a plan.
+    #[default]
+    Interview,
+    /// A map across sessions: questions, research and fog.
+    Wayfinder,
+}
+
+/// What kind of exploration an item is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExploreKind {
+    /// A choice only the user makes, through an interview.
+    #[default]
+    Grilling,
+    /// Evidence an agent investigates.
+    Research,
+    /// A small, disposable experiment.
+    Prototype,
+}
+
+/// Where an exploration item is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExploreState {
+    /// It waits for other items first.
+    #[default]
+    Waiting,
+    /// On the frontier: its prerequisites are resolved.
+    Ready,
+    /// An agent works on it.
+    Running,
+    /// Its interview waits for the user.
+    Asking,
+    /// Resolved, with a source.
+    Resolved,
+}
+
+/// A canonical Decision or Knowledge reference, not a copy of its content.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapSource {
+    /// The canonical kind: decision or knowledge.
+    pub kind: String,
+    /// Exact canonical identity.
+    pub id: String,
+    /// Display label including cited revision/currentness.
+    pub label: String,
+}
+
+/// One precise question on the map.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Exploration {
+    /// Stable within the map.
+    pub id: String,
+    /// A short title.
+    pub title: String,
+    /// The precise question.
+    pub question: String,
+    /// Grilling, research or prototype.
+    pub kind: ExploreKind,
+    /// Where it is.
+    pub state: ExploreState,
+    /// Titles of the items it waits for.
+    pub after: Vec<String>,
+    /// Who works on it, while running.
+    pub by: String,
+    /// Running research whose chat finished: its findings wait for Pilot's planner to record them.
+    pub findings_waiting: bool,
+    /// What resolved it, with its source, once resolved.
+    pub result: String,
+    /// Where it came from, such as a decision or Knowledge entry.
+    pub sources: Vec<String>,
+    /// Openable original records, including the record that settled this question.
+    pub source_refs: Vec<MapSource>,
+    /// The fog area it came from, if any.
+    pub from_fog: String,
+    /// For a question settled in an interview: that earlier round's id, to show its answers.
+    pub round: String,
+    /// For a prototype: its latest finding in words, and whether it still matches the map.
+    /// Empty otherwise. A finding is evidence, never acceptance or permission to build.
+    pub evidence: String,
+    /// The prototype finding's observations, as saved.
+    pub observations: Vec<String>,
+    /// What the prototype left open, as saved.
+    pub unresolved: Vec<String>,
+    /// Cited records that changed or went away since Pilot mapped this, in words.
+    /// Pilot updates the map; nothing here changes it.
+    pub changed: Vec<String>,
+    /// For a prototype with a finding: the exact prototype Pilot linked, to open in the preview.
+    pub prototype: Option<PrototypePin>,
+    /// For a prototype: whether its finding still matches the map.
+    pub prototype_current: bool,
+    /// For a prototype: the limits its planner set, in words. Empty otherwise.
+    pub limits: String,
+}
+
+/// One saved prototype revision, linked to the mission. Opening it runs it only in the isolated preview.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrototypePin {
+    /// The chat that made it.
+    pub session_id: String,
+    /// The artifact.
+    pub artifact_id: String,
+    /// Its exact revision.
+    pub revision: u32,
+}
+
+/// An area that is not understood well enough for precise questions yet.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FogArea {
+    /// Stable within the map.
+    pub id: String,
+    /// The area.
+    pub area: String,
+    /// Why it matters.
+    pub why: String,
+    /// What makes it ready to explore.
+    pub ready_when: String,
+    /// Titles of items it waits for. Fog never blocks work by itself.
+    pub after: Vec<String>,
+    /// Where it came from.
+    pub sources: Vec<String>,
+    /// Openable original records cited by this fog area.
+    pub source_refs: Vec<MapSource>,
+    /// Whether it is still fog. Promoted areas stay as history.
+    pub active: bool,
+    /// Titles of the precise questions it became.
+    pub became: Vec<String>,
+}
+
+/// One build task the agreed plan became.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapTask {
+    /// The task.
+    pub id: String,
+    /// Its number in the mission, or 0 when this read does not have it.
+    pub number: u32,
+    /// Its title.
+    pub title: String,
+    /// Where it is, in words. Publication starts no task.
+    pub status: String,
+}
+
+/// What the shared map says beyond its questions and fog: its saved revision
+/// and where the agreement is. The same records agents read.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapInfo {
+    /// The saved map's revision. Every map change makes a new one.
+    pub revision: u32,
+    /// Where the agreement is, in words. Empty before Pilot proposes a plan.
+    pub agreement: String,
+    /// The tasks the published plan became, in order.
+    pub tasks: Vec<MapTask>,
+}
+
+/// Whether prototypes can be made from this map.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrototypeSupport {
+    /// Whether Pilot can make prototypes here.
+    pub available: bool,
+    /// One line about it.
+    pub line: String,
+}
+
+/// One user story of a proposed spec.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Story {
+    /// Stable within the spec. Slices name it.
+    pub id: String,
+    /// The story.
+    pub text: String,
+}
+
+/// A proposed spec, in full.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Spec {
+    /// The problem.
+    pub problem: String,
+    /// The solution.
+    pub solution: String,
+    /// User stories.
+    pub stories: Vec<Story>,
+    /// Implementation decisions.
+    pub implementation: Vec<String>,
+    /// Testing decisions.
+    pub testing: Vec<String>,
+    /// What is left out.
+    pub exclusions: Vec<String>,
+}
+
+/// Who builds a slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SliceOwner {
+    /// The UI model.
+    #[default]
+    Ui,
+    /// The backend model.
+    Backend,
+}
+
+/// One proposed vertical slice, a future task.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Slice {
+    /// Declared write scope. Missing declarations serialize this project's writers.
+    #[prop(default)]
+    pub files: Vec<String>,
+    /// Stable within the proposal.
+    pub id: String,
+    /// A short title.
+    pub title: String,
+    /// What a user can see or check when it is done.
+    pub outcome: String,
+    /// Acceptance criteria.
+    pub acceptance: Vec<String>,
+    /// The stories it serves, by id.
+    pub stories: Vec<String>,
+    /// Titles of the slices it needs first.
+    pub after: Vec<String>,
+    /// Who builds it, in older plans. Newer plans name a work profile instead.
+    pub owners: Vec<SliceOwner>,
+    /// The work profile ID whose model starts its task. Empty in older plans.
+    #[prop(default)]
+    pub profile: String,
+    /// large or small. Empty in older plans, which count as large.
+    #[prop(default)]
+    pub size: String,
+}
+
+/// A proposed plan: spec, slices and what is still unknown.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Proposal {
+    /// Changes whenever any part changes. A review names it.
+    pub digest: String,
+    /// The spec.
+    pub spec: Spec,
+    /// The slices, in order.
+    pub slices: Vec<Slice>,
+    /// Fog that is still unresolved, in words.
+    pub open_fog: Vec<String>,
+}
+
+/// Where one step from answers to work is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StepState {
+    /// Not reached.
+    #[default]
+    Waiting,
+    /// Happening now.
+    Now,
+    /// Done and confirmed.
+    Done,
+    /// Not confirmed. Only a check settles it.
+    Unknown,
+    /// This app cannot do it yet.
+    Unavailable,
+}
+
+/// One step from answers to work. Each is separate: submitting is not
+/// approval, approval is not publication, publication starts no work.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    /// What it is, such as "Answers submitted".
+    pub label: String,
+    /// Where it is.
+    pub state: StepState,
+    /// One line, when there is more to say.
+    pub line: String,
+}
+
+/// What Pilot's planning agent does now. Activity, not progress: a step
+/// is not a result and its time is not an estimate.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanActivity {
+    /// Whether it is working now.
+    pub working: bool,
+    /// Its step now, as a sentence, such as "Reading docs/missions.md".
+    /// Empty between steps, while idle or when unknown.
+    pub step: String,
+    /// Epoch ms when its current run started, when Pilot saw it start.
+    /// The screen words how long it has worked against its own clock.
+    pub working_since: Option<u64>,
+    /// Epoch ms of its newest saved message or tool progress.
+    pub last_step_at: Option<u64>,
+}
+
+/// Who wrote one row of the planning chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChatRole {
+    /// The user.
+    #[default]
+    You,
+    /// Pilot's planning agent.
+    Pilot,
+    /// Pilot's own planning request, such as passing answers on.
+    Request,
+    /// One tool step of the planning agent.
+    Step,
+}
+
+/// One row of the planning chat, oldest first.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRow {
+    /// Stable for the row's life.
+    pub key: String,
+    /// Who wrote it.
+    pub role: ChatRole,
+    /// Its words. A step reads as a sentence.
+    pub text: String,
+    /// Pilot shows only the start of a long message.
+    pub shortened: bool,
+    /// A step with no saved result yet.
+    pub running: bool,
+    /// A step whose saved result is an error.
+    pub failed: bool,
+}
+
+/// The planning agent's chat, read only. Reading it sends nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanChat {
+    /// Whether a read is on its way.
+    pub reading: bool,
+    /// Why the chat or its newest part cannot be shown. Empty when it can.
+    pub reason: String,
+    /// The rows read so far, oldest first.
+    pub rows: Vec<ChatRow>,
+    /// Whether earlier rows can be read.
+    pub more: bool,
+}
+
+/// One mission's planning, in full.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanPage {
+    /// The mission.
+    pub mission_id: String,
+    /// The mission's title.
+    pub title: String,
+    /// Whether this mission's planning can be shown and answered here.
+    pub available: bool,
+    /// Why not, when unavailable. Empty otherwise.
+    pub reason: String,
+    /// Whether the read shown is the latest. An older read stays on screen.
+    pub fresh: bool,
+    /// The user's goal, as written on New.
+    pub goal: String,
+    /// How it is planned.
+    pub route: PlanRoute,
+    /// Where its planning is.
+    pub stage: PlanStage,
+    /// Where the mission should end up.
+    pub destination: String,
+    /// The interview that is open, if any.
+    pub interview: Option<Interview>,
+    /// Earlier, submitted rounds.
+    pub rounds: Vec<RoundLine>,
+    /// Precise questions, research and prototypes on the map.
+    pub explorations: Vec<Exploration>,
+    /// Whether prototypes can be made.
+    pub prototypes: PrototypeSupport,
+    /// Fog of war, active and promoted.
+    pub fog: Vec<FogArea>,
+    /// The map's revision and agreement, on a Wayfinder map. Absent otherwise.
+    pub map: Option<MapInfo>,
+    /// The proposed plan, once there is one.
+    pub proposal: Option<Proposal>,
+    /// From answers to work, each step separate.
+    pub steps: Vec<Step>,
+    /// Explicit Start for the exact published plan. Absent in unsupported/mock flows.
+    pub work: Option<PlanWork>,
+    /// Revisit: the current agreement and any revision of it. Absent until
+    /// a plan is published.
+    pub revisit: Option<Revisit>,
+    /// One notice about a change, such as a plan that changed during review.
+    pub note: String,
+    /// What Pilot's planning agent does now. Absent when Pilot cannot tell.
+    pub activity: Option<PlanActivity>,
+    /// Whether the user can ask the idle planning agent to continue: it is
+    /// idle or paused, not held, and the plan is not published. False in mock flows.
+    pub can_continue: bool,
+    /// Whether the user can send one comment on the current interview: also while its
+    /// round waits for answers, which the comment then releases. False in mock flows.
+    pub can_comment: bool,
+    /// Why planning moves, waits or is stuck, with at most one fix. Absent in mock flows.
+    pub unstick: Option<Unstick>,
+}
+
+/// Native Start read model. No host, credentials, operation IDs or new grants.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanWork {
+    /// Whether this exact task can be started.
+    pub can_start: bool,
+    /// Whether an uncertain Start has a saved receipt to check.
+    pub can_check: bool,
+    /// Exact published revision shown.
+    pub revision: u64,
+    /// Exact published digest shown.
+    pub digest: String,
+    /// Exact ready task shown.
+    pub task_id: String,
+    /// The task's title.
+    pub title: String,
+    /// Existing-policy model selection, not a spending grant.
+    pub model: String,
+    /// Project named by the native owner.
+    pub project: String,
+    /// Existing permission ceiling. Start never increases it.
+    pub access: String,
+    /// Resolved thinking setting.
+    pub thinking: String,
+    /// Opaque currentness identity. The host supplies authority separately.
+    pub context: String,
+    /// What is known, separately from task execution or acceptance.
+    pub line: String,
+}
+
+/// Where a mission's Revisit is. Asking for one, answering its questions
+/// and reading a revision change nothing. Only the user's confirmation of
+/// the exact revision shown changes the agreement and open tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RevisitStage {
+    /// Nothing asked. The user can ask for one.
+    #[default]
+    Idle,
+    /// Pilot compares the mission with what was agreed. Nothing is asked yet.
+    Preparing,
+    /// New questions for the gaps wait for the user, in the open interview.
+    Questions,
+    /// The answers are submitted. Pilot prepares a revision; nothing changed.
+    Proposing,
+    /// A revision waits for the user's review.
+    Review,
+    /// The user confirmed a revision. The agreement changed as shown.
+    Confirmed,
+}
+
+/// What a revision does to one part of the mission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChangeKind {
+    /// It stays as it is.
+    #[default]
+    Stays,
+    /// It changes, as shown.
+    Changes,
+    /// It is dropped. An open task only; its history stays.
+    Drops,
+    /// It is a new task the revision adds.
+    Adds,
+}
+
+/// One text of the agreement, now and after the revision.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextChange {
+    /// Whether it stays or changes.
+    pub kind: ChangeKind,
+    /// The text now, exactly.
+    pub before: String,
+    /// The text after the revision, exactly. Equal to `before` when it stays.
+    pub after: String,
+}
+
+/// One open task under a revision. Finished tasks are never part of one.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskChange {
+    /// The task.
+    pub id: String,
+    /// Its number in the mission.
+    pub number: u32,
+    /// Its title now.
+    pub title: String,
+    /// Whether it stays, changes or drops.
+    pub kind: ChangeKind,
+    /// What changes, one line each, such as "Title: Add quiet hours → Follow Focus".
+    pub lines: Vec<String>,
+}
+
+/// What a revision does to an active decision. Decisions are replaced or
+/// withdrawn with a reason; the earlier text stays as history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DecisionAction {
+    /// A new decision replaces it.
+    #[default]
+    Replace,
+    /// It no longer applies, and nothing replaces it.
+    Withdraw,
+}
+
+/// One decision a revision replaces or withdraws.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionChange {
+    /// The decision.
+    pub id: String,
+    /// Its number, such as 3 for D3.
+    pub number: u32,
+    /// Its text now.
+    pub before: String,
+    /// Replaced or withdrawn.
+    pub action: DecisionAction,
+    /// The replacement's text. Empty when withdrawn.
+    pub after: String,
+    /// Why, as Pilot gave it.
+    pub reason: String,
+}
+
+/// Who a proposed correction would change. Confirming a revision applies
+/// neither: each has its own settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CorrectionKind {
+    /// How the coordinator works.
+    #[default]
+    Instruction,
+    /// What Pilot's agents may do.
+    Permission,
+}
+
+/// A correction Pilot proposes beside the revision, never applied by it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Correction {
+    /// Instruction or permission.
+    pub kind: CorrectionKind,
+    /// What it would change, as Pilot wrote it.
+    pub text: String,
+}
+
+/// Whether the mission's work must be paused before a revision applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PauseNeed {
+    /// No chat works on the mission. Nothing needs pausing.
+    #[default]
+    None,
+    /// Chats belong to it, and its work is paused.
+    Paused,
+    /// Chats belong to it and its work is not paused. A confirmation is refused.
+    Needed,
+}
+
+/// Where the confirmation of one revision is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfirmState {
+    /// Not confirmed. Nothing changed.
+    #[default]
+    Open,
+    /// Sent; waiting for the service.
+    Confirming,
+    /// Confirmed and applied, exactly as shown.
+    Confirmed,
+    /// Sent, but no answer came back. Only a check settles it.
+    Unknown,
+    /// Reading whether it applied. Changes nothing.
+    Checking,
+}
+
+/// A proposed revision of the mission, in full: what stays, changes and
+/// drops. The user confirms exactly this revision or nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revision {
+    /// This service supports exact affected-work checkpoints.
+    #[prop(default)]
+    pub selective_pause: bool,
+    /// Assignment owners affected by the reviewed revision, including dependent work.
+    #[prop(default)]
+    pub affected_work: u32,
+    /// Canonical affected task labels, including real dependents.
+    #[prop(default)]
+    pub affected_tasks: Vec<String>,
+    /// Stable for the revision's life.
+    pub id: String,
+    /// Changes when any part changes. A confirmation names it.
+    pub digest: String,
+    /// Pilot's summary of it, in one or two sentences.
+    pub summary: String,
+    /// Whether the mission is still what Pilot revised. When it changed,
+    /// this revision cannot be confirmed; Pilot proposes a new one.
+    pub current: bool,
+    /// The mission's goal.
+    pub goal: TextChange,
+    /// The agreement (the mission's spec).
+    pub plan: TextChange,
+    /// Every open task, in order.
+    pub tasks: Vec<TaskChange>,
+    /// New tasks the revision adds, in order. Their number is 0 until they exist.
+    pub added: Vec<TaskChange>,
+    /// Finished tasks. They and their history always stay.
+    pub finished: u32,
+    /// Active decisions it replaces or withdraws.
+    pub decisions: Vec<DecisionChange>,
+    /// Active decisions that stay as they are.
+    pub kept_decisions: u32,
+    /// Proposed corrections it does not apply.
+    pub corrections: Vec<Correction>,
+    /// Whether work must be paused first.
+    pub pause: PauseNeed,
+    /// Where its confirmation is.
+    pub confirm: ConfirmState,
+    /// Other proposals that wait after this one (each thread keeps its own).
+    pub waiting: u32,
+}
+
+/// One revision the user confirmed. Its earlier agreement stays readable
+/// on request; it is history, not guidance.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionLine {
+    /// The revision.
+    pub id: String,
+    /// Its summary.
+    pub summary: String,
+    /// One line, such as "Confirmed by you".
+    pub line: String,
+    /// The goal before it, exactly.
+    pub earlier_goal: String,
+    /// The agreement before it, exactly.
+    pub earlier_plan: String,
+    /// The decisions it replaced or withdrew, in words, with their reasons.
+    pub retired: Vec<String>,
+}
+
+/// A mission's Revisit: its agreement now, the new questions, and the
+/// revision to review. Asking starts no work; confirming changes the
+/// agreement and open tasks but grants, resumes and starts nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Revisit {
+    /// A saved selective checkpoint still holding work, if any. No automatic release.
+    #[prop(default)]
+    pub paused_work: Option<RevisionPause>,
+    /// Whether a Revisit can be used here.
+    pub available: bool,
+    /// Why not, when unavailable. Empty otherwise.
+    pub reason: String,
+    /// Where it is.
+    pub stage: RevisitStage,
+    /// Whether the user can ask for a Revisit now.
+    pub can_ask: bool,
+    /// The goal now.
+    pub goal: String,
+    /// The agreement now, exactly.
+    pub plan: String,
+    /// Open tasks now.
+    pub open_tasks: u32,
+    /// Finished tasks now.
+    pub finished_tasks: u32,
+    /// Active decisions now.
+    pub decisions: u32,
+    /// The revision proposed, once there is one.
+    pub revision: Option<Revision>,
+    /// Confirmed revisions, newest first.
+    pub history: Vec<RevisionLine>,
+}
+
+/// The exact selective checkpoint shown for explicit release or passive lookup.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevisionPause {
+    pub operation_id: String,
+    pub state: String,
+    pub members: u32,
+}
+
+/// Release only the exact selective checkpoint the native read showed.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct ResumeRevisionIntent {
+    pub mission_id: String,
+    pub pause_operation_id: String,
+}
+
+/// Ask Pilot to revisit a mission: compare it with what was agreed, and
+/// ask new questions only for the gaps. It changes nothing by itself.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RevisitIntent {
+    /// The mission.
+    pub mission_id: String,
+}
+
+/// Ask the idle planning agent to continue planning this mission. It
+/// answers, approves and starts nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct ContinueIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// Feedback on the current interview, word for word: Pilot redoes the round
+    /// with it. Empty to only continue.
+    pub feedback: String,
+    /// The user's reply to the planner's last message, word for word: Pilot's
+    /// planning agent gets it as a note and continues. Empty for none.
+    #[prop(default)]
+    pub note: String,
+}
+
+/// Why a mission's planning moves, waits or is stuck, read from saved state.
+/// Reading it changes nothing; its fix applies only when the user asks.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Unstick {
+    /// Moving, waiting (normal) or stuck.
+    pub state: UnstickState,
+    /// Why, in one sentence.
+    pub line: String,
+    /// The one fix the user can apply, if any.
+    pub fix: UnstickFix,
+    /// What was checked, one short line each.
+    pub checks: Vec<String>,
+    /// Unstick's repair agent: a read-only chat that looks and proposes one fix.
+    pub repair: Option<Repair>,
+    /// The planning agent ended its turn while the plan is open: it may wait for
+    /// the user's reply. Reply sends a note; Continue sends none.
+    pub reply: bool,
+    /// Its last message, in that case. Empty otherwise.
+    pub planner_says: String,
+}
+
+/// Whether planning moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnstickState {
+    /// An agent or chat works.
+    Moving,
+    /// It waits for the user or for something normal.
+    #[default]
+    Waiting,
+    /// Nothing moves without help.
+    Stuck,
+}
+
+/// The fix Unstick offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnstickFix {
+    /// No fix: report it with Feedback.
+    #[default]
+    None,
+    /// Continue planning.
+    Continue,
+    /// Remove saved answers to an earlier wording, so new answers save.
+    DropEarlierAnswers,
+}
+
+/// Unstick's repair agent for one mission.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repair {
+    /// Whether **Have an agent look** may start one now.
+    pub available: bool,
+    /// Where the agent is.
+    pub state: RepairState,
+    /// The repair chat, to open it. Empty before it starts.
+    pub chat_id: String,
+    /// Its proposed fix, once it has one.
+    pub proposal: Option<RepairProposal>,
+    /// Why it failed, in plain words.
+    pub reason: String,
+    /// Whether the proposal still matches the mission. Apply refuses when not.
+    pub current: bool,
+}
+
+/// Where the repair agent is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepairState {
+    /// Not asked yet.
+    #[default]
+    None,
+    /// Starting or reading.
+    Looking,
+    /// It proposed a fix.
+    Proposed,
+    /// It could not look or gave no usable fix.
+    Failed,
+}
+
+/// The repair agent's proposal. Only the user's Apply acts on it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairProposal {
+    /// The one fix.
+    pub fix: RepairFix,
+    /// Why planning is stuck, in plain words.
+    pub cause: String,
+    /// With a planner note: the note Continue planning sends.
+    pub note: String,
+    /// low, medium or high.
+    pub certainty: String,
+    /// Short labels of what the agent read.
+    pub evidence: Vec<String>,
+}
+
+/// The fixes a repair agent may propose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RepairFix {
+    /// Nothing to apply: the cause only.
+    #[default]
+    None,
+    /// Continue planning.
+    Continue,
+    /// Continue planning with a note.
+    PlannerNote,
+    /// Remove saved answers to an earlier wording.
+    DropEarlierAnswers,
+    /// A Pilot bug: a code fix in a separate chat.
+    CodeRepair,
+}
+
+/// Apply the repair agent's fix, with the note as the user left it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RepairApplyIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The note to send, for a planner note. Empty keeps the agent's note.
+    pub note: String,
+}
+
+/// Apply Unstick's fix for one mission.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct UnstickIntent {
+    /// The mission.
+    pub mission_id: String,
+}
+
+/// One question the user asked about an interview question. A read-only chat
+/// answers it; the answer explains and never answers for the user.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionAsk {
+    /// Stable: the operation that asked.
+    pub id: String,
+    /// The user's words.
+    pub text: String,
+    /// Where it is.
+    pub state: AskState,
+    /// The answer, word for word, once answered. Empty otherwise.
+    pub answer: String,
+    /// Why there is no answer, once failed. Empty otherwise.
+    pub reason: String,
+}
+
+/// Where a question about a question is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AskState {
+    /// A chat works on the answer.
+    #[default]
+    Asking,
+    /// Answered.
+    Answered,
+    /// No answer came. Asking again is safe.
+    Failed,
+}
+
+/// Ask about one question of the current interview. A read-only chat answers;
+/// it answers no question, and the round keeps waiting for the user.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct QuestionAskIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The interview question asked about.
+    pub question_id: String,
+    /// The user's question, word for word.
+    pub text: String,
+}
+
+/// Confirm one revision exactly as shown. It changes the agreement and
+/// open tasks; it resumes, starts and permits nothing.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct ConfirmRevisionIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The revision shown.
+    pub revision_id: String,
+    /// The revision's digest shown.
+    pub digest: String,
+}
+
+/// Name one revision, to check its confirmation.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct RevisionRef {
+    /// The mission.
+    pub mission_id: String,
+    /// The revision.
+    pub revision_id: String,
+}
+
+/// Start a mission interview, or a chat, from the user's words.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct NewIntent {
+    /// Explicitly create a separate mission despite a similar uncertain request.
+    #[prop(default)]
+    pub create_another: bool,
+    /// Explicit lifetime mission allowance; never a provider bill.
+    #[prop(default)]
+    pub allowance_micros: Option<u64>,
+    /// What the user wants, exactly as written.
+    pub goal: String,
+    /// The setup's digest the screen showed.
+    pub setup: String,
+    /// The old mission this plan re-plans, when New was opened from its
+    /// "Re-plan as a new mission". Only Plan sends it.
+    pub replaces: Option<String>,
+    /// The request in New (a Linear issue or Slack message) this plan comes
+    /// from, when New was opened from its "Plan a mission". Only Plan sends it.
+    pub request: Option<PlanRequest>,
+    /// The saved feedback and the exact proposal this plan comes from, when
+    /// New was opened from Feedback's "Draft a linked mission". Only Plan sends it.
+    #[prop(default)]
+    pub feedback: Option<PlanFeedback>,
+}
+
+/// A request in New, as the screen showed it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct PlanRequest {
+    /// The request's ID.
+    pub item_id: String,
+    /// The request's revision the screen showed.
+    pub revision: u32,
+    /// Explicit user choice; omitted is reference only.
+    #[prop(default)]
+    pub manage_status: Option<bool>,
+}
+
+/// Saved feedback and its investigation's proposal, as the Feedback page showed them.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct PlanFeedback {
+    /// The feedback's ID.
+    pub feedback_id: String,
+    /// The triage or prototype chat whose proposal the user saw.
+    pub triage_session_id: String,
+    /// That proposal's digest, as shown.
+    pub proposal_digest: String,
+}
+
+/// Save one answer as a draft. It never submits or starts anything.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct AnswerIntent {
+    /// The interview.
+    pub interview_id: String,
+    /// The question list's revision the screen showed.
+    pub question_set: u32,
+    /// The question.
+    pub question_id: String,
+    /// The question's digest the screen showed.
+    pub digest: String,
+    /// The chosen suggestion, or null for none.
+    pub choice_id: Option<String>,
+    /// The user's own answer or added detail, exactly as written.
+    pub text: String,
+}
+
+/// Submit an interview's saved answers, once.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct SubmitIntent {
+    /// The interview.
+    pub interview_id: String,
+    /// The saved answers' revision the screen showed.
+    pub revision: u32,
+    /// For a review: the plan's digest the screen showed. Empty otherwise.
+    pub proposal: String,
+}
+
+/// Name one interview.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[prop(exact)]
+pub struct InterviewRef {
+    /// The interview.
+    pub interview_id: String,
+}
+
+/// What a planning intent did.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanOutcome {
+    /// Applied, stale, refused or unknown.
+    pub status: OutcomeStatus,
+    /// The planning read's revision after the intent.
+    pub revision: u32,
+    /// One sentence for the user. Empty when the read model says enough.
+    pub message: String,
+    /// The mission it made or changed, when there is one.
+    pub mission_id: Option<String>,
+}

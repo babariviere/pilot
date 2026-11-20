@@ -3,11 +3,11 @@
 // (intakeDemo.ts): new Slack requests queue in Needs you as cards; the
 // Linear request is counted on the Linear row only.
 import { mount, View } from "nsh";
-import { intakeCounts, intakeOpened, intakeScript, scriptedIntake } from "./intakeDemo";
-import { mirrorIntake } from "./intakeFeed";
-import { mockRituals, openDay } from "./mockFeeds";
-import { goalDraft, linkedMission, planRoute, requestDraft } from "./planView";
-import { TodayScreen } from "./TodayScreen";
+import { mockRituals, openDay } from "./app/testing/mockFeeds";
+import { intakeCounts, intakeOpened, intakeScript, scriptedIntake } from "./missions/intake/intakeDemo";
+import { mirrorIntake } from "./missions/intake/intakeFeed";
+import { goalDraft, linkedMission, planRoute, requestDraft } from "./missions/planning/planView";
+import { TodayScreen } from "./today/TodayScreen";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const day = { ...openDay("quiet"), intake: mirrorIntake(scriptedIntake) };

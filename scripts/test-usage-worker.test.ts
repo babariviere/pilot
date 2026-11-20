@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const script = fileURLToPath(new URL("./bench/usage-worker.mjs", import.meta.url));
+const builder = fileURLToPath(new URL("../packages/daemon/scripts/build-usage-worker.mjs", import.meta.url));
+const source = fileURLToPath(new URL("../packages/daemon/src/", import.meta.url));
+const usage = ["usage-history", "usage-history-worker", "usage-history-disk", "usage-history-validation"];
 function fixture(overrides: NodeJS.ProcessEnv, args = [script]) {
 	const home = mkdtempSync(join(tmpdir(), "usage-probe-test-"));
 	try {
@@ -39,14 +42,11 @@ test("offline worker probe rejects unknown variants/cases and unbounded work bef
 
 test("release generator is deterministic, relocatable and fails closed on missing/stale dependencies", () => {
 	const root = mkdtempSync(join(tmpdir(), "usage-release-test-"));
-	const builder = fileURLToPath(new URL("../packages/daemon/scripts/build-usage-worker.mjs", import.meta.url));
-	const source = fileURLToPath(new URL("../packages/daemon/src/", import.meta.url));
 	let directory = root;
 	try {
 		writeFileSync(join(directory, "package.json"), '{"type":"module"}');
-		for (const name of ["usage-history", "usage-history-worker", "usage-history-disk", "usage-history-validation"])
-			copyFileSync(join(source, `${name}.ts`), join(directory, `${name}.ts`));
-		const run = (action: string) => fixture({}, [builder, action, directory]);
+		for (const name of usage) copyFileSync(join(source, "models/usage", `${name}.ts`), join(directory, `${name}.ts`));
+		const run = (action: string) => fixture({}, [builder, action, directory, "--usage-only"]);
 		assert.equal(run("build").status, 0);
 		const original = readFileSync(join(directory, "usage-history-disk.mjs"), "utf8");
 		assert.equal(run("build").status, 0, "rebuilding must refresh outputs, not select stale ones");
@@ -76,6 +76,30 @@ test("release generator is deterministic, relocatable and fails closed on missin
 		}
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+test("full release generator requires both relocated worker graphs", (t) => {
+	const root = mkdtempSync(join(tmpdir(), "worker-runtime-layout-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	writeFileSync(join(root, "package.json"), '{"type":"module"}');
+	for (const [leaf, names] of [
+		["models/usage", usage],
+		["models/funding", ["funding", "funding-worker", "funding-disk", "funding-errors"]],
+	] as const) {
+		mkdirSync(join(root, "src", leaf), { recursive: true });
+		for (const name of names) copyFileSync(join(source, leaf, `${name}.ts`), join(root, "src", leaf, `${name}.ts`));
+	}
+	const run = (action: string) => fixture({}, [builder, action, join(root, "src")]);
+	for (const action of ["build", "check"]) {
+		const result = run(action);
+		assert.equal(result.status, 0, result.stderr);
+	}
+	rmSync(join(root, "src/models/funding/funding.ts"));
+	for (const action of ["build", "check"]) {
+		const result = run(action);
+		assert.notEqual(result.status, 0);
+		assert.match(result.stderr, /funding\.ts/);
 	}
 });
 

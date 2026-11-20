@@ -1,8 +1,8 @@
 // Test-only schedule adapter. No host, storage, provider or execution.
 import { mount } from "nsh";
-import { SchedulesScreen } from "./SchedulesScreen";
-import { restoreSchedules, savedSchedules, scheduleDraft } from "./scheduleDraft";
-import { scriptedSchedules } from "./schedulesDemo";
+import { SchedulesScreen } from "./settings/schedules/SchedulesScreen";
+import { restoreSchedules, savedSchedules, scheduleDraft } from "./settings/schedules/scheduleDraft";
+import { scriptedSchedules } from "./settings/schedules/schedulesDemo";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const { controls, snapshot, writes, checks, reads, many, lastTarget, unknown, operations } = scriptedSchedules();

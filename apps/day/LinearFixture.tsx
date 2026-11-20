@@ -5,12 +5,12 @@
 // update saves it and shows it again in a fresh window state.
 import { mount, signal, View } from "nsh";
 import type { Request } from "pilot-day/native";
-import { type IntakeSource, type IntakeView, mirrorIntake } from "./intakeFeed";
-import { type LinearDemoMode, ScriptedLinear } from "./linearDemo";
-import { mirrorLinear } from "./linearFeed";
-import { MockDayScreen, openDay } from "./mockFeeds";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import { type IntakeSource, type IntakeView, mirrorIntake } from "./missions/intake/intakeFeed";
+import { type LinearDemoMode, ScriptedLinear } from "./sources/linear/linearDemo";
+import { mirrorLinear } from "./sources/linear/linearFeed";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 const linear = new ScriptedLinear();
 

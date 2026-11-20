@@ -1,5 +1,5 @@
-import { PiReload } from "../pi-reload.ts";
-import type { SessionManager } from "../sessions.ts";
+import { PiReload } from "../sessions/workers/pi-reload.ts";
+import type { SessionManager } from "../sessions/sessions.ts";
 
 /** Offline server fixtures keep the same multi-listener and bridge ownership contracts as sessions. */
 export function sessionObservers() {

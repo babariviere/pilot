@@ -1,8 +1,8 @@
 // Invented connections. No network, configuration files or browser sign-ins.
 import { mount, Scroll, signal } from "nsh";
-import { ConnectionSettings } from "./ConnectionSettings";
-import type { ConnectionControls, ConnectionSnapshot } from "./connectionControls";
-import { restoreConnectionDraft, savedConnectionDraft } from "./connectionDraft";
+import { ConnectionSettings } from "./settings/connections/ConnectionSettings";
+import type { ConnectionControls, ConnectionSnapshot } from "./settings/connections/connectionControls";
+import { restoreConnectionDraft, savedConnectionDraft } from "./settings/connections/connectionDraft";
 import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const snapshot = signal<ConnectionSnapshot | null>({

@@ -1,0 +1,6701 @@
+/** Missions: daemon-owned state shared by the chats of one goal. pilotd is the sole writer. */
+import { randomUUID } from "node:crypto";
+import type { SQLInputValue } from "node:sqlite";
+import { MISSION_DELIVERY_LIMITS, MISSION_STORE_LIMITS, MISSION_TASK_STATUSES } from "@pilot/kernel/mission-write";
+import type {
+	ArtifactKind,
+	GitHubAction,
+	Mission,
+	MissionArtifactLink,
+	MissionBrief,
+	MissionBriefRevision,
+	MissionCodeCompletion,
+	MissionComment,
+	MissionCommentWrite,
+	MissionDecision,
+	MissionDecisionProposal,
+	MissionDetail,
+	MissionEvent,
+	MissionEventKind,
+	MissionEventWrite,
+	MissionHealth,
+	MissionLinearRole,
+	MissionLinearSync,
+	MissionNonCodeDelivery,
+	MissionPhase,
+	MissionPhaseWrite,
+	MissionResource,
+	MissionResourceKind,
+	MissionResourceUpdate,
+	MissionResourceWrite,
+	MissionRevisionDelta,
+	MissionRevisionProposal,
+	MissionRole,
+	MissionStatus,
+	MissionSuccessorLink,
+	MissionTask,
+	MissionTaskStatus,
+	MissionTaskWrite,
+	MissionWorkerRole,
+	SessionPullRequest,
+	SessionSummary,
+	UpdateMissionRequest,
+} from "@pilot/protocol";
+import { AttentionStore } from "../day/attention/attention-store.ts";
+import { ChangeLandingStore } from "../changes/change-landing-store.ts";
+import { DayInsightsAllowance } from "../day/insights/day-insights-allowance.ts";
+import { DayInsightsStore } from "../day/insights/day-insights-store.ts";
+import { Conflict, NotFound } from "../runtime/contracts/errors.ts";
+import { linkedPullRequest } from "../sources/github/github-url.ts";
+import { HumanReviewStore } from "../reviews/human/human-review-store.ts";
+import { InsightsBacklog } from "../insights/insights-backlog.ts";
+import { InsightsLegacyRecords } from "../insights/migration/insights-legacy.ts";
+import { missionNoticeRequestId } from "../day/attention/input-requests.ts";
+import { InsightsOwnerStore } from "../insights/ownership/insights-owner-store.ts";
+import { InsightsTransitionStore } from "../insights/migration/insights-transition-store.ts";
+import { InsightsWorkspaceStore } from "../insights/ownership/insights-workspace-store.ts";
+import { LinearPublisherStore } from "../sources/linear/linear-publisher-store.ts";
+import {
+	type AllocationContextFence,
+	type AllocationWrite,
+	allocationWrite,
+	assertAllocationSubmission,
+	type ContributionAllocation,
+} from "./delivery/mission-contribution-allocation.ts";
+import { MissionControlStore } from "./lifecycle/mission-control-store.ts";
+import {
+	type ChangeKind,
+	MissionDatabase,
+	type MissionDbPort,
+	type Row,
+	type TransactionOptions,
+} from "./mission-database.ts";
+import {
+	assertDeliveryAssignment,
+	type DeliveryObservation,
+	type DeliveryRecord,
+	type DeliveryResolver,
+	type DeliverySubmission,
+	deliveryDigest,
+	deliveryJudgementWrite,
+	deliverySubmissionWrite,
+	latestJudgement,
+	latestSubmission,
+} from "./delivery/mission-delivery-evidence.ts";
+import { MissionInterviewStore } from "./interviews/mission-interview-store.ts";
+import {
+	type LinearContributor,
+	type LinearSyncRecord,
+	linearTarget,
+	reconcileLinearRecord,
+} from "./linear/mission-linear-state.ts";
+import {
+	explainNonCodeAcceptance,
+	type NonCodeAcceptancePolicy,
+	type NonCodeAcceptanceState,
+	type NonCodeAuthorityGap,
+	type NonCodePolicyWrite,
+	nonCodeInputIds,
+	nonCodePolicyWrite,
+} from "./delivery/mission-non-code-acceptance.ts";
+import { parseNonCodeDelivery } from "./delivery/mission-non-code-delivery.ts";
+import { MissionPlanStore, publishedDefinition } from "./planning/mission-plan-store.ts";
+import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./planning/mission-planning.ts";
+import {
+	assertReviewOutput,
+	type MissionReviewProfile,
+	type MissionReviewRecord,
+	type MissionReviewResult,
+	type ReviewContextFence,
+	type ReviewProducer,
+	type ReviewResultWrite,
+	reviewProducer,
+	reviewProfileWrite,
+	reviewReferences,
+	reviewResultWrite,
+} from "./review/mission-review-contract.ts";
+import { MissionRevisions, revisionDigest, revisionText } from "./lifecycle/mission-revisions.ts";
+import { isActiveDecision, isOpenTask } from "./mission-rules.ts";
+import { MissionThreadStore } from "./threads/mission-thread-store.ts";
+import { migrateMissionDb } from "./missions-schema.ts";
+import { nativeReviewProfile, nativeReviewRecord } from "../reviews/native/native-review-records.ts";
+import { reasonLine } from "../day/attention/needs-you-reason.ts";
+import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "../sessions/notice-dispatcher.ts";
+import { PlanningWorkerStore } from "./planning/workers/planning-worker-store.ts";
+import { type MissionSource, type MissionSourceChange, ProjectKnowledgeStore } from "../projects/knowledge/project-knowledge-store.ts";
+import { ProjectPreferencesStore } from "../projects/project-preferences-store.ts";
+import { linearKey, normalizeResourceWrite } from "./resource-url.ts";
+import { RetainedReviewProjections } from "../reviews/retained/retained-review-projections.ts";
+import { ReviewRequestStore } from "../reviews/requests/review-request-store.ts";
+import type { PullRequestBinding } from "../sessions/sessions.ts";
+import { UserFeedbackStore } from "../day/feedback/user-feedback-store.ts";
+import { UserVerificationStore } from "../user-verification-store.ts";
+import { text } from "../runtime/contracts/validate.ts";
+import { WorkflowConfirmationStore } from "./planning/confirmations/workflow-confirmation-store.ts";
+
+/** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
+export interface MissionActor {
+	sessionId?: string;
+	/** Internal attribution when the user accepts a proposal. */
+	proposedBySessionId?: string;
+}
+
+/** Activity selectors are applied in SQLite before limiting or paging. */
+export interface MissionActivityQuery {
+	taskId?: string;
+	kind?: MissionEventKind;
+	sinceEventId?: number;
+	sinceAt?: number;
+	before?: number;
+	limit: number;
+}
+
+const USER: MissionActor = {};
+const STATUSES: MissionStatus[] = ["active", "done", "archived"];
+const TASK_STATUSES: readonly MissionTaskStatus[] = MISSION_TASK_STATUSES;
+const HEALTH: MissionHealth[] = ["on_track", "at_risk", "off_track"];
+const { title: MAX_TITLE, text: MAX_TEXT, goal: MAX_GOAL, brief: MAX_BRIEF } = MISSION_STORE_LIMITS;
+const DETAIL_EVENTS = 50;
+const DETAIL_RESOLVED_COMMENTS = 20;
+
+/** Task counts of one mission by status, dropped tasks excluded. To do and delegated are the rest of `total`. */
+export interface MissionTaskProgress {
+	done: number;
+	inReview: number;
+	inProgress: number;
+	blocked: number;
+	total: number;
+}
+
+interface MissionNotice {
+	requestId: string;
+	missionId: string;
+	lastEventId: number;
+	sessionId: string;
+	content: string;
+	event: import("@pilot/protocol").ChatEventSummary;
+}
+
+/** Summary-only attention and progress counts plus one bounded reason, without loading full task/comment bodies. */
+const MISSION_SELECT = `SELECT missions.*,
+	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'blocked') +
+	CASE WHEN coordinator_session_id IS NULL THEN
+		(SELECT COUNT(*) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
+			AND target_session_id IS NULL AND author_session_id IS NOT NULL)
+	ELSE 0 END +
+	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') +
+	(SELECT COUNT(*) FROM resources WHERE mission_id = missions.id AND linear_role = 'managed'
+		AND (json_extract(linear_sync, '$.status.state') IN ('paused', 'error')
+			OR json_extract(linear_sync, '$.status.reconcilePlan')=1)) AS needs_you_count,
+	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'done') AS tasks_done,
+	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status != 'dropped') AS tasks_total,
+	(SELECT json_object('id', p.id, 'name', p.name,
+		'done', (SELECT COUNT(*) FROM tasks t WHERE t.phase_id = p.id AND t.status = 'done'),
+		'total', (SELECT COUNT(*) FROM tasks t WHERE t.phase_id = p.id AND t.status != 'dropped'))
+		FROM phases p WHERE p.mission_id = missions.id AND p.completed_at IS NULL ORDER BY p.sort, p.id LIMIT 1
+	) AS current_phase,
+	COALESCE(
+		(SELECT substr('Blocked: ' || title, 1, 201) FROM tasks
+			WHERE mission_id = missions.id AND status = 'blocked' ORDER BY sort, number LIMIT 1),
+		CASE WHEN coordinator_session_id IS NULL THEN
+			(SELECT substr(text, 1, 201) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
+				AND target_session_id IS NULL AND author_session_id IS NOT NULL ORDER BY created_at, id LIMIT 1)
+		END,
+		(SELECT substr('Decision proposal: ' || reason, 1, 201) FROM decision_proposals
+			WHERE mission_id = missions.id AND status = 'pending' ORDER BY created_at, id LIMIT 1),
+		(SELECT substr('Linear ' || COALESCE(external_id, 'ticket') || ': ' ||
+			COALESCE(CASE WHEN json_extract(linear_sync, '$.status.reconcilePlan')=1 THEN 'Review the proposed plan change' END,
+				json_extract(linear_sync, '$.status.error'), json_extract(linear_sync, '$.status.reason'),
+				'Review synchronization'), 1, 201) FROM resources
+			WHERE mission_id = missions.id AND linear_role = 'managed'
+			AND (json_extract(linear_sync, '$.status.state') IN ('paused', 'error')
+				OR json_extract(linear_sync, '$.status.reconcilePlan')=1) ORDER BY created_at, id LIMIT 1)
+	) AS needs_you_reason
+	FROM missions`;
+
+function noticeFrom(row: Row): MissionNotice {
+	return {
+		requestId: String(row.request_id),
+		missionId: String(row.mission_id),
+		lastEventId: Number(row.last_event_id),
+		sessionId: String(row.session_id),
+		content: String(row.content),
+		event:
+			typeof row.chat_event === "string"
+				? JSON.parse(row.chat_event)
+				: { kind: "mission_updated", text: "Mission updated" },
+	};
+}
+
+function optional<T>(value: SQLInputValue | undefined, map: (value: SQLInputValue) => T): T | undefined {
+	return value === null || value === undefined ? undefined : map(value);
+}
+
+/** Shape-only checks; scope and price-cap validation is asynchronous and belongs to the caller. */
+function preference(write: MissionTaskWrite): { model?: string | null; thinking?: string | null } | undefined {
+	if (write.preferredModel === undefined && write.preferredThinking === undefined) return undefined;
+	const value = (input: unknown, name: string, max: number) =>
+		input === undefined || input === null ? input : text(input, name, max) || null;
+	return {
+		...(write.preferredModel !== undefined ? { model: value(write.preferredModel, "preferredModel", 256) } : {}),
+		...(write.preferredThinking !== undefined
+			? { thinking: value(write.preferredThinking, "preferredThinking", 32) }
+			: {}),
+	};
+}
+
+const str = (value: SQLInputValue) => String(value);
+const num = (value: SQLInputValue) => Number(value);
+export class MissionStore {
+	/**
+	 * The project's own GitHub repository ("host/owner/name"): the member chat's workspace upstream, else the project
+	 * folder's git remote read earlier. The mission service sets it; undefined means not known.
+	 */
+	projectRepository: (projectId: string, sessionId: string) => string | undefined = () => undefined;
+	private readonly database: MissionDatabase;
+	/** Shared with the stores below. Their transactions skip the mission reconcilers unless they ask. */
+	private readonly port: MissionDbPort = {
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work, options) => this.transaction(work, { reconcile: options?.reconcile ?? false }),
+		durable: () => this.durable(),
+		changed: (missionId, kind) => this.changed(missionId, [], kind),
+	};
+	private readonly listeners = new Set<(missionId: string, kind: ChangeKind) => void>();
+	private readonly linearSyncListeners = new Set<() => void>();
+	private readonly linearSyncChanged = new Set<string>();
+	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
+	private readonly memberListeners = new Set<(sessionId: string) => void>();
+	private referenceBatch?: string;
+	private batchedChanges?: Map<string, Set<string>>;
+	private readonly phaseReconciliations = new Set<string>();
+	/** Startup migrations commit without the reconcilers: their tables and columns may not exist yet. */
+	private initializing = true;
+	private readonly sourceListeners = new Set<(change: MissionSourceChange) => void>();
+	/** Project-owned knowledge. Missions only link entries. */
+	readonly knowledge = new ProjectKnowledgeStore(this.port, this);
+	readonly preferences = new ProjectPreferencesStore(this.port);
+	/** The user's own feedback about Pilot, separate from agent Insights and findings. */
+	readonly feedback = new UserFeedbackStore(this.port);
+	/** Insights findings are tracked as tasks of their mission. */
+	readonly insights = new InsightsBacklog({
+		...this.port,
+		validateMission: (id, projectId) => {
+			const mission = this.require(id);
+			if (mission.projectId !== projectId || mission.status !== "active")
+				throw new Conflict("Insights backlog binding changed");
+		},
+		createTask: (id, draft, sessionId) => this.insertTask(id, { title: draft.title }, { sessionId }).id,
+		updateTask: (id, taskId, { title, body, status }) => {
+			this.run(
+				"UPDATE tasks SET title=?,body=?,status=?,updated_at=?,completed_at=? WHERE id=? AND mission_id=?",
+				title,
+				body,
+				status,
+				Date.now(),
+				status === "done" ? Date.now() : null,
+				taskId,
+				id,
+			);
+		},
+	});
+	/** App-owned Insights records never project to ordinary missions or tasks. */
+	readonly dayInsights = new DayInsightsStore(this.port);
+	readonly dayInsightsAllowance = new DayInsightsAllowance(this.port);
+	readonly insightsWorkspace = new InsightsWorkspaceStore(this.port);
+	readonly insightsOwner = new InsightsOwnerStore(this.port);
+	readonly insightsLegacy = new InsightsLegacyRecords(this.port);
+	readonly insightsTransition = new InsightsTransitionStore(this.port);
+	readonly threads = new MissionThreadStore(this.port);
+	readonly revisions = new MissionRevisions({
+		...this.port,
+		assertTopic: (id, topicId) => {
+			const topic = this.threads.get(id, topicId);
+			if (topic.disposition !== "open" || !topic.handoff)
+				throw new Conflict("A revision for a thread needs that thread open, with a handoff from its chat");
+		},
+		source: (id) => ({
+			mission: this.require(id),
+			tasks: [...this.reportSourceTasks(id)],
+			context: this.allocationContextFence(id),
+			phases: this.phases(id),
+			owners: this.all(
+				"SELECT id FROM events WHERE mission_id=? AND kind IN ('member','coordinator') ORDER BY id DESC LIMIT 1",
+				id,
+			),
+			control: this.controls.current(id),
+			interview: this.interviews.latest(id),
+			plan: this.plans.get(id),
+		}),
+		assertPlanner: (id, actor) => {
+			this.assertPlanner(id, actor);
+			if (actor.sessionId && this.require(id).coordinatorSessionId !== actor.sessionId)
+				throw new Conflict("Only the coordinator can propose mission revisions");
+		},
+		validate: (id, delta) => this.validateRevision(id, delta),
+		apply: (id, proposal, humanSource) => this.applyRevision(id, proposal, humanSource),
+		changed: (id) => {
+			this.changed(id, this.members(id));
+			this.knowledgeChanged(id);
+		},
+	});
+
+	/** Pause controls and reported assessments share canonical storage, not task or approval rows. */
+	readonly controls = new MissionControlStore({
+		...this.port,
+		reportSaved: (report) => {
+			const task = this.task(report.missionId, report.write.taskId);
+			// No coordinator can complete this task, so the worker's delivery report is the result the user checks.
+			// A delivery that is not moving is partial: the user checks it only after a later delivery report.
+			const partial = !!report.write.delivery && report.write.movement === "not_moving";
+			if (report.write.delivery && !partial && this.plannedWithoutCoordinator(report.missionId))
+				this.userVerifications.recordSource(`report:${report.write.reportId}`, task.id);
+			const note = `Task #${task.number}: worker report ${report.write.reportId}${partial ? " (partial delivery, not moving)" : report.write.delivery ? " (scoped delivery)" : ""}. Read current task scope, owner, dependencies and report before changing status; not user acceptance.`;
+			this.event(
+				report.missionId,
+				"update",
+				note,
+				{ sessionId: report.sessionId },
+				{
+					taskId: task.id,
+					wake: true,
+					urgent: !!report.write.delivery || report.write.movement === "not_moving",
+					settled: false,
+					noticeSummaries: [
+						{
+							key: report.write.delivery ? `report:${report.write.reportId}` : `task:${task.id}`,
+							text: note,
+							state: "reported",
+						},
+					],
+				},
+			);
+		},
+	});
+
+	/** Help and human actions share the replica, never approval/ask rows. */
+	readonly attention = new AttentionStore(this.port);
+	readonly userVerifications = new UserVerificationStore(this.port);
+	readonly plans = new MissionPlanStore(this.port);
+	readonly linearPublisher = new LinearPublisherStore(this.port);
+	readonly planningWorkers = new PlanningWorkerStore(this.port);
+	readonly interviews = new MissionInterviewStore({
+		...this.port,
+		create: (input, ownerSessionId) => {
+			if (this.membership(ownerSessionId)) throw new Conflict("Interview owner already belongs to a mission");
+			const mission = this.create({
+				...input,
+				planningVersion: 1,
+				brief: "Interview in progress. No work approved.",
+			});
+			this.join(ownerSessionId, mission.id);
+			this.update(mission.id, { coordinatorSessionId: ownerSessionId });
+			return mission.id;
+		},
+		ownerFence: (id, owner) => this.interviewOwnerFence(id, owner),
+		submitted: (state, op) => this.planningWorkers.submitted(state, op),
+		mapBrief: (id, markdown) => this.writeBrief(id, markdown, this.require(id).briefRevision).revision,
+		currentBriefRevision: (id) => this.require(id).briefRevision,
+		hasPublication: (id) => this.plans.hasPublication(id),
+		publishedAgreement: (id, brief, submissionDigest) => {
+			const p = this.plans.get(id),
+				publication = p?.publication;
+			return publication &&
+				publication.submissionDigest === submissionDigest &&
+				publication.briefRevision === brief.revision &&
+				publication.markdown === brief.markdown
+				? { revision: p!.revision, digest: publication.digest }
+				: undefined;
+		},
+	});
+	readonly workflowConfirmations = new WorkflowConfirmationStore(this.port);
+	/** Global native human feedback shares this database, not a synthetic mission. */
+	readonly humanReviews = new HumanReviewStore(this.port);
+	readonly changeLandings = new ChangeLandingStore(this.port);
+	readonly retainedReviewProjections = new RetainedReviewProjections(this.port);
+	/** Optional global review requests, never a synthetic mission or approval store. */
+	readonly reviewRequests = new ReviewRequestStore(this.port);
+
+	/** Owner-only membership fence. Other members must not strand a saved interview. */
+	interviewOwnerFence(id: string, ownerSessionId: string) {
+		this.require(id);
+		return {
+			memberEventId: Number(
+				this.one(
+					"SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=? AND kind='member' AND session_id=?",
+					id,
+					ownerSessionId,
+				)!.n,
+			),
+			coordinatorEventId: this.allocationContextFence(id).coordinatorEventId,
+		};
+	}
+	/** Bounded host input. The event high-water catches edit/revert and member/owner ABA. */
+	workflowConfirmationState(id: string) {
+		const mission = this.require(id);
+		const brief = this.brief(id);
+		if (!brief || Buffer.byteLength(brief.markdown) > 32 * 1024)
+			throw new Conflict("An approval needs a saved brief of at most 32 KiB");
+		const rows = this.all("SELECT * FROM decisions WHERE mission_id=? ORDER BY number LIMIT 129", id);
+		if (rows.length > 128) throw new Conflict("Approval decision limit exceeded");
+		const decisions = rows.map(decisionFrom).filter(isActiveDecision);
+		if (Buffer.byteLength(JSON.stringify(decisions)) > 16 * 1024)
+			throw new Conflict("Approval decisions exceed 16 KiB");
+		return {
+			mission,
+			brief,
+			decisions,
+			eventId: Number(this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=?", id)!.n),
+			contextFence: this.allocationContextFence(id),
+		};
+	}
+
+	constructor(file: string) {
+		this.database = new MissionDatabase(file);
+		this.database.load(() => {
+			migrateMissionDb(this.database, {
+				recoverInsightsReviews: () => {
+					this.insights.reviews.recover();
+					this.insightsOwner.reviews.recover();
+				},
+				phaseChanged: (missionId) => this.phaseReconciliations.add(missionId),
+				reconcileLinearSync: () => this.reconcileLinearSync(),
+			});
+			this.initializing = false;
+			this.transaction(() => {
+				for (const row of this.all("SELECT DISTINCT mission_id FROM phases"))
+					this.phaseReconciliations.add(str(row.mission_id!));
+			});
+		});
+	}
+
+	/** Commit related recovery writes together, then notify each affected mission/member once. */
+	batchChanges<T>(work: () => T): T {
+		if (this.batchedChanges) return this.transaction(work);
+		const changed = new Map<string, Set<string>>();
+		this.batchedChanges = changed;
+		let committed = false;
+		try {
+			const value = this.transaction(work);
+			committed = true;
+			return value;
+		} finally {
+			this.batchedChanges = undefined;
+			if (committed) for (const [missionId, sessions] of changed) this.changed(missionId, [...sessions]);
+		}
+	}
+	sharedDefinitionRevision(taskId: string): number {
+		return Number(this.one("SELECT revision FROM task_definition_revisions WHERE id=?", taskId)?.revision ?? 0);
+	}
+	/** Narrow Pause binding: full content can change intentionally, writer ownership cannot. */
+	pauseTaskOwnership(missionId: string, owners: string[]) {
+		return this.all(
+			`SELECT t.id,t.session_id,t.status,t.assignment,p.revision FROM tasks t
+			JOIN task_pause_ownership p ON p.task_id=t.id WHERE t.mission_id=?
+			AND t.status NOT IN ('done','dropped') AND t.session_id IN (SELECT value FROM json_each(?)) ORDER BY t.id`,
+			missionId,
+			JSON.stringify(owners),
+		).map((row) => ({
+			id: str(row.id!),
+			sessionId: str(row.session_id!),
+			status: str(row.status!),
+			assignment: row.assignment === null ? null : JSON.parse(str(row.assignment!)),
+			revision: num(row.revision!),
+		}));
+	}
+	/** Read only report fences in one query, without task bodies, phase projection or per-row lookups. */
+	reportSourceTasks(missionId: string): Map<
+		string,
+		{
+			sessionId?: string;
+			status: MissionTaskStatus;
+			assignment?: import("@pilot/protocol").MissionAssignment;
+			definitionRevision: number;
+			taskEvent: number;
+		}
+	> {
+		return new Map(
+			this.all(
+				`SELECT t.id,t.session_id,t.status,t.assignment,COALESCE(d.revision,0) definition_revision,
+			COALESCE((SELECT MAX(e.id) FROM events e WHERE e.mission_id=t.mission_id AND e.task_id=t.id AND e.kind='task'),0) task_event
+			FROM tasks t LEFT JOIN task_definition_revisions d ON d.id=t.id WHERE t.mission_id=?`,
+				missionId,
+			).map((row) => [
+				str(row.id!),
+				{
+					...(row.session_id ? { sessionId: str(row.session_id) } : {}),
+					status: str(row.status!) as MissionTaskStatus,
+					...(row.assignment ? { assignment: JSON.parse(str(row.assignment)) } : {}),
+					definitionRevision: num(row.definition_revision!),
+					taskEvent: num(row.task_event!),
+				},
+			]),
+		);
+	}
+	durable(): Promise<void> {
+		return this.database.durable();
+	}
+
+	/** Like durable(), but undefined when nothing is waiting for the disk, so callers can stay synchronous. */
+	whenDurable(): Promise<void> | undefined {
+		return this.database.whenDurable();
+	}
+
+	close(): void {
+		this.database.close();
+	}
+
+	/**
+	 * Called inside the transaction of each change to a mission record that Knowledge can cite (see sourceRecords).
+	 * A listener that throws rolls the change back.
+	 */
+	onSourceChange(listener: (change: MissionSourceChange) => void): () => void {
+		this.sourceListeners.add(listener);
+		return () => this.sourceListeners.delete(listener);
+	}
+	private sourceChanged(change: MissionSourceChange): void {
+		for (const listener of this.sourceListeners) listener(change);
+	}
+
+	missionProject(missionId: string): string | undefined {
+		const row = this.one("SELECT project_id FROM missions WHERE id = ?", missionId);
+		return row ? String(row.project_id) : undefined;
+	}
+
+	/** The first cited mission record that does not exist, by exact ID. */
+	missingCitation(source: MissionSource): string | undefined {
+		const exists = (sql: string, value: SQLInputValue) => !!this.one(sql, source.missionId, value);
+		if (
+			source.decisionId !== undefined &&
+			!exists("SELECT 1 FROM decisions WHERE mission_id = ? AND id = ?", source.decisionId)
+		)
+			return "decision";
+		if (source.taskId !== undefined && !exists("SELECT 1 FROM tasks WHERE mission_id = ? AND id = ?", source.taskId))
+			return "task";
+		if (
+			source.eventId !== undefined &&
+			!exists("SELECT 1 FROM events WHERE mission_id = ? AND id = ?", source.eventId)
+		)
+			return "event";
+		if (
+			source.briefRevision !== undefined &&
+			!exists("SELECT 1 FROM brief_revisions WHERE mission_id = ? AND revision = ?", source.briefRevision)
+		)
+			return "brief revision";
+		return undefined;
+	}
+
+	/**
+	 * The current records a mission source cites, undefined for each one that is gone. Knowledge hashes them into
+	 * stored observation tokens, so each record keeps exactly these fields in this order.
+	 */
+	sourceRecords(source: MissionSource): unknown[] {
+		const records: unknown[] = [];
+		if (source.decisionId) {
+			const decision = this.one(
+				"SELECT id, text, audience, replacement, withdrawn FROM decisions WHERE mission_id = ? AND id = ?",
+				source.missionId,
+				source.decisionId,
+			);
+			// Tokens observed before decisions had these columns must stay valid while the decision is unchanged.
+			if (decision && !decision.replacement) delete decision.replacement;
+			if (decision && !decision.withdrawn) delete decision.withdrawn;
+			records.push(decision);
+		}
+		if (source.taskId)
+			records.push(
+				this.one(
+					`SELECT t.id, t.title, t.body, t.status, t.updated_at, c.record FROM tasks t
+			LEFT JOIN task_completions c ON c.task_id=t.id WHERE t.mission_id = ? AND t.id = ?`,
+					source.missionId,
+					source.taskId,
+				),
+			);
+		if (source.eventId)
+			records.push(
+				this.one(
+					"SELECT id, mission_id, kind, text, session_id, task_id, health, at, is_user_note FROM events WHERE mission_id = ? AND id = ?",
+					source.missionId,
+					source.eventId,
+				),
+			);
+		if (source.briefRevision !== undefined)
+			records.push(this.one("SELECT brief_revision FROM missions WHERE id = ?", source.missionId));
+		if (!records.length)
+			records.push(this.one("SELECT brief_revision, status FROM missions WHERE id = ?", source.missionId));
+		return records;
+	}
+
+	isOpenTask(taskId: string): boolean {
+		return !!this.one("SELECT 1 FROM tasks WHERE id = ? AND status NOT IN ('done', 'dropped')", taskId);
+	}
+
+	/** A locator to human-authored evidence, not a permission/consent projection from decision authorship. */
+	userNote(missionId: string, eventId: number): string | undefined {
+		const row = this.one(
+			"SELECT text FROM events WHERE mission_id=? AND id=? AND is_user_note=1 AND session_id IS NULL",
+			missionId,
+			eventId,
+		);
+		return row ? String(row.text) : undefined;
+	}
+
+	/** Meaningful knowledge hints only, not streaming, task chatter or pending/check projections. */
+	private readonly knowledgeListeners = new Set<(projectId: string) => void>();
+	onKnowledgeChange(listener: (projectId: string) => void): () => void {
+		this.knowledgeListeners.add(listener);
+		return () => this.knowledgeListeners.delete(listener);
+	}
+	private knowledgeChanged(id: string): void {
+		if (this.referenceBatch === id) return;
+		const projectId = this.require(id).projectId;
+		for (const listener of this.knowledgeListeners) listener(projectId);
+	}
+
+	/** Called after every committed change of a mission, including membership and deletion. */
+	onChange(listener: (missionId: string, kind: ChangeKind) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+	/** Only lifecycle intent changes, never chat activity, streaming or remote observation refreshes. */
+	onLinearSyncChange(listener: () => void): () => void {
+		this.linearSyncListeners.add(listener);
+		return () => this.linearSyncListeners.delete(listener);
+	}
+	/** Only committed transitions to Done, not general activity or startup snapshots. */
+	onCompleted(listener: (projectId: string, missionId: string, at: number) => void): () => void {
+		this.completionListeners.add(listener);
+		return () => this.completionListeners.delete(listener);
+	}
+
+	/** Called after a session joins or leaves a mission, or its mission is deleted. */
+	onMembershipChange(listener: (sessionId: string) => void): () => void {
+		this.memberListeners.add(listener);
+		return () => this.memberListeners.delete(listener);
+	}
+
+	/** Mission notices: who listens decides what each ChangeKind means for it. */
+	private changed(missionId: string, sessions: string[] = [], kind: ChangeKind = "full"): void {
+		if (this.batchedChanges) {
+			const pending = this.batchedChanges.get(missionId) ?? new Set<string>();
+			for (const session of sessions) pending.add(session);
+			this.batchedChanges.set(missionId, pending);
+			return;
+		}
+		if (this.referenceBatch === missionId) return;
+		if (this.linearSyncChanged.delete(missionId)) for (const listener of this.linearSyncListeners) listener();
+		for (const listener of this.listeners) listener(missionId, kind);
+		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
+	}
+
+	private all(sql: string, ...params: SQLInputValue[]): Row[] {
+		return this.database.all(sql, ...params);
+	}
+
+	private one(sql: string, ...params: SQLInputValue[]): Row | undefined {
+		return this.database.one(sql, ...params);
+	}
+
+	private run(sql: string, ...params: SQLInputValue[]): void {
+		this.database.run(sql, ...params);
+	}
+
+	/** Mission writes reconcile task phases and managed Linear sync before commit unless they opt out. */
+	private transaction<T>(work: () => T, { reconcile = true }: TransactionOptions = {}): T {
+		// Reference batches reuse the ordinary validators/writers inside one outer transaction.
+		if (this.database.writing) return work();
+		try {
+			return this.database.transaction(() => {
+				const result = work();
+				if (reconcile && !this.initializing) {
+					for (const id of this.phaseReconciliations) this.reconcilePhases(id);
+					this.reconcileLinearSync();
+				}
+				this.run("UPDATE watch_activity SET annotated=1 WHERE annotated=0");
+				return result;
+			});
+		} finally {
+			this.phaseReconciliations.clear();
+		}
+	}
+
+	private event(
+		missionId: string,
+		kind: MissionEventKind,
+		eventText: string,
+		actor: MissionActor,
+		extra: {
+			taskId?: string;
+			health?: MissionHealth;
+			at?: number;
+			wake?: boolean;
+			urgent?: boolean;
+			settled?: boolean;
+			noticeText?: string;
+			noticeSummaries?: { key: string; text: string; state?: string }[];
+			userNote?: boolean;
+		} = {},
+	): MissionEvent {
+		const at = extra.at ?? Date.now();
+		if (kind === "task" || kind === "claim") this.phaseReconciliations.add(missionId);
+		const result = this.database
+			.prepare(
+				"INSERT INTO events (mission_id, kind, text, session_id, task_id, health, at, is_user_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			)
+			.run(
+				missionId,
+				kind,
+				eventText,
+				actor.sessionId ?? null,
+				extra.taskId ?? null,
+				extra.health ?? null,
+				at,
+				extra.userNote ? 1 : 0,
+			);
+		this.run("UPDATE missions SET updated_at = MAX(updated_at, ?) WHERE id = ?", at, missionId);
+		const eventId = Number(result.lastInsertRowid);
+		if (actor.sessionId)
+			this.run(
+				"UPDATE watch_activity SET origin_session_id=?,annotated=1 WHERE mission_id=? AND annotated=0",
+				actor.sessionId,
+				missionId,
+			);
+		// A planning chat never reads mission notices, so none are queued for it.
+		if (extra.wake && !this.plannedWithoutCoordinator(missionId)) {
+			const coordinator = this.one(
+				"SELECT coordinator_session_id FROM missions WHERE id = ?",
+				missionId,
+			)?.coordinator_session_id;
+			const recipient = typeof coordinator === "string" ? coordinator : undefined;
+			const taskSession = extra.taskId
+				? this.one("SELECT session_id FROM tasks WHERE id = ?", extra.taskId)?.session_id
+				: undefined;
+			const taskSubject = typeof taskSession === "string" ? taskSession : undefined;
+			const summaries = extra.noticeSummaries ?? [
+				{
+					key: extra.taskId ? `task:${extra.taskId}` : `note:${actor.sessionId ?? "user"}`,
+					text: extra.noticeText ?? eventText,
+				},
+			];
+			const remaining = summaries.filter(
+				(summary) => !noticeInvolvesSession(recipient, ...this.noticeSummarySubjects(missionId, summary.key)),
+			);
+			if (!noticeInvolvesSession(recipient, actor.sessionId, taskSubject) && remaining.length) {
+				this.run(
+					"INSERT INTO pending_notices (event_id, mission_id, at, text) VALUES (?, ?, ?, ?)",
+					eventId,
+					missionId,
+					at,
+					extra.noticeText ?? eventText,
+				);
+				if (extra.urgent) this.run("INSERT INTO urgent_notices VALUES (?, ?)", eventId, extra.settled ? 0 : 1);
+				for (const summary of remaining)
+					this.run(
+						"INSERT INTO pending_notice_summaries (event_id, group_key, text, state) VALUES (?, ?, ?, ?)",
+						eventId,
+						summary.key,
+						summary.text,
+						summary.state ?? null,
+					);
+			}
+		}
+		return {
+			id: eventId,
+			kind,
+			text: eventText,
+			...(actor.sessionId ? { sessionId: actor.sessionId } : {}),
+			...(extra.taskId ? { taskId: extra.taskId } : {}),
+			...(extra.health ? { health: extra.health } : {}),
+			at,
+		};
+	}
+
+	/** Resolve chat subjects encoded by durable notice grouping keys. */
+	private noticeSummarySubjects(missionId: string, key: string): string[] {
+		const separator = key.indexOf(":");
+		if (separator < 0) return [];
+		const kind = key.slice(0, separator);
+		const subject = key.slice(separator + 1);
+		if (kind === "chat") return [subject];
+		if (kind === "message") return [subject.split(":", 1)[0]!];
+		if (kind === "report") {
+			const report = this.controls.report(subject);
+			if (!report || report.missionId !== missionId) return [];
+			const owner = this.one(
+				"SELECT session_id FROM tasks WHERE mission_id=? AND id=?",
+				missionId,
+				report.write.taskId,
+			)?.session_id;
+			return [report.sessionId, ...(typeof owner === "string" ? [owner] : [])];
+		}
+		if (kind === "task") {
+			const row = this.one("SELECT session_id FROM tasks WHERE mission_id = ? AND id = ?", missionId, subject);
+			return typeof row?.session_id === "string" ? [row.session_id] : [];
+		}
+		if (kind === "pr")
+			return this.all(
+				`SELECT DISTINCT t.session_id FROM resources r JOIN tasks t ON t.id = r.task_id
+				WHERE r.mission_id = ? AND r.url = ? COLLATE NOCASE AND t.session_id IS NOT NULL`,
+				missionId,
+				subject,
+			).flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
+		return [];
+	}
+
+	/** Ownership links are independent of PR references and of the chat's outcome snapshot. */
+	pullRequestMembers(url: string): string[] {
+		return this.all(
+			`SELECT DISTINCT t.session_id FROM resources r JOIN tasks t ON t.id = r.task_id
+			JOIN members m ON m.session_id = t.session_id AND m.mission_id = r.mission_id
+			WHERE r.url = ? COLLATE NOCASE AND r.kind = 'github.pr' AND r.relationship = 'ownership'`,
+			url,
+		).map((row) => str(row.session_id!));
+	}
+
+	/** Latest owned cache also keeps archived chat-only PRs on the linked polling path. */
+	memberPullRequest(id: string, pr: SessionPullRequest): SessionPullRequest {
+		const row = this.one(
+			"SELECT pull_request FROM member_pull_requests WHERE mission_id = ? AND url = ?",
+			id,
+			pr.url,
+		);
+		const cached = row ? (JSON.parse(str(row.pull_request!)) as SessionPullRequest) : undefined;
+		return cached && cached.checkedAt >= pr.checkedAt ? cached : pr;
+	}
+
+	/** The transition ledger and pending event commit atomically, including chat-only PR caches. */
+	recordMemberPullRequests(
+		session: SessionSummary,
+		prs: SessionPullRequest[],
+		notify = true,
+		contextPrs: SessionPullRequest[] = [],
+	): boolean {
+		const id = this.missionOf(session.id);
+		if (!id) return false;
+		const mission = this.require(id);
+		if (mission.status !== "active" || mission.coordinatorSessionId === session.id) return false;
+		const joinedAt = num(this.one("SELECT joined_at FROM members WHERE session_id = ?", session.id)!.joined_at!);
+		let changed = false;
+		this.transaction(() => {
+			for (const pr of prs) {
+				const row = this.one(
+					"SELECT pull_request FROM member_pull_requests WHERE mission_id = ? AND url = ?",
+					id,
+					pr.url,
+				);
+				const cached = row ? (JSON.parse(str(row.pull_request!)) as SessionPullRequest) : undefined;
+				if (
+					cached &&
+					(cached.checkedAt > pr.checkedAt ||
+						(cached.checkedAt === pr.checkedAt &&
+							(cached.state === "merged" || cached.state === "closed") &&
+							(pr.state === "open" || pr.state === "draft")))
+				)
+					continue;
+				this.run(
+					`INSERT INTO member_pull_requests (mission_id, url, pull_request) VALUES (?, ?, ?)
+					ON CONFLICT (mission_id, url) DO UPDATE SET pull_request = excluded.pull_request`,
+					id,
+					pr.url,
+					JSON.stringify(pr),
+				);
+				if (pr.state !== "merged" && pr.state !== "closed") continue;
+				if (
+					this.one(
+						"SELECT 1 FROM pull_request_transitions WHERE mission_id = ? AND url = ? AND state = ?",
+						id,
+						pr.url,
+						pr.state,
+					)
+				)
+					continue;
+				this.run(
+					"INSERT INTO pull_request_transitions (mission_id, url, state) VALUES (?, ?, ?)",
+					id,
+					pr.url,
+					pr.state,
+				);
+				// First observations are a durable, silent baseline, not evidence of a transition.
+				// Consume terminal states even when their timestamp is missing or later refreshed.
+				if (!cached || cached.state === pr.state) continue;
+				if (pr.state === "merged" && pr.mergedAt === undefined) continue;
+				// Closed PRs have no close timestamp in the cache. Their successful lookup is the best
+				// available boundary; merged PRs must have a real merge time, not a refresh timestamp.
+				if ((pr.state === "merged" ? (pr.mergedAt ?? 0) : pr.checkedAt) < joinedAt) continue;
+				const tasks = this.all(
+					`SELECT DISTINCT t.* FROM tasks t JOIN resources r ON r.task_id = t.id
+					WHERE r.mission_id = ? AND r.url = ? COLLATE NOCASE AND r.relationship = 'ownership'`,
+					id,
+					pr.url,
+				).map(taskFrom);
+				// No coordinator finishes tasks in a planned mission run by its planning chat: a merged owned PR does,
+				// so Pilot can start the tasks it unblocks. The user still checks the result. A PR in another
+				// repository is a prerequisite, and a task whose worker says it is not moving is unfinished.
+				const kept: string[] = [];
+				if (pr.state === "merged" && this.plannedWithoutCoordinator(id))
+					for (const [i, task] of tasks.entries()) {
+						if (!isOpenTask(task)) continue;
+						const reason = this.mergeKeepsTask(id, task, session.id, pr.url);
+						if (reason)
+							kept.push(
+								`PR #${pr.number} merged; task #${task.number} stays ${task.status.replace("_", " ")}: ${reason}`,
+							);
+						else tasks[i] = this.updateTask(id, task.id, { status: "done" });
+					}
+				const taskText = tasks.map(
+					(task) => `task #${task.number}${pr.state === "merged" && task.status === "done" ? " marked done" : ""}`,
+				);
+				const note = `PR #${pr.number}${pr.state === "merged" ? ` ${pr.title} merged` : " closed without merging"} (chat ${session.title}${taskText.length ? `, ${taskText.join(", ")}` : ""})${kept.map((line) => `. ${line}`).join("")}`;
+				const doneIds = new Set(tasks.filter((task) => task.status === "done").map((task) => task.id));
+				const allTasks = this.tasks(id);
+				const allDoneIds = new Set(allTasks.filter((task) => task.status === "done").map((task) => task.id));
+				const unblocked =
+					pr.state === "merged"
+						? allTasks.filter(
+								(task) =>
+									task.status !== "done" &&
+									task.status !== "dropped" &&
+									task.dependsOn?.some((dep) => doneIds.has(dep)) &&
+									task.dependsOn.every((dep) => allDoneIds.has(dep)),
+							)
+						: [];
+				const stacked =
+					pr.state === "merged" && pr.stack
+						? this.all(
+								`SELECT pull_request FROM resources
+					WHERE mission_id = ? AND relationship = 'ownership' AND pull_request IS NOT NULL`,
+								id,
+							)
+								.map((row) => JSON.parse(str(row.pull_request!)) as SessionPullRequest)
+								.concat(contextPrs)
+								.map((other) => this.memberPullRequest(id, other))
+								.filter(
+									(other) =>
+										(other.state === "open" || other.state === "draft") &&
+										other.stack?.number === pr.stack!.number &&
+										other.stack.position > pr.stack!.position &&
+										other.url.slice(0, other.url.lastIndexOf("/")).toLowerCase() ===
+											pr.url.slice(0, pr.url.lastIndexOf("/")).toLowerCase(),
+								)
+								.filter(
+									(other, index, all) =>
+										all.findIndex((candidate) => candidate.url.toLowerCase() === other.url.toLowerCase()) ===
+										index,
+								)
+						: [];
+				const context = `${unblocked.length ? `; unblocks ${unblocked.map((task) => `task #${task.number} ${task.title}`).join(", ")}` : ""}${stacked.length ? `; open stacked PRs: ${stacked.map((other) => `#${other.number} ${other.title}`).join(", ")}` : ""}`;
+				this.event(
+					id,
+					"update",
+					note + context,
+					{ sessionId: session.id },
+					{
+						wake: true,
+						noticeSummaries: [{ key: `pr:${pr.url.toLowerCase()}`, text: note + context, state: pr.state }],
+					},
+				);
+				changed = true;
+			}
+		});
+		if (changed && notify) this.changed(id);
+		return changed;
+	}
+
+	/**
+	 * Why a merged owned PR does not finish this task, or undefined when it does. It finishes the task only when the PR
+	 * is in the project's own GitHub repository and the task's newest report does not say it is not moving.
+	 */
+	private mergeKeepsTask(missionId: string, task: MissionTask, sessionId: string, url: string): string | undefined {
+		const own = this.projectRepository(this.require(missionId).projectId, sessionId)?.toLowerCase();
+		if (!own) return "Pilot does not know this project's GitHub repository";
+		let repository: string;
+		try {
+			repository = linkedPullRequest(url).repo.identity.toLowerCase();
+		} catch {
+			return "the PR is not a GitHub pull request URL Pilot can read";
+		}
+		if (repository !== own) return `the PR is in ${repository}, not this project's repository ${own}`;
+		const report = this.controls.latestReport(missionId, task.id);
+		if (report?.write.movement === "not_moving")
+			return `its latest report says it is not moving (next: ${report.write.nextStep})`;
+		return undefined;
+	}
+
+	/** Snapshot completed work once per run, before a new turn can change task state. */
+	recordMemberRun(session: SessionSummary): void {
+		const membership = this.membership(session.id);
+		if (!membership || membership.coordinator) return;
+		const id = membership.missionId;
+		if (this.one("SELECT 1 FROM member_runs WHERE session_id = ?", session.id)) return;
+		this.run(
+			"INSERT INTO member_runs (session_id, mission_id, done_tasks) VALUES (?, ?, ?) ON CONFLICT(session_id) DO NOTHING",
+			session.id,
+			id,
+			JSON.stringify(
+				this.all(
+					"SELECT id FROM tasks WHERE mission_id = ? AND session_id = ? AND status = 'done' ORDER BY sort, number",
+					id,
+					session.id,
+				).map((row) => str(row.id!)),
+			),
+		);
+	}
+
+	/** A live blocking question is not a completed run. Wake the lead without changing work state. */
+	recordMemberQuestion(session: SessionSummary): void {
+		const id = this.missionOf(session.id);
+		if (!id || this.require(id).coordinatorSessionId === session.id || session.archivedAt !== undefined) return;
+		this.transaction(() =>
+			this.event(
+				id,
+				"update",
+				`${session.title}: chat asked a question: ${session.attentionReason?.detail ?? "Read status for the pending question"}`,
+				{ sessionId: session.id },
+				{
+					wake: true,
+					urgent: true,
+					noticeSummaries: [
+						{
+							key: `chat:${session.id}:question`,
+							text: `Chat ${session.id} has a pending question. Read status with targetSessionId, then use answer if within approved mission scope.`,
+							state: "question",
+						},
+					],
+				},
+			),
+		);
+		this.changed(id);
+	}
+
+	/** Durable high-water mark prevents ready snapshots/restarts from announcing a completion twice. */
+	recordMemberCompletion(session: SessionSummary, recovering = false): void {
+		if (session.working || session.runningJobs?.length || !session.outcome || session.outcomeAt === undefined) return;
+		const membership = this.membership(session.id);
+		if (!membership || membership.coordinator) return;
+		const id = membership.missionId;
+		const previous = this.one("SELECT * FROM member_completions WHERE session_id = ?", session.id);
+		if (previous && num(previous.outcome_at!) > session.outcomeAt) return;
+		// Older stores may contain a waiting snapshot at the same outcome version.
+		const previousWaiting = previous?.signature && JSON.parse(str(previous.signature))[0] === "waiting";
+		if (previous && num(previous.outcome_at!) === session.outcomeAt && !previousWaiting) return;
+		const ownedTasks = this.all(
+			"SELECT * FROM tasks WHERE mission_id = ? AND session_id = ? ORDER BY sort, number",
+			id,
+			session.id,
+		).map(taskFrom);
+		const run = this.one(
+			"SELECT done_tasks FROM member_runs WHERE session_id = ? AND mission_id = ?",
+			session.id,
+			id,
+		);
+		const alreadyDone = new Set<string>(run ? JSON.parse(str(run.done_tasks!)) : []);
+		const tasks = ownedTasks.filter((task) =>
+			run
+				? !alreadyDone.has(task.id)
+				: task.status !== "done" ||
+					(task.completedAt ?? task.updatedAt) >
+						(session.lastUserMessageAt ?? (previous ? num(previous.outcome_at!) : session.createdAt)),
+		);
+		const activeTaskIds = new Set(tasks.map((task) => task.id));
+		const linkedPrs = this.all(
+			"SELECT r.url, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id WHERE r.mission_id = ? AND t.session_id = ? AND r.kind = 'github.pr' AND r.relationship = 'ownership'",
+			id,
+			session.id,
+		);
+		const activePrs = new Set(
+			linkedPrs.filter((row) => activeTaskIds.has(str(row.task_id!))).map((row) => str(row.url!)),
+		);
+		const excludedPrs = new Set(linkedPrs.filter((row) => !activePrs.has(str(row.url!))).map((row) => str(row.url!)));
+		const prs = (session.pullRequests ?? (session.pullRequest ? [session.pullRequest] : [])).filter(
+			(pr) => !excludedPrs.has(pr.url),
+		);
+		// Poll timestamps, titles and stack positions do not change the state being announced.
+		const signature = JSON.stringify([
+			session.outcome,
+			session.outcomeReason ?? null,
+			tasks.map((task) => task.id).sort(),
+			prs.map((pr) => [pr.url, pr.state]).sort(),
+			[], // Retain the signature shape used by older completion records.
+		]);
+		const label = tasks.length ? tasks.map((task) => `#${task.number} ${task.title}`).join(", ") : session.title;
+		const legacyNote = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${prs.length ? `, ${prs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+		const unchangedLegacy =
+			previous &&
+			previous.signature === null &&
+			this.one(
+				"SELECT text FROM events WHERE mission_id = ? AND session_id = ? AND kind = 'update' AND text LIKE '%: chat %' ORDER BY id DESC LIMIT 1",
+				id,
+				session.id,
+			)?.text === legacyNote;
+		const joinedAt = num(this.one("SELECT joined_at FROM members WHERE session_id = ?", session.id)!.joined_at!);
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO member_completions (session_id, mission_id, outcome_at, signature) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET mission_id = excluded.mission_id, outcome_at = excluded.outcome_at, signature = excluded.signature",
+				session.id,
+				id,
+				session.outcomeAt!,
+				signature,
+			);
+			this.run("DELETE FROM member_runs WHERE session_id = ?", session.id);
+			if (ownedTasks.length && !tasks.length) return;
+			if (session.outcome === "done" && tasks.length && tasks.every((task) => this.completion(id, task.id))) return;
+			// Startup is recovery, not a replay of all historical outcomes of newly attached chats.
+			if (recovering && !previous && session.outcomeAt! < joinedAt) return;
+			// Distinct failures remain useful (and can be counted), but unchanged successful/stopped
+			// snapshots must not produce another notice just because their outcome version advanced.
+			if ((previous?.signature === signature || unchangedLegacy) && session.outcome !== "failed") return;
+			// Terminal PRs have their own durable PR-keyed events, never repeat them in outcomes.
+			const previousPrs = new Map<string, string>(previous?.signature ? JSON.parse(str(previous.signature))[3] : []);
+			const relevantPrs = prs.filter(
+				(pr) => pr.state !== "merged" && pr.state !== "closed" && previousPrs.get(pr.url) !== pr.state,
+			);
+			const prior = previous?.signature ? JSON.parse(str(previous.signature)) : undefined;
+			if (
+				prior &&
+				session.outcome !== "failed" &&
+				prior[0] === session.outcome &&
+				prior[1] === (session.outcomeReason ?? null) &&
+				tasks.every((task) => prior[2].includes(task.id)) &&
+				!relevantPrs.length
+			)
+				return;
+			const note = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+			const suffix = note.slice(label.length);
+			this.event(
+				id,
+				"update",
+				note,
+				{ sessionId: session.id },
+				{
+					wake: true,
+					urgent: session.outcome === "question" || session.outcome === "failed" || session.outcome === "done",
+					settled: false,
+					noticeSummaries: tasks.length
+						? tasks.map((task) => ({
+								key: `task:${task.id}`,
+								text: `#${task.number} ${task.title}${suffix}`,
+								state: session.outcome,
+							}))
+						: [{ key: `chat:${session.id}`, text: note, state: session.outcome }],
+				},
+			);
+		});
+		this.changed(id);
+	}
+
+	/** Persist only activity transitions, not streaming summary updates. */
+	setNoticeActivity(id: string, busy: boolean, now: number): void {
+		this.run(
+			`INSERT INTO notice_activity (mission_id, busy, idle_at) VALUES (?, ?, ?)
+			ON CONFLICT(mission_id) DO UPDATE SET busy = excluded.busy, idle_at = ?
+			WHERE notice_activity.busy <> excluded.busy`,
+			id,
+			busy ? 1 : 0,
+			busy ? now : 0,
+			now,
+		);
+	}
+
+	/** Only pending missions are scanned. The oldest event anchors the safety valve. */
+	noticeDeadlines(now: number, id?: string): { missionId: string; at: number }[] {
+		const rows = this.all(
+			`WITH pending AS (
+				SELECT mission_id, MIN(at) AS first_at, MAX(at) AS last_at
+				FROM pending_notices ${id ? "WHERE mission_id = ?" : ""} GROUP BY mission_id
+			), recent AS (
+				SELECT mission_id, delivered_at, ROW_NUMBER() OVER (PARTITION BY mission_id ORDER BY delivered_at DESC) AS rank
+				FROM notices WHERE delivered_at > ?
+			)
+			SELECT p.*, n.request_id, a.busy, a.idle_at, r.delivered_at AS capped_at,
+			(SELECT MAX(u.immediate) FROM urgent_notices u
+			 JOIN pending_notices pn ON pn.event_id=u.event_id
+			 JOIN pending_notice_summaries summary ON summary.event_id=u.event_id
+			 WHERE pn.mission_id=p.mission_id AND NOT EXISTS (
+			 SELECT 1 FROM pending_notice_summaries newer JOIN pending_notices np ON np.event_id=newer.event_id
+			 WHERE np.mission_id=p.mission_id AND newer.group_key=summary.group_key AND newer.event_id>summary.event_id
+			 )) AS urgent
+			FROM pending p
+			LEFT JOIN notice_activity a ON a.mission_id = p.mission_id
+			LEFT JOIN notices n ON n.mission_id = p.mission_id AND n.delivered_at IS NULL
+			LEFT JOIN recent r ON r.mission_id = p.mission_id AND r.rank = ?`,
+			...(id ? [id] : []),
+			now - NOTICE_WINDOW_MS,
+			NOTICE_HOURLY_CAP,
+		);
+		return rows.map((row) => {
+			const missionId = str(row.mission_id!);
+			return {
+				missionId,
+				at:
+					row.urgent !== null && (row.busy !== 1 || row.urgent === 1)
+						? now
+						: noticeDeadline(
+								{
+									firstAt: num(row.first_at!),
+									lastAt: num(row.last_at!),
+									idleAt: num(row.idle_at ?? 0),
+									busy: row.busy === 1,
+									immediateWhenIdle: false,
+									retry: !!row.request_id,
+									cappedAt: row.capped_at === null ? undefined : num(row.capped_at!),
+								},
+								now,
+							),
+			};
+		});
+	}
+
+	pendingNotice(id: string): MissionNotice | undefined {
+		const row = this.one("SELECT * FROM notices WHERE mission_id = ? AND delivered_at IS NULL", id);
+		return row ? noticeFrom(row) : undefined;
+	}
+
+	/** Freeze both the cutoff and payload before IPC, so an uncertain acknowledgement has a stable retry. */
+	prepareNotice(id: string, sessionId: string, now: number): MissionNotice | undefined {
+		const mission = this.require(id);
+		if (mission.status !== "active" || this.passiveLifecycle(id) || mission.coordinatorSessionId !== sessionId)
+			return undefined;
+		return this.transaction(() => {
+			this.run("DELETE FROM notices WHERE delivered_at <= ?", now - NOTICE_WINDOW_MS);
+			if (!this.noticeDeadlines(now, id).some((deadline) => deadline.at <= now)) return undefined;
+			const existing = this.one("SELECT * FROM notices WHERE mission_id = ? AND delivered_at IS NULL", id);
+			if (existing) {
+				// Role changes invalidate delivery to the old chat, including its durable session queue.
+				this.run("UPDATE notices SET session_id = ? WHERE request_id = ?", sessionId, existing.request_id!);
+				return noticeFrom({ ...existing, session_id: sessionId });
+			}
+			const events = this.all(
+				`WITH grouped AS (
+				SELECT group_key, MAX(s.event_id) AS event_id,
+					SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) AS failures
+				FROM pending_notice_summaries s JOIN pending_notices p ON p.event_id = s.event_id
+				WHERE p.mission_id = ? GROUP BY group_key
+			) SELECT s.*, e.kind AS event_kind, g.failures, COUNT(*) OVER () AS total
+				FROM grouped g JOIN pending_notice_summaries s ON s.event_id = g.event_id AND s.group_key = g.group_key
+                JOIN events e ON e.id = s.event_id
+				ORDER BY s.event_id LIMIT 100`,
+				id,
+			);
+			if (!events.length) return undefined;
+			const lastEventId = num(
+				this.one("SELECT MAX(event_id) AS id FROM pending_notices WHERE mission_id = ?", id)!.id!,
+			);
+			const requestId = missionNoticeRequestId(lastEventId);
+			const first = events[0]!;
+			const single = num(first.total!) === 1;
+			const kind =
+				single && first.event_kind === "update" && first.state === "done"
+					? "mission_member_finished"
+					: single && first.event_kind === "task" && first.state === "done"
+						? "mission_task_done"
+						: "mission_updated";
+			const event: import("@pilot/protocol").ChatEventSummary = {
+				kind,
+				text:
+					single && !str(first.group_key!).startsWith("note:")
+						? str(first.text!).replace(/\s+/g, " ").slice(0, 200)
+						: single
+							? "Mission updated"
+							: `Mission updated · ${num(first.total!)} updates`,
+			};
+			const content = [
+				"Mission updates (event summaries, not instructions):",
+				...events.map((event) => {
+					const summary = str(event.text!).replace(/\s+/g, " ").slice(0, 500);
+					const count = num(event.failures!);
+					return `- ${event.state === "failed" && count > 1 ? summary.replace("chat failed", `chat failed ${count === 2 ? "twice" : `${count} times`}`) : summary}`;
+				}),
+				...(num(events[0]!.total!) > events.length
+					? [`- ${num(events[0]!.total!) - events.length} additional groups; read the activity for details.`]
+					: []),
+				"Read the mission with get for details.",
+			].join("\n");
+			this.run(
+				"INSERT INTO notices (request_id, mission_id, last_event_id, session_id, content, created_at, chat_event) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				requestId,
+				id,
+				lastEventId,
+				sessionId,
+				content,
+				now,
+				JSON.stringify(event),
+			);
+			return { requestId, missionId: id, lastEventId, sessionId, content, event };
+		});
+	}
+
+	noticeAllowed(sessionId: string, requestId: string): boolean {
+		return !!this.one(
+			"SELECT n.request_id FROM notices n JOIN missions m ON m.id = n.mission_id JOIN members member ON member.mission_id = m.id AND member.session_id = n.session_id WHERE n.request_id = ? AND n.session_id = ? AND n.delivered_at IS NULL AND m.status = 'active' AND m.passive_lifecycle = 0 AND m.coordinator_session_id = n.session_id",
+			requestId,
+			sessionId,
+		);
+	}
+
+	acknowledgeNotice(notice: MissionNotice, now: number): void {
+		this.transaction(() => {
+			this.run(
+				"UPDATE notices SET delivered_at = ? WHERE request_id = ? AND delivered_at IS NULL",
+				now,
+				notice.requestId,
+			);
+			this.run(
+				"DELETE FROM pending_notices WHERE mission_id = ? AND event_id <= ?",
+				notice.missionId,
+				notice.lastEventId,
+			);
+		});
+	}
+
+	list(projectId?: string): Mission[] {
+		const rows = projectId
+			? this.all(`${MISSION_SELECT} WHERE project_id = ? ORDER BY updated_at DESC`, projectId)
+			: this.all(`${MISSION_SELECT} ORDER BY updated_at DESC`);
+		return rows.map(missionFrom);
+	}
+
+	/** Seek to the next raw window before filtering. Foreign rows cost budget too. */
+	metadataSearchMissions(projectId: string, limit: number, before?: number) {
+		const upper = before === undefined ? "" : "AND rowid <= ?";
+		const args = before === undefined ? [] : [before];
+		const boundary = this.one(
+			`SELECT rowid FROM missions WHERE rowid > 0 ${upper} ORDER BY rowid DESC LIMIT 1 OFFSET ?`,
+			...args,
+			limit,
+		);
+		const rows = this.all(
+			`SELECT id, substr(title, 1, 641) AS title FROM missions WHERE rowid > ? ${upper} AND project_id = ?`,
+			boundary?.rowid ?? 0,
+			...args,
+			projectId,
+		);
+		return {
+			rows: rows.map((row) => ({ id: str(row.id!), title: str(row.title!) })),
+			next: boundary && num(boundary.rowid!),
+		};
+	}
+
+	/** Existing saved pins only. Never infer a revision or consult a chat's artifact tree. */
+	metadataSearchOutputLinks(projectId: string, limit: number, before?: number) {
+		const upper = before === undefined ? "" : "AND a.id <= ?";
+		const args = before === undefined ? [] : [before];
+		const boundary = this.one(
+			`SELECT a.id FROM artifact_links a WHERE a.id > 0 ${upper} ORDER BY a.id DESC LIMIT 1 OFFSET ?`,
+			...args,
+			limit,
+		);
+		const rows = this.all(
+			`SELECT a.id, a.artifact_id, a.session_id, substr(a.title, 1, 641) AS title, a.kind, a.revision, a.linked_at
+			FROM artifact_links a WHERE a.id > ? ${upper} AND a.revision IS NOT NULL
+			AND EXISTS (SELECT 1 FROM missions m WHERE m.id = a.mission_id AND m.project_id = ?)`,
+			boundary?.id ?? 0,
+			...args,
+			projectId,
+		);
+		return { rows: rows.map((row) => this.metadataSearchLink(row)), next: boundary && num(boundary.id!) };
+	}
+
+	/** Seek by indexed identity and ID so even very widely linked outputs have a bounded probe. */
+	metadataSearchPins(projectId: string, sessionId: string, artifactId: string, limit: number, after: number) {
+		const rows = this.all(
+			`SELECT a.id, a.artifact_id, a.session_id, substr(a.title, 1, 641) AS title, a.kind, a.revision, a.linked_at,
+				EXISTS (SELECT 1 FROM missions m WHERE m.id = a.mission_id AND m.project_id = ?) AS owned
+			FROM artifact_links a INDEXED BY artifact_search_owner
+			WHERE a.session_id = ? AND a.artifact_id = ? AND a.revision IS NOT NULL AND a.id > ?
+			ORDER BY a.id LIMIT ?`,
+			projectId,
+			sessionId,
+			artifactId,
+			after,
+			limit + 1,
+		);
+		const more = rows.length > limit;
+		if (more) rows.pop();
+		return {
+			rows: rows.filter((row) => row.owned === 1).map((row) => this.metadataSearchLink(row)),
+			visited: rows.length,
+			next: more ? num(rows.at(-1)!.id!) : undefined,
+		};
+	}
+
+	private metadataSearchLink(row: Row) {
+		return {
+			linkId: num(row.id!),
+			artifactId: str(row.artifact_id!),
+			sessionId: str(row.session_id!),
+			title: str(row.title!),
+			artifactKind: str(row.kind!) as ArtifactKind,
+			revision: num(row.revision!),
+			updatedAt: num(row.linked_at!),
+		};
+	}
+
+	/** The re-planning link of an old mission, if any. */
+	successor(oldMissionId: string): MissionSuccessorLink | undefined {
+		const row = this.one(
+			"SELECT new_mission_id, state FROM mission_successors WHERE old_mission_id = ?",
+			oldMissionId,
+		);
+		return row
+			? { missionId: str(row.new_mission_id!), state: str(row.state!) as MissionSuccessorLink["state"] }
+			: undefined;
+	}
+
+	/** The old mission a new mission re-plans, if any. */
+	replaced(newMissionId: string): MissionSuccessorLink | undefined {
+		const row = this.one(
+			"SELECT old_mission_id, state FROM mission_successors WHERE new_mission_id = ? ORDER BY updated_at DESC LIMIT 1",
+			newMissionId,
+		);
+		return row
+			? { missionId: str(row.old_mission_id!), state: str(row.state!) as MissionSuccessorLink["state"] }
+			: undefined;
+	}
+
+	/** Both sides of a mission's re-planning links, for reads. Absent sides are omitted. */
+	successorLinks(missionId: string): { successor?: MissionSuccessorLink; replaces?: MissionSuccessorLink } {
+		const successor = this.successor(missionId),
+			replaces = this.replaced(missionId);
+		return { ...(successor ? { successor } : {}), ...(replaces ? { replaces } : {}) };
+	}
+
+	/** Refuses a re-plan the user cannot start: only an active old mission of the same project, once at a time. */
+	assertReplaceable(oldMissionId: string, projectId: string): void {
+		const old = this.get(oldMissionId);
+		if (!old) throw new Conflict("The mission to re-plan does not exist");
+		if (old.projectId !== projectId) throw new Conflict("The mission to re-plan is in another project");
+		if (old.status !== "active") throw new Conflict("Only an active mission can be re-planned");
+		if (old.planningVersion !== undefined)
+			throw new Conflict("This mission already has a planning interview; revisit it instead");
+		if (this.successor(oldMissionId)?.state === "planning")
+			throw new Conflict("This mission is already being re-planned");
+	}
+
+	/** Saves the link in the caller's transaction, after the new mission row exists. A finished or abandoned link is replaced. */
+	linkSuccessor(oldMissionId: string, newMissionId: string, projectId: string, operationId: string): void {
+		this.transaction(() => {
+			this.assertReplaceable(oldMissionId, projectId);
+			const now = Date.now();
+			this.run(
+				`INSERT INTO mission_successors (old_mission_id, new_mission_id, operation_id, state, created_at, updated_at)
+				VALUES (?, ?, ?, 'planning', ?, ?)
+				ON CONFLICT(old_mission_id) DO UPDATE SET new_mission_id = excluded.new_mission_id,
+				operation_id = excluded.operation_id, state = 'planning', created_at = excluded.created_at,
+				updated_at = excluded.updated_at`,
+				oldMissionId,
+				newMissionId,
+				operationId,
+				now,
+				now,
+			);
+		});
+	}
+
+	/** Stop re-planning: the link becomes abandoned and nothing else changes. Repeating it is harmless. */
+	abandonSuccessor(oldMissionId: string, newMissionId: string): MissionSuccessorLink {
+		const link = this.transaction(() => {
+			const link = this.successor(oldMissionId);
+			if (!link || link.missionId !== newMissionId) throw new Conflict("This re-planning link has changed");
+			if (link.state === "finished") throw new Conflict("This re-planning already finished");
+			if (link.state === "planning")
+				this.run(
+					"UPDATE mission_successors SET state = 'abandoned', updated_at = ? WHERE old_mission_id = ?",
+					Date.now(),
+					oldMissionId,
+				);
+			return { missionId: newMissionId, state: "abandoned" as const };
+		});
+		this.changed(oldMissionId, [], "passive");
+		this.changed(newMissionId, [], "passive");
+		return link;
+	}
+
+	/** Read-only exact migration comparison. The ticket stays with the old mission unless separately transferred. */
+	successorPreview(oldMissionId: string, keptChats: import("@pilot/protocol").MissionMigrationChat[] = []) {
+		const old = this.require(oldMissionId),
+			link = this.successor(oldMissionId);
+		if (!link || link.state !== "planning") throw new Conflict("No open re-planning link");
+		const next = this.require(link.missionId),
+			plan = this.plans.get(next.id);
+		if (
+			old.status !== "active" ||
+			old.planningVersion !== undefined ||
+			next.status !== "active" ||
+			next.projectId !== old.projectId ||
+			!plan?.publication ||
+			plan.publication.briefRevision !== this.brief(next.id)?.revision ||
+			plan.publication.submissionDigest !== this.interviews.latest(next.id)?.submission?.digest
+		)
+			throw new Conflict("An active old mission and published successor are required");
+		const resources = this.all("SELECT * FROM resources WHERE mission_id=? ORDER BY id", old.id);
+		const oldBrief = this.brief(old.id) ?? null,
+			newBrief = this.brief(next.id)!,
+			oldTasks = this.tasks(old.id),
+			newTasks = this.tasks(next.id);
+		return {
+			version: 1 as const,
+			oldMissionId: old.id,
+			newMissionId: next.id,
+			projectId: old.projectId,
+			oldSource: revisionDigest({
+				source: this.revisions.source(old.id),
+				resources,
+				keptChats,
+				oldBrief,
+				oldTasks,
+				link: this.one("SELECT * FROM mission_successors WHERE old_mission_id=?", old.id),
+			}),
+			newSource: revisionDigest({
+				source: this.revisions.source(next.id),
+				newBrief,
+				newTasks,
+				publication: plan.publication,
+			}),
+			publication: plan.publication,
+			oldMission: old,
+			newMission: next,
+			oldBrief,
+			newBrief,
+			oldTasks,
+			newTasks,
+			keptChats,
+			members: this.members(old.id),
+			managedLinear: resources.filter((r) => r.linear_role === "managed").map(resourceFrom),
+			transferLinear: false as const,
+		};
+	}
+
+	/** Passive archive plus link and receipt commit together. No worker, chat, task or permission mutation. */
+	async finishSuccessor(
+		oldMissionId: string,
+		input: {
+			operationId: string;
+			newMissionId: string;
+			projectId: string;
+			oldSource: string;
+			newSource: string;
+			transferLinear: false;
+		},
+		keptChats: () => import("@pilot/protocol").MissionMigrationChat[] = () => [],
+	) {
+		const prior = this.successorFinishLookup(input.operationId);
+		if (prior) {
+			if (prior.oldMissionId !== oldMissionId || revisionDigest(prior.input) !== revisionDigest(input))
+				throw new Conflict("Migration identity changed");
+			await this.durable();
+			return prior;
+		}
+		const result = this.transaction(
+			() => {
+				const preview = this.successorPreview(oldMissionId, keptChats());
+				if (
+					input.transferLinear !== false ||
+					input.newMissionId !== preview.newMissionId ||
+					input.projectId !== preview.projectId ||
+					input.oldSource !== preview.oldSource ||
+					input.newSource !== preview.newSource
+				)
+					throw new Conflict("Migration preview changed; review exact old and published new sources");
+				const ownedOpen = this.tasks(oldMissionId).filter((t) => isOpenTask(t) && t.sessionId);
+				if (this.members(oldMissionId).length || ownedOpen.length) {
+					if (
+						!this.safelyPaused(oldMissionId, [
+							...new Set([
+								...this.members(oldMissionId),
+								...ownedOpen.flatMap((t) => (t.sessionId ? [t.sessionId] : [])),
+							]),
+						])
+					)
+						throw new Conflict("Old work requires an exact acknowledged safe Pause before migration");
+				}
+				const now = Date.now();
+				this.run(
+					"UPDATE missions SET status='archived',passive_lifecycle=1,updated_at=?,archived_at=? WHERE id=?",
+					now,
+					now,
+					oldMissionId,
+				);
+				this.run(
+					"UPDATE mission_successors SET state='finished',updated_at=? WHERE old_mission_id=?",
+					now,
+					oldMissionId,
+				);
+				this.event(oldMissionId, "status", "Mission migration finished; history and chats kept", USER, { at: now });
+				const receipt = { version: 1 as const, oldMissionId, input: structuredClone(input), finishedAt: now };
+				this.run("INSERT INTO mission_successor_finishes VALUES(?,?)", input.operationId, JSON.stringify(receipt));
+				return receipt;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		this.changed(oldMissionId, [], "passive");
+		this.changed(input.newMissionId, [], "passive");
+		return result;
+	}
+	successorFinishLookup(operationId: string):
+		| {
+				version: 1;
+				oldMissionId: string;
+				input: {
+					operationId: string;
+					newMissionId: string;
+					projectId: string;
+					oldSource: string;
+					newSource: string;
+					transferLinear: false;
+				};
+				finishedAt: number;
+		  }
+		| undefined {
+		const row = this.one("SELECT record FROM mission_successor_finishes WHERE operation_id=?", operationId);
+		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+
+	/** Inventory candidates only. Read one sentinel beyond the limit; never claim a partial list is complete. */
+	planningCandidates(projectId: string, limit: number): string[] {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Conflict("Invalid planning limit");
+		return this.all(
+			`SELECT id FROM missions WHERE project_id=? AND status='active' AND planning_version=1
+			ORDER BY updated_at DESC, id LIMIT ?`,
+			projectId,
+			limit + 1,
+		).map((row) => str(row.id!));
+	}
+
+	/** PR synchronization needs neither attention counts nor mission content. */
+	pullRequestMissions(): Array<Pick<Mission, "id" | "projectId">> {
+		return this.all("SELECT id, project_id FROM missions WHERE status = 'active' ORDER BY updated_at DESC").map(
+			(row) => ({ id: str(row.id!), projectId: str(row.project_id!) }),
+		);
+	}
+
+	ownedPullRequestResources(id: string): Array<Pick<MissionResource, "url" | "pullRequest">> {
+		return this.all(
+			`SELECT url, pull_request FROM resources
+			WHERE mission_id = ? AND kind = 'github.pr' AND relationship = 'ownership' ORDER BY created_at, id`,
+			id,
+		).map((row) => ({
+			url: str(row.url!),
+			...(row.pull_request ? { pullRequest: JSON.parse(str(row.pull_request)) as SessionPullRequest } : {}),
+		}));
+	}
+
+	get(id: string): Mission | undefined {
+		const row = this.one(`${MISSION_SELECT} WHERE id = ?`, id);
+		return row ? missionFrom(row) : undefined;
+	}
+
+	/** Lifecycle listeners need no task counts or attention projection. */
+	status(id: string): MissionStatus | undefined {
+		return this.one("SELECT status FROM missions WHERE id = ?", id)?.status as MissionStatus | undefined;
+	}
+
+	/** Task counts per mission (dropped tasks excluded), for summaries that do not load task bodies. */
+	taskProgress(projectId?: string): Map<string, MissionTaskProgress> {
+		const rows = this.all(
+			`SELECT t.mission_id AS id, SUM(t.status = 'done') AS done, SUM(t.status = 'in_review') AS in_review,
+				SUM(t.status = 'in_progress') AS in_progress, SUM(t.status = 'blocked') AS blocked, COUNT(*) AS total
+				FROM tasks t JOIN missions m ON m.id = t.mission_id
+				WHERE t.status != 'dropped'${projectId ? " AND m.project_id = ?" : ""}
+				GROUP BY t.mission_id`,
+			...(projectId ? [projectId] : []),
+		);
+		return new Map(
+			rows.map((row) => [
+				str(row.id!),
+				{
+					done: num(row.done!),
+					inReview: num(row.in_review!),
+					inProgress: num(row.in_progress!),
+					blocked: num(row.blocked!),
+					total: num(row.total!),
+				},
+			]),
+		);
+	}
+
+	require(id: string): Mission {
+		const mission = this.get(id);
+		if (!mission) throw new NotFound(`Unknown mission: ${id}`);
+		return mission;
+	}
+
+	detail(id: string, history = true): MissionDetail {
+		const mission = this.require(id);
+		const brief = history && mission.briefRevision ? this.brief(id) : undefined;
+		return {
+			mission,
+			...(brief ? { brief } : {}),
+			decisions: this.all("SELECT * FROM decisions WHERE mission_id = ? ORDER BY number", id).map(decisionFrom),
+			decisionProposals: this.proposals(id),
+			comments: [
+				...this.all(
+					"SELECT * FROM comments WHERE mission_id = ? AND resolved_at IS NULL ORDER BY created_at, id",
+					id,
+				),
+				...(history
+					? this.all(
+							"SELECT * FROM comments WHERE mission_id = ? AND resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT ?",
+							id,
+							DETAIL_RESOLVED_COMMENTS,
+						)
+					: []),
+			].map(commentFrom),
+			tasks: this.tasks(id),
+			phases: this.phases(id),
+			artifacts: this.all("SELECT * FROM artifact_links WHERE mission_id = ? ORDER BY linked_at DESC", id).map(
+				artifactFrom,
+			),
+			resources: this.all("SELECT * FROM resources WHERE mission_id = ? ORDER BY created_at, id", id).map(
+				resourceFrom,
+			),
+			events: history ? this.events(id, undefined, DETAIL_EVENTS) : [],
+		};
+	}
+
+	/** Prompt inputs only. Context fan-out must not reread every member's task bodies and artifact history. */
+	assignedDecisionIds(id: string): Set<string> {
+		return new Set(
+			this.all(
+				`SELECT DISTINCT pin.value FROM tasks t, json_each(t.decision_ids) pin
+				WHERE t.mission_id = ? AND t.status NOT IN ('done', 'dropped')
+				AND EXISTS (SELECT 1 FROM members m WHERE m.mission_id = t.mission_id AND m.session_id = t.session_id)`,
+				id,
+			).map((row) => str(row.value!)),
+		);
+	}
+
+	coordinatorWork(id: string) {
+		return {
+			tasks: this.all(
+				"SELECT number,title,status FROM tasks WHERE mission_id=? AND status NOT IN ('done','dropped') ORDER BY sort,number LIMIT 100",
+				id,
+			).map((row) => ({ number: num(row.number!), title: str(row.title!), status: str(row.status!) })),
+			count: num(
+				this.one("SELECT COUNT(*) n FROM tasks WHERE mission_id=? AND status NOT IN ('done','dropped')", id)!.n!,
+			),
+		};
+	}
+
+	/** Prompt inputs only. Context fan-out must not reread every member's task bodies and artifact history. */
+	memberContext(sessionId: string) {
+		const id = this.missionOf(sessionId);
+		const mission = id ? this.get(id) : undefined;
+		if (!mission) return undefined;
+		return {
+			mission,
+			tasks: this.phaseView(
+				mission.id,
+				this.all(
+					`SELECT id, number, title, status, sort, assignment, decision_ids, phase_id,
+						session_id, created_at, updated_at FROM tasks
+					WHERE mission_id = ? AND session_id = ? AND status NOT IN ('done', 'dropped') ORDER BY sort, number`,
+					mission.id,
+					sessionId,
+				).map(taskFrom),
+			),
+			decisions: this.all("SELECT * FROM decisions WHERE mission_id = ? ORDER BY number", mission.id).map(
+				decisionFrom,
+			),
+			resources: this.all(
+				"SELECT * FROM resources WHERE mission_id = ? AND kind = 'linear.issue' ORDER BY created_at, id",
+				mission.id,
+			).map(resourceFrom),
+		};
+	}
+
+	create(
+		input: {
+			projectId: string;
+			planningVersion?: 1;
+			title: unknown;
+			goal?: unknown;
+			brief?: unknown;
+			tasks?: Array<{ title: unknown; body?: unknown }>;
+		},
+		actor: MissionActor = USER,
+	): Mission {
+		if (input.planningVersion !== undefined && input.planningVersion !== 1)
+			throw new Error("Unsupported planningVersion; only version 1 can be created");
+		if (input.planningVersion !== undefined && actor.sessionId)
+			throw new Conflict("Only the user can opt in to coordinator-owned planning");
+		const title = text(input.title, "title", MAX_TITLE)!;
+		const goal = text(input.goal ?? "", "goal", MAX_GOAL, { empty: true })!;
+		const brief = input.brief === undefined ? undefined : text(input.brief, "brief", MAX_BRIEF, { empty: true });
+		if (input.tasks !== undefined && !Array.isArray(input.tasks)) throw new Error("tasks must be an array");
+		const tasks = (input.tasks ?? []).map((task) => ({
+			title: text(task?.title, "task title", MAX_TITLE, { codePoints: true })!,
+			body: text(task?.body, "task body", MAX_TEXT, { optional: true, empty: true }),
+		}));
+		const id = randomUUID();
+		const now = Date.now();
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO missions (id, project_id, title, goal, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+				id,
+				input.projectId,
+				title,
+				goal,
+				now,
+				now,
+			);
+			if (input.planningVersion !== undefined)
+				this.run("UPDATE missions SET planning_version = ? WHERE id = ?", input.planningVersion, id);
+			this.event(id, "created", `Mission created: ${title}`, actor, { at: now });
+			if (brief) this.insertBrief(id, brief, 1, actor, now);
+			for (const task of tasks) this.insertTask(id, { title: task.title, body: task.body }, actor);
+		});
+		this.changed(id);
+		return this.require(id);
+	}
+
+	update(id: string, patch: UpdateMissionRequest, actor: MissionActor = USER): Mission {
+		if ("planningVersion" in patch) throw new Conflict("Planning opt-in is creation-only; adoption is not supported");
+		this.assertPlanner(id, actor);
+		const mission = this.require(id);
+		const next = { ...mission };
+		const notes: Array<[MissionEventKind, string]> = [];
+		if (patch.title !== undefined) next.title = text(patch.title, "title", MAX_TITLE)!;
+		if (patch.goal !== undefined) next.goal = text(patch.goal, "goal", MAX_GOAL, { empty: true })!;
+		if (patch.title !== undefined || patch.goal !== undefined)
+			if (next.title !== mission.title || next.goal !== mission.goal)
+				notes.push(["update", "Mission title or goal changed"]);
+		if (patch.status !== undefined) {
+			if (!STATUSES.includes(patch.status)) throw new Error("status must be active, done or archived");
+			if (patch.status !== mission.status) notes.push(["status", `Mission marked ${patch.status}`]);
+			next.status = patch.status;
+		}
+		if (patch.autopilot !== undefined) {
+			if (typeof patch.autopilot !== "boolean") throw new Error("autopilot must be a boolean");
+			next.autopilot = patch.autopilot;
+		}
+		let coordinator = mission.coordinatorSessionId ?? null;
+		if (patch.phaseGating !== undefined) {
+			if (typeof patch.phaseGating !== "boolean") throw new Error("phaseGating must be a boolean");
+			next.phaseGating = patch.phaseGating;
+			if (next.phaseGating !== mission.phaseGating)
+				notes.push(["update", `Phase gating ${next.phaseGating ? "enabled" : "disabled"}`]);
+		}
+		if (patch.coordinatorSessionId !== undefined) {
+			if (patch.coordinatorSessionId !== null) {
+				if (typeof patch.coordinatorSessionId !== "string")
+					throw new Error("coordinatorSessionId must be a string or null");
+				if (this.missionOf(patch.coordinatorSessionId) !== id)
+					throw new Conflict("The coordinator must be a chat in this mission");
+				if (this.membership(patch.coordinatorSessionId)?.role === "explorer")
+					throw new Conflict("An explorer cannot become coordinator; start a separate coordinator chat");
+			}
+			if (patch.coordinatorSessionId !== coordinator)
+				notes.push([
+					"coordinator",
+					patch.coordinatorSessionId ? "Coordinator changed" : "The user coordinates this mission",
+				]);
+			coordinator = patch.coordinatorSessionId;
+		}
+		const now = Date.now();
+		this.transaction(() => {
+			this.run(
+				"UPDATE missions SET title = ?, goal = ?, status = ?, autopilot = ?, coordinator_session_id = ?, updated_at = ?, completed_at = ?, archived_at = ? WHERE id = ?",
+				next.title,
+				next.goal,
+				next.status,
+				next.autopilot ? 1 : 0,
+				coordinator,
+				now,
+				next.status === "done" ? (mission.completedAt ?? now) : null,
+				next.status === "archived" ? (mission.archivedAt ?? now) : null,
+				id,
+			);
+			for (const [kind, note] of notes) this.event(id, kind, note, actor, { at: now });
+			this.run("UPDATE missions SET phase_gating = ? WHERE id = ?", next.phaseGating ? 1 : 0, id);
+		});
+		// Status and coordinator changes alter every member's context.
+		if (next.status === "done" && mission.status !== "done")
+			for (const listener of this.completionListeners) listener(mission.projectId, id, mission.completedAt ?? now);
+		this.changed(id, this.members(id));
+		return this.require(id);
+	}
+
+	/** Explicit lifecycle. No task reconciliation, role transitions or wake; closed coordinators archive when idle. */
+	lifecycle(
+		id: string,
+		projectId: string,
+		expected: MissionStatus,
+		action: "archive" | "reopen" | "complete",
+	): Mission {
+		if (this.batchedChanges) throw new Conflict("Lifecycle changes cannot be batched");
+		const status = action === "complete" ? "done" : action === "archive" ? "archived" : "active";
+		const now = Date.now();
+		this.transaction(
+			() => {
+				const mission = this.require(id);
+				if (mission.projectId !== projectId || mission.status !== expected)
+					throw new Conflict("The confirmed mission has changed; review it again");
+				if (
+					!["archive", "reopen", "complete"].includes(action) ||
+					(action === "complete"
+						? expected !== "active"
+						: action === "archive"
+							? expected === "archived"
+							: expected === "active")
+				)
+					throw new Conflict("That lifecycle transition is unavailable");
+				// BEGIN IMMEDIATE holds task eligibility through the status write, including external writers.
+				if (action === "complete") {
+					const counts = this.one(
+						"SELECT SUM(status='done') AS done, SUM(status NOT IN ('done','dropped')) AS unfinished FROM tasks WHERE mission_id=?",
+						id,
+					)!;
+					if (!counts.done || counts.unfinished)
+						throw new Conflict(
+							"Mission completion requires every remaining task to be done and at least one done task",
+						);
+				}
+				this.run(
+					"UPDATE missions SET status=?,passive_lifecycle=1,updated_at=?,completed_at=?,archived_at=? WHERE id=?",
+					status,
+					now,
+					status === "done" ? now : null,
+					status === "archived" ? now : null,
+					id,
+				);
+				this.event(id, "status", `Mission marked ${status}`, USER, { at: now });
+			},
+			{ reconcile: false },
+		);
+		this.changed(id, [], "passive");
+		return this.require(id);
+	}
+
+	/**
+	 * A mission planned in Pilot Day whose coordinator is still its planning chat. That chat never takes notices or
+	 * completes tasks, so workers' delivery reports go to the user's To check instead.
+	 */
+	plannedWithoutCoordinator(missionId: string): boolean {
+		return this.planningWorkers.coordinatedByPlanner(missionId);
+	}
+
+	/**
+	 * Open comments a worker addressed to the coordinator (no target chat), newest first. At most 10: the result page
+	 * shows them whole, and older ones stay in the mission's comments.
+	 */
+	openCoordinatorComments(missionId: string, sessionId: string): Array<{ id: string; text: string; at: number }> {
+		return this.all(
+			`SELECT id, text, created_at FROM comments WHERE mission_id=? AND author_session_id=?
+			AND target_session_id IS NULL AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 10`,
+			missionId,
+			sessionId,
+		).map((r) => ({ id: String(r.id), text: String(r.text), at: Number(r.created_at) }));
+	}
+
+	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices. */
+	passiveLifecycle(id: string): boolean {
+		return this.one("SELECT passive_lifecycle FROM missions WHERE id=?", id)?.passive_lifecycle === 1;
+	}
+
+	/** Detaches member chats; they keep their history. */
+	remove(id: string): void {
+		this.require(id);
+		const members = this.members(id);
+		this.transaction(() => this.run("DELETE FROM missions WHERE id = ?", id));
+		this.changed(id, members);
+	}
+
+	/** Identity comes from worker IPC or the trusted local API path, never request payload fields. */
+	private assertPlanner(id: string, actor: MissionActor): void {
+		const mission = this.require(id);
+		if (mission.planningVersion === undefined) return;
+		if (mission.planningVersion !== 1) throw new Conflict("Unsupported mission planning version");
+		if (!actor.sessionId) return; // Trusted daemon/user path.
+		this.assertMember(id, actor.sessionId);
+		if (mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Coordinator-owned planning: propose changes with comment; report facts with report/log");
+	}
+
+	private assertTaskCoordinator(id: string, actor: MissionActor): void {
+		const mission = this.require(id);
+		if (mission.planningVersion !== undefined && mission.planningVersion !== 1)
+			throw new Conflict("Unsupported mission planning version");
+		if (actor.sessionId === undefined) return; // Trusted daemon/user controls remain unchanged.
+		this.assertMember(id, actor.sessionId);
+		if (mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Coordinator-owned task status and assignments; workers report facts with report/log");
+	}
+
+	private assertTaskWriter(id: string, _ref: string, write: MissionTaskWrite, actor: MissionActor): void {
+		if (write.status !== undefined || write.sessionId !== undefined) this.assertTaskCoordinator(id, actor);
+		const mission = this.require(id);
+		if (mission.planningVersion === undefined) return;
+		strictPlanningFields(write, TASK_WRITE_FIELDS);
+		if (mission.planningVersion !== 1) throw new Conflict("Unsupported mission planning version");
+		this.assertPlanner(id, actor);
+	}
+
+	private validateAssignment(id: string, write: MissionTaskWrite, current?: MissionTask) {
+		const version = this.require(id).planningVersion;
+		if (version !== undefined) strictPlanningFields(write, TASK_WRITE_FIELDS);
+		if (write.assignment === undefined) return;
+		if (version !== 1) throw new Conflict("assignment requires planningVersion 1");
+		return assignmentWrite(
+			write.assignment,
+			current?.assignment,
+			current ? this.sharedDefinitionRevision(current.id) : 0,
+		);
+	}
+
+	brief(id: string, revision?: number): MissionBrief | undefined {
+		const mission = this.require(id);
+		if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))
+			throw new Error("revision must be a positive integer");
+		const row = this.one(
+			"SELECT * FROM brief_revisions WHERE mission_id = ? AND revision = ?",
+			id,
+			revision ?? mission.briefRevision,
+		);
+		return row ? briefFrom(row) : undefined;
+	}
+
+	briefRevisions(id: string): MissionBriefRevision[] {
+		this.require(id);
+		return this.all(
+			"SELECT revision, author_session_id, created_at FROM brief_revisions WHERE mission_id = ? ORDER BY revision DESC",
+			id,
+		).map((row) => ({
+			revision: num(row.revision!),
+			...optionalAuthor(row.author_session_id),
+			createdAt: num(row.created_at!),
+		}));
+	}
+
+	/** Exact persisted UTF-8, not recovered pre-trim submission bytes. Never defaults to latest.
+	 * SQLite bounds the BLOB before transferring it into JavaScript. */
+	briefExact(id: string, revision: number, maxBytes: number) {
+		this.require(id);
+		if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("Invalid exact brief revision");
+		if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > 1024 * 1024)
+			throw new Error("Invalid exact brief bound");
+		const row = this.one(
+			`SELECT revision, author_session_id, created_at, length(CAST(markdown AS BLOB)) AS size,
+			 CASE WHEN length(CAST(markdown AS BLOB)) <= ? THEN CAST(markdown AS BLOB) END AS bytes
+			 FROM brief_revisions WHERE mission_id = ? AND revision = ?`,
+			maxBytes,
+			id,
+			revision,
+		);
+		if (!row) throw new Conflict("Exact brief revision unavailable");
+		if (Number(row.size) > maxBytes) throw new Conflict("Exact brief byte quota exceeded");
+		if (!(row.bytes instanceof Uint8Array) || row.bytes.byteLength !== Number(row.size))
+			throw new Conflict("Exact brief bytes unavailable");
+		return {
+			missionId: id,
+			revision,
+			...optionalAuthor(row.author_session_id),
+			createdAt: num(row.created_at!),
+			bytes: Uint8Array.from(row.bytes),
+		};
+	}
+
+	writeBrief(id: string, markdown: unknown, expectedRevision: unknown, actor: MissionActor = USER): MissionBrief {
+		this.assertPlanner(id, actor);
+		const content = text(markdown, "markdown", MAX_BRIEF, { empty: true })!;
+		if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
+			throw new Error("expectedRevision must be a non-negative integer");
+		const brief = this.transaction(() => {
+			const mission = this.require(id);
+			if (mission.briefRevision !== expectedRevision)
+				throw new Conflict(
+					`Brief revision conflict: expected ${expectedRevision}, latest is ${mission.briefRevision}. Read the latest brief and reapply your change.`,
+				);
+			const current = mission.briefRevision ? this.brief(id) : undefined;
+			if (current && current.markdown === content) return current;
+			return this.insertBrief(id, content, mission.briefRevision + 1, actor, Date.now());
+		});
+		this.changed(id);
+		this.knowledgeChanged(id);
+		return brief;
+	}
+
+	private insertBrief(id: string, markdown: string, revision: number, actor: MissionActor, now: number): MissionBrief {
+		this.run(
+			"INSERT INTO brief_revisions (mission_id, revision, markdown, author_session_id, created_at) VALUES (?, ?, ?, ?, ?)",
+			id,
+			revision,
+			markdown,
+			actor.sessionId ?? null,
+			now,
+		);
+		this.run("UPDATE missions SET brief_revision = ? WHERE id = ?", revision, id);
+		this.sourceChanged({ missionId: id, kind: "brief", revision });
+		this.event(id, "brief", `Brief revision ${revision}`, actor, { at: now });
+		return { missionId: id, revision, markdown, ...optionalAuthor(actor.sessionId), createdAt: now };
+	}
+
+	private validateRevision(id: string, delta: MissionRevisionDelta): void {
+		if (!delta || typeof delta !== "object" || Array.isArray(delta)) throw new Error("Expected revision delta");
+		strictPlanningFields(delta, ["goal", "markdown", "tasks", "decisions", "corrections", "newTasks"]);
+		if (delta.goal !== undefined) revisionText(delta.goal, MAX_GOAL);
+		if (delta.markdown !== undefined) revisionText(delta.markdown, MAX_BRIEF);
+		for (const key of ["tasks", "decisions", "corrections", "newTasks"] as const)
+			if (delta[key] !== undefined && (!Array.isArray(delta[key]) || delta[key].length > 100))
+				throw new Error(`Revision ${key} must be an array of at most 100 entries`);
+		const seen = new Set<string>();
+		for (const edit of delta.tasks ?? []) {
+			strictPlanningFields(edit, ["id", "title", "body", "drop", "assignment", "dependsOn", "decisionIds"]);
+			const task = this.resolveTask(id, revisionText(edit.id, 128));
+			if (!isOpenTask(task)) throw new Conflict("Completed or dropped tasks remain historical");
+			if (seen.has(task.id)) throw new Error("Duplicate revision task");
+			seen.add(task.id);
+			if (edit.title !== undefined) revisionText(edit.title, MAX_TITLE);
+			if (edit.body !== undefined) revisionText(edit.body, MAX_TEXT);
+			if (edit.drop !== undefined && edit.drop !== true) throw new Error("drop must be true");
+			if (edit.assignment !== undefined) this.validateAssignment(id, { assignment: edit.assignment }, task);
+			this.taskFields(id, edit, task.id);
+		}
+		seen.clear();
+		for (const edit of delta.decisions ?? []) {
+			strictPlanningFields(edit, ["id", "reason", "action", "text", "audience"]);
+			const decision = this.decision(id, revisionText(edit.id, 128));
+			if (!isActiveDecision(decision)) throw new Conflict("Only active decisions can be revised");
+			if (
+				this.one(
+					"SELECT 1 FROM decision_proposals WHERE mission_id=? AND decision_id=? AND status='pending'",
+					id,
+					decision.id,
+				)
+			)
+				throw new Conflict("Resolve the pending decision proposal first");
+			if (seen.has(decision.id)) throw new Error("Duplicate revision decision");
+			seen.add(decision.id);
+			revisionText(edit.reason, 1000);
+			if (edit.action === "replace") {
+				revisionText(edit.text, 1000);
+				if (edit.audience !== undefined) decisionAudience(edit.audience);
+			} else if (edit.action !== "withdraw" || edit.text !== undefined || edit.audience !== undefined)
+				throw new Error("Expected replacement or withdrawal without replacement fields");
+		}
+		for (const correction of delta.corrections ?? []) {
+			strictPlanningFields(correction, ["kind", "text"]);
+			if (!["instruction", "permission"].includes(correction.kind)) throw new Error("Unknown correction kind");
+			revisionText(correction.text, 1000);
+		}
+		const dropped = new Set(
+			(delta.tasks ?? []).filter((edit) => edit.drop).map((edit) => this.resolveTask(id, edit.id).id),
+		);
+		const keys = new Set<string>();
+		for (const add of delta.newTasks ?? []) {
+			strictPlanningFields(add, ["key", "title", "body", "dependsOn", "prototype"]);
+			if (add.prototype !== undefined) {
+				const pin = add.prototype as Record<string, unknown>;
+				strictPlanningFields(pin, ["sessionId", "artifactId", "revision"]);
+				if (
+					typeof pin.sessionId !== "string" ||
+					this.missionOf(pin.sessionId) !== id ||
+					typeof pin.artifactId !== "string" ||
+					!pin.artifactId ||
+					!Number.isSafeInteger(pin.revision) ||
+					(pin.revision as number) < 1
+				)
+					throw new Error(
+						`New task ${add.key} prototype needs sessionId (a chat of this mission), artifactId and revision`,
+					);
+			}
+			if (typeof add.key !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(add.key))
+				throw new Error("A new task key is 1 to 64 letters, digits, - or _");
+			if (keys.has(add.key)) throw new Error(`Duplicate new task key ${add.key}`);
+			revisionText(add.title, MAX_TITLE);
+			revisionText(add.body, MAX_TEXT);
+			if (add.dependsOn !== undefined && (!Array.isArray(add.dependsOn) || add.dependsOn.length > 100))
+				throw new Error("New task dependsOn must be an array of at most 100 entries");
+			for (const ref of add.dependsOn ?? []) {
+				if (typeof ref === "string" && keys.has(ref)) continue;
+				const task = this.resolveTask(id, ref);
+				if (task.status === "dropped" || dropped.has(task.id))
+					throw new Conflict(`New task ${add.key} cannot depend on dropped task #${task.number}`);
+			}
+			keys.add(add.key);
+		}
+	}
+
+	/**
+	 * In a planned mission, a confirmed revision becomes the published agreement: the current brief and answers, each
+	 * open published task as the revision left it, and the tasks it added. Start and starts by rule then use it.
+	 */
+	private republish(id: string, proposal: MissionRevisionProposal, added: Map<string, string>): void {
+		const plan = this.plans.get(id);
+		if (!plan?.publication) return;
+		const tasks = new Map(this.tasks(id).map((task) => [task.id, task]));
+		const open = (taskId: string) => {
+			const task = tasks.get(taskId);
+			return task && isOpenTask(task) ? task : undefined;
+		};
+		const brief = this.brief(id);
+		const submission = this.interviews.latest(id)?.submission;
+		this.plans.amend(id, `revision:${proposal.id}`, (state) => {
+			const publication = state.publication!;
+			publication.briefRevision = brief?.revision ?? publication.briefRevision;
+			publication.submissionDigest = submission?.digest ?? publication.submissionDigest;
+			publication.tasks = [
+				...publication.tasks.map((entry) => {
+					const task = open(entry.taskId);
+					return task ? { ...entry, definition: publishedDefinition(task) } : entry;
+				}),
+				...[...added].map(([key, taskId]) => ({
+					sliceId: `revision:${proposal.id}:${key}`,
+					taskId,
+					definition: publishedDefinition(tasks.get(taskId)!),
+				})),
+			];
+			return state;
+		});
+	}
+
+	/** Changed task definitions also affect their transitive dependents, not independent owners. */
+	revisionAffectedTasks(id: string, delta: MissionRevisionDelta): string[] {
+		if (delta.goal !== undefined || delta.markdown !== undefined || delta.decisions?.length)
+			return this.tasks(id)
+				.filter((t) => isOpenTask(t))
+				.map((t) => t.id)
+				.sort();
+		const affected = new Set((delta.tasks ?? []).map((edit) => this.resolveTask(id, edit.id).id));
+		const tasks = this.tasks(id);
+		let changed = true;
+		while (changed) {
+			changed = false;
+			for (const task of tasks)
+				if (!affected.has(task.id) && task.dependsOn?.some((ref) => affected.has(ref))) {
+					affected.add(task.id);
+					changed = true;
+				}
+		}
+		return [...affected].sort();
+	}
+	revisionAffectedSessions(id: string, delta: MissionRevisionDelta): string[] {
+		const affected = new Set(this.revisionAffectedTasks(id, delta));
+		return [
+			...new Set(
+				this.tasks(id)
+					.filter((t) => affected.has(t.id) && isOpenTask(t))
+					.flatMap((t) => (t.sessionId ? [t.sessionId] : []))
+					.concat(
+						delta.goal !== undefined || delta.markdown !== undefined || delta.decisions?.length
+							? this.members(id)
+							: [],
+					),
+			),
+		].sort();
+	}
+	/** Claim and Start use the saved scope even after confirmation changed definitions. */
+	revisionTaskHeld(id: string, taskId: string): boolean {
+		return this.controls.revisionPauses(id).some((p) => {
+			const delta = this.revisions.get(id, p.proposalId).delta;
+			return (
+				delta.goal !== undefined ||
+				delta.markdown !== undefined ||
+				!!delta.decisions?.length ||
+				p.taskIds.includes(taskId)
+			);
+		});
+	}
+	private safelyPaused(id: string, owners: string[]): boolean {
+		const control = this.controls.fenceCurrent(id);
+		const pause = control.pauseOperationId ? this.controls.operation(control.pauseOperationId) : undefined;
+		return !!(
+			control.held &&
+			control.state === "paused" &&
+			pause?.missionId === id &&
+			pause.state === "acknowledged" &&
+			pause.command.action === "pause" &&
+			pause.control.pauseGeneration === control.pauseGeneration &&
+			pause.control.stopGeneration === control.stopGeneration &&
+			pause.members.every((m) => ["paused", "held"].includes(m.state)) &&
+			owners.every((owner) => pause.members.some((m) => m.sessionId === owner))
+		);
+	}
+
+	private applyRevision(id: string, proposal: MissionRevisionProposal, humanSource: string): void {
+		const mission = this.require(id);
+		if (mission.status !== "active") throw new Conflict("Mission is inactive");
+		const delta = proposal.delta;
+		// Only adding tasks changes nothing a working chat uses, so it needs no Pause.
+		const addsOnly =
+			delta.goal === undefined && delta.markdown === undefined && !delta.tasks?.length && !delta.decisions?.length;
+		// A confirmed Pause proves the existing checkpoint protocol reached safe boundaries.
+		// Never cancel/restart a worker here or treat idle/model ACK as process-exit proof.
+		if (
+			!addsOnly &&
+			(this.members(id).length ||
+				this.one(
+					"SELECT 1 FROM tasks WHERE mission_id=? AND session_id IS NOT NULL AND status NOT IN ('done','dropped') LIMIT 1",
+					id,
+				))
+		) {
+			const control = this.controls.fenceCurrent(id);
+			const affected = this.revisionAffectedSessions(id, delta);
+			const selective = this.controls
+				.revisionPauses(id)
+				.find((p) => p.proposalId === proposal.id && p.digest === proposal.digest && p.source === proposal.source);
+			const safelySelected =
+				selective?.state === "paused" &&
+				selective.fence.stopGeneration === control.stopGeneration &&
+				selective.fence.pauseGeneration === control.pauseGeneration &&
+				affected.every((owner) =>
+					selective.members.some((m) => m.sessionId === owner && ["paused", "held"].includes(m.state)),
+				) &&
+				selective.members.every((m) => ["paused", "held"].includes(m.state));
+			if (affected.length && !this.safelyPaused(id, affected) && !safelySelected)
+				throw new Conflict("Pause affected mission work safely before applying a revision");
+		}
+		if (this.referenceBatch) throw new Conflict("A mission batch is already active");
+		this.referenceBatch = id;
+		try {
+			const actor = { proposedBySessionId: proposal.authorSessionId ?? undefined };
+			if (delta.goal !== undefined) this.update(id, { goal: delta.goal }, actor);
+			if (delta.markdown !== undefined) this.writeBrief(id, delta.markdown, mission.briefRevision, actor);
+			for (const edit of delta.tasks ?? []) {
+				const { id: taskId, drop, ...write } = edit;
+				this.updateTask(id, taskId, { ...write, ...(drop ? { status: "dropped" as const } : {}) }, actor);
+			}
+			for (const edit of delta.decisions ?? []) {
+				const before = this.decision(id, edit.id);
+				const provenance = { reason: edit.reason, revisionId: proposal.id, humanSource };
+				if (edit.action === "replace") {
+					const next = this.addDecision(id, edit.text, actor, edit.audience ?? before.audience);
+					this.supersedeDecision(id, before.id, next.id, actor);
+					this.run(
+						"UPDATE decisions SET replacement=? WHERE id=?",
+						JSON.stringify({ ...this.decision(id, before.id).replacement, ...provenance }),
+						before.id,
+					);
+				} else {
+					this.recordWithdrawal(id, before, { at: Date.now(), ...provenance, proposalId: proposal.id }, actor);
+				}
+			}
+			const added = new Map<string, string>();
+			for (const add of delta.newTasks ?? []) {
+				const dependsOn = (add.dependsOn ?? []).map((ref) => added.get(ref) ?? this.resolveTask(id, ref).id);
+				const pin = add.prototype;
+				const body = pin
+					? `${add.body}\n\nChosen mockup: artifact ${pin.artifactId} revision ${pin.revision}, from the thread chat. Build to match it; read it with the artifact tool's get.`
+					: add.body;
+				const task = this.addTask(
+					id,
+					{ title: add.title, body, ...(dependsOn.length ? { dependsOn } : {}) },
+					actor,
+				);
+				if (pin)
+					this.linkArtifact(
+						id,
+						{ ...pin, title: `Mockup: ${add.title}`.slice(0, 200), kind: "nsh", taskId: task.id },
+						actor,
+					);
+				added.set(add.key, task.id);
+			}
+			this.republish(id, proposal, added);
+			// The thread whose handoff this answers is done: it links the new tasks, and Pilot closes its chat.
+			if (proposal.topicId)
+				this.threads.amend(id, proposal.topicId, (topic) => {
+					topic.disposition = "resolved";
+					topic.resolvedBy = { proposalId: proposal.id, taskIds: [...added.values()] };
+					for (const taskId of added.values())
+						if (topic.references.length < 100) topic.references.push({ kind: "task", id: taskId });
+				});
+			this.event(
+				id,
+				"update",
+				`Confirmed mission revision ${proposal.id}: ${proposal.summary}. Human source: ${humanSource}. Instruction/permission corrections remain unapplied proposals; no runtime authority changed.`,
+				actor,
+			);
+		} finally {
+			this.referenceBatch = undefined;
+		}
+	}
+
+	private readonly linearHoldListeners = new Set<(sessionId: string) => void>();
+	onLinearHoldChange(listener: (sessionId: string) => void): () => void {
+		this.linearHoldListeners.add(listener);
+		return () => this.linearHoldListeners.delete(listener);
+	}
+	private notifyLinearHold(sessionId: string): void {
+		for (const listener of this.linearHoldListeners) listener(sessionId);
+	}
+	retireLinearChatManagement(sessionId: string): void {
+		this.run("UPDATE linear_chat_links SET enabled=0 WHERE session_id=? AND enabled=1", sessionId);
+	}
+	private notifyLinearTaskHolds(missionId: string): void {
+		for (const row of this.all(
+			"SELECT DISTINCT session_id FROM tasks WHERE mission_id=? AND session_id IS NOT NULL",
+			missionId,
+		))
+			this.notifyLinearHold(str(row.session_id!));
+	}
+	linearReconciliationHeld(taskId: string): boolean {
+		return !!this.one(
+			`SELECT 1 FROM resources c JOIN resources m
+			ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
+			WHERE c.task_id=? AND c.linear_role='contribution'
+			AND json_extract(m.linear_sync,'$.status.reconcilePlan')=1 LIMIT 1`,
+			taskId,
+		);
+	}
+	linearPlanReview(missionId: string): { issue: string; taskIds: string[] }[] {
+		return this.all(
+			`SELECT external_id,linear_sync FROM resources WHERE mission_id=? AND linear_role='managed'
+			AND json_extract(linear_sync,'$.status.reconcilePlan')=1 ORDER BY id LIMIT 25`,
+			missionId,
+		).map((row) => ({
+			issue: str(row.external_id!),
+			taskIds: (JSON.parse(str(row.linear_sync!)) as LinearSyncRecord).contributors
+				.filter((t) => isOpenTask(t))
+				.map((t) => t.taskId),
+		}));
+	}
+	linearPlanOrigin(missionId: string): MissionResource | undefined {
+		const state = this.planningWorkers.get(missionId);
+		const id = state?.linearOriginId;
+		if (!state?.request?.manageStatus || !id) return;
+		const row = this.one(
+			"SELECT * FROM resources WHERE mission_id=? AND id=? AND linear_role='managed'",
+			missionId,
+			id,
+		);
+		return row && resourceFrom(row);
+	}
+	linearWorkHold(sessionId: string): string | undefined {
+		const row = this.one("SELECT linear_sync FROM linear_chat_links WHERE enabled=1 AND session_id=?", sessionId);
+		const status = row && (JSON.parse(str(row.linear_sync!)) as LinearSyncRecord).status;
+		if (status?.reconcilePlan) return "Review work after the Linear issue was canceled or marked duplicate";
+		if (status?.reassigned) return "Assigned to someone else in Linear";
+		for (const task of this.all(
+			`SELECT t.id,t.delegated_from_status FROM tasks t JOIN missions m ON m.id=t.mission_id
+			WHERE t.session_id=? AND m.status='active' AND t.status NOT IN ('done','dropped')`,
+			sessionId,
+		)) {
+			if (task.delegated_from_status) return "Assigned to someone else in Linear";
+			if (this.linearReconciliationHeld(str(task.id!)))
+				return "Review work after the Linear issue was canceled or marked duplicate";
+		}
+	}
+
+	assertLinearChatLink(url: string): string {
+		const key = linearKey(url);
+		if (!key) throw new Conflict("Managing status requires a Linear workspace and issue identifier");
+		if (
+			this.one(
+				"SELECT id FROM linear_chat_links WHERE enabled=1 AND linear_key=? UNION ALL SELECT id FROM resources WHERE linear_role='managed' AND linear_key=?",
+				key,
+				key,
+			)
+		)
+			throw new Conflict("This Linear issue already has a managing chat or mission");
+		return key;
+	}
+
+	/** Reserve the sole managing link before starting the chat. Sync requires proof of the exact chat creation. */
+	addLinearChatLink(projectId: string, sessionId: string, url: string, operationId?: string): void {
+		const key = this.assertLinearChatLink(url);
+		const { kind, externalId } = normalizeResourceWrite({ url });
+		if (kind !== "linear.issue" || !externalId) throw new Conflict("Invalid Linear issue link");
+		const record = reconcileLinearRecord(undefined, [
+			{ linkId: sessionId, taskId: sessionId, status: "in_progress" },
+		]);
+		this.run(
+			`INSERT INTO linear_chat_links VALUES (?,?,?,?,?,?,?,?,1,?) ON CONFLICT(session_id)
+			DO UPDATE SET enabled=1,linear_sync=excluded.linear_sync,operation_id=excluded.operation_id
+			WHERE linear_chat_links.enabled=0 AND linear_chat_links.linear_key=excluded.linear_key
+			AND linear_chat_links.project_id=excluded.project_id`,
+			randomUUID(),
+			sessionId,
+			projectId,
+			url,
+			externalId,
+			key,
+			JSON.stringify(record),
+			Date.now(),
+			operationId ?? null,
+		);
+		for (const listener of this.linearSyncListeners) listener();
+	}
+
+	linearChatControl(projectId: string, sessionId: string, url: string) {
+		const key = linearKey(url);
+		if (!key) return;
+		const row = this.one(
+			"SELECT enabled,linear_sync FROM linear_chat_links WHERE project_id=? AND session_id=? AND linear_key=?",
+			projectId,
+			sessionId,
+			key,
+		);
+		const record = row ? (JSON.parse(str(row.linear_sync!)) as LinearSyncRecord) : undefined;
+		return {
+			enabled: row?.enabled === 1,
+			version: record?.version ?? "new",
+			status: row?.enabled === 1 ? record?.status : undefined,
+		};
+	}
+
+	linearMissionControl(projectId: string, url: string) {
+		const key = linearKey(url);
+		if (!key) return;
+		const row = this.one(
+			`SELECT r.id,r.mission_id,r.linear_sync FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE m.project_id=? AND m.status='active' AND r.linear_role='managed' AND r.linear_key=?`,
+			projectId,
+			key,
+		);
+		if (!row) return;
+		const record = JSON.parse(str(row.linear_sync!)) as LinearSyncRecord;
+		return {
+			enabled: true,
+			version: record.version,
+			status: record.status,
+			missionId: str(row.mission_id!),
+			resourceId: str(row.id!),
+		};
+	}
+
+	changeLinearChatManagement(
+		projectId: string,
+		sessionId: string,
+		url: string,
+		version: string,
+		action: "manage" | "stop" | "resume",
+	): void {
+		const current = this.linearChatControl(projectId, sessionId, url);
+		if (!current || current.version !== version)
+			throw new Conflict("Linear management changed. Read the issue again.");
+		if (action === "manage" && !current.enabled) {
+			this.addLinearChatLink(projectId, sessionId, url);
+			return;
+		}
+		if (!current.enabled || !current.status) throw new Conflict("This chat does not manage the issue");
+		const row = this.one(
+			"SELECT id,linear_sync FROM linear_chat_links WHERE enabled=1 AND project_id=? AND session_id=?",
+			projectId,
+			sessionId,
+		)!;
+		const record = JSON.parse(str(row.linear_sync!)) as LinearSyncRecord;
+		if (action === "stop") {
+			if (record.status.reconcilePlan || record.status.reassigned)
+				throw new Conflict("Review the Linear hold before stopping status management");
+			record.version = randomUUID();
+			this.run("UPDATE linear_chat_links SET enabled=0,linear_sync=? WHERE id=?", JSON.stringify(record), row.id!);
+		} else if (action === "resume") {
+			if (record.status.reassigned || record.status.state === "terminal")
+				throw new Conflict("The issue needs to return to you or reopen in Linear first");
+			this.resetLinearSync(record, "resume");
+			this.saveLinearSync(str(row.id!), version, record);
+		} else throw new Conflict("This chat already manages the issue");
+		for (const listener of this.linearSyncListeners) listener();
+	}
+
+	private linearChatResource(row: Row) {
+		return {
+			missionId: "",
+			reservedAt: num(row.created_at!),
+			sessionId: str(row.session_id!),
+			...(row.operation_id ? { operationId: str(row.operation_id) } : {}),
+			projectId: str(row.project_id!),
+			resource: resourceFrom({ ...row, relationship: "reference", kind: "linear.issue", linear_role: "managed" }),
+			record: JSON.parse(str(row.linear_sync!)) as LinearSyncRecord,
+		};
+	}
+
+	/** Small indexed batches. Network callers must revalidate version after every await. */
+	linearSyncBatch(after = "", limit = 25): NonNullable<ReturnType<MissionStore["linearSyncResource"]>>[] {
+		const count = Math.min(25, limit);
+		const missions = this.all(
+			`SELECT r.*, m.project_id FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE r.linear_role='managed' AND r.id > ? AND m.status <> 'archived' ORDER BY r.id LIMIT ?`,
+			after,
+			count,
+		).map((row) => ({
+			missionId: str(row.mission_id!),
+			projectId: str(row.project_id!),
+			resource: resourceFrom(row),
+			record: JSON.parse(str(row.linear_sync!)) as LinearSyncRecord,
+		}));
+		const chats = this.all(
+			"SELECT * FROM linear_chat_links WHERE enabled=1 AND id > ? ORDER BY id LIMIT ?",
+			after,
+			count,
+		);
+		return [...missions, ...chats.map((row) => this.linearChatResource(row))]
+			.sort((a, b) => a.resource.id.localeCompare(b.resource.id))
+			.slice(0, count);
+	}
+
+	linearSyncRecord(resourceId: string): LinearSyncRecord | undefined {
+		const row =
+			this.one("SELECT linear_sync FROM resources WHERE id=? AND linear_role='managed'", resourceId) ??
+			this.one("SELECT linear_sync FROM linear_chat_links WHERE enabled=1 AND id=?", resourceId);
+		return row?.linear_sync ? (JSON.parse(str(row.linear_sync)) as LinearSyncRecord) : undefined;
+	}
+
+	/** Read-only diagnostic projection. Never materialize contributors, task history or unrelated resources. */
+	linearSyncDiagnostics(missionId: string, offset = 0, limit = 8) {
+		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+			throw new Error("Invalid Linear diagnostic page");
+		const rows = this.all(
+			`SELECT id, external_id, json_extract(linear_sync, '$.status') AS status,
+			json_extract(linear_sync, '$.intent.target') AS requested_target,
+			json_extract(linear_sync, '$.attempts') AS attempts,
+			json_extract(linear_sync, '$.paused') AS paused,
+			json_extract(linear_sync, '$.lastObservationAt') AS observed_at,
+			json_extract(linear_sync, '$.lastFailureAt') AS failed_at
+			FROM resources WHERE mission_id=? AND linear_role='managed' ORDER BY created_at,id LIMIT ? OFFSET ?`,
+			missionId,
+			limit + 1,
+			offset,
+		);
+		const tickets = rows.slice(0, limit).map((row) => ({
+			resourceId: str(row.id!),
+			externalId: str(row.external_id!),
+			status: JSON.parse(str(row.status!)) as MissionLinearSync,
+			requestedTarget: row.requested_target === null ? null : str(row.requested_target!),
+			attempts: num(row.attempts ?? 0),
+			paused: row.paused === null ? null : str(row.paused!),
+			// Unknown legacy times stay unknown. status.updatedAt is a record update, not proof of a read.
+			lastObservationAt: row.observed_at === null ? null : num(row.observed_at!),
+			lastFailureAt: row.failed_at === null ? null : num(row.failed_at!),
+		}));
+		return { tickets, more: rows.length > limit };
+	}
+
+	/** CAS fences task/status edits, detach/re-attach, user pause and concurrent sync work. */
+	saveLinearSync(resourceId: string, version: string, record: LinearSyncRecord): boolean {
+		const row = this.one(
+			"SELECT mission_id FROM resources WHERE id=? AND linear_role='managed' AND json_extract(linear_sync,'$.version')=?",
+			resourceId,
+			version,
+		);
+		const chat =
+			!row &&
+			this.one(
+				"SELECT session_id FROM linear_chat_links WHERE enabled=1 AND id=? AND json_extract(linear_sync,'$.version')=?",
+				resourceId,
+				version,
+			);
+		if (!row && !chat) return false;
+		// A UUID resolved through another workspace alias must never acquire a second writer.
+		if (
+			record.status.issueId &&
+			this.one(
+				`SELECT id FROM resources WHERE linear_role='managed' AND id<>?
+			AND json_extract(linear_sync,'$.status.issueId')=? UNION ALL
+			SELECT id FROM linear_chat_links WHERE enabled=1 AND id<>? AND json_extract(linear_sync,'$.status.issueId')=?`,
+				resourceId,
+				record.status.issueId,
+				resourceId,
+				record.status.issueId,
+			)
+		)
+			throw new Conflict("This Linear issue already has a verified managing link. Remove the duplicate manager.");
+		if (row) {
+			const previous = this.linearSyncRecord(resourceId);
+			this.transaction(() =>
+				this.run("UPDATE resources SET linear_sync=? WHERE id=?", JSON.stringify(record), resourceId),
+			);
+			const missionId = str(row.mission_id!);
+			if (record.status.reconcilePlan || previous?.status.reconcilePlan !== record.status.reconcilePlan)
+				this.notifyLinearTaskHolds(missionId);
+			this.changed(missionId);
+		} else if (chat) {
+			const previous = this.linearSyncRecord(resourceId)?.status;
+			this.run("UPDATE linear_chat_links SET linear_sync=? WHERE id=?", JSON.stringify(record), resourceId);
+			if (
+				record.status.reassigned ||
+				record.status.reconcilePlan ||
+				previous?.reassigned !== record.status.reassigned ||
+				previous?.reconcilePlan !== record.status.reconcilePlan
+			)
+				this.notifyLinearHold(str(chat.session_id!));
+		}
+		return true;
+	}
+
+	setLinearSyncPaused(id: string, resourceId: string, action: "pause" | "resume"): MissionResource {
+		this.require(id);
+		if (action !== "pause" && action !== "resume") throw new Error("action must be pause or resume");
+		const row = this.one(
+			"SELECT * FROM resources WHERE mission_id=? AND id=? AND linear_role='managed'",
+			id,
+			resourceId,
+		);
+		if (!row) throw new NotFound("Unknown managed Linear ticket");
+		const record = this.linearSyncRecord(resourceId)!;
+		const version = record.version;
+		this.resetLinearSync(record, action);
+		this.saveLinearSync(resourceId, version, record);
+		for (const listener of this.linearSyncListeners) listener();
+		this.log(id, { text: `Linear synchronization ${action === "pause" ? "paused" : "resumed"}: ${row.external_id}` });
+		return resourceFrom(this.one("SELECT * FROM resources WHERE id=?", resourceId)!);
+	}
+
+	private resetLinearSync(record: LinearSyncRecord, action: "pause" | "resume"): void {
+		record.version = randomUUID();
+		record.attempts = 0;
+		delete record.intent;
+		delete record.status.error;
+		delete record.status.failure;
+		delete record.status.retryAt;
+		delete record.status.target;
+		record.status.updatedAt = Date.now();
+		if (action === "pause") {
+			record.status.state = "paused";
+			record.status.reason = "Synchronization paused by you. Review the ticket, then resume when ready.";
+			record.paused = record.status.reason;
+			delete record.acceptBaseline;
+		} else {
+			delete record.paused;
+			record.acceptBaseline = true;
+			if (record.status.reconcilePlan) record.reviewedClosure = true;
+			delete record.status.reason;
+			const target = linearTarget(record.contributors);
+			record.status.state = target ? "pending" : "idle";
+			if (target) {
+				record.intent = { target };
+				record.status.target = target;
+			}
+		}
+	}
+
+	linearSyncResource(resourceId: string):
+		| {
+				resource: MissionResource;
+				missionId: string;
+				sessionId?: string;
+				operationId?: string;
+				reservedAt?: number;
+				projectId: string;
+				record: LinearSyncRecord;
+		  }
+		| undefined {
+		const row = this.one(
+			`SELECT r.*,m.project_id FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE r.id=? AND r.linear_role='managed' AND m.status<>'archived'`,
+			resourceId,
+		);
+		if (!row) {
+			const chat = this.one("SELECT * FROM linear_chat_links WHERE enabled=1 AND id=?", resourceId);
+			return chat ? this.linearChatResource(chat) : undefined;
+		}
+		return row
+			? {
+					resource: resourceFrom(row),
+					missionId: str(row.mission_id!),
+					projectId: str(row.project_id!),
+					record: JSON.parse(str(row.linear_sync!)) as LinearSyncRecord,
+				}
+			: undefined;
+	}
+
+	private reconcileLinearSync(): void {
+		for (const dirty of this.all("SELECT * FROM linear_sync_dirty")) {
+			const row = this.one("SELECT * FROM resources WHERE id=?", dirty.resource_id!);
+			if (!row) continue;
+			if (row.linear_role !== "managed") {
+				if (row.linear_sync) this.run("UPDATE resources SET linear_sync=NULL WHERE id=?", row.id!);
+				continue;
+			}
+			const contributors = this.all(
+				`SELECT c.id AS linkId,c.task_id AS taskId,t.status FROM resources c
+				JOIN tasks t ON t.id=c.task_id WHERE c.mission_id=? AND c.linear_key=? AND c.linear_role='contribution' ORDER BY c.id LIMIT 1001`,
+				row.mission_id!,
+				row.linear_key!,
+			) as unknown as LinearContributor[];
+			const previous = row.linear_sync ? (JSON.parse(str(row.linear_sync)) as LinearSyncRecord) : undefined;
+			const next = reconcileLinearRecord(previous, contributors, dirty.structural === 1, dirty.reopened === 1);
+			if (previous !== next) {
+				this.run("UPDATE resources SET linear_sync=? WHERE id=?", JSON.stringify(next), row.id!);
+				this.linearSyncChanged.add(str(row.mission_id!));
+			}
+		}
+		this.run("DELETE FROM linear_sync_dirty");
+	}
+
+	/** Lightweight, bounded linked-issue reads, including automatic delegations awaiting return. */
+	linearTaskLinks(
+		projectId?: string,
+		after = "",
+		limit = 25,
+	): { resourceId: string; issueId: string; projectId: string }[] {
+		return this.all(
+			`
+			SELECT r.id, r.external_id, m.project_id FROM missions m
+			JOIN resources r ON r.mission_id = m.id AND r.kind = 'linear.issue' AND r.linear_role = 'contribution'
+			JOIN tasks t ON t.id = r.task_id
+			WHERE (? IS NULL OR m.project_id = ?) AND m.status = 'active' AND r.id > ?
+			AND (t.status IN ('todo', 'in_progress', 'blocked', 'in_review')
+				OR (t.status = 'delegated' AND t.delegated_from_status IS NOT NULL))
+			ORDER BY r.id LIMIT ?`,
+			projectId ?? null,
+			projectId ?? null,
+			after,
+			Math.min(25, Math.max(1, limit)),
+		).map((row) => ({ resourceId: str(row.id!), issueId: str(row.external_id!), projectId: str(row.project_id!) }));
+	}
+
+	/** Read-only: the mission of a project whose managed link resolved to each Linear issue UUID. At most one each. */
+	managedLinearMissions(projectId: string, issueIds: string[]): Map<string, string> {
+		const missions = new Map<string, string>();
+		if (!issueIds.length) return missions;
+		for (const row of this.all(
+			`SELECT r.mission_id, json_extract(r.linear_sync,'$.status.issueId') AS issue_id
+			FROM resources r JOIN missions m ON m.id=r.mission_id
+			WHERE r.linear_role='managed' AND m.project_id=? AND m.status<>'archived'
+			AND json_extract(r.linear_sync,'$.status.issueId') IN (SELECT value FROM json_each(?))`,
+			projectId,
+			JSON.stringify(issueIds),
+		))
+			missions.set(str(row.issue_id!), str(row.mission_id!));
+		return missions;
+	}
+
+	/** Only an assignee transition can override a manual status. All state and its notice commit together. */
+	observeLinearAssignee(
+		projectId: string,
+		resourceId: string,
+		assignee: { id: string; name: string } | null,
+		me: string,
+	): void {
+		let changed: { missionId: string; sessionId?: string } | undefined;
+		let heldSession: string | undefined;
+		this.transaction(() => {
+			const row = this.one(
+				`SELECT t.*, r.mission_id FROM resources r
+				JOIN missions m ON m.id = r.mission_id JOIN tasks t ON t.id = r.task_id
+				WHERE r.id = ? AND r.kind = 'linear.issue' AND r.linear_role = 'contribution'
+				AND m.project_id = ? AND m.status = 'active'`,
+				resourceId,
+				projectId,
+			);
+			if (!row || !["todo", "in_progress", "blocked", "in_review", "delegated"].includes(str(row.status!))) return;
+			const prior = this.one("SELECT assignee_id,held FROM linear_task_assignees WHERE resource_id = ?", resourceId);
+			if (prior && prior.assignee_id === (assignee?.id ?? null)) {
+				if (row.delegated_from_status && row.session_id) heldSession = str(row.session_id);
+				return;
+			}
+			this.run(
+				`INSERT INTO linear_task_assignees (resource_id, assignee_id, held) VALUES (?, ?, ?)
+				ON CONFLICT(resource_id) DO UPDATE SET assignee_id=excluded.assignee_id, held=excluded.held`,
+				resourceId,
+				assignee?.id ?? null,
+				assignee ? Number(assignee.id !== me) : (prior?.held ?? 0),
+			);
+			// Unassignment is not a return to the user.
+			if (!assignee) return;
+			const before = taskFrom(row);
+			const mine = assignee.id === me;
+			if (before.status === "delegated" && !row.delegated_from_status) return;
+			if (
+				mine &&
+				(before.status !== "delegated" ||
+					this.one(
+						`SELECT 1 FROM linear_task_assignees a JOIN resources r ON r.id=a.resource_id
+				WHERE r.task_id=? AND r.linear_role='contribution' AND a.held=1 LIMIT 1`,
+						before.id,
+					))
+			)
+				return;
+			const status = mine ? str(row.delegated_from_status!) : "delegated";
+			const now = Date.now();
+			this.run(
+				`UPDATE tasks SET status = ?, delegated_to = ?, delegated_from_status = ?,
+				delegated_resource_id = ?, updated_at = ?, completed_at = NULL WHERE id = ?`,
+				status,
+				mine ? null : assignee.name,
+				mine ? null : (row.delegated_from_status ?? before.status),
+				mine ? null : resourceId,
+				now,
+				before.id,
+			);
+			const missionId = str(row.mission_id!);
+			this.event(
+				missionId,
+				"task",
+				mine
+					? `Returned to you in Linear (restored ${statusLabel(status as MissionTaskStatus)}): #${before.number} ${before.title}`
+					: `Delegated to ${assignee.name} in Linear: #${before.number} ${before.title}`,
+				{},
+				{ taskId: before.id, at: now, wake: true },
+			);
+			changed = { missionId, sessionId: before.sessionId };
+		});
+		if (heldSession) this.notifyLinearHold(heldSession);
+		if (changed) {
+			if (changed.sessionId) this.notifyLinearHold(changed.sessionId);
+			this.changed(changed.missionId, changed.sessionId ? [changed.sessionId] : []);
+		}
+	}
+
+	// Phases
+	phases(id: string): MissionPhase[] {
+		return this.all("SELECT * FROM phases WHERE mission_id = ? ORDER BY sort, id", id).map(phaseFrom);
+	}
+
+	resolvePhase(id: string, ref: unknown): MissionPhase {
+		if (typeof ref !== "string") throw new Error("phase must be a name or ID");
+		const phases = this.phases(id);
+		const phase = phases.find((item) => item.id === ref) ?? phases.find((item) => item.name === ref.trim());
+		if (!phase) throw new NotFound(`Unknown phase: ${ref}`);
+		return phase;
+	}
+
+	addPhase(id: string, write: MissionPhaseWrite, actor: MissionActor = USER): MissionPhase {
+		this.assertPlanner(id, actor);
+		this.require(id);
+		const phaseId = randomUUID();
+		this.transaction(() => {
+			this.insertPhase(id, phaseId, write, actor);
+		});
+		this.changed(id);
+		return this.resolvePhase(id, phaseId);
+	}
+
+	private insertPhase(id: string, phaseId: string, write: MissionPhaseWrite, actor: MissionActor): void {
+		const name = text(write.name, "phase name", MAX_TITLE)!;
+		const goal = write.goal === undefined ? null : text(write.goal, "phase goal", MAX_GOAL, { empty: true })!;
+		if (write.order !== undefined && (typeof write.order !== "number" || !Number.isFinite(write.order)))
+			throw new Error("order must be a number");
+		if (this.phases(id).some((phase) => phase.name === name)) throw new Conflict(`Phase already exists: ${name}`);
+		this.run(
+			"INSERT INTO phases (id, mission_id, name, goal, sort) VALUES (?, ?, ?, ?, ?)",
+			phaseId,
+			id,
+			name,
+			goal,
+			write.order ??
+				num(this.one("SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM phases WHERE mission_id = ?", id)!.n!),
+		);
+		this.phaseReconciliations.add(id);
+		this.event(id, "update", `Phase added: ${name}`, actor);
+	}
+
+	updatePhase(id: string, ref: string, write: MissionPhaseWrite, actor: MissionActor = USER): MissionPhase {
+		this.assertPlanner(id, actor);
+		const before = this.resolvePhase(id, ref);
+		const name = write.name === undefined ? before.name : text(write.name, "phase name", MAX_TITLE)!;
+		const goal = write.goal === undefined ? before.goal : text(write.goal, "phase goal", MAX_GOAL, { empty: true });
+		if (write.order !== undefined && (typeof write.order !== "number" || !Number.isFinite(write.order)))
+			throw new Error("order must be a number");
+		if (this.phases(id).some((phase) => phase.id !== before.id && phase.name === name))
+			throw new Conflict(`Phase already exists: ${name}`);
+		this.transaction(() => {
+			this.run(
+				"UPDATE phases SET name = ?, goal = ?, sort = ? WHERE id = ?",
+				name,
+				goal ?? null,
+				write.order ?? before.order,
+				before.id,
+			);
+			// Compatibility alias only. phase_id is authoritative.
+			this.run("UPDATE tasks SET milestone = ? WHERE phase_id = ?", name, before.id);
+			this.event(id, "update", `Phase updated: ${name}`, actor);
+		});
+		this.changed(id);
+		return this.resolvePhase(id, before.id);
+	}
+
+	removePhase(id: string, ref: string, actor: MissionActor = USER): void {
+		this.assertPlanner(id, actor);
+		const phase = this.resolvePhase(id, ref);
+		this.transaction(() => {
+			this.run(
+				"UPDATE tasks SET phase_id = NULL, milestone = NULL, updated_at = ? WHERE phase_id = ?",
+				Date.now(),
+				phase.id,
+			);
+			this.run("DELETE FROM phases WHERE id = ?", phase.id);
+			this.event(id, "update", `Phase deleted: ${phase.name}`, actor);
+		});
+		this.changed(id);
+	}
+
+	/** Empty phases are complete too, so an empty stage never deadlocks later work. */
+	private reconcilePhases(id: string): void {
+		const rows = this.all(
+			`SELECT p.*, NOT EXISTS (SELECT 1 FROM tasks t
+				WHERE t.phase_id = p.id AND t.status NOT IN ('done', 'dropped')) AS complete
+			FROM phases p WHERE p.mission_id = ? ORDER BY p.sort, p.id`,
+			id,
+		);
+		for (const row of rows) {
+			const complete = num(row.complete!) === 1;
+			if (complete === (row.completed_at !== null)) continue;
+			this.run("UPDATE phases SET completed_at = ? WHERE id = ?", complete ? Date.now() : null, row.id!);
+			this.event(id, "update", `Phase ${complete ? "completed" : "reopened"}: ${str(row.name!)}`, USER, {
+				wake: true,
+			});
+		}
+	}
+
+	private phaseView(id: string, tasks: MissionTask[]): MissionTask[] {
+		if (this.one("SELECT phase_gating FROM missions WHERE id = ?", id)?.phase_gating !== 1) return tasks;
+		const phases = this.phases(id);
+		const blockers = new Map<string, string[]>();
+		const earlier: string[] = [];
+		for (const phase of phases) {
+			blockers.set(phase.id, [...earlier]);
+			if (phase.completedAt === undefined) earlier.push(phase.id);
+		}
+		return tasks.map((task) => {
+			if (!task.phaseId || ["done", "dropped", "delegated"].includes(task.status)) return task;
+			const blockedByPhases = blockers.get(task.phaseId) ?? [];
+			return blockedByPhases.length
+				? { ...task, status: "blocked", storedStatus: task.status, blockedByPhases }
+				: task;
+		});
+	}
+
+	private rawTask(task: MissionTask): MissionTask {
+		return task.storedStatus ? { ...task, status: task.storedStatus } : task;
+	}
+
+	private assertPhaseAdmission(task: MissionTask, override = false): void {
+		if (task.blockedByPhases?.length && !override)
+			throw new Conflict(`Task #${task.number} is blocked by earlier phases`);
+	}
+
+	tasks(id: string): MissionTask[] {
+		return this.phaseView(
+			id,
+			this.all("SELECT * FROM tasks WHERE mission_id = ? ORDER BY sort, number", id).map(taskFrom),
+		);
+	}
+
+	/** Passive owner lookup without loading every task body or archived session summary. */
+	activeTaskOwnerIds(projectId: string): string[] {
+		return this.all(
+			`SELECT DISTINCT t.session_id FROM tasks t JOIN missions m ON m.id = t.mission_id
+			 WHERE m.project_id = ? AND m.status = 'active' AND t.status != 'dropped' AND t.session_id IS NOT NULL`,
+			projectId,
+		).map((row) => str(row.session_id));
+	}
+
+	task(id: string, taskId: string): MissionTask {
+		const row = this.one("SELECT * FROM tasks WHERE mission_id = ? AND id = ?", id, taskId);
+		if (!row) throw new NotFound(`Unknown task: ${taskId}`);
+		return this.phaseView(id, [taskFrom(row)])[0]!;
+	}
+
+	/** Agents may also refer to tasks by their display number. */
+	resolveTask(id: string, ref: unknown): MissionTask {
+		if (typeof ref === "number" || (typeof ref === "string" && /^#?\d+$/.test(ref))) {
+			const row = this.one(
+				"SELECT * FROM tasks WHERE mission_id = ? AND number = ?",
+				id,
+				Number(String(ref).replace("#", "")),
+			);
+			if (!row) throw new NotFound(`Unknown task: #${String(ref).replace("#", "")}`);
+			return this.phaseView(id, [taskFrom(row)])[0]!;
+		}
+		if (typeof ref !== "string") throw new Error("task id is required");
+		return this.task(id, ref);
+	}
+
+	addTask(id: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
+		this.assertPlanner(id, actor);
+		this.require(id);
+		const task = this.transaction(() => this.insertTask(id, write, actor));
+		this.changed(id, task.sessionId ? [task.sessionId] : []);
+		return task;
+	}
+
+	private insertTask(id: string, write: MissionTaskWrite, actor: MissionActor): MissionTask {
+		if (write.status !== undefined || write.sessionId !== undefined) this.assertTaskCoordinator(id, actor);
+		if (actor.sessionId && write.order !== undefined && this.controls.orderPinned(id))
+			throw new Conflict("Task order is pinned by the user");
+		const assignment = this.validateAssignment(id, write);
+		// Task authoring uses Unicode code points, matching the agent schema and write boundary.
+		const title = text(write.title, "title", MAX_TITLE, { codePoints: true })!;
+		const fields = this.taskFields(id, write);
+		const now = Date.now();
+		const number = num(this.one("SELECT COALESCE(MAX(number), 0) + 1 AS n FROM tasks WHERE mission_id = ?", id)!.n!);
+		const order =
+			fields.order ??
+			num(this.one("SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM tasks WHERE mission_id = ?", id)!.n!);
+		const status = fields.status ?? "todo";
+		if (status === "done" && actor.sessionId) throw new Error("Create an unfinished task, then use complete");
+		const taskId = randomUUID();
+		const owner = write.sessionId ?? null;
+		if (owner !== null) {
+			this.assertMember(id, owner);
+			this.assertFreshMember(owner);
+		}
+		this.run(
+			"INSERT INTO tasks (id, mission_id, number, title, body, status, sort, milestone, depends_on, session_id, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			taskId,
+			id,
+			number,
+			title,
+			fields.body ?? null,
+			status,
+			order,
+			fields.milestone ?? null,
+			fields.dependsOn?.length ? JSON.stringify(fields.dependsOn) : null,
+			owner,
+			now,
+			now,
+			status === "done" ? now : null,
+		);
+		if (assignment) this.run("UPDATE tasks SET assignment = ? WHERE id = ?", JSON.stringify(assignment), taskId);
+		this.run("UPDATE tasks SET created_by_session_id = ? WHERE id = ?", actor.sessionId ?? null, taskId);
+		if (owner) this.rememberTaskClaim(owner, taskId, false);
+		this.event(id, "task", `Task #${number} added: ${title}`, actor, {
+			taskId,
+			at: now,
+			wake: status === "blocked",
+			urgent: status === "blocked",
+			noticeText: `#${number} ${title} blocked${fields.body ? `: ${fields.body}` : ""}`,
+		});
+		if (fields.decisionIds !== undefined)
+			this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), taskId);
+		if (fields.preference) this.writePreference(id, this.task(id, taskId), fields.preference, actor, now);
+		const phase = this.taskPhase(id, fields, actor);
+		this.run(
+			"UPDATE tasks SET phase_id = ?, milestone = ? WHERE id = ?",
+			phase?.id ?? null,
+			phase?.name ?? null,
+			taskId,
+		);
+		if (owner)
+			this.assertPhaseAdmission(this.task(id, taskId), !actor.sessionId && write.overridePhaseGating === true);
+		return this.task(id, taskId);
+	}
+
+	private taskFields(id: string, write: MissionTaskWrite, self?: string) {
+		if (!write || typeof write !== "object") throw new Error("Expected a task object");
+		const body = write.body === undefined ? undefined : text(write.body, "body", MAX_TEXT, { empty: true });
+		if (write.status !== undefined && !TASK_STATUSES.includes(write.status))
+			throw new Error(`status must be one of ${TASK_STATUSES.join(", ")}`);
+		if (write.order !== undefined && (typeof write.order !== "number" || !Number.isFinite(write.order)))
+			throw new Error("order must be a number");
+		const milestone =
+			write.milestone === undefined ? undefined : text(write.milestone, "milestone", MAX_TITLE, { empty: true });
+		if (write.phaseId !== undefined && write.milestone !== undefined)
+			throw new Error("Use phaseId or milestone, not both");
+		const phaseId =
+			write.phaseId === undefined || write.phaseId === null
+				? write.phaseId
+				: this.resolvePhase(id, write.phaseId).id;
+		if (write.overridePhaseGating !== undefined && typeof write.overridePhaseGating !== "boolean")
+			throw new Error("overridePhaseGating must be a boolean");
+		let dependsOn: string[] | undefined;
+		if (write.dependsOn !== undefined) {
+			if (!Array.isArray(write.dependsOn)) throw new Error("dependsOn must be an array of task IDs");
+			dependsOn = [...new Set(write.dependsOn.map((ref) => this.resolveTask(id, ref).id))];
+			if (self && dependsOn.includes(self)) throw new Error("A task cannot depend on itself");
+		}
+		let decisionIds: string[] | undefined;
+		if (write.decisionIds !== undefined) {
+			if (!Array.isArray(write.decisionIds) || write.decisionIds.length > 1000)
+				throw new Error("decisionIds must be an array of at most 1000 decision IDs");
+			decisionIds = [...new Set(write.decisionIds.map((ref) => this.decision(id, ref).id))];
+		}
+		return {
+			body,
+			status: write.status,
+			order: write.order,
+			milestone,
+			phaseId,
+			dependsOn,
+			decisionIds,
+			preference: preference(write),
+		};
+	}
+
+	/**
+	 * Saves a preference already validated against the model scope by the caller. Setting the model replaces the
+	 * thinking level; a thinking-only write keeps the model. Chats never change a user-set preference.
+	 */
+	private writePreference(
+		id: string,
+		task: MissionTask,
+		write: { model?: string | null; thinking?: string | null },
+		actor: MissionActor,
+		now: number,
+		passive = false,
+	): void {
+		if (actor.sessionId && task.preferredModelSetBy === "user")
+			throw new Conflict(
+				`Task #${task.number} has a user-set preferred model (${task.preferredModel}); only the user can change it`,
+			);
+		const model = write.model === undefined ? (task.preferredModel ?? null) : write.model;
+		const thinking = write.thinking ?? null;
+		if (!model && thinking) throw new Error("preferredThinking requires a preferred model");
+		if (model === (task.preferredModel ?? null) && thinking === (task.preferredThinking ?? null)) return;
+		this.run(
+			"UPDATE tasks SET preferred_model = ?, preferred_thinking = ?, preferred_model_by = ?, updated_at = ? WHERE id = ?",
+			model,
+			model ? thinking : null,
+			model ? (actor.sessionId ? "coordinator" : "user") : null,
+			now,
+			task.id,
+		);
+		this.event(
+			id,
+			passive ? "update" : "task",
+			model
+				? `Task #${task.number} preferred model ${model}${thinking ? `, thinking ${thinking}` : ""}: ${task.title}`
+				: `Task #${task.number} preferred model cleared: ${task.title}`,
+			actor,
+			{ taskId: task.id, at: now },
+		);
+	}
+
+	private taskPhase(
+		id: string,
+		fields: { phaseId?: string | null; milestone?: string },
+		actor: MissionActor,
+	): MissionPhase | null | undefined {
+		if (fields.phaseId !== undefined) return fields.phaseId === null ? null : this.resolvePhase(id, fields.phaseId);
+		if (fields.milestone === undefined) return undefined;
+		if (!fields.milestone) return null;
+		const existing = this.phases(id).find((phase) => phase.name === fields.milestone);
+		if (existing) return existing;
+		const phaseId = randomUUID();
+		this.insertPhase(id, phaseId, { name: fields.milestone }, actor);
+		return this.resolvePhase(id, phaseId);
+	}
+
+	/** Dedicated user preference only: no member callbacks, reconciliation or automation. */
+	taskModel(id: string, projectId: string, taskId: string, write: MissionTaskWrite): MissionTask {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
+		this.assertPlanner(id, USER);
+		if (this.database.writing || this.batchedChanges || this.referenceBatch)
+			throw new Conflict("Preference changes cannot be batched");
+		if (this.require(id).projectId !== projectId) throw new Conflict("The confirmed project changed");
+		if (!taskId || /^\d+$/.test(taskId)) throw new Error("An exact task ID is required");
+		if (Object.keys(write).some((key) => key !== "preferredModel" && key !== "preferredThinking"))
+			throw new Error("Preference fields only");
+		const task = this.rawTask(this.task(id, taskId));
+		const fields = preference(write);
+		if (!fields || fields.model === undefined || fields.thinking === undefined)
+			throw new Error("Both preference fields are required");
+		this.transaction(() => this.writePreference(id, task, fields, USER, Date.now(), true), { reconcile: false });
+		this.changed(id, [], "preference");
+		return this.task(id, taskId);
+	}
+
+	/** One immutable, task-owned handoff. Retries return it, never add another event. */
+	completeTask(id: string, ref: unknown, sessionId: string, value: unknown) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
+		this.assertTaskCoordinator(id, { sessionId });
+		const task = this.resolveTask(id, ref);
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("completion is required");
+		const input = value as Record<string, unknown>;
+		if (Object.keys(input).sort().join(",") !== "checks,commit,issues")
+			throw new Error("completion requires commit, checks and issues only");
+		const record = {
+			commit: text(input.commit, "commit", 40)!,
+			checks: text(input.checks, "checks", MISSION_DELIVERY_LIMITS.checks)!,
+			issues: text(input.issues, "issues", MISSION_DELIVERY_LIMITS.issues, { empty: true })!,
+		};
+		if (!/^[a-f0-9]{40}$/.test(record.commit)) throw new Error("commit must be a 40-character lowercase hex hash");
+		const encoded = JSON.stringify(record);
+		const previous = this.completion(id, task.id);
+		if (previous) {
+			if (JSON.stringify(previous) !== encoded) throw new Conflict("Task already has a completion record");
+			return previous;
+		}
+		this.batchChanges(() => {
+			this.run("INSERT INTO task_completions VALUES (?, ?)", task.id, encoded);
+			this.userVerifications.recordSource(`completion:${task.id}`, task.id);
+			this.sourceChanged({
+				missionId: id,
+				kind: "delivery",
+				projectId: this.require(id).projectId,
+				taskId: task.id,
+				commit: record.commit,
+			});
+			this.updateTask(id, task.id, { status: "done" }, { sessionId });
+			if (task.status === "done")
+				this.event(
+					id,
+					"task",
+					`Task #${task.number} completion recorded`,
+					{ sessionId },
+					{
+						taskId: task.id,
+						wake: true,
+						urgent: true,
+						noticeSummaries: [
+							{
+								key: `task:${task.id}`,
+								text: `Task #${task.number} done. Read the task for details.`,
+								state: "done",
+							},
+						],
+					},
+				);
+			if (
+				task.sessionId &&
+				task.sessionId !== sessionId &&
+				!this.tasks(id).some((item) => item.sessionId === task.sessionId && isOpenTask(item))
+			)
+				this.run("INSERT OR IGNORE INTO retired_members VALUES (?, ?, ?)", task.sessionId, id, Date.now());
+			this.changed(id, task.sessionId ? [task.sessionId] : []);
+		});
+		this.knowledgeChanged(id);
+		return record;
+	}
+
+	completion(id: string, taskId: string): MissionCodeCompletion | undefined {
+		this.task(id, taskId);
+		const row = this.one("SELECT record FROM task_completions WHERE task_id = ?", taskId);
+		return row ? JSON.parse(str(row.record!)) : undefined;
+	}
+
+	/** Indexed task-scoped read. No whole-mission history or remote PR refresh. */
+	taskOutputs(id: string, taskId: string) {
+		this.task(id, taskId);
+		return {
+			completion: this.completion(id, taskId),
+			nonCodeDelivery: this.nonCodeDelivery(id, taskId),
+			pullRequests: this.all(
+				"SELECT * FROM resources WHERE mission_id=? AND task_id=? AND kind='github.pr' ORDER BY created_at,id",
+				id,
+				taskId,
+			).map(resourceFrom),
+			artifacts: this.all(
+				"SELECT * FROM artifact_links WHERE mission_id=? AND task_id=? ORDER BY artifact_id",
+				id,
+				taskId,
+			).map(artifactFrom),
+		};
+	}
+
+	/** Unaccepted submission only. Never changes task status or member lifecycle. */
+	nonCodeDelivery(id: string, taskId: string): MissionNonCodeDelivery | undefined {
+		this.task(id, taskId);
+		const row = this.one("SELECT record FROM task_non_code_deliveries WHERE task_id = ?", taskId);
+		return row ? JSON.parse(str(row.record!)) : undefined;
+	}
+
+	/** Called after the service resolves artifact revisions. Rechecks persisted scope synchronously. */
+	saveNonCodeDelivery(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		resolvedArtifacts: ReadonlyMap<string, string> = new Map(),
+	) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
+		this.assertMember(id, sessionId);
+		const task = this.resolveTask(id, ref);
+		if (task.sessionId !== sessionId && this.require(id).coordinatorSessionId !== sessionId)
+			throw new Conflict("Only the task owner or coordinator may submit delivery");
+		const record = parseNonCodeDelivery(value);
+		const encoded = JSON.stringify(record);
+		const previous = this.nonCodeDelivery(id, task.id);
+		if (previous) {
+			if (JSON.stringify(previous) !== encoded) throw new Conflict("Task already has a non-code delivery");
+			return previous;
+		}
+		for (const item of record.references) {
+			if (item.kind === "brief") {
+				if (this.require(id).briefRevision !== item.revision || !this.brief(id, item.revision))
+					throw new Conflict("Brief reference is missing or stale");
+			} else {
+				const links = this.artifactReferences(id, item.artifactId);
+				const owner = resolvedArtifacts.get(item.artifactId);
+				if (
+					!owner ||
+					links.some((link) => link.sessionId !== owner) ||
+					!links.some(
+						(link) => link.sessionId === owner && link.taskId === task.id && link.revision === item.revision,
+					)
+				)
+					throw new Conflict("Artifact reference must be pinned to this task and revision");
+			}
+		}
+		this.transaction(
+			() => {
+				this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded);
+				this.userVerifications.recordSource(`non-code:${task.id}`, task.id);
+			},
+			{ reconcile: false },
+		);
+		return record;
+	}
+
+	/** Internal history only. No legacy receipt is promoted into verified evidence. */
+	deliveryEvidence(id: string, taskId: string, before?: string, limit = 100): DeliveryRecord[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid delivery history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM task_delivery_evidence WHERE task_id = ? AND record_id = ?",
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown delivery history cursor");
+		return this.all(
+			"SELECT record FROM task_delivery_evidence WHERE task_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?",
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((row) => JSON.parse(str(row.record!)) as DeliveryRecord);
+	}
+
+	/** Two latest records, independent of history page size or the number of review revisions. */
+	currentDeliveryEvidence(id: string, taskId: string): DeliveryRecord[] {
+		this.task(id, taskId);
+		return this.all(
+			`SELECT record FROM task_delivery_evidence WHERE sequence IN (
+			(SELECT sequence FROM task_delivery_evidence WHERE task_id = ? AND record_type = 'submission' ORDER BY sequence DESC LIMIT 1),
+			(SELECT sequence FROM task_delivery_evidence WHERE task_id = ? AND record_type = 'judgement' ORDER BY sequence DESC LIMIT 1)
+		) ORDER BY sequence`,
+			taskId,
+			taskId,
+		).map((row) => JSON.parse(str(row.record!)) as DeliveryRecord);
+	}
+
+	assertDeliveryEvidencePins(id: string, taskId: string, observations: DeliveryObservation[]): void {
+		for (const observation of observations) {
+			const item = observation.reference;
+			if (
+				item.kind === "brief" &&
+				(this.require(id).briefRevision !== item.revision || !this.brief(id, item.revision))
+			)
+				throw new Conflict("Brief delivery evidence is stale");
+			if (item.kind === "artifact") {
+				const links = this.artifactReferences(id, item.artifactId);
+				if (
+					!observation.sourceOwnerSessionId ||
+					links.some((link) => link.sessionId !== observation.sourceOwnerSessionId) ||
+					!links.some((link) => link.taskId === taskId && link.revision === item.revision)
+				)
+					throw new Conflict("Artifact delivery evidence must be pinned to this task, custodian and revision");
+			}
+		}
+	}
+
+	private assertDeliveryMember(id: string, sessionId: string): void {
+		this.assertMember(id, sessionId);
+		if (this.require(id).planningVersion !== 1) throw new Conflict("Delivery evidence requires planningVersion 1");
+	}
+
+	/** Retry recovery precedes mutable assignment/source checks, but cannot change actor/task/action/payload. */
+	private deliveryRetry(
+		id: string,
+		taskId: string,
+		sessionId: string,
+		type: DeliveryRecord["type"],
+		request: DeliveryRecord["request"],
+	): DeliveryRecord | undefined {
+		this.insights.assertOrdinaryTask(taskId);
+		this.assertDeliveryMember(id, sessionId);
+		const row = this.one(
+			"SELECT record FROM task_delivery_evidence WHERE mission_id = ? AND operation_id = ?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const previous = JSON.parse(str(row.record!)) as DeliveryRecord;
+		if (
+			previous.taskId !== taskId ||
+			previous.actorSessionId !== sessionId ||
+			previous.type !== type ||
+			deliveryDigest(previous.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Delivery operation idempotency conflict");
+		return previous;
+	}
+
+	private insertDelivery(record: DeliveryRecord): void {
+		this.run(
+			"INSERT INTO task_delivery_evidence (mission_id, task_id, operation_id, record_id, record_type, record) VALUES (?, ?, ?, ?, ?, ?)",
+			record.missionId,
+			record.taskId,
+			record.request.operationId,
+			record.id,
+			record.type,
+			JSON.stringify(record),
+		);
+		if (record.type === "submission") this.userVerifications.recordSource(`submission:${record.id}`, record.taskId);
+	}
+
+	/** Dormant host-only API. Resolver is host code, never request-supplied observations or passing booleans. */
+	async submitDeliveryEvidence(id: string, ref: string, sessionId: string, value: unknown, resolve: DeliveryResolver) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
+		const request = deliverySubmissionWrite(value);
+		const taskId = this.resolveTask(id, ref).id;
+		const retry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
+		if (retry) {
+			await this.durable();
+			return retry as DeliverySubmission;
+		}
+		const admit = () => {
+			this.assertDeliveryMember(id, sessionId);
+			const task = this.task(id, taskId);
+			if (!task.sessionId || (task.sessionId !== sessionId && this.require(id).coordinatorSessionId !== sessionId))
+				throw new Conflict("Only the task owner or coordinator may submit delivery");
+			if (!isOpenTask(task)) throw new Conflict("Delivery task is closed");
+			assertDeliveryAssignment(task, request.assignment);
+			if (this.sharedDefinitionRevision(taskId) !== request.definitionRevision)
+				throw new Conflict("Delivery task definition revision is stale");
+			if ((latestSubmission(this.currentDeliveryEvidence(id, taskId))?.id ?? null) !== request.expectedSubmissionId)
+				throw new Conflict("Delivery submission revision conflict");
+			return task.sessionId;
+		};
+		const ownerSessionId = admit();
+		const observations: DeliveryObservation[] = [];
+		// Sequential, bounded resolution avoids unbounded artifact/source fanout.
+		for (const reference of request.evidence) {
+			const observation = await resolve(reference);
+			if (
+				deliveryDigest(reference) !== deliveryDigest(observation.reference) ||
+				!/^[a-f0-9]{64}$/.test(observation.sha256) ||
+				!["retained", "partial", "unavailable"].includes(observation.availability)
+			)
+				throw new Conflict("Resolved delivery evidence identity mismatch");
+			observations.push(observation);
+		}
+		const saved = this.transaction(
+			() => {
+				const concurrentRetry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
+				if (concurrentRetry) return concurrentRetry as DeliverySubmission;
+				if (admit() !== ownerSessionId) throw new Conflict("Delivery owner changed while resolving evidence");
+				// Recheck persisted pins/current brief after asynchronous host reads.
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: DeliverySubmission = {
+					version: 1,
+					type: "submission",
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					actorSessionId: sessionId,
+					ownerSessionId,
+					createdAt: Date.now(),
+					request,
+					observations,
+				};
+				this.insertDelivery(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		return saved;
+	}
+
+	/** Coordinator judgement only. Approval does not imply required checks, authority or integration. */
+	async judgeDeliveryEvidence(id: string, ref: string, sessionId: string, value: unknown) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
+		const request = deliveryJudgementWrite(value);
+		const taskId = this.resolveTask(id, ref).id;
+		const saved = this.transaction(
+			() => {
+				const retry = this.deliveryRetry(id, taskId, sessionId, "judgement", request);
+				if (retry) return retry;
+				if (this.require(id).coordinatorSessionId !== sessionId)
+					throw new Conflict("Only the coordinator may record delivery judgement");
+				const task = this.task(id, taskId),
+					records = this.currentDeliveryEvidence(id, taskId);
+				const submission = latestSubmission(records);
+				if (!submission || submission.id !== request.submissionId)
+					throw new Conflict("Delivery judgement targets a stale submission");
+				assertDeliveryAssignment(task, submission.request.assignment);
+				if (this.sharedDefinitionRevision(taskId) !== submission.request.definitionRevision)
+					throw new Conflict("Delivery task definition revision is stale");
+				if (task.sessionId !== submission.ownerSessionId) throw new Conflict("Delivery owner is stale");
+				if ((latestJudgement(records)?.id ?? null) !== request.expectedJudgementId)
+					throw new Conflict("Delivery judgement revision conflict");
+				const record: DeliveryRecord = {
+					version: 1,
+					type: "judgement",
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					actorSessionId: sessionId,
+					createdAt: Date.now(),
+					request,
+				};
+				this.insertDelivery(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		return saved;
+	}
+
+	/** Dormant later scope allocation. No active gate consumes these records. */
+	allocationContextFence(id: string): AllocationContextFence {
+		return {
+			...this.reviewContextFence(id),
+			coordinatorEventId: Number(
+				this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=? AND kind='coordinator'", id)!.n,
+			),
+		};
+	}
+	contributionAllocation(id: string, recordId: string): ContributionAllocation | undefined {
+		this.require(id);
+		const row = this.one(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND record_id=?",
+			id,
+			recordId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as ContributionAllocation) : undefined;
+	}
+	latestContributionAllocation(id: string, taskId: string): ContributionAllocation | undefined {
+		this.task(id, taskId);
+		const row = this.one(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND task_id=? ORDER BY sequence DESC LIMIT 1",
+			id,
+			taskId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as ContributionAllocation) : undefined;
+	}
+	contributionAllocationHistory(id: string, taskId: string, before?: string, limit = 100): ContributionAllocation[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid allocation history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM task_contribution_allocations WHERE mission_id=? AND task_id=? AND record_id=?",
+						id,
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown allocation history cursor");
+		return this.all(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND task_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+			id,
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((row) => JSON.parse(str(row.record!)) as ContributionAllocation);
+	}
+	private assertAllocationActor(id: string, sessionId: string, authorize: () => void): void {
+		authorize();
+		this.assertDeliveryMember(id, sessionId);
+		if (this.require(id).coordinatorSessionId !== sessionId)
+			throw new Conflict("Only the current coordinator may allocate contributions");
+	}
+	private allocationRetry(
+		id: string,
+		taskId: string,
+		sessionId: string,
+		request: AllocationWrite,
+	): ContributionAllocation | undefined {
+		const row = this.one(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND operation_id=?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const prior = JSON.parse(str(row.record!)) as ContributionAllocation;
+		if (
+			prior.taskId !== taskId ||
+			prior.recorderSessionId !== sessionId ||
+			deliveryDigest(prior.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Allocation operation idempotency conflict");
+		return prior;
+	}
+	/** Exact request lookup is authorized recovery, not mutable-source freshness or permission to replay. */
+	async lookupContributionAllocation(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		authorize: () => void,
+	) {
+		this.assertAllocationActor(id, sessionId, authorize);
+		const taskId = this.resolveTask(id, ref).id;
+		const request = allocationWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
+		const record = this.allocationRetry(id, taskId, sessionId, request);
+		await this.durable();
+		this.assertAllocationActor(id, sessionId, authorize);
+		return record;
+	}
+	async recordContributionAllocation(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			validateSources(observations: DeliveryObservation[]): void;
+		},
+	): Promise<ContributionAllocation> {
+		this.assertAllocationActor(id, sessionId, host.authorize);
+		const taskId = this.resolveTask(id, ref).id;
+		const request = allocationWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
+		const retry = this.allocationRetry(id, taskId, sessionId, request);
+		if (retry) {
+			await this.durable();
+			this.assertAllocationActor(id, sessionId, host.authorize);
+			return retry;
+		}
+		const admit = () => {
+			this.assertAllocationActor(id, sessionId, host.authorize);
+			const latest = this.latestContributionAllocation(id, taskId);
+			if ((latest?.id ?? null) !== request.expectedAllocationId) throw new Conflict("Allocation revision conflict");
+			if (request.action === "withdraw") {
+				if (latest?.request.action !== "allocate") throw new Conflict("Only an allocation can be withdrawn");
+				return;
+			}
+			const task = this.task(id, taskId);
+			if (!task.sessionId || !isOpenTask(task)) throw new Conflict("Allocation task is unowned or closed");
+			if (
+				task.sessionId !== request.ownerSessionId ||
+				this.sharedDefinitionRevision(taskId) !== request.definitionRevision
+			)
+				throw new Conflict("Allocation owner or definition is stale");
+			assertDeliveryAssignment(task, request.assignment);
+			if (deliveryDigest(this.allocationContextFence(id)) !== deliveryDigest(request.expectedContextFence))
+				throw new Conflict("Allocation context is stale");
+			assertAllocationSubmission(request, latestSubmission(this.currentDeliveryEvidence(id, taskId)));
+		};
+		admit();
+		const observations: DeliveryObservation[] = [];
+		if (request.action === "allocate") {
+			for (const source of request.sources) {
+				const observed = await host.resolve(structuredClone(source.reference));
+				if (deliveryDigest(observed) !== deliveryDigest(source))
+					throw new Conflict("Allocation retained source identity mismatch or unavailable");
+				observations.push(structuredClone(observed));
+			}
+		}
+		const saved = this.transaction(
+			() => {
+				this.assertAllocationActor(id, sessionId, host.authorize);
+				const concurrent = this.allocationRetry(id, taskId, sessionId, request);
+				if (concurrent) return concurrent;
+				admit(); // Recheck all task, source-pin, membership and context fences after asynchronous reads.
+				if (request.action === "allocate") host.validateSources(observations);
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: ContributionAllocation = {
+					version: 1,
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					recorderSessionId: sessionId,
+					createdAt: Date.now(),
+					request,
+					historicalTaskAttribution: "unknown",
+					scopeCoverage: "selected-only",
+				};
+				const encoded = JSON.stringify(record);
+				if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Allocation record exceeds 256 KiB");
+				this.run(
+					"INSERT INTO task_contribution_allocations(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
+					id,
+					taskId,
+					request.operationId,
+					record.id,
+					encoded,
+				);
+				return record;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		this.assertAllocationActor(id, sessionId, host.authorize);
+		return saved;
+	}
+
+	/** Inert policy metadata. No active gate, transport, status or lifecycle consumer. */
+	latestNonCodeAcceptancePolicy(id: string, taskId: string): NonCodeAcceptancePolicy | undefined {
+		this.task(id, taskId);
+		const row = this.one(
+			"SELECT record FROM task_non_code_acceptance_policies WHERE mission_id=? AND task_id=? ORDER BY sequence DESC LIMIT 1",
+			id,
+			taskId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as NonCodeAcceptancePolicy) : undefined;
+	}
+	nonCodeAcceptancePolicyHistory(id: string, taskId: string, before?: string, limit = 100): NonCodeAcceptancePolicy[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new Error("Invalid non-code policy history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM task_non_code_acceptance_policies WHERE mission_id=? AND task_id=? AND record_id=?",
+						id,
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown non-code policy history cursor");
+		return this.all(
+			"SELECT record FROM task_non_code_acceptance_policies WHERE mission_id=? AND task_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+			id,
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((r) => JSON.parse(str(r.record!)) as NonCodeAcceptancePolicy);
+	}
+	private assertNonCodePolicyActor(id: string, actor: string, authorize: () => void): void {
+		authorize();
+		this.assertDeliveryMember(id, actor);
+		if (this.require(id).coordinatorSessionId !== actor)
+			throw new Conflict("Only the current coordinator may access non-code policies");
+	}
+	private nonCodePolicyRetry(
+		id: string,
+		taskId: string,
+		actor: string,
+		request: NonCodePolicyWrite,
+	): NonCodeAcceptancePolicy | undefined {
+		const row = this.one(
+			"SELECT record FROM task_non_code_acceptance_policies WHERE mission_id=? AND operation_id=?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const prior = JSON.parse(str(row.record!)) as NonCodeAcceptancePolicy;
+		if (
+			prior.taskId !== taskId ||
+			prior.recorderSessionId !== actor ||
+			prior.version !== 1 ||
+			deliveryDigest(prior.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Non-code policy operation idempotency conflict");
+		return prior;
+	}
+	async lookupNonCodeAcceptancePolicy(id: string, ref: string, actor: string, value: unknown, authorize: () => void) {
+		this.assertNonCodePolicyActor(id, actor, authorize);
+		const taskId = this.resolveTask(id, ref).id,
+			request = nonCodePolicyWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
+		const record = this.nonCodePolicyRetry(id, taskId, actor, request);
+		await this.durable();
+		this.assertNonCodePolicyActor(id, actor, authorize);
+		return record;
+	}
+	private nonCodePolicyAuthority(id: string, claim: NonCodePolicyWrite["authorityClaim"]): NonCodeAuthorityGap {
+		let code: NonCodeAuthorityGap["code"] = "authority-not-configured";
+		if (claim) {
+			try {
+				const decision = this.decision(id, claim.decisionId);
+				code =
+					deliveryDigest(decision) === claim.sha256 &&
+					this.allocationContextFence(id).decisionEventId === claim.decisionEventId
+						? "trusted-approval-source-unavailable"
+						: "authority-reference-changed";
+			} catch {
+				code = "authority-reference-unavailable";
+			}
+		}
+		return {
+			state: "unavailable",
+			claimedReference: claim,
+			code,
+			remedy:
+				"An independently admitted exact-scope approval source is required; decision content and actor labels do not grant authority.",
+		};
+	}
+	async saveNonCodeAcceptancePolicy(
+		id: string,
+		ref: string,
+		actor: string,
+		value: unknown,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			validateSources(observations: DeliveryObservation[]): void;
+		},
+	): Promise<NonCodeAcceptancePolicy> {
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		const taskId = this.resolveTask(id, ref).id,
+			request = nonCodePolicyWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
+		const retry = this.nonCodePolicyRetry(id, taskId, actor, request);
+		if (retry) {
+			await this.durable();
+			this.assertNonCodePolicyActor(id, actor, host.authorize);
+			return retry; // Historical metadata only. Never reopen revoked retained content.
+		}
+		const admit = () => {
+			this.assertNonCodePolicyActor(id, actor, host.authorize);
+			const task = this.task(id, taskId);
+			if (
+				!task.sessionId ||
+				!isOpenTask(task) ||
+				task.sessionId !== request.ownerSessionId ||
+				this.sharedDefinitionRevision(taskId) !== request.definitionRevision
+			)
+				throw new Conflict("Non-code policy owner or definition is stale or closed");
+			this.assertMember(id, task.sessionId);
+			assertDeliveryAssignment(task, request.assignment);
+			if ((this.latestNonCodeAcceptancePolicy(id, taskId)?.id ?? null) !== request.expectedPolicyId)
+				throw new Conflict("Non-code policy revision conflict");
+			if (deliveryDigest(this.allocationContextFence(id)) !== deliveryDigest(request.expectedContextFence))
+				throw new Conflict("Non-code policy context changed");
+			return request.reviews.map((r) => {
+				const profile = this.reviewProfile(id, r.profileId);
+				if (
+					!profile ||
+					profile.revision !== r.profileRevision ||
+					!profile.request.definition.applicableIntents.includes("research")
+				)
+					throw new Conflict("Non-code policy review profile missing, changed or inapplicable");
+				return profile.id;
+			});
+		};
+		const profileIds = admit(),
+			observations: DeliveryObservation[] = [];
+		host.validateSources(observations); // Current owner admission for a NEW write, never historical retry.
+		for (const reference of request.destinations) {
+			let observed: DeliveryObservation;
+			try {
+				observed = await host.resolve(structuredClone(reference));
+			} catch {
+				throw new Conflict("Non-code policy retained destination unavailable");
+			}
+			if (
+				deliveryDigest(observed.reference) !== deliveryDigest(reference) ||
+				!/^[a-f0-9]{64}$/.test(observed.sha256) ||
+				observed.availability !== "retained"
+			)
+				throw new Conflict("Non-code policy retained identity unavailable or mismatched");
+			observations.push(structuredClone(observed));
+		}
+		const saved = this.transaction(
+			() => {
+				this.assertNonCodePolicyActor(id, actor, host.authorize);
+				const concurrent = this.nonCodePolicyRetry(id, taskId, actor, request);
+				if (concurrent) return concurrent;
+				if (deliveryDigest(admit()) !== deliveryDigest(profileIds))
+					throw new Conflict("Non-code policy profile changed during reads");
+				host.validateSources(observations);
+				for (const o of observations) if (o.sourceOwnerSessionId) this.assertMember(id, o.sourceOwnerSessionId);
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: NonCodeAcceptancePolicy = {
+					version: 1,
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					recorderSessionId: actor,
+					createdAt: Date.now(),
+					request,
+					destinations: observations,
+					authority: this.nonCodePolicyAuthority(id, request.authorityClaim),
+				};
+				const encoded = JSON.stringify(record);
+				if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Non-code policy record exceeds 256 KiB");
+				this.run(
+					"INSERT INTO task_non_code_acceptance_policies(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
+					id,
+					taskId,
+					request.operationId,
+					record.id,
+					encoded,
+				);
+				return record;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		return saved;
+	}
+	private nonCodeAcceptanceState(id: string, taskId: string, actor: string): NonCodeAcceptanceState {
+		const policy = this.latestNonCodeAcceptancePolicy(id, taskId),
+			records = this.currentDeliveryEvidence(id, taskId),
+			mission = this.require(id);
+		return {
+			missionId: id,
+			projectId: mission.projectId,
+			actorSessionId: actor,
+			coordinatorSessionId: mission.coordinatorSessionId ?? null,
+			task: this.task(id, taskId),
+			definitionRevision: this.sharedDefinitionRevision(taskId),
+			contextFence: this.allocationContextFence(id),
+			policy,
+			submission: latestSubmission(records),
+			judgement: latestJudgement(records),
+			allocation: this.latestContributionAllocation(id, taskId),
+			reviews:
+				policy?.request.reviews.map((requirement) => ({
+					requirement,
+					profile: this.reviewProfile(id, requirement.profileId),
+					result: this.latestReviewResult(id, taskId, requirement.profileId),
+				})) ?? [],
+		};
+	}
+	async evaluateNonCodeAcceptance(
+		id: string,
+		ref: string,
+		actor: string,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			validateSources(observations: DeliveryObservation[]): void;
+			/** Host metadata only; catches observed actor/project/membership churn, not source stability. */
+			actorFence(state: NonCodeAcceptanceState): unknown;
+		},
+	) {
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		const taskId = this.resolveTask(id, ref).id,
+			state = this.nonCodeAcceptanceState(id, taskId, actor);
+		if (state.task.assignment?.classification?.deliveryKind !== "research")
+			throw new Conflict("Non-code explanation requires explicit research classification");
+		const inputs = nonCodeInputIds(state),
+			actors = structuredClone(host.actorFence(state));
+		const authority = this.nonCodePolicyAuthority(id, state.policy?.request.authorityClaim ?? null);
+		let observations: DeliveryObservation[] | undefined;
+		if (state.policy) {
+			try {
+				observations = [];
+				for (const reference of state.policy.request.destinations)
+					observations.push(structuredClone(await host.resolve(structuredClone(reference))));
+				host.validateSources(observations);
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+			} catch {
+				observations = undefined;
+			} // No source text or exception payload enters diagnostics.
+		}
+		await this.durable();
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		const after = this.nonCodeAcceptanceState(id, taskId, actor),
+			currentInputs = nonCodeInputIds(after),
+			currentActors = host.actorFence(after);
+		if (
+			deliveryDigest(inputs) !== deliveryDigest(currentInputs) ||
+			deliveryDigest(actors) !== deliveryDigest(currentActors)
+		) {
+			return {
+				...explainNonCodeAcceptance(state, authority, undefined),
+				policyApplicability: "outdated" as const,
+				changedInputs: {
+					before: inputs,
+					after: currentInputs,
+					actorMetadata: { before: actors, after: currentActors },
+				},
+			};
+		}
+		return { ...explainNonCodeAcceptance(state, authority, observations), changedInputs: null };
+	}
+
+	/** Dormant host-only review history. No legacy receipt promotion or active gate consumer. */
+	nativeReviewRecords(
+		id: string,
+		workerId: string,
+		snapshotId: string,
+		snapshot?: import("@pilot/protocol").NativeReviewSnapshot,
+	): import("@pilot/protocol").NativeReviewRecords {
+		this.require(id);
+		const result: import("@pilot/protocol").NativeReviewRecords = {
+			assessments: [],
+			reported: [],
+			allocations: [],
+			more: false,
+		};
+		// Exact selected references only. Length is checked in SQL before record hydration.
+		const queries = [
+			[
+				"review",
+				`SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='result'
+			 AND EXISTS(SELECT 1 FROM json_each(json_extract(record,'$.request.content')) WHERE json_extract(value,'$.snapshotId')=?) ORDER BY sequence DESC`,
+			],
+			[
+				"submission",
+				`SELECT record FROM task_delivery_evidence WHERE mission_id=? AND record_type='submission'
+			 AND EXISTS(SELECT 1 FROM json_each(json_extract(record,'$.request.evidence')) WHERE json_extract(value,'$.snapshotId')=?) ORDER BY sequence DESC`,
+			],
+			[
+				"allocation",
+				`SELECT record FROM task_contribution_allocations WHERE mission_id=?
+			 AND EXISTS(SELECT 1 FROM json_each(json_extract(record,'$.request.sources')) WHERE json_extract(value,'$.reference.snapshotId')=?) ORDER BY sequence DESC`,
+			],
+		] as const;
+		for (const [kind, query] of queries) {
+			const rows = this.all(
+				`SELECT CASE WHEN length(CAST(record AS BLOB))<=262144 THEN record END AS record FROM (${query}) LIMIT 9`,
+				id,
+				snapshotId,
+			);
+			result.more ||= rows.length > 8;
+			for (const row of rows.slice(0, 8)) {
+				if (!row.record) throw new Error("Oversized related Review record");
+				const r = JSON.parse(str(row.record!));
+				nativeReviewRecord(kind, r, id, workerId, snapshotId);
+				if (
+					r.version !== 1 ||
+					r.missionId !== id ||
+					typeof r.id !== "string" ||
+					typeof r.taskId !== "string" ||
+					!Number.isSafeInteger(r.createdAt)
+				)
+					throw new Error("Malformed related Review record");
+				const task = this.task(id, r.taskId);
+				if (task.sessionId !== workerId || this.missionOf(workerId) !== id)
+					throw new Error("Related record worker custody unavailable");
+				if (kind === "review") {
+					const request = reviewResultWrite(r.request);
+					if (deliveryDigest(r.contextFence) !== deliveryDigest(request.expectedContextFence))
+						throw new Error("Review context identity mismatch");
+					reviewProducer(r.producer);
+					if (
+						r.type !== "result" ||
+						r.ownerSessionId !== workerId ||
+						r.independence !== "unavailable" ||
+						r.humanAuthorship !== "unavailable" ||
+						!Array.isArray(r.observations)
+					)
+						throw new Error("Malformed result custody");
+					// Other context/citation authorization is not inferred by this bounded reader.
+					const exact =
+						request.content.length === 1 &&
+						request.content[0]?.kind === "snapshot" &&
+						request.content[0].snapshotId === snapshotId;
+					if (
+						!exact ||
+						request.context.length > 0 ||
+						"references" in request.preferences ||
+						request.findings.some((f) => f.evidence.some((e) => e.kind !== "code" || e.snapshotId !== snapshotId))
+					)
+						throw new Error("Unsupported related assessment scope");
+					const profile = this.reviewProfile(id, request.profileId, request.profileRevision);
+					if (
+						!profile ||
+						profile.version !== 1 ||
+						profile.missionId !== id ||
+						profile.revision !== request.profileRevision
+					)
+						throw new Error("Missing exact review profile");
+					reviewProfileWrite(profile.request);
+					nativeReviewProfile(profile, id, request.profileId, request.profileRevision);
+					let outdated = false;
+					try {
+						assertDeliveryAssignment(task, request.assignment);
+					} catch {
+						outdated = true;
+					}
+					outdated ||=
+						this.sharedDefinitionRevision(task.id) !== request.definitionRevision ||
+						this.latestReviewResult(id, task.id, request.profileId)?.id !== r.id ||
+						this.reviewProfile(id, request.profileId)?.revision !== request.profileRevision ||
+						deliveryDigest(this.reviewContextFence(id)) !== deliveryDigest(request.expectedContextFence);
+					result.assessments.push({
+						id: r.id,
+						taskId: task.id,
+						profile: profile.request.definition.purpose,
+						profileRevision: request.profileRevision,
+						intent: request.assignment.intent,
+						applicability: outdated ? "outdated" : "unavailable",
+						state: request.output.state,
+						outcome: request.output.state === "completed" ? request.output.outcome : null,
+						reason: request.output.reason,
+						limitations: request.limitations,
+						findings: request.findings.map((f) => ({
+							title: f.title,
+							trigger: f.trigger,
+							cost: f.cost,
+							severity: f.severity,
+							evidence: f.evidence.map((e) => {
+								if (e.kind !== "code" || !snapshot || snapshot.snapshotId !== snapshotId)
+									throw new Error("Citation comparison unavailable");
+								const entry = snapshot[e.side].find((s) => s.path === e.path);
+								if (
+									entry?.state !== "text" ||
+									entry.sha256 !== e.sha256 ||
+									entry.bytes === null ||
+									e.end > entry.bytes
+								)
+									throw new Error("Citation manifest reference unavailable");
+								return { path: e.path, side: e.side, sha256: e.sha256, start: e.start, end: e.end };
+							}),
+						})),
+					});
+				} else if (kind === "submission") {
+					const request = deliverySubmissionWrite(r.request);
+					if (
+						request.evidence.length !== 1 ||
+						request.evidence[0]?.kind !== "snapshot" ||
+						request.evidence[0].snapshotId !== snapshotId
+					)
+						throw new Error("Unsupported submission assessment scope");
+					if (r.type !== "submission" || r.ownerSessionId !== workerId || !Array.isArray(r.observations))
+						throw new Error("Invalid submission custody");
+					result.reported.push({
+						id: r.id,
+						taskId: task.id,
+						intent: request.assignment.intent,
+						claim: request.claim,
+						limitations: request.limitations,
+					});
+				} else {
+					const request = allocationWrite(r.request);
+					if (
+						request.action === "allocate" &&
+						(request.sources.length !== 1 ||
+							request.sources[0]?.reference.kind !== "snapshot" ||
+							request.sources[0].reference.snapshotId !== snapshotId ||
+							request.sources[0].sourceOwnerSessionId !== workerId ||
+							request.sources[0].sha256 !== snapshotId)
+					)
+						throw new Error("Unsupported selected allocation scope");
+					if (
+						request.action !== "allocate" ||
+						request.ownerSessionId !== workerId ||
+						r.historicalTaskAttribution !== "unknown" ||
+						r.scopeCoverage !== "selected-only"
+					)
+						throw new Error("Invalid allocation scope");
+					result.allocations.push({
+						id: r.id,
+						taskId: task.id,
+						intent: request.assignment.intent,
+						reason: request.reason,
+					});
+				}
+			}
+		}
+		return result;
+	}
+
+	reviewProfile(id: string, profileId: string, revision?: number): MissionReviewProfile | undefined {
+		this.require(id);
+		const row = this.one(
+			`SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='profile' AND profile_id=?
+			${revision === undefined ? "" : "AND json_extract(record,'$.revision')=?"} ORDER BY sequence DESC LIMIT 1`,
+			id,
+			profileId,
+			...(revision === undefined ? [] : [revision]),
+		);
+		return row ? (JSON.parse(str(row.record!)) as MissionReviewProfile) : undefined;
+	}
+	reviewResult(id: string, recordId: string): MissionReviewResult | undefined {
+		this.require(id);
+		const row = this.one(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='result' AND record_id=?",
+			id,
+			recordId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as MissionReviewResult) : undefined;
+	}
+	latestReviewResult(id: string, taskId: string, profileId: string): MissionReviewResult | undefined {
+		this.task(id, taskId);
+		const row = this.one(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='result' AND task_id=? AND profile_id=? ORDER BY sequence DESC LIMIT 1",
+			id,
+			taskId,
+			profileId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as MissionReviewResult) : undefined;
+	}
+	reviewHistory(id: string, taskId: string, before?: string, limit = 100): MissionReviewResult[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid review history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM mission_review_records WHERE mission_id=? AND task_id=? AND record_id=?",
+						id,
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown review history cursor");
+		return this.all(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND task_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+			id,
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((r) => JSON.parse(str(r.record!)) as MissionReviewResult);
+	}
+	/** Existing durable activity sequence fences pin churn even when content/owner changes back (ABA).
+	 * Artifact/decision activity is mission-wide: conservative invalidation, not inferred relevance. */
+	reviewContextFence(id: string): ReviewContextFence {
+		const last = (kind: string) =>
+			Number(this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=? AND kind=?", id, kind)!.n);
+		return {
+			briefRevision: this.require(id).briefRevision,
+			decisionEventId: last("decision"),
+			artifactEventId: last("artifact"),
+			memberEventId: last("member"),
+		};
+	}
+	private assertReviewActor(id: string, sessionId: string, authorize: () => void, taskId?: string): void {
+		if (taskId) this.insights.assertOrdinaryTask(taskId);
+		authorize(); // Trusted host project/session admission precedes even retry lookup.
+		this.assertDeliveryMember(id, sessionId);
+		if (this.require(id).coordinatorSessionId === sessionId) return;
+		if (!taskId || this.task(id, taskId).sessionId !== sessionId)
+			throw new Conflict(
+				"Only the current coordinator or task owner may record review claims; profiles require coordinator",
+			);
+	}
+	private reviewRetry(
+		id: string,
+		sessionId: string,
+		type: MissionReviewRecord["type"],
+		taskId: string | null,
+		request: MissionReviewRecord["request"],
+	): MissionReviewRecord | undefined {
+		const row = this.one(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND operation_id=?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const prior = JSON.parse(str(row.record!)) as MissionReviewRecord;
+		if (
+			prior.type !== type ||
+			prior.recorderSessionId !== sessionId ||
+			(prior.type === "result" ? prior.taskId : null) !== taskId ||
+			deliveryDigest(prior.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Review operation idempotency conflict");
+		return prior;
+	}
+	private insertReview(record: MissionReviewRecord): void {
+		const encoded = JSON.stringify(record);
+		if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Review record exceeds 256 KiB");
+		this.run(
+			"INSERT INTO mission_review_records(mission_id,task_id,profile_id,record_type,operation_id,record_id,record) VALUES(?,?,?,?,?,?,?)",
+			record.missionId,
+			record.type === "result" ? record.taskId : null,
+			record.request.profileId,
+			record.type,
+			record.request.operationId,
+			record.id,
+			encoded,
+		);
+	}
+	async saveReviewProfile(
+		id: string,
+		sessionId: string,
+		value: unknown,
+		authorize: () => void,
+	): Promise<MissionReviewProfile> {
+		this.assertReviewActor(id, sessionId, authorize);
+		const request = reviewProfileWrite(value);
+		const saved = this.transaction(
+			() => {
+				this.assertReviewActor(id, sessionId, authorize);
+				const retry = this.reviewRetry(id, sessionId, "profile", null, request);
+				if (retry) return retry as MissionReviewProfile;
+				if ((this.reviewProfile(id, request.profileId)?.revision ?? 0) !== request.expectedRevision)
+					throw new Conflict("Review profile revision conflict");
+				const record: MissionReviewProfile = {
+					version: 1,
+					type: "profile",
+					id: randomUUID(),
+					missionId: id,
+					recorderSessionId: sessionId,
+					createdAt: Date.now(),
+					revision: request.expectedRevision + 1,
+					request,
+				};
+				this.insertReview(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		return saved;
+	}
+	async recordReviewResult(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			observeProducer(request: ReviewResultWrite): Promise<ReviewProducer>;
+			validateCitations(request: ReviewResultWrite): Promise<void>;
+		},
+	): Promise<MissionReviewResult> {
+		// Resolve only inside this mission; current authorization still precedes retry/content access.
+		host.authorize();
+		const taskId = this.resolveTask(id, ref).id;
+		this.assertReviewActor(id, sessionId, host.authorize, taskId);
+		const request = reviewResultWrite(value);
+		const retry = this.reviewRetry(id, sessionId, "result", taskId, request);
+		if (retry) {
+			await this.durable();
+			return retry as MissionReviewResult;
+		}
+		const admit = () => {
+			this.assertReviewActor(id, sessionId, host.authorize, taskId);
+			const task = this.task(id, taskId),
+				profile = this.reviewProfile(id, request.profileId);
+			if (!task.sessionId || !isOpenTask(task)) throw new Conflict("Review task is unowned or closed");
+			assertDeliveryAssignment(task, request.assignment);
+			if (this.sharedDefinitionRevision(taskId) !== request.definitionRevision)
+				throw new Conflict("Review task definition is stale");
+			if (deliveryDigest(request.expectedContextFence) !== deliveryDigest(this.reviewContextFence(id)))
+				throw new Conflict("Review source/context fence is stale");
+			if (!profile || profile.revision !== request.profileRevision)
+				throw new Conflict("Review profile superseded or missing");
+			assertReviewOutput(profile.request.definition, request);
+			if ((this.latestReviewResult(id, taskId, request.profileId)?.id ?? null) !== request.expectedResultId)
+				throw new Conflict("Review result revision conflict");
+			for (const resolution of request.resolutions) {
+				const original = this.reviewResult(id, resolution.resultId);
+				if (
+					!original ||
+					original.taskId !== taskId ||
+					original.request.profileId !== request.profileId ||
+					!original.request.findings.some((f) => f.id === resolution.findingId)
+				)
+					throw new Conflict("Review resolution must name a retained finding in this task/profile");
+			}
+			return task.sessionId;
+		};
+		const ownerSessionId = admit(),
+			contextFence = this.reviewContextFence(id);
+		const observations: DeliveryObservation[] = [];
+		for (const reference of reviewReferences(request)) {
+			const observation = await host.resolve(reference);
+			if (
+				deliveryDigest(reference) !== deliveryDigest(observation.reference) ||
+				!/^[a-f0-9]{64}$/.test(observation.sha256) ||
+				!["retained", "partial", "unavailable"].includes(observation.availability)
+			)
+				throw new Conflict("Review retained identity mismatch");
+			observations.push(structuredClone(observation));
+		}
+		await host.validateCitations(request);
+		const producer = reviewProducer(await host.observeProducer(request));
+		const saved = this.transaction(
+			() => {
+				this.assertReviewActor(id, sessionId, host.authorize, taskId);
+				const concurrent = this.reviewRetry(id, sessionId, "result", taskId, request);
+				if (concurrent) return concurrent as MissionReviewResult;
+				if (
+					admit() !== ownerSessionId ||
+					deliveryDigest(contextFence) !== deliveryDigest(this.reviewContextFence(id))
+				)
+					throw new Conflict("Review source/context or ownership changed during admission");
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+				const record: MissionReviewResult = {
+					version: 1,
+					type: "result",
+					id: randomUUID(),
+					missionId: id,
+					taskId,
+					recorderSessionId: sessionId,
+					createdAt: Date.now(),
+					ownerSessionId,
+					request,
+					observations,
+					contextFence,
+					producer,
+					independence: "unavailable",
+					humanAuthorship: "unavailable",
+				};
+				this.insertReview(record);
+				return record;
+			},
+			{ reconcile: false },
+		);
+		await this.durable();
+		return saved;
+	}
+
+	retiredMember(sessionId: string): boolean {
+		return !!this.one("SELECT 1 FROM retired_members WHERE session_id = ?", sessionId);
+	}
+
+	private assertFreshMember(sessionId: string): void {
+		if (this.retiredMember(sessionId))
+			throw new Conflict(
+				"This member has delivered and is retired. Start a new chat, or ask the user to override retirement.",
+			);
+	}
+
+	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
+		this.assertTaskWriter(id, taskId, write, actor);
+		if (write.sessionId === null && Object.keys(write).length === 1 && !actor.sessionId)
+			return this.releaseTask(id, taskId, actor);
+		const projected = this.resolveTask(id, taskId);
+		const before = this.rawTask(projected);
+		const assignment = this.validateAssignment(id, write, before);
+		const fields = this.taskFields(id, write, before.id);
+		const title =
+			write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE, { codePoints: true })!;
+		let owner = before.sessionId ?? null;
+		if (write.sessionId !== undefined) {
+			if (write.sessionId !== null) this.assertMember(id, write.sessionId);
+			owner = write.sessionId;
+			if (owner && owner !== before.sessionId && write.overrideRetirement !== true) this.assertFreshMember(owner);
+		}
+		const status = fields.status ?? before.status;
+		const now = Date.now();
+		this.transaction(() => {
+			if (assignment) {
+				// Revalidate against canonical state inside the transaction, never after model I/O alone.
+				const next = this.validateAssignment(id, write, this.task(id, before.id))!;
+				this.run("UPDATE tasks SET assignment = ? WHERE id = ?", JSON.stringify(next), before.id);
+				this.event(id, "task", `Task #${before.number} assignment revision ${next.revision}`, actor, {
+					taskId: before.id,
+				});
+			}
+			if (owner && owner !== before.sessionId) this.rememberTaskClaim(owner, before.id, false);
+			if (owner && owner !== before.sessionId && !actor.sessionId && write.overrideRetirement === true)
+				this.run("DELETE FROM retired_members WHERE session_id = ?", owner);
+			const phase = this.taskPhase(id, fields, actor);
+			if (fields.status !== undefined && fields.status === before.status)
+				this.run("UPDATE task_definition_revisions SET revision=revision+1 WHERE id=?", before.id);
+			if (fields.decisionIds !== undefined)
+				this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), before.id);
+			if (fields.preference) this.writePreference(id, { ...before, title }, fields.preference, actor, now);
+			// An explicit status, including the same one, opts out until the next assignment change.
+			if (fields.status !== undefined)
+				this.run(
+					"UPDATE tasks SET delegated_to = NULL, delegated_from_status = NULL, delegated_resource_id = NULL WHERE id = ?",
+					before.id,
+				);
+			// A user moving work back opts out permanently, across restarts and new links.
+			const rank = (state: MissionTaskStatus) =>
+				state === "todo" ? 0 : state === "in_review" ? 2 : state === "done" || state === "dropped" ? 3 : 1;
+			if (!actor.sessionId && rank(status) < rank(before.status))
+				this.run("UPDATE tasks SET pr_sync_disabled = 1 WHERE id = ?", before.id);
+			this.run(
+				"UPDATE tasks SET title = ?, body = ?, status = ?, sort = ?, milestone = ?, depends_on = ?, session_id = ?, updated_at = ?, completed_at = ? WHERE id = ?",
+				title,
+				(fields.body === undefined ? before.body : fields.body) || null,
+				status,
+				fields.order ?? before.order,
+				(phase === undefined ? before.milestone : phase?.name) || null,
+				fields.dependsOn === undefined
+					? before.dependsOn?.length
+						? JSON.stringify(before.dependsOn)
+						: null
+					: fields.dependsOn.length
+						? JSON.stringify(fields.dependsOn)
+						: null,
+				owner,
+				now,
+				status === "done" ? (before.completedAt ?? now) : null,
+				before.id,
+			);
+			if (phase !== undefined) {
+				this.run("UPDATE tasks SET phase_id = ? WHERE id = ?", phase?.id ?? null, before.id);
+				if ((phase?.id ?? undefined) !== before.phaseId)
+					this.event(id, "task", `Task #${before.number} phase ${phase?.name ?? "cleared"}: ${title}`, actor, {
+						taskId: before.id,
+					});
+			}
+			if (owner && owner !== before.sessionId)
+				this.assertPhaseAdmission(this.task(id, before.id), !actor.sessionId && write.overridePhaseGating === true);
+			if (status !== before.status)
+				this.event(id, "task", `Task #${before.number} ${statusLabel(status)}: ${title}`, actor, {
+					taskId: before.id,
+					at: now,
+					wake: status === "blocked" || status === "done" || (before.status === "blocked" && status === "todo"),
+					urgent: status === "blocked" || status === "done",
+					settled: false,
+					noticeText: `Task #${before.number} ${status}. Read the task for details.`,
+					...(status === "done"
+						? {
+								noticeSummaries: [
+									{
+										key: `task:${before.id}`,
+										text: `Task #${before.number} done. Read the task for details.`,
+										state: "done",
+									},
+								],
+							}
+						: {}),
+				});
+			else if (title !== before.title)
+				this.event(id, "task", `Task #${before.number} renamed: ${title}`, actor, { taskId: before.id, at: now });
+			if (fields.order !== undefined && fields.order !== before.order) {
+				if (actor.sessionId && this.controls.orderPinned(id))
+					throw new Conflict("Task order is pinned by the user");
+				if (!actor.sessionId) this.controls.pinOrder(id);
+				this.event(id, "task", `Task #${before.number} reordered: ${title}`, actor, { taskId: before.id, at: now });
+			}
+			if (fields.milestone !== undefined && fields.milestone !== (before.milestone ?? ""))
+				this.event(
+					id,
+					"task",
+					`Task #${before.number} milestone ${fields.milestone || "cleared"}: ${title}`,
+					actor,
+					{
+						taskId: before.id,
+						at: now,
+					},
+				);
+			if (owner !== (before.sessionId ?? null))
+				this.event(
+					id,
+					"claim",
+					owner ? `Task #${before.number} assigned` : `Task #${before.number} released`,
+					actor,
+					{ taskId: before.id, at: now },
+				);
+		});
+		this.changed(id, [...new Set([before.sessionId, owner].filter((value): value is string => !!value))]);
+		return this.task(id, before.id);
+	}
+
+	/** Validate the whole selection before writing, then publish one update rather than one per task. */
+	groupTasks(id: string, refs: string[], milestone: string, actor: MissionActor = USER): MissionTask[] {
+		this.assertPlanner(id, actor);
+		this.require(id);
+		const group = text(milestone, "milestone", MAX_TITLE, { empty: true })!;
+		const tasks = [
+			...new Map(
+				refs.map((ref) => {
+					const task = this.resolveTask(id, ref);
+					return [task.id, task] as const;
+				}),
+			).values(),
+		];
+		const changed = tasks.filter((task) => (task.milestone ?? "") !== group);
+		for (const task of tasks) this.insights.assertOrdinaryTask(task.id);
+		if (!changed.length) return tasks;
+		const now = Date.now();
+		this.transaction(() => {
+			const phase = this.taskPhase(id, { milestone: group }, actor);
+			const update = this.database.prepare(
+				"UPDATE tasks SET milestone = ?, phase_id = ?, updated_at = ? WHERE id = ?",
+			);
+			for (const task of changed) update.run(group || null, phase?.id ?? null, now, task.id);
+			this.event(id, "task", `${changed.length} task milestones ${group ? `set to ${group}` : "cleared"}`, actor, {
+				at: now,
+			});
+		});
+		this.changed(id, [...new Set(changed.flatMap((task) => (task.sessionId ? [task.sessionId] : [])))]);
+		const updated = new Map(this.tasks(id).map((task) => [task.id, task]));
+		return tasks.map((task) => updated.get(task.id)!);
+	}
+
+	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
+		this.assertPlanner(id, actor);
+		const task = this.resolveTask(id, taskId);
+		if (this.one("SELECT 1 FROM resources WHERE task_id = ? AND linear_role = 'contribution'", task.id))
+			throw new Conflict("Detach Linear contributions before removing this task");
+		this.transaction(() => {
+			// Match resource-link deletion semantics without overwriting an existing mission pin.
+			this.run(
+				`INSERT OR IGNORE INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at)
+				 SELECT mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at
+				 FROM artifact_links WHERE mission_id = ? AND task_id = ?`,
+				id,
+				task.id,
+			);
+			this.run("DELETE FROM tasks WHERE id = ?", task.id);
+			for (const other of this.tasks(id))
+				if (other.dependsOn?.includes(task.id)) {
+					const rest = other.dependsOn.filter((dep) => dep !== task.id);
+					this.run(
+						"UPDATE tasks SET depends_on = ? WHERE id = ?",
+						rest.length ? JSON.stringify(rest) : null,
+						other.id,
+					);
+				}
+			this.event(id, "task", `Task #${task.number} removed: ${task.title}`, actor);
+		});
+		this.changed(id, task.sessionId ? [task.sessionId] : []);
+	}
+
+	/** Validate the whole start batch, then stable dependency order (caller order breaks ties). */
+	prepareTaskStart(
+		id: string,
+		refs: string[],
+		starting?: ReadonlySet<string>,
+		overridePhaseGating = false,
+	): MissionTask[] {
+		const tasks = [
+			...new Map(
+				refs.map((ref) => {
+					const task = this.resolveTask(id, ref);
+					return [task.id, task] as const;
+				}),
+			).values(),
+		];
+		if (!tasks.length) throw new Error("start requires at least one task");
+		const selected = new Set(tasks.map((task) => task.id));
+		const reasons: string[] = [];
+		for (const task of tasks) {
+			this.insights.assertOrdinaryTask(task.id);
+			if (this.revisionTaskHeld(id, task.id))
+				reasons.push(`Task #${task.number} is held by an exact revision Pause`);
+			if (this.linearReconciliationHeld(task.id))
+				reasons.push(`Task #${task.number} needs plan review after a Linear closure`);
+			if (starting?.has(`${id}:${task.id}`))
+				// Reservations remain authoritative even with a user gating override.
+				reasons.push(`Task #${task.number} is already starting in another chat`);
+			this.assertPhaseAdmission(task, overridePhaseGating);
+			if (task.sessionId) reasons.push(`Task #${task.number} is already claimed by a chat`);
+			if (!isOpenTask(task) || task.status === "delegated") reasons.push(`Task #${task.number} is ${task.status}`);
+			for (const depId of task.dependsOn ?? []) {
+				if (selected.has(depId)) continue;
+				const dep = this.resolveTask(id, depId);
+				if (dep.status !== "done")
+					reasons.push(
+						`Task #${task.number} depends on task #${dep.number} outside the start list, which is not done`,
+					);
+			}
+		}
+		if (reasons.length) throw new Conflict(reasons.join("; "));
+		const ordered: MissionTask[] = [];
+		const remaining = new Set(selected);
+		while (remaining.size) {
+			const next = tasks.find(
+				(task) => remaining.has(task.id) && !(task.dependsOn ?? []).some((dep) => remaining.has(dep)),
+			);
+			if (!next)
+				throw new Conflict(
+					`Dependency cycle among tasks ${tasks
+						.filter((task) => remaining.has(task.id))
+						.map((task) => `#${task.number}`)
+						.join(", ")}`,
+				);
+			ordered.push(next);
+			remaining.delete(next.id);
+		}
+		return ordered;
+	}
+
+	/** Spawn admission claims every selected task in one transaction, with no partial success. */
+	claimStartTasks(id: string, refs: string[], sessionId: string, overridePhaseGating = false): MissionTask[] {
+		this.assertMember(id, sessionId);
+		const tasks = this.transaction(() =>
+			this.prepareTaskStart(id, refs, undefined, overridePhaseGating).map((task) =>
+				this.takeTask(id, task, sessionId, {}, overridePhaseGating),
+			),
+		);
+		this.changed(id, [sessionId]);
+		return tasks;
+	}
+
+	/** Atomic: a task owned by another chat is never taken over. */
+	claimTask(id: string, taskId: unknown, sessionId: string, actor: MissionActor = USER): MissionTask {
+		this.assertTaskCoordinator(id, actor);
+		this.assertPlanner(id, actor);
+		this.assertMember(id, sessionId);
+		const task = this.transaction(() => {
+			const task = this.resolveTask(id, taskId);
+			if (this.revisionTaskHeld(id, task.id)) throw new Conflict("Task is held by an exact revision Pause");
+			return this.takeTask(id, task, sessionId, actor);
+		});
+		this.changed(id, [sessionId]);
+		return task;
+	}
+
+	/** Only the user and current coordinator may release claims. */
+	releaseTask(id: string, taskId: unknown, actor: MissionActor = USER): MissionTask {
+		this.assertTaskCoordinator(id, actor);
+		this.assertPlanner(id, actor);
+		const mission = this.require(id);
+		if (actor.sessionId) this.assertMember(id, actor.sessionId);
+		const before = this.rawTask(this.resolveTask(id, taskId));
+		this.insights.assertOrdinaryTask(before.id);
+		const task = this.transaction(() => {
+			if (
+				actor.sessionId &&
+				actor.sessionId !== mission.coordinatorSessionId &&
+				before.sessionId &&
+				before.sessionId !== actor.sessionId
+			)
+				throw new Conflict(
+					`Task #${before.number} is claimed by another chat; only the coordinator can release it`,
+				);
+			if (!before.sessionId) return before;
+			const status = before.status === "in_progress" || before.status === "blocked" ? "todo" : before.status;
+			this.run(
+				"UPDATE tasks SET session_id = NULL, status = ?, updated_at = ? WHERE id = ?",
+				status,
+				Date.now(),
+				before.id,
+			);
+			this.event(
+				id,
+				"claim",
+				`Task #${before.number} claim released from chat ${before.sessionId}: ${before.title}`,
+				actor,
+				{ taskId: before.id },
+			);
+			return this.task(id, before.id);
+		});
+		if (!this.database.writing && before.sessionId) this.changed(id, [before.sessionId]);
+		return task;
+	}
+
+	releaseTasks(id: string, refs: string[], actor: MissionActor = USER) {
+		this.assertTaskCoordinator(id, actor);
+		this.assertPlanner(id, actor);
+		if (actor.sessionId) this.assertMember(id, actor.sessionId);
+		const affected = new Set<string>();
+		const result = this.transaction(() => {
+			const released: MissionTask[] = [];
+			const skipped: Array<{ ref: string; reason: string; task?: MissionTask }> = [];
+			const seen = new Set<string>();
+			for (const ref of refs) {
+				let task: MissionTask;
+				try {
+					task = this.resolveTask(id, ref);
+				} catch (error) {
+					if (!(error instanceof NotFound)) throw error;
+					skipped.push({ ref, reason: error.message });
+					continue;
+				}
+				if (seen.has(task.id)) continue;
+				seen.add(task.id);
+				if (
+					actor.sessionId &&
+					actor.sessionId !== this.require(id).coordinatorSessionId &&
+					task.sessionId &&
+					task.sessionId !== actor.sessionId
+				) {
+					skipped.push({
+						ref,
+						reason: `Task #${task.number} is claimed by another chat; only the coordinator can release it`,
+						task,
+					});
+					continue;
+				}
+				if (task.sessionId) affected.add(task.sessionId);
+				released.push(this.releaseTask(id, task.id, actor));
+			}
+			return { released, skipped };
+		});
+		if (result.released.length) this.changed(id, [...affected]);
+		return result;
+	}
+
+	/** Partial success for a batch, without exposing intermediate state to member contexts. */
+	claimTasks(id: string, refs: string[], sessionId: string, actor: MissionActor = USER) {
+		this.assertTaskCoordinator(id, actor);
+		this.assertPlanner(id, actor);
+		this.assertMember(id, sessionId);
+		const result = this.transaction(() => {
+			const claimed: MissionTask[] = [];
+			const skipped: Array<{ ref: string; reason: string; task?: MissionTask }> = [];
+			const seen = new Set<string>();
+			for (const ref of refs) {
+				let task: MissionTask;
+				try {
+					task = this.resolveTask(id, ref);
+				} catch (error) {
+					if (!(error instanceof NotFound)) throw error;
+					skipped.push({ ref, reason: error.message });
+					continue;
+				}
+				if (seen.has(task.id)) continue;
+				seen.add(task.id);
+				if (task.sessionId && task.sessionId !== sessionId) {
+					skipped.push({ ref, reason: `Task #${task.number} is already claimed by another chat`, task });
+					continue;
+				}
+				if (task.blockedByPhases?.length) {
+					skipped.push({ ref, reason: `Task #${task.number} is blocked by earlier phases`, task });
+					continue;
+				}
+				const reason = this.additionalClaimRefusal(id, task, sessionId, actor);
+				if (reason) {
+					skipped.push({ ref, reason, task });
+					continue;
+				}
+				claimed.push(this.takeTask(id, task, sessionId, actor));
+			}
+			return { claimed, skipped };
+		});
+		if (result.claimed.length) this.changed(id, [sessionId]);
+		return result;
+	}
+
+	/** Only member-initiated, previously unseen tasks consume the lifetime allowance. */
+	private additionalClaimRefusal(
+		id: string,
+		task: MissionTask,
+		sessionId: string,
+		actor: MissionActor,
+	): string | undefined {
+		if (task.sessionId === sessionId || !actor.sessionId || this.require(id).coordinatorSessionId === sessionId)
+			return;
+		if (this.one("SELECT 1 FROM member_task_claims WHERE session_id = ? AND task_id = ?", sessionId, task.id)) return;
+		const count = num(
+			this.one("SELECT COUNT(*) AS n FROM member_task_claims WHERE session_id = ? AND additional = 1", sessionId)!
+				.n!,
+		);
+		if (count >= 2)
+			return "This chat has already self-claimed two additional tasks. Ask the coordinator to start a fresh chat.";
+	}
+
+	private rememberTaskClaim(sessionId: string, taskId: string, additional: boolean): void {
+		this.run(
+			"INSERT OR IGNORE INTO member_task_claims (session_id, task_id, additional) VALUES (?, ?, ?)",
+			sessionId,
+			taskId,
+			additional ? 1 : 0,
+		);
+	}
+
+	private takeTask(
+		id: string,
+		task: MissionTask,
+		sessionId: string,
+		actor: MissionActor,
+		overridePhaseGating = false,
+	): MissionTask {
+		this.insights.assertOrdinaryTask(task.id);
+		if (task.sessionId === sessionId) return task;
+		const creator = this.one("SELECT created_by_session_id FROM tasks WHERE id = ?", task.id)?.created_by_session_id;
+		// Delivery still fences unrelated work, but not the member's own feedback follow-ups.
+		if (actor.sessionId !== sessionId || creator !== sessionId) this.assertFreshMember(sessionId);
+		const refusal = this.additionalClaimRefusal(id, task, sessionId, actor);
+		if (refusal) throw new Conflict(refusal);
+		this.assertPhaseAdmission(task, overridePhaseGating && !actor.sessionId);
+		task = this.rawTask(task);
+		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by another chat`);
+		const now = Date.now();
+		const status = task.status === "todo" ? "in_progress" : task.status;
+		this.run(
+			"UPDATE tasks SET session_id = ?, status = ?, updated_at = ? WHERE id = ?",
+			sessionId,
+			status,
+			now,
+			task.id,
+		);
+		this.rememberTaskClaim(
+			sessionId,
+			task.id,
+			!!actor.sessionId && this.require(id).coordinatorSessionId !== sessionId,
+		);
+		this.event(id, "claim", `Task #${task.number} claimed: ${task.title}`, actor, { taskId: task.id, at: now });
+		return this.task(id, task.id);
+	}
+
+	// Decisions
+
+	addDecision(
+		id: string,
+		value: unknown,
+		actor: MissionActor = USER,
+		audience: unknown = "reference",
+	): MissionDecision {
+		this.assertPlanner(id, actor);
+		this.require(id);
+		const decisionText = text(value, "text", MAX_TEXT)!;
+		const scope = decisionAudience(audience);
+		const now = Date.now();
+		const decision: MissionDecision = {
+			id: randomUUID(),
+			number: 0,
+			audience: scope,
+			text: decisionText,
+			...optionalAuthor(actor.sessionId),
+			createdAt: now,
+			updatedAt: now,
+		};
+		this.transaction(() => {
+			this.run("UPDATE missions SET decision_sequence = decision_sequence + 1 WHERE id = ?", id);
+			decision.number = num(this.one("SELECT decision_sequence FROM missions WHERE id = ?", id)!.decision_sequence!);
+			this.run(
+				"INSERT INTO decisions (id, mission_id, text, author_session_id, created_at, updated_at, audience, number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				decision.id,
+				id,
+				decision.text,
+				actor.sessionId ?? null,
+				now,
+				now,
+				scope,
+				decision.number,
+			);
+			this.event(id, "decision", `Decision D${decision.number}: ${decision.text}`, actor, { at: now });
+		});
+		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
+		return decision;
+	}
+
+	/** Records an already-authorized replacement, not a policy approval or an edit. */
+	supersedeDecision(
+		id: string,
+		decisionId: string,
+		replacementDecisionId: string,
+		actor: MissionActor = USER,
+	): MissionDecision {
+		const mission = this.require(id);
+		if (actor.sessionId) {
+			this.assertMember(id, actor.sessionId);
+			if (mission.coordinatorSessionId !== actor.sessionId)
+				throw new Conflict("Only the mission coordinator or user can supersede decisions");
+		}
+		this.assertPlanner(id, actor);
+		const before = this.decision(id, decisionId);
+		if (before.withdrawn) throw new Conflict("Withdrawn decisions cannot be replaced");
+		if (before.replacement) {
+			if (
+				before.replacement.id === replacementDecisionId ||
+				`D${before.replacement.number}`.toLowerCase() === replacementDecisionId.toLowerCase()
+			)
+				return before;
+			throw new Conflict("Decision already has a different replacement");
+		}
+		const replacement = this.decision(id, replacementDecisionId);
+		const visited = new Set([before.id]);
+		let next: MissionDecision | undefined = replacement;
+		while (next) {
+			if (next.withdrawn) throw new Conflict("A withdrawn decision cannot be a replacement");
+			if (visited.has(next.id)) throw new Conflict("Decision replacement cannot be self-referential or cyclic");
+			visited.add(next.id);
+			const row: Row | undefined = next.replacement
+				? this.one("SELECT * FROM decisions WHERE mission_id = ? AND id = ?", id, next.replacement.id)
+				: undefined;
+			next = row ? decisionFrom(row) : undefined;
+		}
+		const at = Date.now();
+		this.transaction(() => {
+			this.run(
+				"UPDATE decisions SET replacement = ?, updated_at = ? WHERE id = ?",
+				JSON.stringify({ id: replacement.id, number: replacement.number, at }),
+				at,
+				before.id,
+			);
+			this.sourceChanged({ missionId: id, kind: "decision", decisionId: before.id });
+			this.event(id, "decision", `Decision D${before.number} replaced by D${replacement.number}`, actor, {
+				at,
+			});
+		});
+		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
+		return this.decision(id, before.id);
+	}
+
+	/** Only the user edits or removes decisions. */
+	updateDecision(
+		id: string,
+		decisionId: string,
+		value: unknown,
+		actor: MissionActor = USER,
+		audience?: unknown,
+	): MissionDecision {
+		if (actor.sessionId) throw new Error("Only the user can change recorded decisions");
+		this.assertPlanner(id, actor);
+		const before = this.decision(id, decisionId);
+		const decisionText = value === undefined ? before.text : text(value, "text", MAX_TEXT)!;
+		const scope = audience === undefined ? before.audience : decisionAudience(audience);
+		const now = Date.now();
+		this.transaction(() => {
+			this.run(
+				"UPDATE decisions SET text = ?, audience = ?, updated_at = ? WHERE id = ?",
+				decisionText,
+				scope,
+				now,
+				before.id,
+			);
+			this.dropProposal(id, before.id);
+			if (before.text !== decisionText || before.audience !== scope)
+				this.sourceChanged({ missionId: id, kind: "decision", decisionId: before.id });
+			this.event(
+				id,
+				"decision",
+				`Decision D${before.number} changed${proposalAttribution(actor)}: ${decisionText}`,
+				actor,
+				{ at: now },
+			);
+		});
+		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
+		return this.decision(id, decisionId);
+	}
+
+	removeDecision(id: string, decisionId: string, actor: MissionActor = USER): void {
+		if (actor.sessionId) throw new Error("Only the user can change recorded decisions");
+		this.assertPlanner(id, actor);
+		const before = this.decision(id, decisionId);
+		this.transaction(() => {
+			for (const task of this.tasks(id)) {
+				if (task.decisionIds?.includes(before.id))
+					this.run(
+						"UPDATE tasks SET decision_ids = ? WHERE id = ?",
+						JSON.stringify(task.decisionIds.filter((ref) => ref !== before.id)),
+						task.id,
+					);
+			}
+			this.dropProposal(id, before.id);
+			this.run("DELETE FROM decisions WHERE id = ?", before.id);
+			this.sourceChanged({ missionId: id, kind: "decision", decisionId: before.id });
+			this.event(
+				id,
+				"decision",
+				`Decision D${before.number} removed${proposalAttribution(actor)}: ${before.text}`,
+				actor,
+				{},
+			);
+		});
+		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
+	}
+
+	private decision(id: string, decisionId: string): MissionDecision {
+		const row = /^D[1-9]\d*$/i.test(decisionId)
+			? this.one("SELECT * FROM decisions WHERE mission_id = ? AND number = ?", id, Number(decisionId.slice(1)))
+			: this.one("SELECT * FROM decisions WHERE mission_id = ? AND id = ?", id, decisionId);
+		if (!row) throw new NotFound(`Unknown decision: ${decisionId}`);
+		return decisionFrom(row);
+	}
+	/** Exact help source. A pending proposal is a choice; recorded decisions are binding guidance. */
+	assistanceSource(missionId: string, kind: "proposal" | "binding_decision", id: string) {
+		const mission = this.require(missionId);
+		if (mission.status !== "active") throw new Conflict("Assistance mission is inactive");
+		const decision = kind === "binding_decision" ? this.decision(missionId, id) : undefined;
+		const proposal =
+			kind === "proposal"
+				? this.one(
+						"SELECT * FROM decision_proposals WHERE mission_id=? AND id=? AND status='pending'",
+						missionId,
+						id,
+					)
+				: undefined;
+		if ((!decision && !proposal) || (decision && !isActiveDecision(decision)))
+			throw new Conflict("Assistance source is no longer current");
+		return {
+			projectId: mission.projectId,
+			eventId: Number(this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=?", missionId)!.n),
+			// Include current binding text with the proposal, not just its proposed replacement.
+			source: JSON.stringify(
+				proposal
+					? { proposal: proposalFrom(proposal), decision: this.decision(missionId, String(proposal.decision_id)) }
+					: { decision },
+			),
+		};
+	}
+
+	proposals(id: string): MissionDecisionProposal[] {
+		return this.all(
+			`SELECT * FROM decision_proposals WHERE mission_id = ? AND status = 'pending'
+			UNION ALL SELECT * FROM (SELECT * FROM decision_proposals WHERE mission_id = ? AND status != 'pending'
+			ORDER BY resolved_at DESC, id LIMIT 20)`,
+			id,
+			id,
+		).map(proposalFrom);
+	}
+
+	private dropProposal(id: string, decisionId: string): void {
+		// User edits/removals invalidate pending withdrawal, but never erase its history.
+		this.run(
+			"UPDATE decision_proposals SET status = 'rejected', resolved_at = ? WHERE mission_id = ? AND decision_id = ? AND status = 'pending' AND kind = 'withdraw'",
+			Date.now(),
+			id,
+			decisionId,
+		);
+		this.run(
+			"DELETE FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending' AND kind != 'withdraw'",
+			id,
+			decisionId,
+		);
+	}
+
+	proposeDecision(
+		id: string,
+		decisionId: string,
+		value: unknown,
+		remove: unknown,
+		reason: unknown,
+		actor: MissionActor,
+	): MissionDecisionProposal {
+		const mission = this.require(id);
+		if (!actor.sessionId || mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Only the mission coordinator can propose decision changes");
+		this.assertMember(id, actor.sessionId);
+		const decision = this.decision(id, decisionId);
+		if (
+			this.one(
+				"SELECT 1 FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending' AND kind = 'withdraw'",
+				id,
+				decision.id,
+			)
+		)
+			throw new Conflict("Resolve the pending withdrawal proposal first");
+		if (remove !== undefined && remove !== true) throw new Error("remove must be true");
+		if (remove === true && value !== undefined) throw new Error("Use text or remove, not both");
+		const proposal: MissionDecisionProposal = {
+			id: randomUUID(),
+			decisionId: decision.id,
+			kind: remove === true ? "remove" : "edit",
+			...(remove === true ? {} : { text: text(value, "text", MAX_TEXT)! }),
+			reason: text(reason, "reason", MAX_TEXT)!,
+			authorSessionId: actor.sessionId,
+			status: "pending",
+			createdAt: Date.now(),
+		};
+		this.transaction(() => {
+			this.dropProposal(id, decision.id);
+			this.run(
+				"INSERT INTO decision_proposals (id, mission_id, decision_id, kind, text, reason, author_session_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				proposal.id,
+				id,
+				decision.id,
+				proposal.kind,
+				proposal.text ?? null,
+				proposal.reason,
+				proposal.authorSessionId,
+				proposal.status,
+				proposal.createdAt,
+			);
+			this.event(id, "decision", `Change proposed for decision D${decision.number}: ${proposal.reason}`, actor);
+		});
+		this.changed(id);
+		return proposal;
+	}
+
+	/** No decision has inferred delegation: only user acceptance can retire its guidance. */
+	proposeWithdrawal(
+		id: string,
+		decisionId: string,
+		reason: unknown,
+		operationId: unknown,
+		actor: MissionActor,
+	): MissionDecisionProposal {
+		const mission = this.require(id);
+		if (!actor.sessionId || mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Only the mission coordinator can propose decision withdrawal");
+		this.assertMember(id, actor.sessionId);
+		this.assertPlanner(id, actor);
+		const decision = this.decision(id, decisionId);
+		text(reason, "reason", MAX_TEXT);
+		const why = reason as string;
+		text(operationId, "operationId", 128);
+		const operation = operationId as string;
+		const prior = this.one(
+			"SELECT * FROM decision_proposals WHERE mission_id = ? AND operation_id = ?",
+			id,
+			operation,
+		);
+		if (prior) {
+			const proposal = proposalFrom(prior);
+			if (
+				proposal.kind !== "withdraw" ||
+				proposal.decisionId !== decision.id ||
+				proposal.reason !== why ||
+				proposal.authorSessionId !== actor.sessionId
+			)
+				throw new Conflict("Withdrawal operationId already has a different request");
+			return proposal;
+		}
+		if (!isActiveDecision(decision)) throw new Conflict("Only active decisions can be withdrawn");
+		if (
+			this.one(
+				"SELECT 1 FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending'",
+				id,
+				decision.id,
+			)
+		)
+			throw new Conflict("Resolve the pending decision proposal first");
+		const proposal: MissionDecisionProposal = {
+			id: randomUUID(),
+			decisionId: decision.id,
+			kind: "withdraw",
+			operationId: operation,
+			reason: why,
+			authorSessionId: actor.sessionId,
+			status: "pending",
+			createdAt: Date.now(),
+		};
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO decision_proposals (id, mission_id, decision_id, kind, reason, author_session_id, status, created_at, operation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				proposal.id,
+				id,
+				decision.id,
+				proposal.kind,
+				why,
+				proposal.authorSessionId,
+				proposal.status,
+				proposal.createdAt,
+				operation,
+			);
+			this.event(id, "decision", `Withdrawal proposed for decision D${decision.number}: ${why}`, actor);
+		});
+		this.changed(id);
+		return proposal;
+	}
+
+	private recordWithdrawal(
+		id: string,
+		decision: MissionDecision,
+		withdrawal: NonNullable<MissionDecision["withdrawn"]>,
+		actor: MissionActor,
+	): void {
+		if (!isActiveDecision(decision)) throw new Conflict("Only active decisions can be withdrawn");
+		this.run(
+			"UPDATE decisions SET withdrawn=?,updated_at=? WHERE id=?",
+			JSON.stringify(withdrawal),
+			withdrawal.at,
+			decision.id,
+		);
+		this.sourceChanged({ missionId: id, kind: "decision", decisionId: decision.id });
+		this.event(
+			id,
+			"decision",
+			`Decision D${decision.number} withdrawn${proposalAttribution(actor)}: ${withdrawal.reason}`,
+			actor,
+			{ at: withdrawal.at },
+		);
+	}
+
+	resolveProposal(
+		id: string,
+		proposalId: string,
+		accept: boolean,
+		replacement?: unknown,
+		actor: MissionActor = USER,
+	): MissionDecisionProposal {
+		if (actor.sessionId) throw new Error("Only the user can resolve decision proposals");
+		if (!accept && replacement !== undefined) throw new Error("Replacement text requires acceptance");
+		const row = this.one("SELECT * FROM decision_proposals WHERE mission_id = ? AND id = ?", id, proposalId);
+		if (!row) throw new NotFound("Unknown pending decision proposal");
+		const proposal = proposalFrom(row);
+		if (proposal.kind === "withdraw" && replacement !== undefined)
+			throw new Error("Withdrawal has no replacement text");
+		if (proposal.status !== "pending") {
+			if (proposal.kind !== "withdraw") throw new NotFound("Unknown pending decision proposal");
+			if (proposal.status !== (accept ? "accepted" : "rejected"))
+				throw new Conflict("Withdrawal proposal already has a different outcome");
+			return proposal;
+		}
+		const decision = this.decision(id, proposal.decisionId);
+		if (accept && proposal.kind === "withdraw" && !isActiveDecision(decision))
+			throw new Conflict("Only active decisions can be withdrawn");
+		if (proposal.kind === "remove" && replacement !== undefined) throw new Error("Removal has no replacement text");
+		// Reuse user-only writers, suppressing their broadcasts until the whole transaction commits.
+		this.referenceBatch = id;
+		try {
+			this.transaction(() => {
+				this.run(
+					"UPDATE decision_proposals SET status = ?, resolved_at = ? WHERE id = ?",
+					accept ? "accepted" : "rejected",
+					Date.now(),
+					proposalId,
+				);
+				if (accept) {
+					const user = { proposedBySessionId: proposal.authorSessionId };
+					if (proposal.kind === "withdraw") {
+						const at = Date.now();
+						this.recordWithdrawal(id, decision, { at, reason: proposal.reason, proposalId }, user);
+					} else if (proposal.kind === "remove") this.removeDecision(id, decision.id, user);
+					else {
+						const applied = this.updateDecision(id, decision.id, replacement ?? proposal.text, user);
+						this.run("UPDATE decision_proposals SET text = ? WHERE id = ?", applied.text, proposalId);
+					}
+				}
+				const notice = `Decision D${decision.number} proposal ${proposalId} ${accept ? "accepted" : "rejected"}`;
+				this.event(id, "decision", notice, USER, {
+					wake: true,
+					noticeSummaries: [{ key: `proposal:${proposalId}`, text: notice }],
+				});
+			});
+		} finally {
+			this.referenceBatch = undefined;
+		}
+		this.changed(id, accept ? this.members(id) : []);
+		if (accept && proposal.kind === "withdraw") this.knowledgeChanged(id);
+		return proposalFrom(this.one("SELECT * FROM decision_proposals WHERE id = ?", proposalId)!);
+	}
+
+	/** PR safety needs no task bodies, brief, decisions, events, comments or attention aggregation. */
+	linearPrScope(id: string) {
+		const mission = this.one("SELECT project_id, status FROM missions WHERE id = ?", id);
+		if (!mission) throw new NotFound(`Unknown mission: ${id}`);
+		return {
+			mission: { projectId: str(mission.project_id!), status: str(mission.status!) },
+			tasks: this.all("SELECT id, number, status FROM tasks WHERE mission_id = ? ORDER BY number", id).map(
+				(row) => ({ id: str(row.id!), number: num(row.number!), status: str(row.status!) }),
+			),
+			resources: this.all(
+				"SELECT * FROM resources WHERE mission_id = ? AND kind IN ('linear.issue', 'github.pr') ORDER BY created_at, id",
+				id,
+			).map(resourceFrom),
+		};
+	}
+
+	/** Daemon-owned correction flags. Persist comment IDs to avoid duplicate notices after restart. */
+	reportLinearPrSafety(id: string, resourceId: string, url: string, warnings: string[]): void {
+		const previous = this.one(
+			"SELECT * FROM linear_pr_safety_reports WHERE resource_id = ? AND mission_id = ?",
+			resourceId,
+			id,
+		);
+		const message = warnings.length
+			? `Linear PR safety: ${url}\n${[...new Set(warnings)].join("\n").slice(0, 7000)}\nCorrect explicitly and recheck; no PR was edited.`
+			: "";
+		if ((!previous && !message) || previous?.text === message) return;
+		if (!this.one("SELECT 1 FROM resources WHERE id = ? AND mission_id = ?", resourceId, id)) return;
+		this.batchChanges(() => {
+			if (previous?.comment_id) this.resolveComment(id, str(previous.comment_id));
+			const comment = message ? this.addComment(id, { text: message }) : undefined;
+			this.run(
+				"INSERT INTO linear_pr_safety_reports VALUES (?, ?, ?, ?) ON CONFLICT(resource_id) DO UPDATE SET comment_id = excluded.comment_id, text = excluded.text",
+				resourceId,
+				id,
+				comment?.id ?? null,
+				message,
+			);
+		});
+	}
+
+	// Comments
+
+	addComment(
+		id: string,
+		write: MissionCommentWrite & { notification?: "action" | "informational" | "ack" | "urgent" },
+		actor: MissionActor = USER,
+	): MissionComment {
+		const mission = this.require(id);
+		if (!write || typeof write !== "object") throw new Error("Expected a comment object");
+		const commentText = text(write.text, "text", MAX_TEXT)!;
+		if (
+			write.notification !== undefined &&
+			!["action", "informational", "ack", "urgent"].includes(write.notification)
+		)
+			throw new Error("Invalid comment notification");
+		const anchor = text(write.anchor, "anchor", MAX_TEXT, { optional: true, empty: true }) || undefined;
+		if (write.targetSessionId !== undefined) this.assertMember(id, write.targetSessionId);
+		const now = Date.now();
+		const comment: MissionComment = {
+			id: randomUUID(),
+			text: commentText,
+			...(anchor ? { anchor, revision: mission.briefRevision } : {}),
+			...optionalAuthor(actor.sessionId),
+			...(write.targetSessionId ? { targetSessionId: write.targetSessionId } : {}),
+			createdAt: now,
+		};
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO comments (id, mission_id, text, anchor, revision, author_session_id, target_session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				comment.id,
+				id,
+				comment.text,
+				comment.anchor ?? null,
+				comment.revision ?? null,
+				actor.sessionId ?? null,
+				comment.targetSessionId ?? null,
+				now,
+			);
+			this.event(id, "comment", `Comment: ${comment.text}`, actor, {
+				at: now,
+				wake:
+					(!write.notification || write.notification === "action" || write.notification === "urgent") &&
+					!/^(ack|acknowledged|thanks|thank you|noted|received)[.!]?$/i.test(comment.text.trim()) &&
+					(!write.targetSessionId || write.targetSessionId === mission.coordinatorSessionId),
+				urgent: write.notification === "urgent",
+				noticeSummaries: [{ key: `comment:${comment.id}`, text: `Comment ${comment.id}: ${comment.text}` }],
+			});
+		});
+		this.changed(id);
+		return comment;
+	}
+
+	resolveComment(id: string, commentId: string, actor: MissionActor = USER): MissionComment {
+		const before = this.comment(id, commentId);
+		if (before.resolvedAt !== undefined) return before;
+		const now = Date.now();
+		this.transaction(() => {
+			this.run(
+				"UPDATE comments SET resolved_at = ?, resolved_by_session_id = ? WHERE id = ?",
+				now,
+				actor.sessionId ?? null,
+				before.id,
+			);
+			this.event(id, "comment", `Comment resolved: ${before.text}`, actor, { at: now });
+		});
+		this.changed(id);
+		return this.comment(id, commentId);
+	}
+
+	removeComment(id: string, commentId: string): void {
+		const before = this.comment(id, commentId);
+		this.transaction(() => this.run("DELETE FROM comments WHERE id = ?", before.id));
+		this.changed(id);
+	}
+
+	private comment(id: string, commentId: string): MissionComment {
+		const row = this.one("SELECT * FROM comments WHERE mission_id = ? AND id = ?", id, commentId);
+		if (!row) throw new NotFound(`Unknown comment: ${commentId}`);
+		return commentFrom(row);
+	}
+
+	// Resources and artifacts
+	/** Indexed source authorization lookup, without materializing tasks, activity or the brief. */
+	artifactReferences(id: string, artifactId: string): MissionArtifactLink[] {
+		return this.all("SELECT * FROM artifact_links WHERE mission_id = ? AND artifact_id = ?", id, artifactId).map(
+			artifactFrom,
+		);
+	}
+
+	/** One commit and one detail/context broadcast, rather than one per reference. */
+	attachTaskReferences(
+		id: string,
+		taskId: string | string[],
+		artifacts: Omit<MissionArtifactLink, "linkedAt" | "linkedBySessionId">[],
+		links: MissionResourceWrite[],
+	): void {
+		if (!artifacts.length && !links.length) return;
+		if (this.referenceBatch) throw new Error("A reference batch is already active");
+		const taskIds = typeof taskId === "string" ? [taskId] : taskId;
+		for (const ref of taskIds) this.resolveTask(id, ref);
+		this.referenceBatch = id;
+		try {
+			this.transaction(() => {
+				for (const taskId of taskIds) {
+					for (const item of artifacts) this.linkArtifact(id, { ...item, taskId });
+					for (const item of links) this.addResource(id, { ...item, taskId, relationship: "reference" });
+				}
+			});
+		} finally {
+			this.referenceBatch = undefined;
+		}
+		this.changed(id);
+	}
+
+	/** Multi-task chats must use link + taskId, never infer a task from status or claim order. */
+	linkAutomaticPullRequests(sessionId: string, urls: string[]): void {
+		const id = this.missionOf(sessionId);
+		if (!id || !urls.length) return;
+		// Include completed tasks: a delayed PR from an earlier task is not the next task's PR.
+		const tasks = this.all(
+			"SELECT id, status FROM tasks WHERE mission_id = ? AND session_id = ? LIMIT 2",
+			id,
+			sessionId,
+		);
+		if (this.referenceBatch) throw new Error("A reference batch is already active");
+		let linked = false;
+		this.referenceBatch = id;
+		try {
+			this.transaction(() => {
+				for (const url of urls) {
+					const parsed = normalizeResourceWrite({ url });
+					if (parsed.kind !== "github.pr") continue;
+					const observed = this.database
+						.prepare("INSERT OR IGNORE INTO automatic_pull_request_observations (mission_id, url) VALUES (?, ?)")
+						.run(id, parsed.url);
+					if (!observed.changes) continue;
+					// Also respect explicit/legacy attribution before the observation ledger existed.
+					if (
+						this.one(
+							"SELECT 1 FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND relationship = 'ownership' LIMIT 1",
+							id,
+							parsed.url,
+						)
+					)
+						continue;
+					if (tasks.length !== 1 || tasks[0]!.status === "done" || tasks[0]!.status === "dropped") continue;
+					this.addResource(id, { url: parsed.url, taskId: str(tasks[0]!.id!) }, { sessionId });
+					linked = true;
+				}
+			});
+		} finally {
+			this.referenceBatch = undefined;
+		}
+		if (linked) this.changed(id);
+	}
+
+	addResource(id: string, write: MissionResourceWrite, actor: MissionActor = USER): MissionResource {
+		this.require(id);
+		const { title, ...parsed } = normalizeResourceWrite(write);
+		const taskId = write.taskId === undefined ? undefined : this.resolveTask(id, write.taskId).id;
+		if (taskId) this.insights.assertOrdinaryTask(taskId);
+		if (write.relationship !== undefined && write.relationship !== "ownership" && write.relationship !== "reference")
+			throw new Error("Invalid link relationship");
+		const relationship = write.relationship ?? (taskId && parsed.kind === "github.pr" ? "ownership" : "reference");
+		if (relationship === "ownership" && (!taskId || parsed.kind !== "github.pr"))
+			throw new Error("Ownership links require a task and a GitHub PR");
+		const role = parsed.kind === "linear.issue" ? (write.linearRole ?? "reference") : undefined;
+		const key = parsed.kind === "linear.issue" ? linearKey(parsed.url) : undefined;
+		const existing = key
+			? this.one(
+					"SELECT * FROM resources WHERE mission_id = ? AND linear_key = ? AND task_id IS ? ORDER BY created_at, id LIMIT 1",
+					id,
+					key,
+					taskId ?? null,
+				)
+			: this.one(
+					"SELECT * FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS ? AND relationship = ?",
+					id,
+					parsed.url,
+					taskId ?? null,
+					relationship,
+				);
+		if (existing) {
+			if (write.linearRole !== undefined && existing.linear_role !== role)
+				throw new Conflict("Use PATCH to explicitly change the existing Linear link role");
+			return resourceFrom(existing);
+		}
+		if (role) this.validateLinearRole(id, taskId, key, role, actor);
+		const now = Date.now();
+		const resource: MissionResource = {
+			relationship,
+			...(role ? { linearRole: role } : {}),
+			...(key ? { linearKey: key } : {}),
+			id: randomUUID(),
+			...(taskId ? { taskId } : {}),
+			url: parsed.url,
+			...(title ? { title } : {}),
+			kind: parsed.kind,
+			...(parsed.externalId ? { externalId: parsed.externalId } : {}),
+			...(actor.sessionId ? { addedBySessionId: actor.sessionId } : {}),
+			createdAt: now,
+		};
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at, task_id, relationship, linear_role, linear_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				resource.id,
+				id,
+				resource.url,
+				resource.title ?? null,
+				resource.kind,
+				resource.externalId ?? null,
+				actor.sessionId ?? null,
+				now,
+				taskId ?? null,
+				relationship,
+				role ?? null,
+				key ?? null,
+			);
+			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, {
+				at: now,
+				taskId,
+				...(parsed.kind === "linear.issue" && !taskId
+					? {
+							wake: true,
+							noticeSummaries: [
+								{
+									key: `ticket:${resource.id}`,
+									text: `Linear ticket attached (${role}): ${parsed.externalId}. Read links and ticket context; clarify existing work before associating or splitting.`,
+								},
+							],
+						}
+					: {}),
+			});
+			const cached = this.one(
+				"SELECT pull_request FROM resources WHERE url = ? COLLATE NOCASE AND pull_request IS NOT NULL LIMIT 1",
+				resource.url,
+			);
+			if (cached) {
+				this.run("UPDATE resources SET pull_request = ? WHERE id = ?", cached.pull_request!, resource.id);
+				resource.pullRequest = JSON.parse(str(cached.pull_request!)) as SessionPullRequest;
+			}
+		});
+		this.changed(id);
+		return resourceFrom(this.one("SELECT * FROM resources WHERE id=?", resource.id)!);
+	}
+
+	private validateLinearRole(
+		id: string,
+		taskId: string | undefined,
+		key: string | undefined,
+		role: MissionLinearRole,
+		actor: MissionActor,
+		resourceId?: string,
+	): void {
+		if (role === "reference") return;
+		if (actor.sessionId && actor.sessionId !== this.require(id).coordinatorSessionId)
+			throw new Conflict("Only the user or coordinator may manage Linear tickets and contributions");
+		if (!key) throw new Error("Managed Linear links require a workspace and issue identifier");
+		if (role === "managed") {
+			if (taskId) throw new Error("Managed Linear tickets require mission scope");
+			const manager = this.one("SELECT id FROM resources WHERE linear_key = ? AND linear_role = 'managed'", key);
+			if (manager && manager.id !== resourceId)
+				throw new Conflict("This Linear ticket already has a managing mission");
+			if (this.one("SELECT id FROM linear_chat_links WHERE enabled=1 AND linear_key=?", key))
+				throw new Conflict("This Linear ticket already has a managing chat");
+		} else {
+			if (!taskId) throw new Error("Linear contributions require a task");
+			if (
+				!this.one(
+					"SELECT 1 FROM resources WHERE mission_id = ? AND linear_key = ? AND linear_role = 'managed'",
+					id,
+					key,
+				)
+			)
+				throw new Conflict("Manage the Linear ticket in this mission before adding contributions");
+			const existing = this.one(
+				"SELECT id FROM resources WHERE mission_id = ? AND task_id = ? AND linear_key = ? AND linear_role = 'contribution'",
+				id,
+				taskId,
+				key,
+			);
+			if (existing && existing.id !== resourceId)
+				throw new Conflict("This task already contributes to the Linear ticket");
+		}
+	}
+
+	private assertLinearDetach(id: string, resource: MissionResource): void {
+		if (
+			resource.linearRole === "managed" &&
+			this.one(
+				"SELECT 1 FROM resources WHERE mission_id = ? AND linear_key = ? AND linear_role = 'contribution'",
+				id,
+				resource.linearKey!,
+			)
+		)
+			throw new Conflict("Detach task contributions before detaching the managed Linear ticket");
+	}
+
+	updateResource(
+		id: string,
+		resourceId: string,
+		write: MissionResourceUpdate,
+		actor: MissionActor = USER,
+	): MissionResource {
+		this.require(id);
+		if (!write || !["reference", "managed", "contribution"].includes(write.linearRole))
+			throw new Error("Invalid Linear role");
+		const row = this.one("SELECT * FROM resources WHERE mission_id = ? AND id = ?", id, resourceId);
+		if (!row) throw new NotFound(`Unknown resource: ${resourceId}`);
+		const resource = resourceFrom(row);
+		if (resource.kind !== "linear.issue") throw new Error("Linear roles require a Linear issue");
+		if (actor.sessionId && actor.sessionId !== this.require(id).coordinatorSessionId)
+			throw new Conflict("Only the user or coordinator may change Linear link roles");
+		if (resource.linearRole === write.linearRole) return resource;
+		this.validateLinearRole(id, resource.taskId, resource.linearKey, write.linearRole, actor, resourceId);
+		this.assertLinearDetach(id, resource);
+		this.transaction(() => {
+			this.run("UPDATE resources SET linear_role = ? WHERE id = ?", write.linearRole, resourceId);
+			// A newly explicit contribution starts fresh assignment observation, not a replay of reference reads.
+			this.run("DELETE FROM linear_task_assignees WHERE resource_id = ?", resourceId);
+			this.event(id, "resource", `Linear link role changed to ${write.linearRole}: ${resource.externalId}`, actor, {
+				taskId: resource.taskId,
+				wake: true,
+			});
+		});
+		this.changed(id);
+		return resourceFrom(this.one("SELECT * FROM resources WHERE id=?", resourceId)!);
+	}
+
+	removeResource(id: string, resourceId: string, actor: MissionActor = USER): void {
+		const row = this.one("SELECT * FROM resources WHERE mission_id = ? AND id = ?", id, resourceId);
+		if (!row) throw new NotFound(`Unknown resource: ${resourceId}`);
+		const resource = resourceFrom(row);
+		this.assertLinearDetach(id, resource);
+		if (
+			resource.linearRole &&
+			resource.linearRole !== "reference" &&
+			actor.sessionId &&
+			actor.sessionId !== this.require(id).coordinatorSessionId
+		)
+			throw new Conflict("Only the user or coordinator may detach Linear contributions or managed tickets");
+		if (
+			actor.sessionId &&
+			actor.sessionId !== this.require(id).coordinatorSessionId &&
+			resource.addedBySessionId !== actor.sessionId
+		)
+			throw new Conflict("Members may only remove links they added");
+		this.transaction(() => {
+			if (resource.kind === "github.pr" && resource.relationship === "ownership")
+				this.run(
+					"INSERT OR IGNORE INTO automatic_pull_request_observations (mission_id, url) VALUES (?, ?)",
+					id,
+					resource.url,
+				);
+			this.run("DELETE FROM resources WHERE id = ?", resourceId);
+			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
+				taskId: resource.taskId,
+			});
+		});
+		this.changed(id);
+	}
+
+	/** URL + scope identify one link. Prefer a reference when both kinds share a scope. */
+	unlinkResource(
+		id: string,
+		url: string,
+		taskRef?: string,
+		actor: MissionActor = USER,
+	): { removed: boolean; resource?: MissionResource } {
+		const mission = this.require(id);
+		const parsed = normalizeResourceWrite({ url });
+		const taskId = taskRef === undefined ? undefined : this.resolveTask(id, taskRef).id;
+		const row = this.one(
+			`SELECT * FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS ?
+			ORDER BY CASE WHEN ? = 1 OR added_by_session_id = ? THEN 0 ELSE 1 END,
+			relationship DESC, created_at, id LIMIT 1`,
+			id,
+			parsed.url,
+			taskId ?? null,
+			!actor.sessionId || actor.sessionId === mission.coordinatorSessionId ? 1 : 0,
+			actor.sessionId ?? null,
+		);
+		if (!row) return { removed: false };
+		const resource = resourceFrom(row);
+		this.removeResource(id, resource.id, actor);
+		return { removed: true, resource };
+	}
+
+	/** Validate before session metadata is committed. No mission means there is no task link to bind. */
+	validatePullRequestBinding(
+		sessionId: string,
+		url: string,
+		taskId?: string,
+	): { missionId: string; taskId?: string } | undefined {
+		const parsed = normalizeResourceWrite({ url });
+		if (parsed.kind !== "github.pr") throw new Error("Expected a GitHub pull request URL");
+		const missionId = this.missionOf(sessionId);
+		if (!missionId) {
+			if (taskId !== undefined) throw new Error("A task binding requires a mission chat");
+			return undefined;
+		}
+		if (taskId !== undefined) {
+			const task = this.resolveTask(missionId, taskId);
+			if (!isOpenTask(task)) throw new Conflict(`Task #${task.number} is already ${task.status}`);
+			return { missionId, taskId: task.id };
+		}
+		const tasks = this.all(
+			"SELECT id FROM tasks WHERE mission_id = ? AND session_id = ? AND status NOT IN ('done', 'dropped') LIMIT 2",
+			missionId,
+			sessionId,
+		);
+		if (tasks.length > 1) throw new Conflict("Ambiguous task binding: specify a taskId");
+		return { missionId, ...(tasks[0] ? { taskId: str(tasks[0].id!) } : {}) };
+	}
+
+	/** Explicit handoffs move task links and both sides' activity in one durable, replay-safe transaction. */
+	applyPullRequestBinding(operation: PullRequestBinding): { changed: boolean; taskLinkRemoved: boolean } {
+		let changed = false;
+		let taskLinkRemoved = false;
+		const affected = new Set<string>();
+		this.transaction(() => {
+			if (this.one("SELECT 1 FROM pull_request_binding_operations WHERE id = ?", operation.id)) return;
+			const parsed = normalizeResourceWrite({ url: operation.url });
+			if (parsed.kind !== "github.pr") throw new Error("Expected a GitHub pull request URL");
+			// Validation already resolved the task before the journal commit. Do not resolve an omitted
+			// task again: claims can change while metadata is saved or before crash recovery runs.
+			const targetMissionId = operation.missionId ?? this.missionOf(operation.sessionId);
+			const pinnedTask =
+				operation.bound && targetMissionId && operation.taskId
+					? this.one("SELECT * FROM tasks WHERE mission_id = ? AND id = ?", targetMissionId, operation.taskId)
+					: undefined;
+			const targetTaskId =
+				pinnedTask && pinnedTask.status !== "done" && pinnedTask.status !== "dropped"
+					? str(pinnedTask.id!)
+					: undefined;
+			if (targetTaskId) this.insights.assertOrdinaryTask(targetTaskId);
+			const missionIds = new Set<string>();
+			if (targetMissionId && this.get(targetMissionId)) missionIds.add(targetMissionId);
+			for (const sessionId of [operation.sessionId, ...operation.previousSessionIds]) {
+				const missionId = this.missionOf(sessionId);
+				if (missionId) missionIds.add(missionId);
+			}
+			const cached = this.one(
+				"SELECT pull_request FROM resources WHERE url = ? COLLATE NOCASE AND pull_request IS NOT NULL LIMIT 1",
+				parsed.url,
+			)?.pull_request;
+			const tasks = new Map<string, string>();
+			const linkChanges = new Set<string>();
+			const currentBinding = this.one(
+				"SELECT task_id FROM pull_request_bindings WHERE session_id = ? AND url = ? AND bound = 1",
+				operation.sessionId,
+				parsed.url,
+			);
+			for (const missionId of missionIds) {
+				const links = this.all(
+					`SELECT r.id, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id
+					WHERE r.mission_id = ? AND r.kind = 'github.pr' AND r.relationship = 'ownership' AND r.url = ? COLLATE NOCASE
+					AND t.status NOT IN ('done', 'dropped')
+					AND (? = 1 OR ((t.session_id = ? OR r.added_by_session_id = ? OR t.id = ?)
+						AND NOT EXISTS (SELECT 1 FROM pull_request_bindings b WHERE b.url = r.url
+							AND b.bound = 1 AND b.session_id <> ? AND b.mission_id = r.mission_id AND b.task_id = r.task_id)))`,
+					missionId,
+					parsed.url,
+					operation.bound ? 1 : 0,
+					operation.sessionId,
+					operation.sessionId,
+					currentBinding?.task_id ?? null,
+					operation.sessionId,
+				);
+				for (const link of links) {
+					if (!operation.bound && operation.changed === false) continue;
+					const taskId = str(link.task_id!);
+					if (operation.bound && targetMissionId === missionId && targetTaskId === taskId) continue;
+					this.run("DELETE FROM resources WHERE id = ?", link.id!);
+					changed = true;
+					taskLinkRemoved = true;
+					tasks.set(taskId, missionId);
+					linkChanges.add(missionId);
+					affected.add(missionId);
+				}
+			}
+			if (operation.bound && targetMissionId && targetTaskId) {
+				if (
+					!this.one(
+						"SELECT 1 FROM resources WHERE mission_id = ? AND task_id = ? AND url = ? COLLATE NOCASE AND relationship = 'ownership'",
+						targetMissionId,
+						targetTaskId,
+						parsed.url,
+					)
+				) {
+					this.run(
+						`INSERT INTO resources (id, mission_id, task_id, url, kind, external_id,
+						added_by_session_id, created_at, pull_request, relationship) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ownership')`,
+						randomUUID(),
+						targetMissionId,
+						targetTaskId,
+						parsed.url,
+						parsed.kind,
+						parsed.externalId ?? null,
+						operation.actor.sessionId ?? null,
+						Date.now(),
+						cached ?? null,
+					);
+					changed = true;
+					linkChanges.add(targetMissionId);
+					affected.add(targetMissionId);
+				}
+				tasks.set(targetTaskId, targetMissionId);
+			}
+			const record = (sessionId: string, bound: boolean, missionId: string | undefined, taskId?: string) => {
+				const before = this.one(
+					"SELECT * FROM pull_request_bindings WHERE session_id = ? AND url = ?",
+					sessionId,
+					parsed.url,
+				);
+				const same =
+					before &&
+					Boolean(before.bound) === bound &&
+					before.mission_id === (missionId ?? null) &&
+					before.task_id === (taskId ?? null);
+				const metadataChanged = sessionId === operation.sessionId ? operation.changed : undefined;
+				if (
+					missionId &&
+					this.get(missionId) &&
+					(linkChanges.has(missionId) || metadataChanged === true || (!same && metadataChanged !== false))
+				) {
+					this.event(
+						missionId,
+						"resource",
+						`Pull request ${bound ? "bound to" : "unbound from"} chat ${sessionId}: ${parsed.url}`,
+						operation.actor,
+						{
+							taskId:
+								taskId ??
+								[...tasks].find(
+									([id, mission]) => mission === missionId && this.task(mission, id).sessionId === sessionId,
+								)?.[0],
+						},
+					);
+					affected.add(missionId);
+				}
+				this.run(
+					`INSERT INTO pull_request_bindings (session_id, url, bound, mission_id, task_id) VALUES (?, ?, ?, ?, ?)
+					ON CONFLICT (session_id, url) DO UPDATE SET bound = excluded.bound,
+					mission_id = excluded.mission_id, task_id = excluded.task_id`,
+					sessionId,
+					parsed.url,
+					bound ? 1 : 0,
+					missionId ?? null,
+					taskId ?? null,
+				);
+			};
+			for (const sessionId of new Set(operation.previousSessionIds)) {
+				if (sessionId !== operation.sessionId) record(sessionId, false, this.missionOf(sessionId));
+			}
+			record(operation.sessionId, operation.bound, targetMissionId, operation.bound ? operation.taskId : undefined);
+			this.run(
+				"INSERT INTO pull_request_binding_operations (id, applied_at) VALUES (?, ?)",
+				operation.id,
+				Date.now(),
+			);
+		});
+		for (const missionId of affected) this.changed(missionId);
+		return { changed, taskLinkRemoved };
+	}
+
+	/** Persist a fresh result for all copies of this URL and reconcile affected tasks together. */
+	newlyMergedCoordinators(pr: SessionPullRequest): string[] {
+		if (pr.state !== "merged") return [];
+		return this.all(
+			`SELECT DISTINCT m.coordinator_session_id FROM resources r JOIN missions m ON m.id = r.mission_id
+			WHERE r.kind = 'github.pr' AND r.relationship = 'ownership' AND r.url = ? COLLATE NOCASE AND m.status = 'active'
+			AND m.coordinator_session_id IS NOT NULL AND json_extract(r.pull_request, '$.state') IS NOT 'merged'`,
+			pr.url,
+		).map((row) => str(row.coordinator_session_id!));
+	}
+
+	updatePullRequest(
+		pr: SessionPullRequest,
+		members: SessionSummary[] = [],
+		contextPrs?: (missionId: string) => SessionPullRequest[],
+	): void {
+		const rows = this.all(
+			"SELECT DISTINCT mission_id FROM resources WHERE kind = 'github.pr' AND url = ? COLLATE NOCASE",
+			pr.url,
+		);
+		const affected = new Set(rows.map((row) => str(row.mission_id!)));
+		this.transaction(() => {
+			for (const id of affected) {
+				this.run(
+					"UPDATE resources SET pull_request = ? WHERE mission_id = ? AND url = ? COLLATE NOCASE",
+					JSON.stringify(pr),
+					id,
+					pr.url,
+				);
+			}
+			for (const member of members) {
+				const id = this.missionOf(member.id);
+				if (id && this.recordMemberPullRequests(member, [pr], false, contextPrs?.(id))) affected.add(id);
+			}
+		});
+		for (const id of affected) this.changed(id);
+	}
+
+	linkArtifact(
+		id: string,
+		link: {
+			sessionId: string;
+			artifactId: string;
+			title: string;
+			kind: ArtifactKind;
+			revision?: number;
+			taskId?: string;
+		},
+		actor: MissionActor = USER,
+	): MissionArtifactLink {
+		this.require(id);
+		if (
+			!this.one(
+				"SELECT 1 FROM artifact_links WHERE mission_id = ? AND artifact_id = ? AND session_id = ?",
+				id,
+				link.artifactId,
+				link.sessionId,
+			)
+		)
+			this.assertMember(id, link.sessionId);
+		const taskId = link.taskId === undefined ? undefined : this.resolveTask(id, link.taskId).id;
+		if (taskId) this.insights.assertOrdinaryTask(taskId);
+		const now = Date.now();
+		const value: MissionArtifactLink = {
+			...(taskId ? { taskId } : {}),
+			artifactId: link.artifactId,
+			sessionId: link.sessionId,
+			title: link.title,
+			kind: link.kind,
+			...(link.revision !== undefined ? { revision: link.revision } : {}),
+			...(actor.sessionId ? { linkedBySessionId: actor.sessionId } : {}),
+			linkedAt: now,
+		};
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET title = excluded.title, kind = excluded.kind, revision = excluded.revision, linked_by_session_id = excluded.linked_by_session_id, linked_at = excluded.linked_at",
+				id,
+				value.artifactId,
+				value.sessionId,
+				value.title,
+				value.kind,
+				value.revision ?? null,
+				actor.sessionId ?? null,
+				now,
+				taskId ?? null,
+			);
+			this.event(id, "artifact", `Artifact linked: ${value.title}`, actor, { at: now, taskId });
+		});
+		this.changed(id);
+		return value;
+	}
+
+	unlinkArtifact(id: string, artifactId: string, actor: MissionActor = USER, taskRef?: string): void {
+		const taskId = taskRef === undefined ? null : this.resolveTask(id, taskRef).id;
+		const row = this.one(
+			"SELECT * FROM artifact_links WHERE mission_id = ? AND artifact_id = ? AND task_id IS ?",
+			id,
+			artifactId,
+			taskId,
+		);
+		if (!row) throw new NotFound(`Unknown artifact link: ${artifactId}`);
+		this.transaction(() => {
+			this.run(
+				"DELETE FROM artifact_links WHERE mission_id = ? AND artifact_id = ? AND task_id IS ?",
+				id,
+				artifactId,
+				taskId,
+			);
+			this.event(id, "artifact", `Artifact unlinked: ${str(row.title!)}`, actor);
+		});
+		this.changed(id);
+	}
+
+	// Activity
+
+	/** Replay-safe attribution. Only the execution-time mission receives the event. */
+	recordGitHubAction(sessionId: string, action: GitHubAction, chat: string): void {
+		const id = action.missionId;
+		if (!id || !this.one("SELECT id FROM missions WHERE id = ?", id)) return;
+		const retention = this.one("SELECT pruned_at FROM github_action_retention WHERE mission_id = ?", id);
+		if (retention && action.at <= num(retention.pruned_at!)) return;
+		if (
+			this.one(
+				"SELECT event_id FROM github_action_events WHERE session_id = ? AND action_id = ?",
+				sessionId,
+				action.id,
+			)
+		)
+			return;
+		const confirmed = action.publication ? action.publication.stage === "confirmed" : action.exitCode === 0;
+		const status = confirmed
+			? ""
+			: action.exitCode === null || action.exitCode === 0
+				? " (exit status unknown)"
+				: ` (failed, exit ${action.exitCode})`;
+		const description = confirmed ? action.description : `attempted: ${action.description}`;
+		this.transaction(() => {
+			const event = this.event(
+				id,
+				"github",
+				`${chat} ${description}${status} · ${action.summary}`,
+				{ sessionId },
+				{ at: action.at },
+			);
+			this.run(
+				"INSERT INTO github_action_events (session_id, action_id, event_id) VALUES (?, ?, ?)",
+				sessionId,
+				action.id,
+				event.id,
+			);
+			const pruned = this.one(
+				`SELECT MAX(at) AS at FROM events WHERE mission_id = ? AND kind = 'github' AND id NOT IN
+				(SELECT id FROM events WHERE mission_id = ? AND kind = 'github' ORDER BY id DESC LIMIT 1000)`,
+				id,
+				id,
+			);
+			if (pruned?.at !== null && pruned?.at !== undefined)
+				this.run(
+					`INSERT INTO github_action_retention (mission_id, pruned_at) VALUES (?, ?)
+					ON CONFLICT(mission_id) DO UPDATE SET pruned_at = MAX(pruned_at, excluded.pruned_at)`,
+					id,
+					num(pruned.at),
+				);
+			// Delete only automatic GitHub records, never authored notes or unrelated history.
+			this.run(
+				`DELETE FROM events WHERE mission_id = ? AND kind = 'github' AND id NOT IN
+				(SELECT id FROM events WHERE mission_id = ? AND kind = 'github' ORDER BY id DESC LIMIT 1000)`,
+				id,
+				id,
+			);
+		});
+		this.changed(id);
+	}
+
+	/** User-authored notes have their own bounded window, independent of automatic and agent activity. */
+	userNotes(id: string, limit: number): MissionEvent[] {
+		this.require(id);
+		return this.all(
+			`SELECT * FROM events WHERE mission_id = ? AND is_user_note = 1
+			 ORDER BY id DESC LIMIT ?`,
+			id,
+			limit,
+		).map(eventFrom);
+	}
+
+	/** Structured completion activity. Triggers capture all writers, including PR and remote projections. */
+	watchActivity(
+		after: number,
+		limit = 100,
+	): {
+		id: number;
+		missionId: string;
+		taskId?: string;
+		taskNumber?: number;
+		title: string;
+		at: number;
+		originSessionId?: string;
+	}[] {
+		return this.all(
+			"SELECT * FROM watch_activity WHERE id>? ORDER BY id LIMIT ?",
+			after,
+			Math.max(1, Math.min(limit, 100)),
+		).map((row) => ({
+			id: num(row.id!),
+			missionId: str(row.mission_id!),
+			title: str(row.title!),
+			at: num(row.at!),
+			...(row.task_id ? { taskId: str(row.task_id!), taskNumber: num(row.task_number!) } : {}),
+			...(row.origin_session_id ? { originSessionId: str(row.origin_session_id) } : {}),
+		}));
+	}
+	events(id: string, before?: number, limit = DETAIL_EVENTS): MissionEvent[] {
+		this.require(id);
+		const rows =
+			before === undefined
+				? this.all("SELECT * FROM events WHERE mission_id = ? ORDER BY id DESC LIMIT ?", id, limit)
+				: this.all(
+						"SELECT * FROM events WHERE mission_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+						id,
+						before,
+						limit,
+					);
+		return rows.map(eventFrom);
+	}
+
+	activity(id: string, query: MissionActivityQuery): MissionEvent[] {
+		this.require(id);
+		const where = ["mission_id = ?"];
+		const values: SQLInputValue[] = [id];
+		for (const [column, operator, value] of [
+			["task_id", "=", query.taskId],
+			["kind", "=", query.kind],
+			["id", ">", query.sinceEventId],
+			["at", ">", query.sinceAt],
+			["id", "<", query.before],
+		] as const) {
+			if (value === undefined) continue;
+			where.push(`${column} ${operator} ?`);
+			values.push(value);
+		}
+		return this.all(
+			`SELECT * FROM events WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+			...values,
+			query.limit,
+		).map(eventFrom);
+	}
+
+	log(id: string, write: MissionEventWrite, actor: MissionActor = USER): MissionEvent {
+		this.require(id);
+		if (!write || typeof write !== "object") throw new Error("Expected an event object");
+		const eventText = text(write.text, "text", MAX_TEXT)!;
+		const kind = write.kind ?? "update";
+		if (kind !== "update" && kind !== "handoff") throw new Error("kind must be update or handoff");
+		if (write.health !== undefined && !HEALTH.includes(write.health))
+			throw new Error("health must be on_track, at_risk or off_track");
+		const event = this.transaction(() =>
+			this.event(id, kind, eventText, actor, {
+				userNote: actor.sessionId === undefined,
+				...(write.health ? { health: write.health } : {}),
+			}),
+		);
+		this.changed(id);
+		return event;
+	}
+
+	/** A durable dedupe key makes kernel outbox replay safe across daemon restarts. */
+	recordSystemMessageState(
+		sessionId: string,
+		event: { id: string; requestId: string; state: "held" | "discarded"; preview: string },
+	): void {
+		// New sends carry their original mission identity, even if the recipient later leaves or moves.
+		const parts = event.requestId.split(":");
+		const id =
+			parts.length === 6 && parts[2] === "from"
+				? parts[4]
+				: parts.length === 4
+					? parts[2]
+					: this.missionOf(sessionId);
+		if (!id || !this.get(id)) return;
+		const changed = this.transaction(() => {
+			if (
+				this.one(
+					"SELECT event_id FROM system_message_events WHERE session_id = ? AND event_id = ?",
+					sessionId,
+					event.id,
+				)
+			)
+				return false;
+			this.run(
+				"INSERT INTO system_message_events (session_id, event_id, mission_id) VALUES (?, ?, ?)",
+				sessionId,
+				event.id,
+				id,
+			);
+			const text = `Message ${event.requestId} (${JSON.stringify(event.preview)}) to chat ${sessionId} ${event.state === "held" ? "held because the user stopped the chat" : "discarded by the user"}.`;
+			this.event(
+				id,
+				"update",
+				text,
+				{ sessionId },
+				{ wake: true, noticeSummaries: [{ key: `message:${sessionId}:${event.requestId}:${event.state}`, text }] },
+			);
+			return true;
+		});
+		if (changed) this.changed(id);
+	}
+
+	/** Automatic start activity is task activity, not an authored user note. */
+	recordTaskStart(id: string, taskId: string, model: string, thinking: string): MissionEvent {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
+		const task = this.task(id, taskId);
+		const event = this.transaction(() =>
+			this.event(id, "task", `Started #${task.number} on ${model}, thinking ${thinking}`, USER, { taskId }),
+		);
+		this.changed(id);
+		return event;
+	}
+
+	// Membership
+
+	/** Ownership handoff, not leave/join: retain every claim, status, PR link and observation tombstone. */
+	continueSession(from: string, to: string): void {
+		if (from === to) throw new Conflict("A continuation requires a fresh chat");
+		const previous = this.one("SELECT to_session_id FROM session_continuations WHERE from_session_id = ?", from);
+		if (previous && previous.to_session_id !== to) throw new Conflict("Chat already continued elsewhere");
+		const id = this.missionOf(from);
+		if (id && this.controls.current(id).held) throw new Conflict("Mission work is paused; ownership cannot move");
+		if (!id) {
+			this.transaction(() => {
+				this.run(
+					"INSERT OR IGNORE INTO session_continuations (from_session_id, to_session_id) VALUES (?, ?)",
+					from,
+					to,
+				);
+				this.run("UPDATE member_task_claims SET session_id = ? WHERE session_id = ?", to, from);
+				this.run("UPDATE tasks SET created_by_session_id = ? WHERE created_by_session_id = ?", to, from);
+			});
+			return; // The same journal may be replayed after the transaction committed.
+		}
+		if (this.missionOf(to)) throw new Conflict("The continuation chat already belongs to a mission");
+		this.transaction(() => {
+			this.run(
+				"INSERT OR IGNORE INTO session_continuations (from_session_id, to_session_id) VALUES (?, ?)",
+				from,
+				to,
+			);
+			this.run("UPDATE member_task_claims SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE tasks SET created_by_session_id = ? WHERE created_by_session_id = ?", to, from);
+			this.run("UPDATE members SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE tasks SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE missions SET coordinator_session_id = ? WHERE coordinator_session_id = ?", to, from);
+			this.run("UPDATE member_runs SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE retired_members SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE notices SET session_id = ? WHERE session_id = ? AND delivered_at IS NULL", to, from);
+			this.run(
+				"UPDATE comments SET target_session_id = ? WHERE target_session_id = ? AND resolved_at IS NULL",
+				to,
+				from,
+			);
+			// Copy both positive bindings and negative tombstones. Never re-infer task attribution.
+			this.run(
+				`INSERT INTO pull_request_bindings (session_id, url, bound, mission_id, task_id)
+				SELECT ?, url, bound, mission_id, task_id FROM pull_request_bindings WHERE session_id = ?`,
+				to,
+				from,
+			);
+			this.run("UPDATE pull_request_bindings SET bound = 0 WHERE session_id = ?", from);
+			this.run(
+				"UPDATE resources SET added_by_session_id = ? WHERE added_by_session_id = ? AND relationship = 'ownership'",
+				to,
+				from,
+			);
+			this.event(id, "member", `Chat ${from} continued in ${to}`, { sessionId: to });
+		});
+		this.changed(id, [from, to]);
+	}
+
+	/** Hot session-summary path: no attention counts, task bodies or mission detail. Always read current roles. */
+	membership(
+		sessionId: string,
+	): { missionId: string; active: boolean; coordinator: boolean; role?: MissionRole } | undefined {
+		const row = this.one(
+			`SELECT m.mission_id, m.role, mission.status, mission.planning_version, mission.coordinator_session_id
+			FROM members m JOIN missions mission ON mission.id = m.mission_id WHERE m.session_id = ?`,
+			sessionId,
+		);
+		return row
+			? {
+					missionId: str(row.mission_id!),
+					active: row.status === "active",
+					coordinator: row.coordinator_session_id === sessionId,
+					...(row.planning_version != null
+						? {
+								role:
+									row.coordinator_session_id === sessionId
+										? ("coordinator" as const)
+										: workerRole(num(row.planning_version), row.role ?? undefined),
+							}
+						: {}),
+				}
+			: undefined;
+	}
+
+	missionOf(sessionId: string): string | undefined {
+		const row = this.one("SELECT mission_id FROM members WHERE session_id = ?", sessionId);
+		return row ? str(row.mission_id!) : undefined;
+	}
+
+	members(id: string): string[] {
+		return this.all("SELECT session_id FROM members WHERE mission_id = ? ORDER BY joined_at", id).map((row) =>
+			str(row.session_id!),
+		);
+	}
+	/** Bounded native Review discovery; current membership is still checked per returned ID. */
+	nativeReviewMembers(id: string): string[] {
+		this.require(id);
+		return this.all(
+			"SELECT session_id FROM members WHERE mission_id=? ORDER BY joined_at,session_id LIMIT 101",
+			id,
+		).map((row) => str(row.session_id!));
+	}
+
+	private assertMember(id: string, sessionId: unknown): void {
+		if (typeof sessionId !== "string" || this.missionOf(sessionId) !== id)
+			throw new Conflict("That chat is not in this mission");
+	}
+
+	/** Moving a chat from another mission releases its tasks there. */
+	join(sessionId: string, id: string, actor: MissionActor = USER, role?: MissionWorkerRole): void {
+		if (this.one("SELECT 1 FROM session_continuations WHERE from_session_id = ?", sessionId))
+			throw new Conflict("This chat continued elsewhere and cannot own mission work");
+		this.assertPlanner(id, actor);
+		const selected = this.workerRole(id, role);
+		const previous = this.missionOf(sessionId);
+		if (previous === id) {
+			if (role !== undefined && this.membership(sessionId)?.role !== selected)
+				throw new Conflict("Mission roles cannot change in place; start a fresh chat");
+			return;
+		}
+		if (this.controls.current(id).held || (previous && this.controls.current(previous).held))
+			throw new Conflict("Mission work is paused; membership cannot move");
+		this.transaction(() => {
+			if (previous) this.detach(sessionId, previous, actor);
+			this.run(
+				"INSERT INTO members (session_id, mission_id, joined_at, role) VALUES (?, ?, ?, ?)",
+				sessionId,
+				id,
+				Date.now(),
+				selected ?? null,
+			);
+			this.event(id, "member", "A chat joined the mission", { sessionId });
+		});
+		if (previous) this.changed(previous, []);
+		this.changed(id, [sessionId]);
+	}
+
+	/** Missing roles preserve existing opted-in admissions as builders; legacy missions stay unlabelled. */
+	workerRole(id: string, value: unknown): MissionWorkerRole | undefined {
+		return workerRole(this.require(id).planningVersion, value);
+	}
+
+	/** Whether a task start makes a chat that can change code. Only those take a worker slot; Ask chats never do. */
+	startChangesCode(id: string, request: { role?: unknown; mode?: unknown }): boolean {
+		return this.workerRole(id, request.role) !== "explorer" && request.mode !== "ask";
+	}
+
+	leave(sessionId: string, actor: MissionActor = USER): void {
+		const id = this.missionOf(sessionId);
+		if (!id) return;
+		this.transaction(() => this.detach(sessionId, id, actor));
+		this.changed(id, [sessionId]);
+	}
+
+	private detach(sessionId: string, id: string, actor: MissionActor): void {
+		this.run("DELETE FROM members WHERE session_id = ?", sessionId);
+		this.run("DELETE FROM member_runs WHERE session_id = ?", sessionId);
+		this.run(
+			"UPDATE tasks SET session_id = NULL, status = CASE status WHEN 'in_progress' THEN 'todo' ELSE status END WHERE mission_id = ? AND session_id = ?",
+			id,
+			sessionId,
+		);
+		this.run(
+			"UPDATE missions SET coordinator_session_id = NULL WHERE id = ? AND coordinator_session_id = ?",
+			id,
+			sessionId,
+		);
+		this.event(id, "member", "A chat left the mission", actor.sessionId ? actor : { sessionId });
+	}
+}
+
+function workerRole(version: number | undefined, value: unknown): MissionWorkerRole | undefined {
+	if (version === undefined) {
+		if (value !== undefined) throw new Conflict("Mission roles require planningVersion 1; adoption is not supported");
+		return undefined;
+	}
+	if (version !== 1) throw new Conflict("Unsupported mission planning version");
+	if (value === undefined) return "builder";
+	if (value !== "explorer" && value !== "builder" && value !== "reviewer")
+		throw new Error("role must be explorer, builder or reviewer");
+	return value;
+}
+
+function optionalAuthor(value: SQLInputValue | string | undefined): { authorSessionId?: string } {
+	return value === null || value === undefined ? {} : { authorSessionId: String(value) };
+}
+
+function statusLabel(status: MissionTaskStatus): string {
+	return status === "in_progress" ? "in progress" : status === "in_review" ? "in review" : status;
+}
+
+function missionFrom(row: Row): Mission {
+	return {
+		...(row.planning_version != null ? { planningVersion: num(row.planning_version) } : {}),
+		id: str(row.id!),
+		projectId: str(row.project_id!),
+		title: str(row.title!),
+		goal: str(row.goal!),
+		status: str(row.status!) as MissionStatus,
+		...(row.passive_lifecycle === 1 ? { passiveLifecycle: true } : {}),
+		...(row.coordinator_session_id ? { coordinatorSessionId: str(row.coordinator_session_id) } : {}),
+		...(row.autopilot ? { autopilot: true } : {}),
+		phaseGating: row.phase_gating === 1,
+		...(typeof row.current_phase === "string" ? { currentPhase: JSON.parse(row.current_phase) } : {}),
+		briefRevision: num(row.brief_revision!),
+		needsYouCount: num(row.needs_you_count!),
+		tasksDone: num(row.tasks_done!),
+		tasksTotal: num(row.tasks_total!),
+		...(row.needs_you_reason ? { needsYouReason: reasonLine(str(row.needs_you_reason)) } : {}),
+		createdAt: num(row.created_at!),
+		updatedAt: num(row.updated_at!),
+		...(row.completed_at !== null && row.completed_at !== undefined ? { completedAt: num(row.completed_at) } : {}),
+		...(row.archived_at !== null && row.archived_at !== undefined ? { archivedAt: num(row.archived_at) } : {}),
+	};
+}
+
+function briefFrom(row: Row): MissionBrief {
+	return {
+		missionId: str(row.mission_id!),
+		revision: num(row.revision!),
+		markdown: str(row.markdown!),
+		...optionalAuthor(row.author_session_id),
+		createdAt: num(row.created_at!),
+	};
+}
+
+function decisionAudience(value: unknown): MissionDecision["audience"] {
+	if (value !== "all" && value !== "coordinator" && value !== "reference")
+		throw new Error("audience must be all, coordinator or reference");
+	return value;
+}
+
+function decisionFrom(row: Row): MissionDecision {
+	return {
+		id: str(row.id!),
+		number: num(row.number!),
+		text: str(row.text!),
+		audience: decisionAudience(row.audience),
+		...(row.replacement ? { replacement: JSON.parse(str(row.replacement)) as MissionDecision["replacement"] } : {}),
+		...(row.withdrawn ? { withdrawn: JSON.parse(str(row.withdrawn)) as MissionDecision["withdrawn"] } : {}),
+		...optionalAuthor(row.author_session_id),
+		createdAt: num(row.created_at!),
+		updatedAt: num(row.updated_at!),
+	};
+}
+
+function commentFrom(row: Row): MissionComment {
+	return {
+		id: str(row.id!),
+		text: str(row.text!),
+		...(row.anchor ? { anchor: str(row.anchor) } : {}),
+		...(optional(row.revision, num) !== undefined ? { revision: num(row.revision!) } : {}),
+		...optionalAuthor(row.author_session_id),
+		...(row.target_session_id ? { targetSessionId: str(row.target_session_id) } : {}),
+		createdAt: num(row.created_at!),
+		...(optional(row.resolved_at, num) !== undefined ? { resolvedAt: num(row.resolved_at!) } : {}),
+		...(row.resolved_by_session_id ? { resolvedBySessionId: str(row.resolved_by_session_id) } : {}),
+	};
+}
+
+function phaseFrom(row: Row): MissionPhase {
+	return {
+		id: str(row.id!),
+		missionId: str(row.mission_id!),
+		name: str(row.name!),
+		order: num(row.sort!),
+		...(row.goal ? { goal: str(row.goal) } : {}),
+		...(row.completed_at !== null ? { completedAt: num(row.completed_at!) } : {}),
+	};
+}
+
+function taskFrom(row: Row): MissionTask {
+	const dependsOn = row.depends_on ? (JSON.parse(str(row.depends_on)) as string[]) : undefined;
+	return {
+		id: str(row.id!),
+		number: num(row.number!),
+		title: str(row.title!),
+		...(row.body ? { body: str(row.body) } : {}),
+		...(row.assignment ? { assignment: JSON.parse(str(row.assignment)) as MissionTask["assignment"] } : {}),
+		status: str(row.status!) as MissionTaskStatus,
+		...(row.delegated_to ? { delegatedTo: str(row.delegated_to) } : {}),
+		order: num(row.sort!),
+		...(row.milestone ? { milestone: str(row.milestone) } : {}),
+		...(row.phase_id ? { phaseId: str(row.phase_id) } : {}),
+		...(dependsOn?.length ? { dependsOn } : {}),
+		...(row.decision_ids ? { decisionIds: JSON.parse(str(row.decision_ids)) as string[] } : {}),
+		...(row.session_id ? { sessionId: str(row.session_id) } : {}),
+		...(row.preferred_model
+			? {
+					preferredModel: str(row.preferred_model),
+					...(row.preferred_thinking ? { preferredThinking: str(row.preferred_thinking) } : {}),
+					...(row.preferred_model_by
+						? { preferredModelSetBy: str(row.preferred_model_by) as "user" | "coordinator" }
+						: {}),
+				}
+			: {}),
+		createdAt: num(row.created_at!),
+		updatedAt: num(row.updated_at!),
+		...(optional(row.completed_at, num) !== undefined ? { completedAt: num(row.completed_at!) } : {}),
+	};
+}
+
+function artifactFrom(row: Row): MissionArtifactLink {
+	return {
+		...(row.task_id ? { taskId: str(row.task_id) } : {}),
+		artifactId: str(row.artifact_id!),
+		sessionId: str(row.session_id!),
+		title: str(row.title!),
+		kind: str(row.kind!) as ArtifactKind,
+		...(optional(row.revision, num) !== undefined ? { revision: num(row.revision!) } : {}),
+		...(row.linked_by_session_id ? { linkedBySessionId: str(row.linked_by_session_id) } : {}),
+		linkedAt: num(row.linked_at!),
+	};
+}
+
+function resourceFrom(row: Row): MissionResource {
+	return {
+		...(row.linear_role === "managed" && row.linear_sync
+			? { linearSync: (JSON.parse(str(row.linear_sync)) as LinearSyncRecord).status }
+			: {}),
+		...(row.kind === "linear.issue" ? { linearRole: (row.linear_role ?? "reference") as MissionLinearRole } : {}),
+		...(row.linear_key ? { linearKey: str(row.linear_key) } : {}),
+		id: str(row.id!),
+		relationship: str(row.relationship!) as MissionResource["relationship"],
+		...(row.pull_request ? { pullRequest: JSON.parse(str(row.pull_request)) as SessionPullRequest } : {}),
+		...(row.task_id ? { taskId: str(row.task_id) } : {}),
+		url: str(row.url!),
+		...(row.title ? { title: str(row.title) } : {}),
+		kind: str(row.kind!) as MissionResourceKind,
+		...(row.external_id ? { externalId: str(row.external_id) } : {}),
+		...(row.added_by_session_id ? { addedBySessionId: str(row.added_by_session_id) } : {}),
+		createdAt: num(row.created_at!),
+	};
+}
+
+function eventFrom(row: Row): MissionEvent {
+	return {
+		id: num(row.id!),
+		kind: str(row.kind!) as MissionEventKind,
+		text: str(row.text!),
+		...(row.session_id ? { sessionId: str(row.session_id) } : {}),
+		...(row.task_id ? { taskId: str(row.task_id) } : {}),
+		...(row.health ? { health: str(row.health) as MissionHealth } : {}),
+		at: num(row.at!),
+	};
+}
+
+function proposalAttribution(actor: MissionActor): string {
+	return actor.proposedBySessionId ? ` (proposed by chat ${actor.proposedBySessionId})` : "";
+}
+
+function proposalFrom(row: Row): MissionDecisionProposal {
+	return {
+		id: str(row.id!),
+		decisionId: str(row.decision_id!),
+		kind: str(row.kind!) as MissionDecisionProposal["kind"],
+		...(row.operation_id ? { operationId: str(row.operation_id) } : {}),
+		...(row.text !== null ? { text: str(row.text!) } : {}),
+		reason: str(row.reason!),
+		authorSessionId: str(row.author_session_id!),
+		status: str(row.status!) as MissionDecisionProposal["status"],
+		createdAt: num(row.created_at!),
+		...(row.resolved_at !== null ? { resolvedAt: num(row.resolved_at!) } : {}),
+	};
+}

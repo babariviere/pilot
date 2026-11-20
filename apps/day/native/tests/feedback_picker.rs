@@ -1,6 +1,6 @@
 //! Real NSH picker and Day image controls. Hidden, offline, not native appearance or IME acceptance.
-#[path = "support/day_library.rs"]
-mod day_library;
+#[path = "support/app_source.rs"]
+mod app_source;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nsh_core::{ImageData, picker::PickedFile};
 use nsh_engine::EngineConfig;
@@ -26,26 +26,14 @@ fn picker_cancel_keeps_words_and_a_picked_screenshot_can_retry_or_be_removed() {
         .unwrap()
         .to_path_buf();
     std::fs::create_dir(dir).unwrap();
-    for entry in std::fs::read_dir(&source).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_file()
-            && matches!(
-                path.extension().and_then(|s| s.to_str()),
-                Some("ts" | "tsx" | "json")
-            )
-        {
-            std::fs::copy(&path, dir.join(path.file_name().unwrap())).unwrap();
-        }
-    }
-    // The component library lives in ui/; screens import it as "./ui".
-    day_library::copy(&source, dir);
+    app_source::copy(&source, dir).unwrap();
     std::fs::write(dir.join("nsh.json"), r#"{"name":"Picker fixture","id":"test.feedback.picker","theme":"theme.json","capabilities":{"picker":true}}"#).unwrap();
     let entry = dir.join("PickerFixture.tsx");
     std::fs::write(&entry, r#"
 import { mount, Text, View } from 'nsh';
 import { Input } from 'nsh/base';
-import { FeedbackImages } from './FeedbackImages';
-import { feedbackDraft } from './feedbackView';
+import { FeedbackImages } from './feedback/FeedbackImages';
+import { feedbackDraft } from './feedback/feedbackView';
 feedbackDraft.set({text:'Keep my draft',origin:null});
 mount(() => <View><FeedbackImages disabled={false}>{onPaste => <Input testID="words" value={feedbackDraft().text} onChange={({value}) => feedbackDraft.update(d => ({...d,text:value}))} onPaste={onPaste}/>}</FeedbackImages><Text>{feedbackDraft().text}</Text></View>);
 "#).unwrap();

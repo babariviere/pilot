@@ -1,0 +1,649 @@
+/** The `mission` tool: shared mission state, owned by pilotd and reached over the worker's IPC channel. */
+import type { JsonValue } from "@earendil-works/chord/json";
+import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import {
+	COORDINATOR_ACTIONS,
+	MISSION_DELIVERY_LIMITS,
+	MISSION_OPENING_MESSAGE_LIMIT,
+	MISSION_REPORT_LIMITS,
+	MISSION_STORE_LIMITS,
+	MISSION_TASK_STATUSES,
+	MISSION_WORKER_CAP,
+	MISSION_WRITE_LIMITS,
+	TASK_PROTOTYPE_LIMITS,
+	validateMissionWrite,
+} from "./mission-write.ts";
+import { StringEnum } from "../schema.ts";
+
+export const MISSION_TOOL = "mission";
+
+const MEMBER_ACTIONS = [
+	"get",
+	"map",
+	"answers",
+	"replaced",
+	"brief",
+	"update",
+	"tasks",
+	"task",
+	"decide",
+	"decisions",
+	"links",
+	"artifacts",
+	"comments",
+	"activity",
+	"comment",
+	"resolve",
+	"attach",
+	"link",
+	"unlink",
+	"log",
+	"report",
+	"ticket",
+	"prGuidance",
+	"prototype",
+] as const;
+export const MISSION_ACTIONS = [...MEMBER_ACTIONS, ...COORDINATOR_ACTIONS] as const;
+/** Every action pilotd takes. A thread chat's own (thread, handoff) are only in its tool (THREAD_ACTIONS). */
+export type MissionAction = (typeof MISSION_ACTIONS)[number] | "thread" | "handoff";
+
+/** Sends one call to pilotd and resolves with its JSON result. */
+export type MissionCall = (action: MissionAction, args: Record<string, JsonValue>) => Promise<JsonValue>;
+
+const taskStatus = StringEnum(MISSION_TASK_STATUSES);
+
+export function createMissionTool(call: MissionCall, coordinator = false): ToolDefinition {
+	const tool = defineTool({
+		name: MISSION_TOOL,
+		label: "Mission",
+		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
+Actions:
+Write limits (Unicode code points, including whitespace): decision text ${MISSION_WRITE_LIMITS.decision}, task title ${MISSION_WRITE_LIMITS.title}/body ${MISSION_WRITE_LIMITS.body}, brief ${MISSION_WRITE_LIMITS.brief}. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
+Workers report facts with report/log, never change canonical task status, complete or claim/release work. Coordinator/user owns status; worker delivery is not task completion or user acceptance. When get reports planningVersion 1, only the coordinator/user edits task definitions, criteria, assignments, brief or decisions. Propose changes with comment.
+- get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
+- map: read the canonical Wayfinder overview for this chat's current mission, with source currentness and interview history. No arguments. Same map as the native planning page; no edits, grants or execution authority. Unavailable planning context refuses, never means an empty map.
+- answers: id (an interview submission, as map settledBy names it): that round's questions and the user's exact answers. Read it instead of asking again.
+- replaced: read-only view of the old mission this mission re-plans: brief, decisions and task list; id (old task number) for one task with its latest report.
+- links, artifacts: references, filtered by taskId and filter open (default), done or all.
+- decisions: active decisions not already in your prompt. Use filter all for exact historical bodies, labeled nonbinding when replaced/withdrawn. Changes arrive as short notices; current decisions supersede old prompt text.
+- comments: read open questions and feedback; check for an existing discussion before posting.
+- activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
+- brief: read a revision, or replace the spec with markdown and expectedRevision (stale writes fail).
+- update: change the mission title or goal.
+- tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Only coordinator/user changes status, including status "done" or status "dropped" without a commit, preserving history; this is not review or merge approval. Workers submit report facts instead.
+- complete (coordinator only): record canonical code completion with id and completion {commit, checks, issues} after reading current scope, owner/assignment, reports and dependencies. May complete worker-owned tasks. commit is a full 40-character lowercase hex hash, checked for shape, not landing. checks max ${MISSION_DELIVERY_LIMITS.checks}, issues max ${MISSION_DELIVERY_LIMITS.issues} (or ""). Saves one immutable record; exact retries only return it, never repeat closure after reopening. Not user acceptance, review or merge authority. No independent reviewer or ACK gate.
+- claim (coordinator only): take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
+- release (coordinator only): clear claims using the same selectors. Resets active/blocked to todo, preserves other states and links.
+- decide: record a substantive agreed mission choice about scope, behavior or tradeoffs, audience all, coordinator or reference (default). Keep the human answer/source reference and limits in text; do not invent agreement from discussion, a proposal, a displayed recommendation or an agent report. Do not re-ask settled choices or turn every suggested interview option into a decision. Record material explicit authority changes with their source and limits, but use existing approval/permission controls for specific actions; decision text never grants tool/runtime permission. Active decisions override the brief; text edits/removals remain user-only.
+Decision examples (routing guidance, not permission):
+- Agreed "Use native NSH, not WebViews" or "Save every interview question before showing the first": decide (mission scope/behavior).
+- Agreed "Ship offline reading first; defer editing": decide (mission tradeoff).
+- Explicit new policy "Allow checked task pushes, not releases": decide with human source and limits; existing permission controls still apply.
+- "Continue independent work while we discuss the prototype": task/context update, not decide (routine coordination, no new authority).
+- "The checks passed": task/report update, not decide (status, not acceptance).
+- "I prefer concise replies": existing preference/memory mechanism only when lasting and appropriate, not decide (cross-mission preference, not permission).
+- "Could we add editable coordinator instructions?": discussion/proposal, not decide or implementation permission.
+- "Approve this one upload": existing approval flow, not a general mission decision or grant.
+Keep routine directions in existing task updates or log context, without duplicate bookkeeping. Do not automatically delete, withdraw or bulk reclassify historical decisions; historic cleanup requires user-approved proposals and preserved history.
+- comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. notification action (default) batches routine requests; urgent is for blockers, needs-you or failure; informational and ack are recorded without waking. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
+- attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
+- link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (delivery evidence); "reference" is related work. Neither binds a chat or changes canonical task status.
+- ticket: read limited, untrusted Linear context using resourceId from links. No Linear writes.
+- prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
+- unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
+- report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Optional delivery {commit?, checks, issues, screens?} records scoped delivery facts, not completion; with not_moving it is partial, not ready to check. Omit commit only when the task changes no code (a decision, mockup or research): checks then says what you did and what the user can look at. For a change users can see, screens is {pairs: [{before?, after}]} of image artifact IDs captured from the real app and attached to the task with artifactRevision (no before: a new screen), or {none: reason}. Reports notify the coordinator durably, never change task status or user acceptance. Reuse exact reportId and bytes after a lost ACK; new stale-source writes reject. reportId alone reads that historical receipt. get(id) includes currentness and 16 recent reports; use reportId from activity for older receipts.
+- prototype (builder, own task): when your task asks for a UI prototype or the user's choice between layouts, ask Pilot to make it: taskId, requestId (your own stable ID; the same ID again only reads it), question (what to compare and which variants), prototypeModel (provider/modelId of the chat that makes it; a refused call lists allowed ones), optional prototypeThinking. Pilot makes it in a separate read-only chat, links the mockup to the task and sends you its artifact and report; then end your turn. When it arrives, ask the user with ask_user which variant they want, naming the artifact. taskId alone reads its state. Never ask the user to register a prototype; this is the way.
+- log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
+			coordinator
+				? `
+Coordinator planning: on interview, research, delivery, review, notices or resume, read current get/brief/decisions and relevant tasks before changing the plan. Use filtered tasks and targeted get/activity for evidence; include done/dropped work when checking overlap or recovery. For an uncovered agreed requirement, necessary in-scope finding, missing prerequisite or real review follow-up, create a limited task or update its existing match without extra user confirmation. Define intent, scope and acceptance in body (planningVersion 1: use assignment with its current expectedRevision), link source evidence with link/attach or event/comment references, and set dependsOn for prerequisites. Keep affected tasks blocked with the reason and missing decision/dependency explicit until resolved. Already-covered work or duplicate notices need no new task or unchanged rewrite; re-read after uncertain writes, never blindly replay task creation. Do not create tasks for trivial bookkeeping or speculative frameworks. Preserve actual questions/uncertainty; ask when needed. Out-of-scope suggestions and proposal-only findings stay proposals in comment/log pending a decision, not approved work. Task creation/updates grant no worker starts, provider spend, approval or restricted activation; existing start/permission rules still apply.
+- propose (coordinator only): suggest an edit (decisionId, text, reason), hard removal (remove: true), or withdrawal (withdraw: true, reason, operationId). IDs accept D7. Withdrawal keeps text/pins/history; only user acceptance retires guidance. No direct withdrawal authority is inferred. Reuse operationId only for exact withdrawal retries; conflicting requests fail. Never automatically replay unknown effects. get includes pending/recent outcomes.
+- supersede (coordinator only): record an already-authorized replacement with decisionId and replacementDecisionId (IDs or D7, same mission). Keeps old text/history/pins, but retires its guidance. Does not approve policy or edit/remove text. Exact retries are harmless; relinking is rejected.
+- updateLink (coordinator only): explicitly change an existing Linear link using resourceId and linearRole. References never count toward delivery.
+- split (coordinator only): resourceId of a managed ticket, tasks [{title, body?}] (max 20). Atomically create local contributing tasks; exact retries reuse them. Read existing tasks first, clarify ambiguous matches, or link existing tasks instead. No Linear sub-issues.
+- delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
+- phase (coordinator only): operation create (name, optional goal/order), rename (phase name/ID, name, optional goal), reorder (phase, order) or delete (phase). Deleting leaves tasks without a phase. Empty phases are complete. When phase gating is enabled, earlier incomplete phases block claim/start; only the user can override.
+- group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
+- task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
+- task model/thinking (coordinator only): set the task's preferred model and thinking for new chats, validated like start; model "" clears. User-set preferences cannot be changed.
+- start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. In planningVersion 1, role explorer|builder|reviewer (default builder) is fixed at admission. Explorer uses Ask read/search/web and session-local artifacts, never bash/write/edit or planning ownership; coordinator-authorized research may precede brief approval. Reviewer is metadata only, with existing permissions, not a review engine. Roles do not isolate hostile shells/loopback REST. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per code task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit ${MISSION_OPENING_MESSAGE_LIMIT} characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to the task's preferred model, then the project's (a user-set preference cannot be overridden); validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only within current user authorization. Add a stable operationId to queue one authorized slice durably until dependencies and a worker slot clear (max ${MISSION_WORKER_CAP} chats that can change code, reviewers included; explorers take none); get shows waiting reasons. Exact retries are lookup only, including Unknown. Queue before parking when authorized work can continue. Dispatch also requires a qualified current host policy; unavailable gates stay blocked. This does not enable Autopilot or grant spend.
+- send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
+- revision-source / revision-propose / revision (coordinator only): read the current source, save {operationId,source,summary,delta}, or read saved id. Revisit only when requested: compare current agreement/work, reuse settled answers and trusted planning skills, interview genuine gaps only. Age permits a suggestion, never automatic replanning. Proposals never apply themselves. Before previewing an applicable revision, use existing explicit Mission Pause to checkpoint work safely; never restart/reset/compact automatically. User confirmation of the exact saved digest uses the native/user route only, not an agent action. Completed tasks/history remain. Decisions replace/withdraw with reason and human source. Instruction/permission corrections remain separate unapplied proposals; confirmation changes no runtime grants or Stop/holds.
+- answer (coordinator only): answer a member's pending ordinary question using targetSessionId, questionId from status and message. Use approved mission scope and decisions; ask the user for missing decisions, scope changes or approvals. Never grants database access or other user-only permissions. Ordinary send/steer does not answer questions. After uncertain delivery, inspect status; never blindly replay.
+- archiveWorker / restoreWorker (coordinator only): targetSessionId in this mission/project. First establish that assigned work is delivered or explicitly resolved (tasks done/dropped); idle is not completion. Refuses unfinished assignments, assistance, queued inputs and live work. Archive preserves the workspace from automatic pruning/reclamation, history and artifacts; it does not approve completion or authorize deletion. Restore is passive; send/start a separately authorized follow-up explicitly. Repeats are harmless; returns committed archivedAt (null when restored). status includes archived workers. User archive/cleanup controls remain separate.
+- requestReview / retireReview (coordinator only): request supplies an exact optional retained-change suggestion or retires your own suggestion. Same-mission/project member custody only. Never requires human approval, resolves threads or waives gates. Reuse operationId and exact payload after a lost reply; retry returns the original effect, not current state.
+- status (coordinator only): summarize members: state, outcome, branch, compact PR states, tasks and finishedWithoutPR (idle claimed work lacking open/draft/merged PR). targetSessionId returns one member plus lastAssistantReply (1500 chars) and pendingQuestion (questionId, question, context/options, or null). Never starts workers. Status/start return chatUrl (pilot://chat/<id>); use [chat name](chatUrl) when referencing a chat to the user. They also include cached read-only subscriptionUsage per provider (window percent/reset; stale or unknown labelled).
+- checkIn (coordinator only): schedule.operation list, save or cancel, only your agreed mission check-ins. Save needs a stable requestId, expectedBriefRevision and message, with at (epoch milliseconds, optional expiresAt) or recurrence. Exact requestId retries reuse the saved definition; changed content needs a new requestId. Cancel names id and expectedRevision. To replace, cancel the old check-in before saving a new one. Holds delay starts; changed agreement/coordinator invalidates them. Never schedule worker starts or widen agreed scope.
+- bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
+- unbindPr (coordinator only): detach url from targetSessionId, stopping tracking/pushes/follow-ups and removing unfinished ownership links. References/branches stay. Returns {changed, previousOwner, taskLinkRemoved}.`
+				: ""
+		}`,
+		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
+		executionMode: "sequential",
+		annotations: { openWorldHint: false, destructiveHint: coordinator },
+		parameters: Type.Object({
+			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
+			...(coordinator
+				? {
+						schedule: Type.Optional(
+							Type.Object({
+								operation: StringEnum(["list", "save", "cancel"] as const),
+								id: Type.Optional(Type.String({ maxLength: 128 })),
+								requestId: Type.Optional(Type.String({ maxLength: 128 })),
+								expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+								expectedBriefRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+								title: Type.Optional(Type.String({ maxLength: 200 })),
+								message: Type.Optional(Type.String({ maxLength: 8000 })),
+								at: Type.Optional(Type.Number()),
+								expiresAt: Type.Optional(Type.Number()),
+								recurrence: Type.Optional(
+									Type.Object({
+										every: StringEnum(["day", "week", "month"] as const),
+										time: Type.String(),
+										timeZone: Type.String(),
+										weekday: Type.Optional(Type.Integer()),
+										weekdays: Type.Optional(Type.Array(Type.Integer())),
+										dayOfMonth: Type.Optional(Type.Integer()),
+									}),
+								),
+							}),
+						),
+					}
+				: {}),
+			...(coordinator
+				? {
+						source: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
+						summary: Type.Optional(Type.String({ minLength: 1, maxLength: 1000 })),
+						delta: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+					}
+				: {}),
+			reportId: Type.Optional(Type.String({ maxLength: 128 })),
+			report: Type.Optional(
+				Type.Object({
+					version: Type.Literal(1),
+					reportId: Type.String({ maxLength: MISSION_REPORT_LIMITS.id }),
+					taskId: Type.String({ maxLength: MISSION_REPORT_LIMITS.id }),
+					source: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+					expectedPreviousId: Type.Union([Type.String({ maxLength: MISSION_REPORT_LIMITS.id }), Type.Null()]),
+					movement: StringEnum(["moving", "not_moving", "unknown"] as const),
+					summary: Type.String({ maxLength: MISSION_REPORT_LIMITS.summary }),
+					nextStep: Type.String({ maxLength: MISSION_REPORT_LIMITS.nextStep }),
+					evidence: Type.Array(Type.String({ maxLength: MISSION_REPORT_LIMITS.evidence }), {
+						maxItems: MISSION_REPORT_LIMITS.evidenceItems,
+					}),
+					delivery: Type.Optional(
+						Type.Object({
+							commit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
+							checks: Type.String({ minLength: 1, maxLength: MISSION_DELIVERY_LIMITS.checks }),
+							issues: Type.String({ maxLength: MISSION_DELIVERY_LIMITS.issues }),
+							screens: Type.Optional(
+								Type.Union([
+									Type.Object({
+										pairs: Type.Array(
+											Type.Object({
+												before: Type.Optional(Type.String({ maxLength: 128 })),
+												after: Type.String({ maxLength: 128 }),
+											}),
+											{ minItems: 1, maxItems: 8 },
+										),
+									}),
+									Type.Object({ none: Type.String({ minLength: 1, maxLength: 500 }) }),
+								]),
+							),
+						}),
+					),
+				}),
+			),
+			...(coordinator ? { role: Type.Optional(StringEnum(["explorer", "builder", "reviewer"] as const)) } : {}),
+			id: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description: coordinator
+						? "Task ID or number (get, task, claim, release, delete, start), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both."
+						: "Task ID or number (get, task, claim, release), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
+				}),
+			),
+			ids: Type.Optional(
+				Type.Array(Type.Union([Type.String({ maxLength: 128 }), Type.Integer({ minimum: 1 })]), {
+					minItems: 1,
+					maxItems: 1000,
+					description: coordinator
+						? "For claim, release, group or start: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Claim/release return claimed/released and skipped; group/start require every task to exist; start is all-or-none. Use instead of id."
+						: "For claim or release: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed/released and skipped. Use instead of id.",
+				}),
+			),
+			markdown: Type.Optional(
+				Type.String({
+					description: `Complete replacement brief: max ${MISSION_WRITE_LIMITS.brief} Unicode code points.`,
+				}),
+			),
+			expectedRevision: Type.Optional(Type.Integer({ minimum: 0, description: "Brief revision you edited." })),
+			revision: Type.Optional(Type.Integer({ minimum: 1, description: "Brief revision to read." })),
+			title: Type.Optional(
+				Type.String({ description: `Task title: max ${MISSION_WRITE_LIMITS.title} Unicode code points.` }),
+			),
+			goal: Type.Optional(Type.String({ maxLength: MISSION_STORE_LIMITS.goal })),
+			body: Type.Optional(
+				Type.String({ description: `Task details: max ${MISSION_WRITE_LIMITS.body} Unicode code points.` }),
+			),
+			status: Type.Optional(taskStatus),
+			completion: Type.Optional(
+				Type.Object({
+					commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+					checks: Type.String({ minLength: 1, maxLength: MISSION_DELIVERY_LIMITS.checks }),
+					issues: Type.String({ maxLength: MISSION_DELIVERY_LIMITS.issues }),
+				}),
+			),
+			notification: Type.Optional(StringEnum(["action", "urgent", "informational", "ack"] as const)),
+			phase: Type.Optional(
+				Type.String({ maxLength: 200, description: 'Phase name or ID; task/tasks: "" for none.' }),
+			),
+			milestone: Type.Optional(Type.String({ maxLength: 200 })),
+			dependsOn: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { description: "Task IDs or numbers." })),
+			decisionIds: Type.Optional(
+				Type.Array(Type.String({ maxLength: 128 }), {
+					maxItems: 1000,
+					description: "Task decision pins (IDs or D7); [] clears.",
+				}),
+			),
+			audience: Type.Optional(StringEnum(["all", "coordinator", "reference"] as const)),
+			filter: Type.Optional(StringEnum(["open", "done", "all"] as const)),
+			mine: Type.Optional(Type.Boolean({ description: "tasks: only your tasks." })),
+			text: Type.Optional(
+				Type.String({
+					description: `Decision text: max ${MISSION_WRITE_LIMITS.decision} Unicode code points (decide/propose). Comment or log text: max 8000.`,
+				}),
+			),
+			anchor: Type.Optional(
+				Type.String({ maxLength: 8000, description: "Quoted brief excerpt a comment refers to." }),
+			),
+			targetSessionId: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description: coordinator
+						? "Member chat for comment, send, answer, status, archiveWorker, restoreWorker, bindPr or unbindPr."
+						: "Member chat for comment.",
+				}),
+			),
+			...(coordinator
+				? {
+						request: Type.Optional(
+							Type.Union([
+								Type.Object(
+									{
+										operationId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }),
+										target: Type.Object(
+											{
+												projectId: Type.String(),
+												sessionId: Type.String(),
+												snapshotId: Type.String(),
+												repositoryId: Type.String(),
+												changeId: Type.String(),
+												baseCommitId: Type.String(),
+												headCommitId: Type.String(),
+												layer: StringEnum(["layer", "stack"]),
+												diffSha256: Type.String(),
+												comparisonDigest: Type.String(),
+											},
+											{ additionalProperties: false },
+										),
+										title: Type.String({ minLength: 1, maxLength: 200 }),
+										reason: Type.String({ minLength: 1, maxLength: 4000 }),
+										replacesRequestId: Type.Union([Type.String(), Type.Null()]),
+										replacesExpectedRevision: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+									},
+									{ additionalProperties: false },
+								),
+								Type.Object(
+									{
+										operationId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }),
+										requestId: Type.String({ minLength: 1, maxLength: 128 }),
+										expectedRevision: Type.Integer({ minimum: 1 }),
+										reason: Type.String({ minLength: 1, maxLength: 4000 }),
+									},
+									{ additionalProperties: false },
+								),
+							]),
+						),
+						questionId: Type.Optional(
+							Type.Integer({ minimum: 1, description: "Exact pending question entry ID from status (answer)." }),
+						),
+						assignment: Type.Optional(
+							Type.Object(
+								{
+									version: Type.Literal(1),
+									expectedRevision: Type.Integer({ minimum: 0 }),
+									expectedDefinitionRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+									classification: Type.Optional(
+										Type.Union([
+											Type.Null(),
+											Type.Object(
+												{
+													version: Type.Literal(1),
+													effort: StringEnum(["small", "medium", "large", "unknown"]),
+													difficulty: StringEnum(["routine", "substantive", "hard", "unknown"]),
+													risk: StringEnum(["low", "medium", "high", "unknown"]),
+													uncertainty: StringEnum(["known", "unknown"]),
+													scope: StringEnum(["bounded", "expanded", "unknown"]),
+													role: StringEnum(["builder", "explorer", "reviewer", "unknown"]),
+													deliveryKind: StringEnum(["code", "native-ui", "research", "unknown"]),
+												},
+												{ additionalProperties: false },
+											),
+										]),
+									),
+									intent: Type.String({ minLength: 1, maxLength: 1000 }),
+									scope: Type.String({ minLength: 1, maxLength: 4000 }),
+									criteria: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), {
+										minItems: 1,
+										maxItems: 20,
+									}),
+								},
+								{
+									additionalProperties: false,
+									description:
+										"Planning v1 assignment replacement; read revision (0 when absent). Classification/null also requires task definitionRevision (0 on creation). Omission preserves on unchanged intent/scope/criteria, otherwise clears to unknown. Role/kind confer no capabilities or contribution proof. Does not grant authority.",
+								},
+							),
+						),
+						sessionId: Type.Optional(
+							Type.Union([Type.String({ minLength: 1, maxLength: 128 }), Type.Null()], {
+								description: "Planning v1 only: assign a member chat, or null to release.",
+							}),
+						),
+						tasks: Type.Optional(
+							Type.Array(
+								Type.Object({
+									title: Type.String({
+										description: `Task title: max ${MISSION_WRITE_LIMITS.title} Unicode code points.`,
+									}),
+									body: Type.Optional(
+										Type.String({
+											description: `Task body: max ${MISSION_WRITE_LIMITS.body} Unicode code points.`,
+										}),
+									),
+								}),
+								{
+									minItems: 1,
+									maxItems: 20,
+									description:
+										"Local split deliverables. Read existing work first; ambiguous matches need clarification.",
+								},
+							),
+						),
+						operation: Type.Optional(StringEnum(["create", "rename", "reorder", "delete"] as const)),
+						name: Type.Optional(Type.String({ maxLength: 200 })),
+						decisionId: Type.Optional(Type.String({ maxLength: 128 })),
+						replacementDecisionId: Type.Optional(Type.String({ maxLength: 128 })),
+						remove: Type.Optional(Type.Literal(true)),
+						withdraw: Type.Optional(Type.Literal(true)),
+						operationId: Type.Optional(
+							Type.String({
+								minLength: 1,
+								maxLength: 128,
+								description:
+									"start: stable identity for one authorized slice, queued durably until prerequisites/worker slot clear. Exact repeats are lookup only.",
+							}),
+						),
+						reason: Type.Optional(Type.String({ maxLength: 8000 })),
+						mode: Type.Optional(
+							StringEnum(["steer", "followUp"] as const, {
+								description: "For send: steer changes current work; followUp can wait (default).",
+							}),
+						),
+						order: Type.Optional(
+							Type.Number({
+								description: "Task sort key (task): lower first, ties by task number. Fractions allowed.",
+							}),
+						),
+						model: Type.Optional(
+							Type.String({
+								maxLength: 256,
+								description:
+									"For start or task (preferred model): scoped provider/modelId within the price cap. Omit for the task's preference or project default. Errors list allowed models.",
+							}),
+						),
+						thinking: Type.Optional(
+							Type.String({
+								maxLength: 32,
+								description:
+									"For start or task: a thinking level supported by the chosen model. Omit for its configured default.",
+							}),
+						),
+						artifacts: Type.Optional(
+							Type.Array(
+								Type.Object({
+									artifactId: Type.String({ maxLength: 128 }),
+									revision: Type.Optional(Type.Integer({ minimum: 1 })),
+								}),
+								{ maxItems: 40, description: "Artifact references for start, saved on the task." },
+							),
+						),
+						links: Type.Optional(
+							Type.Array(
+								Type.Object({
+									url: Type.String({ maxLength: 2048 }),
+									title: Type.Optional(Type.String({ maxLength: 200 })),
+								}),
+								{ maxItems: 40, description: "Link references for start, saved on the task." },
+							),
+						),
+						message: Type.Optional(
+							Type.String({
+								maxLength: 8000,
+								description: "Opening instructions (start), message (send), or question reply (answer).",
+							}),
+						),
+					}
+				: {}),
+			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
+			requestId: Type.Optional(
+				Type.String({
+					pattern: TASK_PROTOTYPE_LIMITS.requestId.source,
+					description: "prototype: your own stable ID for this request; the same ID again only reads it.",
+				}),
+			),
+			question: Type.Optional(
+				Type.String({
+					maxLength: TASK_PROTOTYPE_LIMITS.question,
+					description: "prototype: what to compare and which variants.",
+				}),
+			),
+			prototypeModel: Type.Optional(
+				Type.String({
+					maxLength: TASK_PROTOTYPE_LIMITS.model,
+					description:
+						"prototype: provider/modelId of the chat that makes it, within the price cap. Errors list allowed models.",
+				}),
+			),
+			prototypeThinking: Type.Optional(
+				Type.String({
+					maxLength: TASK_PROTOTYPE_LIMITS.thinking,
+					description: "prototype: thinking level for that model.",
+				}),
+			),
+			resourceId: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description: "Linked ticket ID from links: ticket, updateLink or split.",
+				}),
+			),
+			linearRole: Type.Optional(
+				StringEnum(["reference", "managed", "contribution"] as const, {
+					description: "Explicit Linear role for link or updateLink; defaults to reference.",
+				}),
+			),
+			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+			relationship: Type.Optional(
+				StringEnum(["ownership", "reference"] as const, {
+					description: "Link role: task PR ownership or related-work reference. Never binds a chat.",
+				}),
+			),
+			url: Type.Optional(Type.String({ maxLength: 2048 })),
+			taskId: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description: coordinator
+						? "Task ID or number for activity, link, unlink, attach, prGuidance or bindPr (owning task disambiguation)."
+						: "Task ID or number for activity, link, unlink, attach or prGuidance.",
+				}),
+			),
+			kind: Type.Optional(
+				StringEnum(
+					[
+						"created",
+						"status",
+						"handoff",
+						"update",
+						"brief",
+						"decision",
+						"comment",
+						"task",
+						"claim",
+						"artifact",
+						"resource",
+						"member",
+						"coordinator",
+						"github",
+					] as const,
+					{ description: "Activity event kind; log accepts only update or handoff." },
+				),
+			),
+			since: Type.Optional(
+				Type.Union([
+					Type.String({ maxLength: 64, description: "activity: exclusive ISO timestamp with timezone." }),
+					Type.Integer({ minimum: 0, description: "activity: exclusive event ID lower bound." }),
+				]),
+			),
+			cursor: Type.Optional(
+				Type.Integer({ minimum: 1, description: "activity: cursor from the previous page, for older events." }),
+			),
+			limit: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 100, description: "activity: page size (default 15)." }),
+			),
+			health: Type.Optional(StringEnum(["on_track", "at_risk", "off_track"] as const)),
+		}),
+		// The daemon owns the action-specific result shapes; every action returns a JSON object.
+		outputSchema: Type.Record(Type.String(), Type.Unknown()),
+		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
+			signal?.throwIfAborted();
+			const { action, ...rest } = params;
+			if (!coordinator && ["complete", "claim", "release"].includes(action))
+				throw new Error("Only the mission coordinator can change task status or assignments; report facts instead");
+			validateMissionWrite(action, rest);
+			const args = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
+				string,
+				JsonValue
+			>;
+			const data = await call(action, args);
+			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
+		},
+	});
+	// Prepare before JSON Schema validation; execute and daemon admission also guard direct calls.
+	return {
+		...tool,
+		prepareArguments(value) {
+			if (value && typeof value === "object") {
+				const { action, ...args } = value as Record<string, unknown>;
+				if (typeof action === "string") validateMissionWrite(action, args);
+			}
+			return value as Static<typeof tool.parameters>;
+		},
+	};
+}
+/** What a thread chat may do: read the mission as its coordinator does, read its thread, and hand off agreed work. */
+export const THREAD_ACTIONS = [
+	"get",
+	"status",
+	"tasks",
+	"task",
+	"brief",
+	"decisions",
+	"comments",
+	"activity",
+	"links",
+	"artifacts",
+	"map",
+	"answers",
+	"replaced",
+	"thread",
+	"handoff",
+] as const satisfies readonly MissionAction[];
+
+/** The mission tool of a thread chat: coordinator reads, its thread, and the handoff. It changes nothing else. */
+export function createThreadMissionTool(call: MissionCall): ToolDefinition {
+	const key = Type.String({ minLength: 1, maxLength: 128 });
+	return defineTool({
+		name: MISSION_TOOL,
+		label: "Mission",
+		description: `Read the mission this thread chat belongs to, as its coordinator sees it, and hand agreed work to the planning agent. You change nothing else.
+- get: goal, status, phases and tasks with progress, members and their states, needs-you, PRs in review and decision proposals. id: one full task with its reports.
+- status: members' states, outcomes and PRs; targetSessionId for one member with its last reply and pending question.
+- tasks: filter open (default), done or all, phase. task: id reads one task.
+- brief (optional revision), decisions (filter all for history), comments, activity (taskId, kind, since, cursor, limit), links and artifacts (taskId, filter), map, answers (id: an interview submission), replaced.
+- thread: this thread: title, state, its earlier messages with the planning agent, the latest handoff and what resolved it.
+- handoff: only after the user said yes to sending it. summary (what the user wants and what you agreed), handoffTasks [{key, title, outcome, acceptance[], dependsOn? (existing task numbers or earlier keys), prototype? {artifactId, revision} of a mockup the user chose}]. Pilot sends it to the planning agent, which proposes a revision for the user to confirm. A handoff grants nothing.`,
+		promptSnippet: "Read the shared mission and hand agreed work to the planning agent",
+		executionMode: "sequential",
+		annotations: { openWorldHint: false, destructiveHint: false },
+		parameters: Type.Object({
+			action: StringEnum(THREAD_ACTIONS),
+			id: Type.Optional(Type.Union([key, Type.Integer({ minimum: 1 })])),
+			revision: Type.Optional(Type.Integer({ minimum: 1 })),
+			filter: Type.Optional(StringEnum(["open", "done", "all"] as const)),
+			phase: Type.Optional(Type.String({ maxLength: 200 })),
+			taskId: Type.Optional(Type.Union([key, Type.Integer({ minimum: 1 })])),
+			targetSessionId: Type.Optional(key),
+			kind: Type.Optional(Type.String({ maxLength: 64 })),
+			since: Type.Optional(Type.Union([Type.String({ maxLength: 64 }), Type.Integer({ minimum: 0 })])),
+			cursor: Type.Optional(Type.String({ maxLength: 256 })),
+			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+			summary: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
+			handoffTasks: Type.Optional(
+				Type.Array(
+					Type.Object(
+						{
+							key: Type.String({ pattern: "^[A-Za-z0-9_-]{1,64}$" }),
+							title: Type.String({ minLength: 1, maxLength: 200 }),
+							outcome: Type.String({ minLength: 1, maxLength: 4000 }),
+							acceptance: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), {
+								minItems: 1,
+								maxItems: 20,
+							}),
+							dependsOn: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { maxItems: 20 })),
+							prototype: Type.Optional(
+								Type.Object(
+									{ artifactId: key, revision: Type.Integer({ minimum: 1 }) },
+									{ additionalProperties: false },
+								),
+							),
+						},
+						{ additionalProperties: false },
+					),
+					{ minItems: 1, maxItems: 20 },
+				),
+			),
+		}),
+		outputSchema: Type.Record(Type.String(), Type.Unknown()),
+		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
+			signal?.throwIfAborted();
+			const { action, ...rest } = params;
+			const args = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
+				string,
+				JsonValue
+			>;
+			const data = await call(action, args);
+			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
+		},
+	});
+}
+
+/** The mission tool for this chat's place in the mission: thread chat, coordinator or member. */
+export function missionToolFor(call: MissionCall, context: { coordinator?: string; thread?: unknown } | undefined) {
+	return context?.thread ? createThreadMissionTool(call) : createMissionTool(call, context?.coordinator === "self");
+}
+
+/** Which mission tool a context needs; a change re-registers the tool. */
+export const missionToolKind = (context: { coordinator?: string; thread?: unknown } | undefined) =>
+	context?.thread ? "thread" : context?.coordinator === "self" ? "coordinator" : "member";

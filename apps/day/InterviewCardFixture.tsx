@@ -1,9 +1,9 @@
 // Mock data only. No account, daemon or real continuation.
 import { effect, mount, Scroll, signal, View } from "nsh";
 import type { Decision, DraftIntent, ReplyIntent } from "pilot-day/native";
-import { DecisionCard } from "./DecisionCard";
-import { ScopedInterviewCard } from "./InterviewCard";
-import { openDay } from "./mockFeeds";
+import { openDay } from "./app/testing/mockFeeds";
+import { ScopedInterviewCard } from "./missions/interviews/InterviewCard";
+import { DecisionCard } from "./today/DecisionCard";
 import { Block, Button, Buttons, Caption, Column, Page, PageHead, Panel, Section, WindowCanvas } from "./ui";
 
 const day = openDay();

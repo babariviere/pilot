@@ -2,11 +2,11 @@
 // Needs you with nothing to decide, scripted results to check (deliveryDemo.ts)
 // and scripted requests (intakeDemo.ts): the Slack request cards wait behind the results.
 import { mount } from "nsh";
-import { ScriptedDelivery } from "./deliveryDemo";
-import { mirrorDelivery } from "./deliveryFeed";
-import { scriptedIntake } from "./intakeDemo";
-import { mirrorIntake } from "./intakeFeed";
-import { MockDayScreen, openDay } from "./mockFeeds";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { ScriptedDelivery } from "./missions/delivery/deliveryDemo";
+import { mirrorDelivery } from "./missions/delivery/deliveryFeed";
+import { scriptedIntake } from "./missions/intake/intakeDemo";
+import { mirrorIntake } from "./missions/intake/intakeFeed";
 
 const day = {
 	...openDay("quiet"),

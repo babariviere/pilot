@@ -4,7 +4,7 @@ import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { MissionStore } from "../../packages/daemon/src/missions.ts";
+import { MissionStore } from "../../packages/daemon/src/missions/missions.ts";
 import type { SessionSummary } from "../../packages/protocol/src/index.ts";
 import { loadBaseline } from "./baseline.ts";
 
@@ -15,7 +15,7 @@ let cleanupBaseline: (() => Promise<void>) | undefined;
 try {
 	const loaded = await loadBaseline<{
 		MissionStore: typeof MissionStore;
-	}>(baseline, new URL("../../packages/daemon/src/missions.ts", import.meta.url));
+	}>(baseline, new URL("../../packages/daemon/src/missions/missions.ts", import.meta.url));
 	cleanupBaseline = loaded.cleanup;
 	const { MissionStore: LegacyStore } = loaded.module;
 	const seed = join(home, "seed.sqlite");

@@ -15,13 +15,13 @@ import type {
 	ProjectArtifactRequest,
 	SavedArtifactContent,
 } from "@pilot/protocol";
-import { Conflict, NotFound } from "./errors.ts";
-import type { MissionStore } from "./missions.ts";
-import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
-import type { ProjectStore } from "./projects.ts";
-import type { SessionManager } from "./sessions.ts";
+import { Conflict, NotFound } from "./runtime/contracts/errors.ts";
+import type { MissionStore } from "./missions/missions.ts";
+import { canonicalJSON, OperationRejected } from "./transport/operations/operation-journal.ts";
+import type { ProjectStore } from "./projects/projects.ts";
+import type { SessionManager } from "./sessions/sessions.ts";
 import type { UserVerifications } from "./user-verification.ts";
-import { OPAQUE_ID } from "./validate.ts";
+import { OPAQUE_ID } from "./runtime/contracts/validate.ts";
 
 const id = (s: unknown): s is string => typeof s === "string" && OPAQUE_ID.test(s);
 const hash = (s: unknown): s is string => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);

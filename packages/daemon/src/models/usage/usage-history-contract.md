@@ -1,0 +1,236 @@
+# Local usage history, version 1
+
+This contract adds a **local accounting** plane, not telemetry, billing or routing. Checked against main
+`e3bb09bd` on 2026-10-21. The existing [chat accounting](ai-usage-accounting.md) and
+[telemetry boundary](../../../../telemetry/telemetry-contract.md) remain in force. New writes must implement this contract first.
+
+## Data and authority
+
+The protocol types are `UsageObservation`, `UsageHistoryStatus` and `UsageHistoryPage`, mirrored as Codable
+types in PilotCore. All numeric values are finite, nonnegative safe integers, in tokens, milliseconds or USD
+micros. Reject invalid values, do not silently coerce them. Aggregation must detect overflow and report partial
+coverage, never wrap or claim an exact saturated amount. Unknown is absent, not zero.
+
+An observation contains only:
+
+| Field | Contract |
+| --- | --- |
+| `schemaVersion` | `1` |
+| `generation` | Host-issued erasure epoch, read from status before capture; stale epochs rejected |
+| `sourceId` | Durable opaque source UUID, stable across worker restart/park and source replay |
+| `operationId` | Stable source-owned identity, max 128 restricted identifier characters, persisted before publication |
+| `revision` | Positive safe integer; source commit order, **not** arrival time or wall clock |
+| `kind` | `request` or `checkpoint` |
+| `scope` | `direct` or `child` |
+| `observedAt` | Time the evidence was observed, Unix milliseconds, not necessarily the request date |
+| `completedAt` | Optional committed physical-request completion time; omitted when unknown |
+| `coverage` | `committed`, `legacy` or `partial`; no claim of complete host/account usage |
+| `purpose` | `agent`, `control`, `follow_up`, `title`, `triage`, `classification`, `memory`, `compaction`, `other`, `unknown` |
+| `attribution` | Optional project/chat/attempt/run UUIDs; optional mission tuple `(homeId, lineageId, missionId)`, all UUIDs |
+| `physicalModel` | Optional observed `{provider, model}` identifiers, each <=128 restricted identifier characters |
+| `virtualModel` | Optional **observed** `{provider, model}` identifiers; never a newly inferred routing policy |
+| `virtualRevision` | Optional already-observed immutable policy revision, <=128 restricted identifier characters; absent if unavailable |
+| `parent` | Optional original `{sourceId, operationId}` provenance; same validation as record identity |
+| `tokens`, `cost` | Optional existing `AIUsageTokens` and `AIUsageCost`; unknown response evidence omits them, never substitutes zeros. Retain pricing revision with the estimate |
+| `activity` | Optional `compaction`, on non-additive checkpoints only; non-model activity has no inferred tokens/cost |
+| `requests`, `providerAttempts`, `retries`, `durationMs` | Optional committed/observed nonnegative integer counters |
+| `outcome` | Optional `success`, `failure`, `cancelled` or `unknown` from committed outcome evidence |
+
+The full canonical allowlisted record is at most 4 KiB. No arbitrary metadata, error text, tool names, titles,
+paths, URLs, messages, prompts, completions, headers, tokens/credentials, email, account fingerprints or request
+payloads. Model identifiers are exact catalog/response identifiers, never credential or endpoint strings. Adapter
+code must construct fields from trusted structured evidence, not extract attribution from transcript prose.
+
+Record identity is `(sourceId, operationId)`, independent of host aliases and chat titles. Equal revision and
+equal canonical record is a no-op; equal revision with differing content is a visible conflict; older revision
+is ignored. Higher revisions **replace** the entire record, including downward corrections. Kind and direct/child
+scope cannot change under one identity. New physical retries are counted only when observed. A new billable
+physical invocation needs its own operation identity; replaying its evidence does not.
+
+### Non-overlapping totals
+
+`UsageDoc` is the authoritative per-conversation replacement checkpoint. Preserve the existing direct-model and
+child-tool summary code and its replacement/roll-forward semantics, unchanged. Do not treat successive checkpoint
+values as increments. Do not add a rolled legacy total to its detailed requests.
+
+Only `request` rows with committed completion timestamps are additive in dated charts and model/purpose breakdowns.
+Unknown historical dates must be represented by checkpoints, not undated additive requests.
+`checkpoint` rows are a **separate, non-additive reconciliation view**, including undated legacy totals.
+This first version does not invent dated
+residuals by subtracting incompatible snapshots. A chart is explicitly observed/partial when checkpoint coverage
+exceeds detailed evidence. Consumers must never sum the two views.
+
+For delegated work, use the actual child request as the sole additive row where available. Parent tool usage is a
+child-scope checkpoint only, never another additive request. Direct child rows retain their original source and
+operation IDs when observed through a parent. The root summary and the child's summary are not two costs. Forks
+reference inherited evidence with its original identity, not a new charge; only newly committed requests get new
+IDs. Reset and compaction change context, not usage identity. Deterministic compaction without inference creates
+no token or cost row. Background work uses its own stable operation and purpose, not a fabricated chat request.
+
+Input excludes cache-read/cache-write classes. Reasoning is a subset of output. Cache efficiency keeps numerator
+`cacheRead` and denominator `input + cacheRead`. Retry/error/aborted output can have committed usage. No response
+is not proof of zero usage. Timing/retries may remain partial after a crash even when tokens recover.
+
+Catalog estimates are not invoices, marginal subscription spend or quota. Missing/zero placeholder prices stay
+unavailable. Retain the pricing revision that produced each observation, do not silently reprice history. Different
+versions can be summed only as a labelled mixed-version estimate. Physical provenance must come from the request
+that ran, never the current chat model. Existing virtual selections may be reported if observed. No new routing
+lifecycle, configuration, credential affinity, provider polling or paid calls are required.
+
+## Storage, recovery and migration
+
+One `accounting/usage-history.sqlite` per execution host, under its private Pilot home, mode 0600 in a mode 0700 directory.
+All SQLite work/fsync is off the daemon event loop in a dedicated worker. Transactions durably commit before
+acknowledgement (`synchronous=FULL`, bounded rollback journal). A crash before ack is uncertain: replay the same
+committed source identity/revision, never reissue inference. Failed writes expose partial/unavailable status and
+cannot stop, retry, reroute or otherwise change agent work.
+
+Storage schema version lives in `PRAGMA user_version`. Version 0 initializes transactionally; unknown versions or corrupt
+databases fail closed without overwriting/quarantining copies. No backup of sensitive accounting is created.
+Storage v2 uses SQLite binary JSON (JSONB) rather than JSON text. Opening a v1 store transactionally converts
+its records without changing identities, revisions, counters, generation or coverage. A one-time worker-only
+`VACUUM` packs the smaller records and indexes; it needs temporary disk space up to the database size.
+If packing fails, the converted store remains usable and freed pages can be reused. Routine writes/reads
+never run `VACUUM`. The public observation/query/status schema remains v1 and returns ordinary JSON.
+Older runtimes reject storage v2 rather than misread it; runtime rollback cannot downgrade this store.
+Existing `ai-usage.json` files remain authoritative compatibility files and are not rewritten by migration.
+Import at most one undated legacy checkpoint per chat/scope from their already-bounded summary on normal session
+load, in bounded batches. Stable IDs and revisions make rerunning migration idempotent. Never walk transcripts or
+invent old model/date attribution. Source adapters recover committed detail using bounded durable evidence cursors
+on normal recovery, independent of compaction/context availability. Missing pre-capture provenance stays unknown.
+
+The store is a bounded materialization, not a second transcript or permanent ledger. Default retention is **30
+days** of locally observed evidence, including checkpoints by their observation time; request dates older than the
+window cannot be resurrected by replay. A monotonic persisted retention floor rejects stale replay. Maximum
+**250,000 rows**, **512 MiB database** (plus bounded SQLite transaction journal), **32 pending messages / 256 KiB
+ingress**. Expire in <=500-row batches on writes/startup and hourly idle maintenance, not on UI repaint.
+Reads immediately exclude expired rows; idle physical cleanup can lag by at most an hour while the host is running.
+Capacity rejects new writes rather than evicting replay fences or growing without bound.
+The row and byte caps are independent; reaching either still rejects new records. Raising them
+does not guarantee a complete 30-day window at every workload or recover already rejected observations.
+Rejections/expiration/conflicts and store availability are
+visible through content-free status. Counters survive restart; volatile queue overflow is explicitly process-local.
+At most one outstanding maintenance call. Closed/draining stores refuse new work and join before home removal.
+
+### Lifecycle and erasure
+
+Archive and park retain data only within the same 30-day window. Rename, fork and reset do not relabel/move old
+charges. Delete a chat: delete attributed rows **before** removing its session directory and fence old writers by
+rotating the host generation. Clear usage history: atomically delete all rows, rotate generation, advance the
+capture floor, reset coverage start. No durable tombstone list that can grow without bound. Old in-flight reports
+are rejected. Capture adapters must acquire the new generation and start at the new floor, never replay cleared
+history. Never transplant old operation evidence into a new generation. After any erasure, legacy cumulative
+summary import is disabled for that store: a later summary timestamp cannot prove which lifetime tokens came
+after deletion. New capture adapters resume with new committed operations only.
+Clearing diagnostics does not clear accounting; clearing accounting does not change credentials, runtime
+history or existing composer summaries. This is logical deletion using SQLite secure_delete, not a guarantee
+against filesystem snapshots/backups or SSD forensic recovery.
+
+## Access and query budgets
+
+Internal store methods are trusted daemon APIs, not agent tools or a generic SQLite/SQL endpoint. Native clients
+can receive bounded projections through the existing authenticated/loopback host boundary; access does not enroll,
+connect, wake or authorize a devbox. Responses carry host identity separately; dedupe by canonical daemon/source/
+operation identity, never host display name. Unsupported/offline hosts are omissions, not zeros. Canonical mission
+identity does not become host-scoped. No cross-host background replication of the raw accounting database.
+
+Queries use indexed completion time and keyset paging, at most **100 records / 512 KiB response**, time ranges
+<=366 days and <=400 UTC buckets per chart. UTC half-open windows `[from, to)`; day buckets are multiples of
+86,400,000 ms, independent of locale/DST. Unknown dates appear only in the separate reconciliation view. The store
+returns raw bounded pages, not an unbounded in-memory read or all-history scan; the query layer bounds aggregation,
+cancellation and scope filters separately. No read opens a kernel, parses history, calls a provider or polls hosts.
+Retention may make “All” mean retained history only. Coverage/status accompanies all results.
+The [versioned query API and native-client handoff](usage-queries.md) specify aggregate coverage, checkpoint
+reconciliation, group keys and paging. The first dashboard pass is **Local only**; devbox collection and
+cross-host aggregation are deferred, not release prerequisites. Queries reduce indexed retained
+evidence inside the existing storage worker, not by hydrating the ledger in the daemon or UI.
+
+Local accounting identifiers are outside diagnostics reads and automatic repair evidence. Do not attach raw rows
+to logs, exceptions, artifacts or remote telemetry. Existing explicit telemetry allowlists remain unchanged and
+continue excluding provider/model/policy/project/chat/operation/account identities. Remote telemetry remains
+opt-in under its own contract. No network export of this new plane by default.
+
+## Verification and rollout
+
+### Lossless storage compaction probe
+
+`node packages/daemon/src/models/usage/usage-compaction.bench.ts 250000` uses only synthetic records in a
+temporary directory. It compares 100,000 canonical v1 text rows with their migrated JSONB rows,
+asserting identical status, request pages, totals, buckets and duplicate acknowledgements. It then
+adds binary rows in bounded transactions until the requested count or byte cap is reached.
+
+One macOS arm64 / Node 24.21.0 run reduced the 100,000-row database from 316,063,744 to
+193,146,880 bytes (38.9%), including page packing, in 4.46 seconds. Twelve full-range daily
+aggregate samples had median/p95 259/283 ms before and 197/217 ms after. This larger synthetic
+record shape reached the byte cap at roughly 238,000 committed rows (535,506,944 bytes), before
+the row cap; aggregate median/p95 there was 493/798 ms. These are single-process synthetic
+observations, not UI latency, event-loop or RSS acceptance evidence. The one-time migration can
+delay initial worker reads/capture acknowledgements; no inference is retried or replayed.
+Actual savings depend on row shape and fragmentation. The running user's store was not modified,
+and historical lost observations were not reconstructed. Existing dashboard release gates remain.
+
+Required fixtures: v0 initialization/unknown schema, restart and duplicate/out-of-order/corrected input, equal-revision
+conflict, crash before/after commit/ack, corrupt/oversize state, bounded queue/capacity, UTC boundaries, retention,
+delete/clear fencing and checkpoint/detail/child overlap. TS/PilotCore JSON parity must cover optional unknowns.
+Capture adapters must separately prove lifecycle recovery through replay, fork, reset, compaction, park and restart.
+Store tests alone do not prove those capture seams or complete historical coverage.
+
+### Kernel source adapter
+
+The kernel observes the existing physical registry stream, inside native offline/subscription retries, without
+changing model/auth/options resolution. Task wrappers carry structured purpose and conversation/run identity, and
+observe successful UsageDoc commits. Numeric direct/child UsageDoc checkpoints remain a separate reconciliation
+view. Detailed raw responses remain `partial` until matching ledger contributions are observed; they never replace
+UsageDoc or get added to a parent tool's overlapping checkpoint. New physical invocations have distinct operations.
+Already-scheduled deferred fetch/cancel operations reuse the original identity and never introduce new polling.
+Request estimates retain their capture-time catalog revision; historical UsageDoc checkpoint estimates use the
+explicit `UsageDoc:unversioned` marker because the source has no original pricing revision, rather than claiming the
+current catalog produced old totals.
+
+Each runtime owns one `usage-capture.json` source outbox beside its durable storage, private mode 0600, at most 32
+records / 132 KiB and one bounded `.pending` crash remnant. Asynchronous fsync/rename persists source and operation
+identity before dispatch. This source file is independent of Harness storage: capture I/O failures cannot fail
+the agent's storage, retry work or change dispatch. Full outboxes omit new detail instead of blocking work, so
+coverage stays partial. Publication is asynchronous and acknowledged; a lost acknowledgement replays the same
+source/operation/revision, with no transcript scan. Retention/capture floors apply on new capture; recovered source
+evidence keeps its original epoch, date and attribution and cannot be transplanted into an erased epoch.
+Runtime source evidence, like UsageDoc, is not part of the dashboard's erasable materialization.
+
+Child profiles observe their existing request path and publish through the private parent bridge. Their own source
+UUID and original parent reference survive worker replacement. Forks reuse existing source evidence rather than
+charging inherited requests again. Attempt/run UUIDs encode source-owned durable conversation/input identities,
+not titles or current model settings. Mission `homeId` is the canonical home's daemon UUID, paired with its lineage,
+never an execution-host alias. Unavailable policy revisions, prices, dates, retry detail and timing remain absent.
+Deterministic compactions are non-additive activity checkpoints with no inferred token/cost contribution.
+
+Offscreen faux source-overhead probe (not a release pass): three serial fresh pairs, 36 zero-latency responses per
+variant, 400 seeded entries (about 700 KiB), real runtime SQLite plus the candidate source file. Including source
+publication/acknowledgement drain, baseline median/p95 was 5.0/10.6 ms and capture was 46.6/133.1 ms. Durable source
+writes dominate an instantaneous faux response, and the tail is a verification risk, not a provider-latency or UI
+claim. This did not measure daemon RSS/event-loop p99, live providers, installed packaging or on-screen smoothness;
+the unchanged 16 MiB gate and dashboard release verification remain separate and unresolved.
+
+Before dashboard release measure faux large retained histories and streaming versus baseline: p95 bounded page
+query <=50ms and <=512KiB; no new uninterrupted main-thread accounting task >10ms; event-loop p99 regression
+<=5ms and peak RSS regression <=16MiB. These are acceptance budgets, not measured results. On-screen UI performance
+requires separate permission and evidence; routine checks stay offscreen. Full suites/packaging run in remote CI.
+Rollout preserves direct selection, composer summaries, quota gates and informational budgets. Larger retention,
+content/credential storage or remote export needs separate user review, not a routine schema revision.
+
+### Offscreen allocation verification (not a release pass)
+
+The initial +51.34 MiB result was confounded by seed-worker allocator state and an inherited agent preload.
+Corrected fresh-process, serial paired measurements separate bare worker, empty
+store, retained history and sustained query/write allocations. Practical statement/validation/RPC fixes reduce
+write peaks from median 45.44 to 38.03 MiB; idle store peaks remain about 30–32 MiB. Query peaks grow from about
+51–61 MiB at 1,500 pages to about 80 MiB at 6,000 serialized pages; these are measurements, not memory bounds.
+The **16 MiB gate remains unchanged and failing**. No inference, native window, deployment or merge was used.
+Capture/provider/native/installed-daemon/CI/packaging verification remains separate; these store measurements
+do not authorize default dashboard rollout or completion of dependent tasks.
+
+A release-generator follow-up removes the leaf
+worker's per-isolate TypeScript parser without changing the dedicated worker or storage semantics. Three paired
+synthetic runs using the shipped Node executable and actual generator reduce idle median peak from 25.14 to
+14.58 MiB, but 6,000 serialized pages still peak at median 46.66 MiB (baseline 72.91). Raw/final pairs are retained.
+These are isolated worker-leaf results, not installed full-daemon or rebuilt-package evidence. The **16 MiB gate
+still fails and is not waived**; architecture or budget alternatives require explicit review before default rollout.

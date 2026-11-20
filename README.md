@@ -20,12 +20,12 @@ public Day release, and Linux desktop is deferred.
 - **Integrations:** work with GitHub, Slack, Linear, MCP, and Postgres.
 - **Local history:** retain conversations, artifacts, knowledge, and usage records.
 
-[User documentation](docs/README.md) · [Technical documentation](docs/technical/README.md)
+[User documentation](docs/README.md)
 
 ## Development
 
 Start with the [Day development guide](apps/day/README.md) and
-[development reference](docs/technical/development.md).
+[development reference](DEVELOPMENT.md).
 
 ## License
 

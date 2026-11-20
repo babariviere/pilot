@@ -1,0 +1,445 @@
+// Today's New section over the native root: the selected project's request
+// pages, the user's Later and Discard, and an explicit Start. A read only
+// reads. Each write names the exact request, its revision and the project
+// context shown; Rust saves the operation and sends it once. A write whose
+// answer is lost stays Unknown, also after reopening: Check reads that one
+// operation's saved receipt and never sends again (apps/day/missions/intake/day-intake.md).
+import type { Signal } from "nsh";
+import type { Intake, Request } from "pilot-day/native";
+import { call, type Reply } from "../../sources/bridge";
+import { LOST, OPEN_LOST, type Refusal, readReason, writeRefusal } from "../../sources/refusals";
+import { CallOrder, Feed, mirror } from "../../sources/source";
+
+/** The user's triage of a request. Separate from any Slack or Linear status. */
+export type Triage = "new" | "later" | "discarded";
+
+/** A request as shown, with the exact revision a write names. */
+export type IntakeRow = { request: Request; revision: number };
+
+/** One intake write Pilot saved and sent. */
+export type IntakeOp = {
+	operationId: string;
+	itemId: string;
+	kind: "triage" | "start";
+	/** What a triage asked for. Null for a Start. */
+	asked: Triage | null;
+	/** The mission a Start chose. Null for standalone work. */
+	missionId: string | null;
+	/** The chat a Start names. Null for a triage. */
+	sessionId: string | null;
+	/** Unknown until a receipt says otherwise; checking while Check reads it. */
+	delivery: "unknown" | "checking" | "accepted" | "rejected";
+	/** The request's title when Pilot read it, else empty. */
+	title: string;
+	/** Why the service refused it, exactly as written. */
+	reason: string;
+};
+
+/** What the New section shows. */
+export type IntakeView = {
+	/** "reading" before the first answer; "unavailable" when no read could be shown. */
+	availability: "reading" | "live" | "unavailable";
+	/** Why the requests are not shown, or why what is shown is from an earlier read. */
+	reason: string;
+	/** The project configuration the rows were read under. Every write names it. */
+	contextDigest: string;
+	/** The project the rows belong to, or "" before a read. */
+	projectId: string;
+	/** Sources, their trouble and unshown rows, from Rust's projection of the newest read. */
+	intake: Intake;
+	fresh: IntakeRow[];
+	later: IntakeRow[];
+	discarded: IntakeRow[];
+	/** Writes whose result is not known. Pilot looks them up by itself; Check is the fallback. */
+	unsettled: IntakeOp[];
+	/** Writes settled while this window was open, oldest first. */
+	settled: IntakeOp[];
+	/** Confirmed Starts of standalone work, from every saved write: the chats they created. */
+	started: IntakeOp[];
+	/** Requests with a write on its way. */
+	sending: string[];
+	/** Whether this window can hand a request's saved link to the browser, as the native root last said. */
+	canOpen: boolean;
+};
+
+/** What a write or a Check did, for the user. */
+export type IntakeResult = {
+	status: "accepted" | "stale" | "rejected" | "unknown";
+	message: string;
+	operationId: string | null;
+};
+
+export type TriageIntent = { itemId: string; revision: number; contextDigest: string; state: Triage };
+export type StartIntent = {
+	itemId: string;
+	revision: number;
+	contextDigest: string;
+	missionId: string | null;
+	manageStatus?: boolean;
+};
+/** Opens one shown Slack request's saved message link. Nothing is saved or sent. */
+export type OpenIntent = { itemId: string; revision: number };
+
+/** The New section's source. The connected window has one; the mock window has none. */
+export interface IntakeSource {
+	view(): IntakeView;
+	onChange(listener: (view: IntakeView) => void): () => void;
+	/** Reads the requests again. Passive: it sends, starts and settles nothing. */
+	read(): Promise<void>;
+	triage(intent: TriageIntent): Promise<IntakeResult>;
+	start(intent: StartIntent): Promise<IntakeResult>;
+	/** Reads one unsettled write's saved receipt. Never sends the write again. */
+	check(operationId: string): Promise<IntakeResult>;
+	/**
+	 * Shows the saved Slack message of exactly the request shown in the browser,
+	 * once, for one press. Native reads the request again first; a changed one
+	 * opens nothing. Nothing is saved, sent or retried.
+	 */
+	open(intent: OpenIntent): Promise<IntakeResult>;
+	dispose(): void;
+}
+
+const NO_INTAKE: Intake = { watched: false, sources: [], requests: [], trouble: [], more: "" };
+
+/** What the root returns for a read, as far as the screen uses it. */
+type RawItem = { id?: unknown; revision?: unknown; title?: unknown };
+type Snapshot = {
+	version: 1;
+	projectId?: string;
+	contextDigest: string;
+	sources: { items?: RawItem[] }[];
+	intake: Intake;
+	later?: Intake;
+	discarded?: Intake;
+	claimed?: Intake;
+	canOpenUrl?: boolean;
+};
+type Summary = {
+	operationId: string;
+	itemId: string;
+	kind: "intake-triage" | "intake-start";
+	asked?: Triage | null;
+	missionId?: string | null;
+	sessionId?: string | null;
+	state: string;
+	receipt?: { state?: string; reason?: string } | null;
+};
+
+function isIntake(x: unknown): x is Intake {
+	const i = x as Intake | null;
+	return !!i && typeof i === "object" && Array.isArray(i.requests) && Array.isArray(i.trouble);
+}
+
+function snapshotOf(x: unknown): Snapshot | null {
+	const s = x as Snapshot | null;
+	if (!s || typeof s !== "object" || s.version !== 1 || typeof s.contextDigest !== "string") return null;
+	if (!Array.isArray(s.sources) || !isIntake(s.intake)) return null;
+	return s;
+}
+
+function summariesOf(x: unknown): Summary[] | null {
+	if (!Array.isArray(x)) return null;
+	return x.filter(
+		(o): o is Summary =>
+			!!o &&
+			typeof o.operationId === "string" &&
+			typeof o.itemId === "string" &&
+			(o.kind === "intake-triage" || o.kind === "intake-start") &&
+			typeof o.state === "string",
+	);
+}
+
+/** Why requests could not be read, in one calm sentence. */
+export function intakeReason(refusal: Refusal): string {
+	return readReason(refusal, {
+		denied: "Pilot does not have access to read new requests here.",
+		unavailable: "Pilot could not read new requests right now.",
+		other: "Pilot could not read new requests.",
+	});
+}
+
+/** What a refused open means. Only an open whose answer is lost may have shown the message. */
+function refusedOpen(refusal: Refusal): IntakeResult {
+	const unavailable = "Pilot cannot open links in this window. Nothing opened.";
+	const message = writeRefusal(
+		refusal,
+		{
+			lost: OPEN_LOST,
+			unknown: OPEN_LOST,
+			stale: "This request changed since Pilot read it. Nothing opened. Look again first.",
+			offline: "Pilot could not reach its service to check this link. Nothing opened.",
+			invalid: "Pilot only opens Slack message links. Nothing opened.",
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not open this link. Nothing opened.",
+		},
+		"Nothing opened.",
+	);
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "rejected";
+	return { status, message, operationId: null };
+}
+
+/** What a refused write means, before anything was saved or sent. */
+function refused(refusal: Refusal): IntakeResult {
+	const unavailable = "This is not available here yet. Nothing was sent.";
+	const message = writeRefusal(refusal, {
+		unknown: LOST,
+		stale: "This request changed since Pilot read it. Nothing was sent. Look again first.",
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not send this. Nothing was sent.",
+	});
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "rejected";
+	return { status, message, operationId: null };
+}
+
+/** The New section over this window's native root. */
+export class ConnectedIntake implements IntakeSource {
+	#window: string;
+	#snapshot: Snapshot | null = null;
+	#refusal: Refusal | null = null;
+	#ops: Summary[] = [];
+	#order = new CallOrder();
+	#sending = new Set<string>();
+	#checking = new Set<string>();
+	/** Operations this window sent or checked, so their settled result can show. */
+	#mine: string[] = [];
+	/** Titles from every read in this window, for writes whose request left the read. */
+	#titles = new Map<string, string>();
+	#feed = new Feed(
+		() => this.view(),
+		(id) => this.#lookUp(id),
+	);
+	#reads = this.#feed.coalesce(async () => {
+		await this.#call("day.intake.read", {});
+		this.#feed.publish();
+	});
+
+	constructor(window: string) {
+		this.#window = window;
+	}
+
+	view(): IntakeView {
+		const s = this.#snapshot;
+		const revisions = new Map<string, number>();
+		for (const source of s?.sources ?? []) {
+			for (const item of source.items ?? []) {
+				if (typeof item.id === "string" && typeof item.revision === "number") revisions.set(item.id, item.revision);
+			}
+		}
+		const rows = (intake: Intake | undefined): IntakeRow[] =>
+			(intake?.requests ?? [])
+				.filter((r) => revisions.has(r.id))
+				.map((request) => ({ request, revision: revisions.get(request.id) as number }));
+		const op = (o: Summary): IntakeOp => ({
+			operationId: o.operationId,
+			itemId: o.itemId,
+			kind: o.kind === "intake-start" ? "start" : "triage",
+			asked: o.asked ?? null,
+			missionId: o.missionId ?? null,
+			sessionId: typeof o.sessionId === "string" ? o.sessionId : null,
+			delivery:
+				o.state === "accepted" || o.state === "rejected"
+					? o.state
+					: this.#checking.has(o.operationId) || this.#feed.checking(o.operationId)
+						? "checking"
+						: "unknown",
+			title: this.#titles.get(o.itemId) ?? "",
+			reason: o.receipt?.reason ?? "",
+		});
+		const sent = this.#ops.filter((o) => o.state !== "not-sent");
+		const unsettled = sent.filter((o) => o.state !== "accepted" && o.state !== "rejected").map(op);
+		const settled = this.#mine
+			.map((id) => sent.find((o) => o.operationId === id))
+			.filter((o): o is Summary => !!o && (o.state === "accepted" || o.state === "rejected"))
+			.map(op);
+		const reason = this.#refusal
+			? s
+				? `${intakeReason(this.#refusal)} What shows is from Pilot's last read.`
+				: intakeReason(this.#refusal)
+			: "";
+		return {
+			availability: s ? "live" : this.#refusal ? "unavailable" : "reading",
+			reason,
+			contextDigest: s?.contextDigest ?? "",
+			projectId: typeof s?.projectId === "string" ? s.projectId : "",
+			intake: s?.intake ?? NO_INTAKE,
+			fresh: rows(s?.intake),
+			later: rows(s?.later),
+			discarded: rows(s?.discarded),
+			unsettled,
+			settled,
+			started: sent
+				.filter((o) => o.kind === "intake-start" && o.state === "accepted" && !o.missionId && o.sessionId)
+				.map(op),
+			sending: [...this.#sending],
+			canOpen: s?.canOpenUrl === true,
+		};
+	}
+
+	onChange(listener: (view: IntakeView) => void): () => void {
+		return this.#feed.onChange(listener);
+	}
+
+	/** One exact call. Only the newest call's answer replaces what is shown. */
+	async #call(name: string, args: unknown) {
+		const order = this.#order.next();
+		const r = await call<unknown>(this.#window, name, args);
+		if (this.#feed.closed) return r;
+		if (r.ok && this.#order.apply(order)) {
+			const snapshot = snapshotOf(r.snapshot);
+			const ops = summariesOf(r.value.operations);
+			if (snapshot) {
+				// Back from a refused read: Pilot looks every Unknown write up again.
+				if (this.#refusal) this.#feed.restart();
+				this.#snapshot = snapshot;
+				this.#refusal = null;
+				for (const intake of [snapshot.intake, snapshot.later, snapshot.discarded, snapshot.claimed]) {
+					for (const request of intake?.requests ?? []) this.#titles.set(request.id, request.title);
+				}
+			} else if (name === "day.intake.read") {
+				this.#refusal = "invalid";
+			}
+			if (ops) {
+				this.#ops = ops;
+				this.#feed.watch(this.view().unsettled.map((o) => o.operationId));
+			}
+		} else if (!r.ok && name === "day.intake.read" && this.#order.apply(order)) {
+			this.#refusal = r.refusal;
+		}
+		return r;
+	}
+
+	read(): Promise<void> {
+		return this.#reads();
+	}
+
+	/** One automatic Check: a receipt read only. It never sends the write again. */
+	async #lookUp(operationId: string): Promise<void> {
+		const r = await this.#call("day.intake.check", { operationId });
+		if (r.ok && !this.#mine.includes(operationId)) this.#mine.push(operationId);
+		this.#feed.publish();
+	}
+
+	/** Sends one write for `itemId` once. A request with a write on its way or unsettled takes no other. */
+	async #write(itemId: string, name: string, args: Record<string, unknown>): Promise<IntakeResult> {
+		if (this.#sending.has(itemId)) return refused("busy");
+		if (this.view().unsettled.some((o) => o.itemId === itemId)) {
+			return {
+				status: "unknown",
+				message: "An earlier change to this request is not confirmed. Check it first.",
+				operationId: null,
+			};
+		}
+		this.#sending.add(itemId);
+		this.#feed.publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call(name, args);
+		} finally {
+			this.#sending.delete(itemId);
+		}
+		if (!r.ok) {
+			// A lost answer may hide a saved operation: the read lists it as Unknown.
+			void this.read();
+			this.#feed.publish();
+			return refused(r.refusal);
+		}
+		const outcome = r.value.outcome as {
+			operationId?: unknown;
+			state?: unknown;
+			receipt?: { reason?: unknown };
+		} | null;
+		const id = typeof outcome?.operationId === "string" ? outcome.operationId : null;
+		if (id) this.#mine.push(id);
+		// A write whose answer came without a fresh read keeps what was shown; read once more.
+		if (!snapshotOf(r.snapshot)) void this.read();
+		this.#feed.publish();
+		if (outcome?.state === "accepted") return { status: "accepted", message: "", operationId: id };
+		if (outcome?.state === "rejected") {
+			const reason = typeof outcome.receipt?.reason === "string" ? outcome.receipt.reason : "";
+			return {
+				status: "rejected",
+				message: reason ? `Pilot's service refused it: ${reason}` : "Pilot's service refused it.",
+				operationId: id,
+			};
+		}
+		return { status: "unknown", message: LOST, operationId: id };
+	}
+
+	triage(intent: TriageIntent): Promise<IntakeResult> {
+		const { itemId, revision, contextDigest, state } = intent;
+		return this.#write(itemId, "day.intake.triage", { itemId, revision, contextDigest, state });
+	}
+
+	start(intent: StartIntent): Promise<IntakeResult> {
+		const { itemId, revision, contextDigest, missionId, manageStatus } = intent;
+		const args: Record<string, unknown> = { itemId, revision, contextDigest };
+		if (missionId) args.missionId = missionId;
+		if (manageStatus) args.manageStatus = true;
+		return this.#write(itemId, "day.intake.start", args);
+	}
+
+	async check(operationId: string): Promise<IntakeResult> {
+		if (this.#checking.has(operationId)) return refused("busy");
+		this.#checking.add(operationId);
+		this.#feed.publish();
+		let r: Reply<unknown>;
+		try {
+			r = await this.#call("day.intake.check", { operationId });
+		} finally {
+			this.#checking.delete(operationId);
+		}
+		if (!this.#mine.includes(operationId)) this.#mine.push(operationId);
+		this.#feed.publish();
+		if (!r.ok) {
+			return {
+				status: "unknown",
+				message: "Pilot could not check it now. Nothing was sent; it stays not confirmed.",
+				operationId,
+			};
+		}
+		const outcome = r.value.outcome as { state?: unknown } | null;
+		if (outcome?.state === "accepted" || outcome?.state === "rejected") {
+			return { status: outcome.state, message: "", operationId };
+		}
+		return {
+			status: "unknown",
+			message: "Pilot's service has no result for it yet. Nothing was sent again.",
+			operationId,
+		};
+	}
+
+	async open(intent: OpenIntent): Promise<IntakeResult> {
+		// One press, one call: an open is never queued, saved or tried again.
+		const r = await call<unknown>(this.#window, "day.intake.open", {
+			itemId: intent.itemId,
+			revision: intent.revision,
+		});
+		if (!r.ok) {
+			if (r.refusal === "stale") void this.read();
+			return refusedOpen(r.refusal);
+		}
+		return { status: "accepted", message: "", operationId: null };
+	}
+
+	dispose(): void {
+		this.#feed.close();
+	}
+}
+
+/** The New section's view, mirrored in one signal that only the source's listener sets. */
+export type IntakeMirror = {
+	source: IntakeSource;
+	view: Signal<IntakeView>;
+	close: () => void;
+};
+
+/** Mirrors `source`'s view. Rows that arrive or leave glide to their places. */
+export function mirrorIntake(source: IntakeSource): IntakeMirror {
+	const shape = (v: IntakeView) =>
+		[v.fresh, v.later, v.discarded, v.unsettled]
+			.map((l) => l.map((r) => ("request" in r ? r.request.id : r.operationId)).join(","))
+			.join("|");
+	return { source, ...mirror(source, source.view(), shape) };
+}

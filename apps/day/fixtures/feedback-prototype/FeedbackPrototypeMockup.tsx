@@ -4,12 +4,12 @@
 // mockups, and the fix built from the user's choice. Choosing here sends nothing.
 import { mount, Scroll, signal, Text, View } from "nsh";
 import type { DecisionArtifact } from "pilot-day/native";
-import { createShelf, PinnedArtifacts } from "../../ArtifactShelf";
-import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "../../artifactReads";
-import { FeedbackQuestion } from "../../FeedbackQuestion";
-import type { FeedbackItem, StepResult, UserFeedbackQuestion } from "../../feedbackFeed";
-import type { ChatStep } from "../../feedbackSteps";
-import { QuestionArtifacts } from "../../QuestionArtifacts";
+import { createShelf, PinnedArtifacts } from "../../artifacts/ArtifactShelf";
+import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "../../artifacts/artifactReads";
+import { FeedbackQuestion } from "../../feedback/FeedbackQuestion";
+import type { FeedbackItem, StepResult, UserFeedbackQuestion } from "../../feedback/feedbackFeed";
+import type { ChatStep } from "../../feedback/feedbackSteps";
+import { QuestionArtifacts } from "../../missions/interviews/QuestionArtifacts";
 import { Button, MarkedLine, Tab, TabBar } from "../../ui";
 
 type State = "proposal" | "question" | "fix";

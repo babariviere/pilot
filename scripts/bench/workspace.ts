@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { createWorkspace, dissociateWorkspace, type Runner } from "../../packages/daemon/src/workspaces.ts";
+import { createWorkspace, dissociateWorkspace, type Runner } from "../../packages/daemon/src/workspaces/workspaces.ts";
 
 const exec = promisify(execFile);
 const [source, flag] = process.argv.slice(2);

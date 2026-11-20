@@ -14,8 +14,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { parseArgs } from "node:util";
-import { operations, threadCpuMs } from "../../packages/daemon/src/event-loop-watchdog.ts";
-import { MissionStore } from "../../packages/daemon/src/missions.ts";
+import { operations, threadCpuMs } from "../../packages/daemon/src/runtime/process/event-loop-watchdog.ts";
+import { MissionStore } from "../../packages/daemon/src/missions/missions.ts";
 import type { SessionSummary } from "../../packages/protocol/src/index.ts";
 import { loadBaseline } from "./baseline.ts";
 
@@ -79,7 +79,7 @@ let cleanupBaseline: (() => Promise<void>) | undefined;
 async function baselineStore(commit: string): Promise<Store> {
 	const loaded = await loadBaseline<{ MissionStore: Store }>(
 		commit,
-		new URL("../../packages/daemon/src/missions.ts", import.meta.url),
+		new URL("../../packages/daemon/src/missions/missions.ts", import.meta.url),
 	);
 	cleanupBaseline = loaded.cleanup;
 	return loaded.module.MissionStore;

@@ -1,9 +1,9 @@
 // Real Day views with bounded, fictional scope replies and the saved interview fixture.
 import { keymap, mount, View } from "nsh";
 import { type Planning, type PlanRow, TodayFeed } from "pilot-day/native";
-import { mirrorDay } from "./day";
-import { MockDayScreen, openPlanning } from "./mockFeeds";
-import { mirrorScope, type ScopeSource, todayProject } from "./todayScope";
+import { mirrorDay } from "./app/day";
+import { MockDayScreen, openPlanning } from "./app/testing/mockFeeds";
+import { mirrorScope, type ScopeSource, todayProject } from "./today/todayScope";
 import { Block, Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("interview");

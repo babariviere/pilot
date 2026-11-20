@@ -1,3 +1,4 @@
 import { mount } from "nsh";
-import { Fixture } from "./insightsFixtureData";
+import { Fixture } from "./insights/insightsFixtureData";
+
 mount(() => <Fixture />);

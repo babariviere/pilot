@@ -3,5 +3,10 @@
 set -euo pipefail
 # shellcheck source=apps/day/scripts/build-env.sh
 source "$(dirname "$0")/build-env.sh"
-export CARGO="$NSH_DAY_REAL_CARGO"
-exec "$NSH_DAY_REAL_CARGO" "$@"
+cargo_path="$(type -P cargo || true)"
+if [[ ! -x "$cargo_path" || "$cargo_path" -ef "$0" ]]; then
+	echo 'Day requires Cargo on PATH.' >&2
+	exit 127
+fi
+export CARGO="$cargo_path"
+exec "$cargo_path" "$@"

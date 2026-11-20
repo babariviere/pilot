@@ -1,8 +1,8 @@
 // Test-only: styled controls and the screen agent's request handling over the injected native host channel.
 // Every control and value here is invented.
 import { mount, signal } from "nsh";
-import { call } from "./bridge";
-import { installScreenAgent } from "./screenAgent";
+import { installScreenAgent } from "./screen-agent/screenAgent";
+import { call } from "./sources/bridge";
 import {
 	AgentScope,
 	Block,

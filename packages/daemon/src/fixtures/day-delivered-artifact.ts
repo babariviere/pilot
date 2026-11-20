@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { ArtifactStore, nshSource as capturedNsh } from "@pilot/artifacts";
-import { nativeIntakeFixture } from "../native-intake.fixture.ts";
+import { nativeIntakeFixture } from "../day/intake/native-intake.fixture.ts";
 
 const f = await nativeIntakeFixture();
 const worker = await f.sessions.spawnDurable(

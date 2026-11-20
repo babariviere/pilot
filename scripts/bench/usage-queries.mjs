@@ -5,9 +5,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const [mode, source = "packages/daemon/src", home] = process.argv.slice(2);
+const currentSource = fileURLToPath(new URL("../../packages/daemon/src/models/usage/", import.meta.url));
+const [mode, source = currentSource, home] = process.argv.slice(2);
 const now = 1792530001000;
 const day = 86400000;
 const sourceId = "22222222-2222-4222-8222-222222222222";
@@ -47,7 +48,7 @@ if (!mode) {
 	assert.equal(sources.length, 0);
 	for (const [label, directory] of [
 		["baseline", process.env.USAGE_QUERY_BASELINE],
-		["candidate", process.env.USAGE_QUERY_CANDIDATE ?? "packages/daemon/src"],
+		["candidate", process.env.USAGE_QUERY_CANDIDATE ?? currentSource],
 	]) {
 		if (!directory) continue;
 		const home = await mkdtemp(join(tmpdir(), "usage-query-probe-"));

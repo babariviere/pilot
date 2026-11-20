@@ -1,0 +1,486 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { readFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type TestContext, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import type { ProjectDashboard, ProjectDashboardCounts, ServerMessage, SessionSummary } from "@pilot/protocol";
+import { WebSocket } from "ws";
+import { MissionReports } from "../../missions/threads/mission-reports.ts";
+import type { MissionService } from "../../missions/mission-service.ts";
+import { MissionStore } from "../../missions/missions.ts";
+import type { ModelCatalog } from "../../models/models.ts";
+import { ProjectMemoryService } from "../memory/project-memory.ts";
+import { ProjectStore } from "../projects.ts";
+import type { SessionManager } from "../../sessions/sessions.ts";
+import type { TerminalManager } from "../../sessions/terminals/terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "../../testing/daemon-server.ts";
+import { sessionObservers } from "../../testing/session-observers.ts";
+
+async function until<T>(check: () => T | undefined | false): Promise<T> {
+	const deadline = Date.now() + 3_000;
+	for (;;) {
+		const value = check();
+		if (value) return value;
+		assert.ok(Date.now() < deadline, "condition did not settle");
+		await delay(5);
+	}
+}
+
+async function fixture(t: TestContext) {
+	const home = await mkdtemp(join(tmpdir(), "pilot-dashboard-"));
+	const projectDir = join(home, "project");
+	const { mkdir } = await import("node:fs/promises");
+	await mkdir(projectDir);
+	const projects = new ProjectStore(join(home, "data"));
+	await projects.load();
+	const project = await projects.create({ path: projectDir, workspace: "direct" });
+	const store = new MissionStore(":memory:");
+	const chats = new Map<string, SessionSummary>();
+	const observers = sessionObservers();
+	const sessions = {
+		...observers,
+		piReload: { onChange: () => () => {}, status: () => ({ state: "idle" }) },
+		setWorkspaceProcessGuard() {},
+		list: (query: { projectId?: string; archived?: string } = {}) =>
+			[...chats.values()].filter(
+				(chat) =>
+					(!query.projectId || chat.projectId === query.projectId) &&
+					(query.archived === "all" || (chat.archivedAt !== undefined) === (query.archived === "true")),
+			),
+		get: (id: string) => chats.get(id),
+	} as unknown as SessionManager;
+	const put = (chat: Partial<SessionSummary> & { id: string }) => {
+		const value: SessionSummary = {
+			title: chat.id,
+			cwd: "/work",
+			projectId: project.id,
+			createdAt: 1,
+			updatedAt: 1,
+			state: "idle",
+			...chat,
+		};
+		chats.set(value.id, value);
+		observers.emit(value);
+		return value;
+	};
+	const providerListeners = new Set<() => void>();
+	const memory = new ProjectMemoryService(join(home, "data"));
+	let pending = [] as Array<{ id: string; title: string; kind: "chat"; trigger: "at"; state: "pending" }>;
+	const server = createDaemonServer({
+		config: { home: join(home, "data"), host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		models: {} as ModelCatalog,
+		terminals: { isRunning: () => false } as unknown as TerminalManager,
+		missions: { service: { reports: new MissionReports(store) } as MissionService, store },
+		dashboardProviders: {
+			scheduled: () => pending,
+			onChange(listener) {
+				providerListeners.add(listener);
+				return () => providerListeners.delete(listener);
+			},
+		},
+		memory,
+		hello: {
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "0.0.0",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: process.platform,
+			arch: process.arch,
+			capabilities: {
+				independentExecution: true,
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: false,
+			},
+		},
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const port = (server.address() as AddressInfo).port;
+	const sockets: WebSocket[] = [];
+	t.after(async () => {
+		for (const ws of sockets) ws.terminate();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		store.close();
+		await memory.stop();
+		await rm(home, { recursive: true, force: true });
+	});
+	const api = (path: string, init?: RequestInit) =>
+		fetch(`http://127.0.0.1:${port}/api${path}`, {
+			...init,
+			headers: init?.body ? { "content-type": "application/json" } : {},
+		});
+	const connect = async () => {
+		const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`);
+		sockets.push(ws);
+		const messages: ServerMessage[] = [];
+		ws.on("message", (raw) => messages.push(JSON.parse(String(raw)) as ServerMessage));
+		await once(ws, "open");
+		return { ws, messages };
+	};
+	return {
+		home,
+		project,
+		memory,
+		store,
+		put,
+		api,
+		connect,
+		schedule: (item: (typeof pending)[number]) => {
+			pending = [...pending, item];
+			for (const listener of providerListeners) listener();
+		},
+	};
+}
+
+/** A pong follows earlier frames on this socket, providing a real transport barrier without a sleep. */
+async function roundTrip(ws: WebSocket): Promise<void> {
+	const pong = once(ws, "pong");
+	ws.ping();
+	await pong;
+}
+
+test("Day returns complete existing projections without inferring progress from activity", async (t) => {
+	const f = await fixture(t);
+	const hello = await (await f.api("/hello")).json();
+	assert.equal(hello.capabilities.dayOverview, 1);
+	assert.equal(
+		hello.capabilities.missionControls,
+		undefined,
+		"no native capability service, no controls advertisement",
+	);
+	for (let i = 0; i < 11; i++) {
+		const mission = f.store.create({ projectId: f.project.id, title: `Mission ${i}` });
+		f.put({ id: `working-${i}`, missionId: mission.id, state: "working" });
+	}
+	const short = (await (await f.api(`/projects/${f.project.id}/dashboard`)).json()) as ProjectDashboard;
+	assert.equal(short.working.items.length, 5);
+	const response = await f.api(`/projects/${f.project.id}/day`);
+	assert.equal(response.status, 200);
+	const day = (await response.json()) as import("@pilot/protocol").DayOverview;
+	assert.equal(day.complete, true);
+	assert.equal(day.dashboard.working.items.length, day.dashboard.working.total);
+	assert.equal(day.dashboard.missions.items.length, 11);
+	assert.equal(day.controls.length, 11);
+	assert.deepEqual(day.reports, [], "active sessions are not movement reports");
+	const id = day.controls[0]!.missionId;
+	const control = await (await f.api(`/missions/${id}/controls`)).json();
+	assert.equal(control.state, "running");
+	const denied = await f.api(`/missions/${id}/controls`, {
+		method: "POST",
+		body: JSON.stringify({ action: "pause", actor: "user" }),
+	});
+	assert.equal(denied.status, 503, "missing native authority never admits a control");
+	assert.equal(f.store.controls.current(id).revision, 0);
+});
+
+test("Day lists successful outcomes without reviewing them or changing the dashboard preview", async (t) => {
+	const f = await fixture(t);
+	const url = `/projects/${f.project.id}`;
+	for (let i = 0; i < 201; i++) f.put({ id: `done-${i}`, outcome: "done", outcomeAt: i + 1 });
+	f.put({ id: "failed", outcome: "failed", outcomeAt: 300 });
+	f.put({ id: "still-working", outcome: "done", outcomeAt: 400, state: "working" });
+	f.put({ id: "foreign", outcome: "done", outcomeAt: 500, projectId: "different-project" });
+	f.put({ id: "archived", outcome: "done", outcomeAt: 600, archivedAt: 700 });
+	const dashboard = async (): Promise<ProjectDashboard> => (await f.api(`${url}/dashboard`)).json();
+	const before = await dashboard();
+	assert.equal(before.needsYou.total, 202);
+	assert.equal(before.recent.total, 0);
+
+	const day: import("@pilot/protocol").DayOverview = await (await f.api(`${url}/day`)).json();
+	assert.equal(day.recentDone?.total, 201);
+	assert.equal(day.recentDone?.items.length, 200);
+	assert.equal(day.recentDone?.items[0]?.sessionId, "done-200");
+	assert.equal(day.recentDone?.items[199]?.sessionId, "done-1");
+	assert.equal(day.dashboard.needsYou.total, 202);
+	assert.deepEqual(await dashboard(), before);
+});
+
+test("Today working chats include exact mission tasks and standalone chats, never held or finished activity", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Native work" });
+	f.store.join("builder", mission.id);
+	const task = f.store.addTask(mission.id, { title: "Read activity", status: "in_progress", sessionId: "builder" });
+	f.put({ id: "builder", title: "Activity builder", missionId: mission.id, working: true, state: "working" });
+	f.put({ id: "solo", title: "Standalone", working: true, state: "working" });
+	for (const chat of [
+		{ id: "queued", state: "starting", working: false },
+		{ id: "idle", state: "idle", working: false },
+		{ id: "paused", working: true, sleepPaused: true },
+		{ id: "waiting", working: true, attentionReason: { kind: "asks" } },
+		{ id: "archived", working: true, archivedAt: 1 },
+		{ id: "foreign", working: true, projectId: "other" },
+	] as const)
+		f.put(chat);
+	const read = async () =>
+		(await (await f.api(`/projects/${f.project.id}/day`)).json()) as import("@pilot/protocol").DayOverview;
+	const first = await read();
+	assert.deepEqual(first.workingNow, [
+		{
+			sessionId: "builder",
+			title: "Activity builder",
+			missionId: mission.id,
+			missionTitle: "Native work",
+			purpose: "Read activity",
+			status: "working",
+		},
+		{ sessionId: "solo", title: "Standalone", missionId: null, missionTitle: null, purpose: null, status: "working" },
+	]);
+	f.store.updateTask(mission.id, task.id, { title: "Changed task" });
+	assert.equal((await read()).workingNow?.[0]?.purpose, "Changed task");
+	f.store.updateTask(mission.id, task.id, { status: "in_review" });
+	assert.equal((await read()).workingNow?.[0]?.purpose, "Changed task");
+	f.put({ id: "builder", missionId: mission.id, working: false });
+	assert.deepEqual(
+		(await read()).workingNow?.map((r) => r.sessionId),
+		["solo"],
+	);
+	assert.equal(f.store.controls.current(mission.id).revision, 0);
+});
+
+test("Day mission owners expose live work and exact holds without admitting work", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Read owner state" });
+	for (const id of ["jobs", "held", "question", "foreign", "archived", "gone", "failed"]) {
+		f.store.join(id, mission.id);
+		f.store.addTask(mission.id, { title: id, sessionId: id });
+	}
+	f.put({ id: "jobs", missionId: mission.id, state: "idle", working: true });
+	f.put({
+		id: "held",
+		missionId: mission.id,
+		sleepPaused: true,
+		offlinePaused: true,
+		subscriptionPause: { windows: [{ provider: "openai", label: "Week", usedPercent: 99 }] },
+	});
+	f.put({ id: "question", missionId: mission.id, outcome: "question", outcomeReason: "Which target?" });
+	f.put({ id: "foreign", projectId: "other", missionId: mission.id, state: "working" });
+	f.put({ id: "standalone", state: "working" });
+	f.put({ id: "archived", missionId: mission.id, archivedAt: 1, outcome: "question" });
+	f.put({ id: "failed", missionId: mission.id, state: "failed", outcome: "failed" });
+	const earlier = f.store.create({ projectId: f.project.id, title: "Archived mission" });
+	f.store.join("old-owner", earlier.id);
+	f.store.addTask(earlier.id, { title: "Old owner", sessionId: "old-owner" });
+	f.put({ id: "old-owner", missionId: earlier.id, archivedAt: 1 });
+	f.store.update(earlier.id, { status: "archived" });
+	const read = async () =>
+		(await (await f.api(`/projects/${f.project.id}/day`)).json()) as import("@pilot/protocol").DayOverview;
+	const first = await read();
+	assert.deepEqual(
+		first.missionAgents
+			?.map((a) => [a.sessionId, a.working, a.holds, a.waitingForUser])
+			.sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+		[
+			["archived", false, ["Owner chat archived"], false],
+			["failed", false, ["Owner failed. Open its chat for the saved failure."], false],
+			["held", false, ["Sleep hold", "Offline hold", "Usage limit hold"], false],
+			["jobs", true, [], false],
+			["question", false, [], true],
+		],
+	);
+	f.put({ id: "held", missionId: mission.id, subscriptionPause: { windows: [], forced: true } });
+	const next = await read();
+	assert.deepEqual(next.missionAgents?.find((a) => a.sessionId === "held")?.holds, []);
+	assert.equal(f.store.controls.current(mission.id).revision, 0, "reads never change control authority");
+});
+
+test("GET /api/projects/:id/dashboard aggregates the project and rejects unknown ones", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "API v2", goal: "" });
+	f.store.addTask(mission.id, { title: "One", status: "done" });
+	f.store.addTask(mission.id, { title: "Two", status: "blocked" });
+	f.store.addTask(mission.id, { title: "Dropped", status: "dropped" });
+	f.put({ id: "working", state: "working", lastUserMessageAt: 50, missionId: mission.id, model: "t/m" });
+	f.put({ id: "failed", outcome: "failed", outcomeAt: 10, outcomeReason: "boom" });
+	f.put({ id: "other", projectId: "elsewhere", state: "working" });
+
+	const response = await f.api(`/projects/${f.project.id}/dashboard`);
+	assert.equal(response.status, 200);
+	const dashboard = (await response.json()) as ProjectDashboard;
+	assert.equal(dashboard.projectId, f.project.id);
+	assert.deepEqual(dashboard.summary, {
+		chats: 2,
+		working: 1,
+		needsYou: 2,
+		openPullRequests: 0,
+		readyPullRequests: 0,
+		activeMissions: 1,
+	});
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => [item.kind, item.title, item.reason, item.count]),
+		[
+			["failed", "failed", "boom", undefined],
+			["question", "API v2", undefined, 1],
+		],
+	);
+	assert.equal(dashboard.working.items[0]?.missionTitle, "API v2");
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => item.attentionReason),
+		[
+			{ kind: "failed", detail: "boom" },
+			{ kind: "mission", detail: "Blocked: Two" },
+		],
+	);
+	const inbox = await (await f.api("/inbox")).json();
+	assert.deepEqual(
+		inbox.needsYou.items.map((item: { attentionReason: unknown }) => item.attentionReason),
+		dashboard.needsYou.items.map((item) => item.attentionReason),
+	);
+	assert.deepEqual(dashboard.missions.items[0], {
+		id: mission.id,
+		title: "API v2",
+		tasksDone: 1,
+		tasksInReview: 0,
+		tasksInProgress: 0,
+		tasksBlocked: 1,
+		tasksTotal: 2,
+		working: 1,
+		needsYou: 1,
+	});
+
+	assert.equal((await f.api("/projects/nope/dashboard")).status, 404);
+	const counts = (await (await f.api("/dashboard/counts")).json()) as ProjectDashboardCounts;
+	assert.deepEqual(counts, {
+		projects: { [f.project.id]: { working: 1, needsYou: 2, needsYouReasons: { failed: 1, mission: 1 } } },
+	});
+});
+
+test("POST /api/reviews moves a result from needs you to recent and rejects bad input", async (t) => {
+	const f = await fixture(t);
+	f.put({ id: "done", outcome: "done", outcomeAt: 20 });
+	const read = async () => (await (await f.api(`/projects/${f.project.id}/dashboard`)).json()) as ProjectDashboard;
+	assert.equal((await read()).needsYou.total, 1);
+	const post = (body: unknown) => f.api("/reviews", { method: "POST", body: JSON.stringify(body) });
+	// Unknown chats are ignored, an older mark does not review a newer result.
+	assert.equal((await post({ marks: [{ sessionId: "ghost", outcomeAt: 99 }] })).status, 200);
+	assert.equal((await post({ marks: [{ sessionId: "done", outcomeAt: 19 }] })).status, 200);
+	assert.equal((await read()).needsYou.total, 1);
+	assert.equal((await post({ marks: [{ sessionId: "done", outcomeAt: 20 }] })).status, 200);
+	const after = await read();
+	assert.equal(after.needsYou.total, 0);
+	assert.deepEqual(
+		after.recent.items.map((item) => item.sessionId),
+		["done"],
+	);
+	for (const body of [
+		{},
+		{ marks: "x" },
+		{ marks: [{ sessionId: "done" }] },
+		{ marks: [{ sessionId: 1, outcomeAt: 1 }] },
+	])
+		assert.equal((await post(body)).status, 400);
+	assert.equal(
+		(await post({ marks: Array.from({ length: 1001 }, () => ({ sessionId: "done", outcomeAt: 1 })) })).status,
+		400,
+	);
+	// Review persistence is asynchronous. Wait for its final snapshot before deleting this fixture's directory.
+	await until(() => {
+		try {
+			return JSON.parse(readFileSync(join(f.home, "data", "reviews.json"), "utf8")).done === 20;
+		} catch {
+			return false;
+		}
+	});
+});
+
+test("WebSocket pushes counts on connect and dashboards on change, without duplicates", async (t) => {
+	const f = await fixture(t);
+	f.put({ id: "a", state: "working" });
+	const { ws, messages } = await f.connect();
+	const dashboards = () =>
+		messages.filter((m): m is Extract<ServerMessage, { type: "dashboard" }> => m.type === "dashboard");
+	const counts = () =>
+		messages.filter((m): m is Extract<ServerMessage, { type: "dashboard.counts" }> => m.type === "dashboard.counts");
+	await until(() => counts().length === 1);
+	assert.deepEqual(counts()[0]!.counts, { projects: { [f.project.id]: { working: 1, needsYou: 0 } } });
+	assert.equal(dashboards().length, 0);
+
+	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: f.project.id }));
+	await until(() => dashboards().length === 1);
+	assert.equal(dashboards()[0]!.dashboard.working.total, 1);
+
+	// A burst of changes yields one update with the final state.
+	f.put({ id: "b", state: "working" });
+	f.put({ id: "c", outcome: "done", outcomeAt: 5 });
+	await until(() => dashboards().length === 2);
+	assert.equal(dashboards()[1]!.dashboard.working.total, 2);
+	assert.equal(dashboards()[1]!.dashboard.needsYou.total, 1);
+	await until(() => counts().length === 2);
+	assert.deepEqual(counts()[1]!.counts, {
+		projects: { [f.project.id]: { working: 2, needsYou: 1, needsYouReasons: { not_reviewed: 1 } } },
+	});
+
+	// A change that does not alter the dashboard (a title-less metadata touch) pushes nothing.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	f.put({ id: "a", state: "working", updatedAt: 99 });
+	t.mock.timers.tick(500);
+	await roundTrip(ws);
+	assert.equal(dashboards().length, 2);
+	assert.equal(counts().length, 2);
+	t.mock.timers.reset();
+
+	// Mission changes and extension providers also update it.
+	f.store.create({ projectId: f.project.id, title: "M", goal: "" });
+	await until(() => dashboards().length === 3);
+	assert.equal(dashboards()[2]!.dashboard.missions.total, 1);
+	f.schedule({ id: "x", title: "Plan", kind: "chat", trigger: "at", state: "pending" });
+	await until(() => dashboards().length === 4);
+	assert.equal(dashboards()[3]!.dashboard.scheduled.total, 1);
+
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	ws.send(JSON.stringify({ type: "dashboard.unsubscribe", projectId: f.project.id }));
+	await roundTrip(ws);
+	f.put({ id: "d", state: "working" });
+	t.mock.timers.tick(400);
+	await roundTrip(ws);
+	assert.equal(counts().length, 3);
+	assert.equal(dashboards().length, 4);
+	t.mock.timers.reset();
+
+	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: "missing" }));
+	await until(() => messages.some((m) => m.type === "error" && /Unknown project/.test(m.message)));
+});
+
+test("memory API validates project/origin and pushes its dashboard provider without polling", async (t) => {
+	const f = await fixture(t);
+	f.put({ id: "origin" });
+	f.put({ id: "elsewhere", projectId: "other" });
+	const path = `/projects/${f.project.id}/memory`;
+	assert.equal((await f.api("/projects/unknown/memory/wake")).status, 404);
+	assert.equal(
+		(await f.api(`${path}/note`, { method: "POST", body: JSON.stringify({ text: "fact", sessionId: "elsewhere" }) }))
+			.status,
+		400,
+	);
+	const { ws, messages } = await f.connect();
+	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: f.project.id }));
+	await until(() => messages.some((m) => m.type === "dashboard"));
+	const response = await f.api(`${path}/note`, {
+		method: "POST",
+		body: JSON.stringify({ text: "lasting fact", sessionId: "origin" }),
+	});
+	assert.equal(response.status, 201);
+	await until(() => messages.some((m) => m.type === "dashboard" && m.dashboard.memory?.count === 1));
+	const summary = await (await f.api(path)).json();
+	assert.equal(summary.recent[0].text, "lasting fact");
+	const wake = await (await f.api(`${path}/wake`)).json();
+	assert.match(wake.text, /#0 .*lasting fact/);
+	assert.equal((await (await f.api(`${path}/recall?regex=lasting`)).json()).matches, 1);
+	for (const suffix of ["/wake?lines=0", "/zoom?lo=0&hi=2", "/zoom", "/recall?regex=%5B"])
+		assert.equal((await f.api(path + suffix)).status, 400);
+	await f.api(`${path}/note`, { method: "POST", body: JSON.stringify({ text: "second", sessionId: "origin" }) });
+	assert.equal((await (await f.api(`${path}/zoom?lo=0&hi=1`)).json())[1].entry.index, 1);
+	assert.equal(
+		(await f.api(`${path}/forget`, { method: "POST", body: JSON.stringify({ lo: 0, hi: 1 }) })).status,
+		400,
+	);
+});

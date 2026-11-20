@@ -39,9 +39,9 @@ import type {
 	SessionJob,
 } from "@pilot/protocol";
 import type { TraceCarrier } from "@pilot/telemetry";
-import { watchActivity } from "./activity.ts";
-import { type AgentEventStream, watchEvents } from "./agent-events.ts";
-import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
+import { watchActivity } from "./session/activity/activity.ts";
+import { type AgentEventStream, watchEvents } from "./session/activity/agent-events.ts";
+import { type ArtifactToolOptions, createArtifactTools } from "./artifacts/artifact-tools.ts";
 import {
 	AttemptsDoc,
 	type AttemptsState,
@@ -52,18 +52,18 @@ import {
 	planRewind,
 	publicAttempts,
 } from "./attempts.ts";
-import { reconcileCompletion } from "./attention.ts";
-import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
-import { canonicalJSON } from "./canonical-json.ts";
-import { chatEvents, compactionEvents } from "./chat-events.ts";
-import { createChatReportTool } from "./chat-report-tool.ts";
-import { createDiagnosticContextTool } from "./diagnostic-context-tool.ts";
-import { createDiagnosticHistoryTool } from "./diagnostic-history-tool.ts";
-import { createDiagnosticLogTool } from "./diagnostic-log-tool.ts";
-import { createDiagnosticsTool } from "./diagnostics-tool.ts";
-import { ACTIVITY_ENTRY } from "./entry-kinds.ts";
-import { detectGhStack } from "./gh-stack.ts";
-import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
+import { reconcileCompletion } from "./tools/attention/attention.ts";
+import { autoCompactionThreshold, shouldAutoCompact } from "./history/auto-compaction.ts";
+import { canonicalJSON } from "./history/canonical-json.ts";
+import { chatEvents, compactionEvents } from "./session/activity/chat-events.ts";
+import { createChatReportTool } from "./session/activity/chat-report-tool.ts";
+import { createDiagnosticContextTool } from "./diagnostics/diagnostic-context-tool.ts";
+import { createDiagnosticHistoryTool } from "./diagnostics/diagnostic-history-tool.ts";
+import { createDiagnosticLogTool } from "./diagnostics/diagnostic-log-tool.ts";
+import { createDiagnosticsTool } from "./diagnostics/diagnostics-tool.ts";
+import { ACTIVITY_ENTRY } from "./history/entry-kinds.ts";
+import { detectGhStack } from "./tools/github/gh-stack.ts";
+import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./tools/github/github-actions.ts";
 import {
 	admitWithHeld,
 	discardHeld,
@@ -74,63 +74,63 @@ import {
 	pendingQuestionToolBlock,
 	publishQuestionWithHeld,
 	questionBoundary,
-} from "./held-inputs.ts";
-import { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
-import { createHistoryRecallTool } from "./history-recall.ts";
-import { hostCallTools } from "./host-calls.ts";
-import { submitIdleInput } from "./idle-input.ts";
-import { InputOrigins, inputOrigin } from "./input-origin.ts";
-import { createInsightsBacklogTool } from "./insights-backlog-tool.ts";
-import { createInsightsHistoryTool } from "./insights-history-tool.ts";
-import { validateInsightsOwnerBinding } from "./insights-owner-binding.ts";
-import { interviewQuestion, StandaloneInterviewDoc } from "./interview-state.ts";
-import { createInterviewTool } from "./interview-tool.ts";
-import { JobsMonitor } from "./jobs.ts";
-import { createKnowledgeTool, createProjectPreferencesTool } from "./knowledge-tools.ts";
-import { createLiveUpdateTools } from "./live-update-tool.ts";
-import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
-import { mcpActivity } from "./mcp-activity.ts";
-import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
-import { DecisionInbox } from "./mission-decision-inbox.ts";
-import type { AcknowledgedDecision } from "./mission-decisions.ts";
-import { MISSION_TOOL, type MissionCall, missionToolFor, missionToolKind } from "./mission-tools.ts";
-import { continueModelInPlace } from "./model-continuation.ts";
-import { rebuildContext } from "./model-rebuild.ts";
+} from "./session/input/held-inputs.ts";
+import { HeldInputsDoc, type SystemMessageStateEvent } from "./session/input/held-inputs-doc.ts";
+import { createHistoryRecallTool } from "./history/history-recall.ts";
+import { hostCallTools } from "./worker/host-calls.ts";
+import { submitIdleInput } from "./session/input/idle-input.ts";
+import { InputOrigins, inputOrigin } from "./session/input/input-origin.ts";
+import { createInsightsBacklogTool } from "./insights/insights-backlog-tool.ts";
+import { createInsightsHistoryTool } from "./insights/insights-history-tool.ts";
+import { validateInsightsOwnerBinding } from "./insights/insights-owner-binding.ts";
+import { interviewQuestion, StandaloneInterviewDoc } from "./missions/interview-state.ts";
+import { createInterviewTool } from "./missions/interview-tool.ts";
+import { JobsMonitor } from "./tools/jobs/jobs.ts";
+import { createKnowledgeTool, createProjectPreferencesTool } from "./tools/knowledge/knowledge-tools.ts";
+import { createLiveUpdateTools } from "./tools/updates/live-update-tool.ts";
+import { createManualCompaction, queueDuringCompaction } from "./history/manual-compaction.ts";
+import { mcpActivity } from "./tools/mcp/mcp-activity.ts";
+import { createMemoryTools, type MemoryCall } from "./history/memory-tools.ts";
+import { DecisionInbox } from "./missions/mission-decision-inbox.ts";
+import type { AcknowledgedDecision } from "./missions/mission-decisions.ts";
+import { MISSION_TOOL, type MissionCall, missionToolFor, missionToolKind } from "./missions/mission-tools.ts";
+import { continueModelInPlace } from "./models/model-continuation.ts";
+import { rebuildContext } from "./models/model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
-import { recentSnapshot } from "./paged-history.ts";
-import { startParentBridge } from "./parent-bridge.ts";
+import { recentSnapshot } from "./history/paged-history.ts";
+import { startParentBridge } from "./worker/parent-bridge.ts";
 import { PerformanceLog } from "./performance.ts";
-import { admitPlanningInput, holdPlanning, PlanningWorkerDoc, planningBoundary } from "./planning-boundary.ts";
+import { admitPlanningInput, holdPlanning, PlanningWorkerDoc, planningBoundary } from "./missions/planning-boundary.ts";
 import {
 	assertPlanningBinding,
 	type PlanningInput,
 	type PlanningWorkerBinding,
 	type PlanningWorkerReply,
 	type PlanningWorkerRequest,
-} from "./planning-worker.ts";
-import type { WorkspaceContext } from "./policy.ts";
-import { type MissionContext, withPilotPolicy } from "./policy.ts";
-import type { HostCall, KernelSpec, KernelSubagent } from "./protocol.ts";
-import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
-import { type ClarificationRequest, QuestionClarifications } from "./question-clarifications.ts";
-import { createQuestionTool, type PublishQuestion } from "./question-tool.ts";
+} from "./missions/planning-worker.ts";
+import type { WorkspaceContext } from "./runtime/policy.ts";
+import { type MissionContext, withPilotPolicy } from "./runtime/policy.ts";
+import type { HostCall, KernelSpec, KernelSubagent } from "./worker/protocol.ts";
+import { PullRequestsDoc, pullRequestProvenance } from "./tools/github/pull-request-provenance.ts";
+import { type ClarificationRequest, QuestionClarifications } from "./tools/questions/question-clarifications.ts";
+import { createQuestionTool, type PublishQuestion } from "./tools/questions/question-tool.ts";
 import {
 	editQueuedMessage,
 	queueUpdateForDisplay,
 	removeQueuedMessage,
 	type WithdrawnMessage,
 	watchQueue,
-} from "./queue.ts";
-import { refActivity } from "./ref-activity.ts";
-import { createReferenceSourcesTool } from "./reference-sources.ts";
-import { createRepairDiagnosticsTools } from "./repair-diagnostics-tools.ts";
-import { createRepairProposalTool } from "./repair-proposal-tool.ts";
-import { createScopedMetricsTool } from "./scoped-metrics-tool.ts";
-import { createScreenTools } from "./screen-tools.ts";
-import { createSlackStatusTool, SLACK_STATUS_TOOL } from "./slack-status-tool.ts";
-import { findInputReceipt, openSessionStorage } from "./storage.ts";
-import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
-import { createTodoTool } from "./todo-tool.ts";
+} from "./session/input/queue.ts";
+import { refActivity } from "./session/activity/ref-activity.ts";
+import { createReferenceSourcesTool } from "./tools/sources/reference-sources.ts";
+import { createRepairDiagnosticsTools } from "./diagnostics/repair-diagnostics-tools.ts";
+import { createRepairProposalTool } from "./diagnostics/repair-proposal-tool.ts";
+import { createScopedMetricsTool } from "./tools/metrics/scoped-metrics-tool.ts";
+import { createScreenTools } from "./tools/screen/screen-tools.ts";
+import { createSlackStatusTool, SLACK_STATUS_TOOL } from "./tools/sources/slack-status-tool.ts";
+import { findInputReceipt, openSessionStorage } from "./history/storage.ts";
+import { SubagentBridge, type SubagentCommand } from "./tools/jobs/subagents.ts";
+import { createTodoTool } from "./tools/todos/todo-tool.ts";
 import {
 	applyTodo,
 	type TodoCall,
@@ -140,11 +140,11 @@ import {
 	todoRead,
 	todosUpdate,
 	validateTodoArgs,
-} from "./todos.ts";
-import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
-import { nativeToolPolicy } from "./tool-policy.ts";
-import type { KernelUsage } from "./usage.ts";
-import { UsageCapture } from "./usage-capture.ts";
+} from "./tools/todos/todos.ts";
+import { TOOL_ACTIVITY_FILE } from "./session/activity/tool-activity.ts";
+import { nativeToolPolicy } from "./tools/codemode/tool-policy.ts";
+import type { KernelUsage } from "./funding/usage.ts";
+import { UsageCapture } from "./funding/usage-capture.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
 
@@ -179,7 +179,7 @@ export interface KernelSessionHooks {
 	onWorking(
 		working: boolean,
 		completion?: SessionCompletion,
-		execution?: import("./protocol.ts").ExecutionEvidence,
+		execution?: import("./worker/protocol.ts").ExecutionEvidence,
 	): void;
 	/** A compaction started or ended. Not a turn: it never changes the completion. */
 	onCompacting?(compacting: boolean): void;
@@ -1398,7 +1398,7 @@ export class KernelSession {
 	get completion(): SessionCompletion | undefined {
 		return this.#completion;
 	}
-	async executionEvidence(): Promise<import("./protocol.ts").ExecutionEvidence> {
+	async executionEvidence(): Promise<import("./worker/protocol.ts").ExecutionEvidence> {
 		const settled = this.#completion as (SessionCompletion & { input?: number; entry?: number }) | undefined;
 		const input =
 			settled?.input !== undefined
@@ -2176,7 +2176,7 @@ export class KernelSession {
 		let queue: DocumentWatch<InboxState>;
 		let heldQueue: Awaited<ReturnType<typeof this.harness.watchDoc>> | undefined;
 		let audit: DocumentWatch<{ actions: GitHubAction[] }> | undefined;
-		let todos: DocumentWatch<import("./todos.ts").TodoProgress> | undefined;
+		let todos: DocumentWatch<import("./tools/todos/todos.ts").TodoProgress> | undefined;
 		try {
 			heldQueue = (await this.harness.watchDoc(HeldInputsDoc, this.conversation.id, context)) ?? undefined;
 			audit = (await this.harness.watchDoc(GitHubActionsDoc, context)) ?? undefined;

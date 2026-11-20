@@ -1,5 +1,5 @@
 // The screen agent's view of this window, after UI SDK's agent bridge
-// (docs/technical/day-screen-agent.md). Every styled control registers
+// (apps/day/screen-agent/day-screen-agent.md). Every styled control registers
 // itself here with live getters of its props and the callbacks a person's
 // input calls; the agent reads a snapshot, queries choices and runs steps.
 // Nothing here copies page state or writes a signal directly.

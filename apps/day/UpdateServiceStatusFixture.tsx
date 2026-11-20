@@ -1,9 +1,9 @@
 // Mock data. A running service does not require selected update distributions.
 // This fixture uses the real update screen but never connects or updates anything.
 import { mount } from "nsh";
-import { openDay, openUpdate } from "./mockFeeds";
-import { UpdateScreen } from "./UpdateScreen";
+import { openDay, openUpdate } from "./app/testing/mockFeeds";
 import { Block, Caption, WindowCanvas } from "./ui";
+import { UpdateScreen } from "./updates/UpdateScreen";
 
 const day = openDay("quiet");
 const update = openUpdate("current");

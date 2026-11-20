@@ -11,7 +11,7 @@ Its dependencies now pin the same upstream NSH **v0.6.1** release as the TSX app
 cache edits or WebViews. Use the matching installed CLI through `nsh.sh`;
 never build `nsh-cli` locally. Its lock must be resolved for that release,
 not relabeled from the former main snapshot. See the
-[release qualification](../../../../docs/technical/day-nsh-release.md).
+[release qualification](../../scripts/day-nsh-release.md).
 
 ## What is shared, and what is not
 

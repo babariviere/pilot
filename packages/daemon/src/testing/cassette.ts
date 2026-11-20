@@ -1,7 +1,7 @@
 /** Replay-only service fixtures. Never executes a process, opens a socket or records a miss. */
 import { readFile } from "node:fs/promises";
 import type { TrackingJson } from "@pilot/protocol";
-import type { Runner } from "../workspaces.ts";
+import type { Runner } from "../workspaces/workspaces.ts";
 
 interface CassetteEntry {
 	request: unknown;

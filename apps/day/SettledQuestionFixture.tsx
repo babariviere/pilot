@@ -1,8 +1,8 @@
 // Fixture data only. An explorer chat whose question the plan settled: the page does not say it waits.
 import { mount } from "nsh";
-import { ChatScreen } from "./ChatScreen";
-import { openDay, openMockChat } from "./mockFeeds";
-import { mirrorSessionChat, type SessionChat } from "./sessionChat";
+import { openDay, openMockChat } from "./app/testing/mockFeeds";
+import { ChatScreen } from "./sessions/ChatScreen";
+import { mirrorSessionChat, type SessionChat } from "./sessions/sessionChat";
 
 const source = openMockChat().source;
 const settled = (chat: SessionChat | null): SessionChat | null =>

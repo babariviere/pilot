@@ -23,10 +23,10 @@ git merge-base --is-ancestor 29102eb5f20f735c208300769f65cd9227279986 "$SOURCE"
 
 # Missing tools stop the build here, before any work.
 NSH_DAY_CLI=$(realpath "$(brew --prefix nsh)/libexec/bin/nsh")
-unset NSH_DAY_REAL_CARGO RUSTC
+unset RUSTC
 export NSH_DAY_CLI
 export PILOT_SIGNING_POLICY=private-adhoc
-export PILOT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=' # docs/technical/day-package-inputs.md
+export PILOT_UPDATER_PUBLIC_KEY='MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=' # apps/day/scripts/day-package-inputs.md
 export PILOT_UPDATER_REPOSITORY=babariviere/pilot
 export PILOT_UPDATER_BUILD="$BUILD"
 

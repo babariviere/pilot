@@ -37,9 +37,12 @@
 	"overrides": [
 		{
 			"includes": [
-				"apps/day/*.tsx",
-				"!apps/day/ExpeditionChart.tsx",
-				"!apps/day/Palette.tsx",
+				"apps/day/**/*.tsx",
+				"!apps/day/fixtures/**",
+				"!apps/day/native/**",
+				"!apps/day/ui/**",
+				"!apps/day/missions/planning/ExpeditionChart.tsx",
+				"!apps/day/app/Palette.tsx",
 				"!apps/day/FontProbeFixture.tsx"
 			],
 			"plugins": ["./apps/day/scripts/forge-screens.grit"]

@@ -33,14 +33,22 @@ REQUIRED = [
     "node/bin/node", "node/LICENSE", "package.json", "pnpm-lock.yaml",
     "packages/daemon/src/main.ts", "packages/daemon/src/runtime-launch.ts",
     "packages/daemon/src/runtime-owner.ts", "packages/kernel/src/worker-entry.ts",
-    "packages/protocol/src/hello.ts", "packages/kernel/skills/pilot-artifacts/SKILL.md",
-    "packages/daemon/src/usage-history-worker.mjs",
+    "packages/kernel/skills/pilot-artifacts/SKILL.md",
     "node_modules/@earendil-works/pi-coding-agent/package.json",
     "node_modules/@earendil-works/pi-durable/package.json",
     "node_modules/node-pty/package.json", "node_modules/ws/package.json",
     "runtime-build.json",
     "desktop-assets/AppIcon.icns",
 ]
+FEATURE_RESOURCES = (
+    "packages/protocol/src/runtime/hello.ts",
+    "packages/daemon/src/models/usage/usage-history-worker.mjs",
+    "packages/daemon/src/models/funding/funding-worker.mjs",
+)
+LEGACY_RESOURCES = (
+    "packages/protocol/src/hello.ts",
+    "packages/daemon/src/usage-history-worker.mjs",
+)
 
 # Public UI runtime release, not the unrelated command shell or a floating main.
 NSH_RELEASE = dict(tag="v0.6.1", source="2f51d8611677c8a6bbad937b39756e8d0cc45350")
@@ -285,7 +293,8 @@ def validate_runtime(runtime, expected_source, *, protocol=1):
             or not re.fullmatch(r"24\.\d+\.\d+", build.get("node", ""))
             or build.get("version") != read_json(runtime / "package.json")["version"]):
         raise ValueError("Runtime build identity mismatch")
-    for relative in REQUIRED:
+    feature_layout = any((runtime / relative).exists() for relative in FEATURE_RESOURCES)
+    for relative in (*REQUIRED, *(FEATURE_RESOURCES if feature_layout else LEGACY_RESOURCES)):
         if not (runtime / relative).is_file():
             raise ValueError(f"Required runtime resource missing: {relative}")
     return build

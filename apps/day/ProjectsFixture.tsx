@@ -1,7 +1,12 @@
 // Scripted mock data only. No daemon, filesystem, GitHub or credential access.
 import { mount, Scroll, signal } from "nsh";
-import { ProjectsSection } from "./ProjectsSection";
-import { type ProjectSetup, type ProjectsSource, restoreProjectSetup, savedProjectSetup } from "./projectSetup";
+import { ProjectsSection } from "./settings/projects/ProjectsSection";
+import {
+	type ProjectSetup,
+	type ProjectsSource,
+	restoreProjectSetup,
+	savedProjectSetup,
+} from "./settings/projects/projectSetup";
 import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const writes = signal(0),

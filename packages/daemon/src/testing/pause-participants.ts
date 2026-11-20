@@ -1,4 +1,4 @@
-import type { MissionPauseParticipants } from "../mission-controls.ts";
+import type { MissionPauseParticipants } from "../missions/lifecycle/mission-controls.ts";
 
 /**
  * Pause participants for fixtures without mission work: no chats run mission work, each chat owns its own work, and

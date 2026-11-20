@@ -1,8 +1,8 @@
 // Test-only invented source. No providers, accounts or files.
 import { mount, Scroll, signal } from "nsh";
-import { SlackSettings } from "./SlackSettings";
-import type { SlackControls, SlackSnapshot } from "./slackControls";
-import { restoreSlackDraft, savedSlackDraft } from "./slackDraft";
+import { SlackSettings } from "./settings/connections/SlackSettings";
+import type { SlackControls, SlackSnapshot } from "./settings/connections/slackControls";
+import { restoreSlackDraft, savedSlackDraft } from "./settings/connections/slackDraft";
 import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const snapshot = signal<SlackSnapshot | null>({

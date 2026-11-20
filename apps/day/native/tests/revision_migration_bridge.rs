@@ -3,7 +3,7 @@ include!("support/intake_fixture.rs");
 
 #[test]
 fn native_revision_scopes_checkpoint_and_legacy_finish_is_exact_and_lookup_only() {
-    let mut f = Fixture::with_daemon("day-revision-migration.ts");
+    let mut f = Fixture::with_daemon("day/planning/day-revision-migration.ts");
     let b = f.bridge();
     let mission = f.info["mission"].as_str().unwrap().to_owned();
     let old = f.info["old"].as_str().unwrap().to_owned();

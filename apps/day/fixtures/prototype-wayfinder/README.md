@@ -57,7 +57,7 @@ unknown and what happens next, and let you check where each answer came from?
   walkthroughs, free play, the current state, a side-by-side comparison and About.
   Reset or reload starts over.
 - All variants show the same mission, "Pilot on Linux desktops", taken from the Day mock
-  planning world (`apps/day/native/src/plan_world.rs`). They use the native map's records and
+  planning world (`apps/day/native/src/planning/plan_world.rs`). They use the native map's records and
   words: questions with a kind and a state, fog of war, original Decision and Knowledge
   sources, interview rounds, agreement and tasks. No new contract or tracker.
   Choosing a variant is feedback, not approval to build it.

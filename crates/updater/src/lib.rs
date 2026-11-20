@@ -4,46 +4,64 @@ use std::time::Duration;
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+#[path = "app/app_update.rs"]
 pub mod app_update;
+#[path = "release/archive/mod.rs"]
 pub mod archive;
+#[path = "app/build_input.rs"]
 pub mod build_input;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+#[path = "app/coordinated.rs"]
 pub mod coordinated;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+#[path = "service/handoff/coordination.rs"]
 pub mod coordination;
+#[path = "service/handoff/daemon_upgrade.rs"]
 pub mod daemon_upgrade;
 #[cfg(feature = "fixture")]
+#[path = "testing/fixture.rs"]
 pub mod fixture;
+#[path = "install/helper.rs"]
 pub mod helper;
+#[path = "install/installer.rs"]
 pub mod installer;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+#[path = "release/iteration.rs"]
 pub mod iteration;
+#[path = "install/layout.rs"]
 pub mod layout;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+#[path = "service/handoff/lifecycle.rs"]
 pub mod lifecycle;
 #[cfg(any(test, target_os = "linux"))]
+#[path = "install/linux.rs"]
 pub mod linux;
+#[path = "release/manifest.rs"]
 pub mod manifest;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[path = "service/runtime/runtime.rs"]
 pub mod runtime;
+#[path = "diagnostics/timing.rs"]
 mod timing;
+#[path = "release/transport.rs"]
 pub mod transport;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+#[path = "app/worker.rs"]
 pub mod worker;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,15 +4,15 @@
 // or storage.
 import { mount, View } from "nsh";
 import { PlanFeed, type Planning, type PlanRow } from "pilot-day/native";
-import { DEMO_PROJECTS, ScriptedChats } from "./chatDemo";
-import { mirrorChats } from "./chatFeed";
-import type { PlanningFeed } from "./feeds";
-import { openDay } from "./mockFeeds";
-import { NewScreen } from "./NewScreen";
-import { mirrorPlanning } from "./planning";
-import { planRoute } from "./planView";
+import { openDay } from "./app/testing/mockFeeds";
+import { NewScreen } from "./missions/intake/NewScreen";
+import { mirrorPlanning } from "./missions/planning/planning";
+import { planRoute } from "./missions/planning/planView";
+import { stateWord } from "./missions/words";
+import { DEMO_PROJECTS, ScriptedChats } from "./sessions/chatDemo";
+import { mirrorChats } from "./sessions/chatFeed";
+import type { PlanningFeed } from "./sources/feeds";
 import { Button, Buttons, Caption, WindowCanvas } from "./ui";
-import { stateWord } from "./words";
 
 let planningOff = false;
 const source = new PlanFeed("interview");

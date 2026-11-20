@@ -1,5 +1,5 @@
 import { mount, Scroll, signal } from "nsh";
-import { LinearPublisher, type PublisherIntent, type PublisherSnapshot } from "./LinearPublisher";
+import { LinearPublisher, type PublisherIntent, type PublisherSnapshot } from "./sources/linear/LinearPublisher";
 import { Block, Column, Page, PageFoot, PageHead, Panel, Section, WindowCanvas } from "./ui";
 
 const parent = {

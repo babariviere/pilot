@@ -1,0 +1,244 @@
+# Confirmed mission revisions
+
+Backend contract. Pilot Day's Revisit screens run on mock data only (see [Native UI](#native-ui)).
+Nothing here runs a model, changes a live mission, resets a chat, or enables a schedule.
+
+## Reused records and limits
+
+- `MissionStore.writeBrief` appends the canonical brief revision. It does not keep a second spec.
+- `updateTask`, assignment CAS and definition revisions keep task identity, completed work,
+  dependencies and owner fences. Revision edits support title, body, assignment, dependencies,
+  decision pins and explicit drop, not reassignment, starts, model changes or completion.
+- `supersedeDecision` and the shared withdrawal writer keep original bodies and historical pins.
+  Revision retirements add reason, revision identity and the explicit human-source reference.
+  Existing user edit/delete routes are unchanged. No historical cleanup or migration runs.
+- Saved interviews already keep exact submitted answers and question digests in
+  `mission_interviews`; `history` and `assertNewQuestions` preserve earlier rounds and reject
+  repeated questions. Trusted grill-with-docs, Wayfinder, to-spec and to-tickets loaders remain
+  unchanged. See [their review trail](../../../../kernel/src/runtime/skill-prompt-review.md).
+- Creation interviews publish an agreement on submit. Canonical `interview-questions` accepts
+  `kind: "revisit"`; rounds opened after native plan publication also use that kind. Later
+  Revisit rounds stay Revisit rounds and reject repeated submitted questions. Save and submit
+  keep exact answers, digests and history without writing the agreement. The submitted
+  `agreementMarkdown` is an answer summary, not a publication; `briefRevision` identifies the
+  unchanged agreement. Revisit answers cannot bind a workflow/build approval. Existing
+  planning-only continuation can consume them under its unchanged independent gates.
+  Native plan publication remains creation-only, not an amendment API. No legacy enrollment
+  or automatic conversion of old interview records runs.
+- The new table stores only reviewed deltas and exact confirmation receipts. Current planning
+  still lives in the existing mission, brief, tasks and decisions, not in that table.
+
+Check-ups compare current goal, agreement, active decisions and work (including completed work
+to avoid duplicates). Reuse settled answers. Use a new saved interview only for genuine gaps.
+Age can justify offering a check-up, never automatic questions, replanning or rewriting. There
+is no age threshold, timer or schedule.
+
+## API
+
+Trusted local/user routes, under `/api/missions/:missionId/revisions`:
+
+| Method and suffix | Result |
+| --- | --- |
+| GET | Current opaque `source`, latest confirmed summary and latest `pending` proposal (or null) with explicit source currentness |
+| POST | Save `{operationId, source, summary, delta}` without applying anything |
+| GET `/:id` | Exact saved proposal and any confirmation receipt |
+| GET `/operations/:operationId` | Exact proposal/preview lookup (or null) after a lost reply, never a resend |
+| POST `/:id/preview` | User requests a **new** full preview using `{operationId, source, digest}`; copies only the exact saved summary/delta and links `repreviewOf` |
+| POST `/:id/confirm` | Confirm `{digest, humanSource}` for that exact saved proposal |
+
+The coordinator tool exposes `revision-source`, `revision-propose` and `revision` (read by ID).
+It has **no confirm action**. Caller-supplied user labels are not accepted through the agent
+surface. The local HTTP boundary has the same trust model as existing user-only decision routes;
+it is not a new sandbox against unrestricted local shells.
+
+`MissionRevisionDelta` is in `packages/protocol/src/missions/mission-revision.ts`. Only known fields are
+accepted, at most 100 entries per collection and 64 KiB per proposal. Text is reviewed already
+trimmed, not silently normalized during application. Decisions use replace/withdraw with a
+reason, not edit/delete. Instruction and permission corrections are distinct **unapplied
+proposals**, even in a confirmed package. Use the existing instruction/permission controls for
+any separately approved change. Text or a revision receipt is never runtime authority.
+
+Source binds mission/project/coordinator identity, membership/coordinator event generations,
+brief/decision context, task definition revisions, phases, controls and current interview/plan.
+It uses canonical task definition counters even on non-shared missions, not shared-replica
+entity counters or timestamps alone. Concurrent changes, including ABA edits, require a new
+review. Confirmation never substitutes new bytes. Exact operation retries are lookups; changed
+bytes conflict. The durable SQLite writer must finish before acknowledgement or API reads.
+
+## Safe application
+
+Application is one SQLite transaction. Preparation does not pause existing work. Changes to a
+task affect its owner and owners of transitive dependents, not independent work. Goal, agreement
+or decision changes conservatively affect all members and open task owners. Adds-only and edits
+to unowned tasks need no checkpoint.
+
+Native `revision-pause` uses `/api/operations` with the mission target, binding ID equal to the
+displayed source, generation 1, and `{purpose,proposalId,digest,source}`. Before interruption it
+durably saves the exact affected owner and owned-flow inventory. It calls the existing session
+checkpoint protocol, including final child inventory, census, close acknowledgement and exit.
+Only an acknowledged `paused` receipt with every member `paused` or independently `held` can
+authorize application. Unknown is lookup-only. The receipt never sets global controls to Paused.
+The planning revision read adds `affectedSessions` and active `workPauses`.
+
+Selective Pause does not change the proposal's source. Confirm the same exact proposal after its
+safe receipt; unrelated source changes still require a new preview. Existing whole-mission Pause
+also remains supported, but must name an acknowledged Pause operation covering affected owners.
+A displayed Paused boolean alone is not proof. Changing global Pause or Stop stales the source.
+
+Confirmation keeps all holds. A separate explicit `revision-resume` operation uses the current
+source as binding ID and `{purpose,pauseOperationId,source}`. It releases only that checkpoint.
+It never clears independent holds, re-enters Unknown, or silently starts a new task. Whole-mission
+Pause cannot take ownership away from an active selective checkpoint. A later Stop or uncertain
+checkpoint requires inspection rather than a guessed resume.
+Resume rechecks its current source, active mission and member/owned-flow ownership around every
+asynchronous boundary and at actual session admission. Delayed release of an independent hold
+still needs the saved Resume source and owner. An interrupted cold shell action cannot return a
+successful held checkpoint just because it has no queued input.
+Ownership is captured at Pause, not inferred when Resume is requested. It binds projects, session
+identity, flow roots, member fences and open-task owner/status/assignment. A narrow durable task
+counter detects ownership/status ABA while allowing intentional content edits. Immediate Resume
+and delayed held release compare this saved binding after restart. Older receipts without it
+cannot authorize Resume.
+
+A revision that only adds tasks (`newTasks`, with no goal, agreement, task or decision change)
+needs no Pause: it changes nothing a working chat uses. Each new task has a `key`, a title, a
+body (its outcome and acceptance) and `dependsOn`: existing task IDs or numbers, or keys of new
+tasks listed earlier. A dropped task, or one the same revision drops, cannot be a dependency.
+
+### Planned missions
+
+A proposal that only adds tasks (`addsOnly`) stays current while other tasks make progress: it needs only its
+dependencies, which confirmation checks again. Any other proposal goes stale when the mission source changes.
+
+In a mission with a published native plan, a confirmed revision becomes the published agreement
+(`MissionStore.republish`): the publication takes the current brief revision and latest
+submission, each open published task gets its `definition` (`publishedDefinition`: title, body,
+dependencies, assignment, decisions), and each new task joins `publication.tasks` with slice ID
+`revision:<proposal>:<key>`. Start and starts by rule compare a task with its `definition` when
+it has one, and with its slice otherwise. So new tasks start like the others, and a task changed
+outside a confirmed revision loses Start authority.
+
+The planning agent may save a proposal after a Revisit or after a mission thread message it took
+(`userAsked`), for example when the user asks for new work in a thread. The proposal is inert
+until the user confirms it on the planning page.
+
+### Reachable post-Pause preview
+
+The coordinator can prepare and save an inert delta while already allowed to plan. The user
+then invokes existing Mission Pause and waits for its durable Paused result. No coordinator
+turn runs while held. The user can explicitly request `/:id/preview` using the saved proposal's
+exact digest and the **new post-Pause source**. This creates a new immutable proposal with a
+different ID/digest, without confirming anything or changing/renewing the old proposal.
+
+The client must display a full comparison against the current mission, including any changes
+since the old proposal, and require a fresh explicit confirmation of the **new** ID/digest.
+This is not approval carried across a source mismatch, an automatic rebase, or proof the old
+proposal still fits. If any referenced task has finished or decision has retired, normal
+validation refuses instead of substituting content. Any subsequent edit/Stop/Pause stales the
+new preview too. Exact operation retries return their original receipt; Unknown is lookup-only.
+An already confirmed revision cannot seed a fresh preview. Confirmation keeps all holds.
+
+Application does not cancel jobs, drop effects/drafts, clear user holds or Stop generations,
+resume workers, retry Unknown starts or change queued policy authority. Task/assignment and
+agreement/decision changes invalidate the existing report, allocation, approval and queued-start
+source fences. Resume is a separate explicit lifecycle operation with its existing checks.
+No worker status is inferred from its report. No completed/dropped task can be edited here.
+
+## Current-only context and recovery
+
+`MissionService.context` and `MissionStore.memberContext` remain the canonical assembler.
+Coordinators receive the current brief, active decisions, up to 100 open task summaries (with
+the full count), and the latest confirmed revision's short summary. They do not receive old
+briefs/plans or retired decision bodies. Worker audience/pin routing is unchanged. Retired
+comparison state carries hashes and links, not bodies. Coordinator system prompts refresh on
+same-role changes; worker prompt caching keeps its existing selection and retirement behavior.
+
+Default `mission decisions` reads active guidance missing from the prompt. `filter: "all"`
+explicitly reads exact history; retired entries are labeled historical/nonbinding. Explicit old
+brief reads and task-pinned retired decisions also carry that label. Replacement chains and
+reasons remain available. Reads grant no authority and do not re-pin tasks.
+
+`decisionNotice` omits retired/deleted bodies. `DecisionInbox.observe` runs on startup and live
+changes, strips older pending batches, and quarantines exact frozen/queued/question-deferred
+notices whose bodies became historical. It never rewrites an uncertain placement ID/bytes or
+replays those bodies. Quarantine appends exact original records as historical entries with no
+model contribution, not an ever-growing loaded context document. Unchanged current lost-ACK
+notices still deduplicate with their original ID.
+Question/Pause/Stop holds remain intact. No quarantine record is model context.
+
+**Filtering cannot erase an already loaded transcript.** Earlier placed notices, tool results
+and prior plans remain historical text. After a revision, re-read current agreement and tasks
+before work. For a genuinely fresh context, use an explicitly requested existing checkpoint/
+continuation flow after its safe boundary, carrying only current agreement, references to
+history, kept drafts and uncertain effects. Do not reset automatically, recreate a lost tool
+stack, replay effects, bypass opt-in compaction or claim that resume discarded old context.
+This implementation does not initiate that lifecycle flow.
+
+## Native UI
+
+Day's planning page (`apps/day/missions/planning/RevisitDoc.tsx`) shows the agreement now, a Revisit interview
+round (`RoundKind::Revisit`, the existing saved interview UI), and a full preview of one
+revision: goal and agreement text, every open task (stays, changes or drops), finished tasks
+kept, decision replacements and withdrawals with reasons, and unapplied instruction or
+permission corrections. Confirmation is two presses and names the revision ID and digest shown.
+Stale, unpaused and lost-answer cases refuse or stay Unknown; Check only reads.
+`plan.rs` mirrors the delta above; the mock rules are in `plan_revisit.rs` and
+`native/tests/revisit.rs`.
+
+The connected planning read includes the canonical current mission, brief, tasks, active
+decisions, controls, revision source and pending proposal. No second revision store is used.
+The existing private native planning ledger journals three explicit human intents through
+authenticated `/api/operations`:
+
+- `plan-revisit` names the displayed source and admission digest. Only an active, idle,
+  unheld, unstopped trusted published planning owner can receive it through `admitPlanning`.
+  There is no ordinary Build/sendNotice fallback, legacy adoption or age-triggered admission.
+- `revision-preview` names a saved proposal's ID/digest and the new current source. The
+  established “Ask for a new revision” action uses this after Pause, without waking a held
+  planner. It creates a fresh proposal and displays its full current comparison.
+- `revision-confirm` names that fresh proposal's ID/digest/source. Its user provenance is
+  fixed to `native-revision:<operationId>`. Confirmation preserves Pause and all permissions.
+
+Published planners can only save new `kind=revisit` questions or an inert `revision-propose`
+delta through `mission_plan`. The default read returns current agreement, active decisions,
+tasks, latest confirmed summary and settled answers, not old full plans. Historical plan reads
+remain explicit. The trusted upstream skills and normal saved-round continuation are reused.
+Creation submit/approval never serves as amendment consent or execution Start.
+
+Every uncertain admission, preview or confirmation is lookup-only with the original full
+operation. Recovery reads saved kernel input receipts or exact canonical proposal/confirmation
+records, never re-enters an effect. The existing Check again action settles Unknown. Unsupported
+older services remain unavailable. Native appearance and real-provider acceptance are separate
+gates; isolated tests do not authorize live check-ups.
+
+## Verification
+
+`revision-work-pause.test.ts` checks selected and dependent owners, independent work left running,
+global control unchanged, application proof, explicit release and lookup-only uncertainty using
+fake checkpoint participants. `mission-successor-finish.test.ts` checks native migration against
+canonical storage and durable reopen. These do not prove real-process checkpoint behavior or
+large-session performance. Independent review of the selective checkpoint and migration paths is
+still required before live acceptance.
+Deterministic Resume races now cover source, archive and membership changes, initial/final
+persistence, delayed hold release, and a source change inside actual session resume admission.
+`mission-pause.test.ts` also covers cold interrupted shell effects and a changed fence before held.
+
+`mission-revisions.test.ts` covers inert proposals, exact confirmation, preserved completed
+tasks, replacement/withdrawal provenance, concurrent edits, ownership ABA, Stop/Pause source
+changes, safe-boundary refusal, assignment/report invalidation and durable reopen/receipt lookup.
+`mission-service.test.ts` covers the HTTP boundary. Kernel decision/inbox/tool tests cover
+current-only prompts, explicit history, live same-role coordinator refresh and queued/frozen/
+question-deferred retirement, without real providers. Existing planning, reports, continuation,
+pause and mission suites cover unchanged ownership and lifecycle gates.
+Focused Revisit cases also cover post-Pause re-preview identities, stale discovery, subsequent
+Stop/completed-task refusal, inert canonical/native submissions and exact history/receipt reopen.
+`native/tests/plan_host.rs::revisit_round_uses_saved_interview_without_publishing_agreement`
+exercises that existing bridge seam in an isolated daemon, not connected Revisit acceptance.
+
+`revisit-planning.test.ts` replaces all worker/provider admission with isolated fakes. It covers
+explicit admission and duplicates, held/Stop/access/owner/source/busy refusal, current-only
+context, inert deltas, new-round submission, post-Pause re-preview, exact confirmation and lost
+ACK lookup without replay. `planning-boundary.test.ts` covers kernel holds and atomic input
+deduplication. `plan_revision_host::tests` covers the existing native projection and exact
+intent mapping, including unchanged/completed tasks, stale sources and Unknown. Broader suites
+and native appearance remain separate CI/acceptance work.

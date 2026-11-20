@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { nshSource } from "@pilot/artifacts";
 import type { DeliveredArtifact, DeliveredArtifactRequest, DeliveredWork, ProjectArtifact } from "@pilot/protocol";
-import { nativeIntakeFixture } from "./native-intake.fixture.ts";
+import { nativeIntakeFixture } from "./day/intake/native-intake.fixture.ts";
 
 function withSource<T extends { source: string; nsh: ReturnType<typeof nshSource> }>(artifact: T, source: string): T {
 	return { ...artifact, source, nsh: nshSource(source, artifact.nsh.entry) };

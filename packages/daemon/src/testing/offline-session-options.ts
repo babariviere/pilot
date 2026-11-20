@@ -1,4 +1,4 @@
-import type { SessionManagerOptions } from "../sessions.ts";
+import type { SessionManagerOptions } from "../sessions/sessions.ts";
 
 /** Synthetic workers do not imply account/config access. Fixtures select these services independently. */
 export function offlineSessionOptions(options: SessionManagerOptions = {}): SessionManagerOptions {

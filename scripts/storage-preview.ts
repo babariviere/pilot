@@ -2,7 +2,7 @@
 import { lstat, opendir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { abandonedAtomicFiles } from "../packages/daemon/src/temporary-storage.ts";
+import { abandonedAtomicFiles } from "../packages/daemon/src/runtime/storage/temporary-storage.ts";
 
 const home = resolve(process.argv[2] ?? join(homedir(), ".local/share/pilot"));
 if ((await realpath(home)) !== home) throw new Error("Refusing an aliased Pilot home");

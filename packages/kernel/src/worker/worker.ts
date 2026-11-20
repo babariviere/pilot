@@ -1,0 +1,659 @@
+/** Kernel worker entry: one process per session, driven over Node IPC by pilotd. */
+
+import { randomUUID } from "node:crypto";
+import { serialize } from "node:v8";
+import { ConversationBusy } from "@earendil-works/pi-durable";
+import { configureNodeTelemetry, localHostKind, nodeTelemetry, telemetryEnvironment } from "@pilot/telemetry";
+import release from "../../../../package.json" with { type: "json" };
+import { formatFailure } from "../failure.ts";
+import { InputGenerationRefused, QuestionReplyRefused } from "../session/input/held-inputs.ts";
+import { preparePerformanceClear, setPerformanceCollectionEnabled } from "../performance.ts";
+import type { MissionContext, WorkspaceContext } from "../runtime/policy.ts";
+import type { HostCall, HostCallPacket, HostCalls, HostMethod, KernelCommand, KernelPacket } from "./protocol.ts";
+import { KernelSession } from "../session.ts";
+import { prepareToolActivityClear, setToolActivityCollectionEnabled } from "../session/activity/tool-activity.ts";
+
+const errorText = formatFailure;
+
+export interface IpcChannel {
+	readonly connected: boolean;
+	send(packet: KernelPacket, callback: (error: Error | null) => void): boolean;
+}
+
+type SendJob = { packet: KernelPacket; bytes: number; resolve(): void; reject(error: Error): void };
+
+/** One in-flight write, bounded FIFO retention. Never silently drop ordered state deltas. */
+export class IpcSender {
+	private readonly waiting: SendJob[] = [];
+	private inFlight?: SendJob;
+	private failure?: Error;
+	private timer?: ReturnType<typeof setTimeout>;
+	private bytes = 0;
+	private readonly channel: IpcChannel;
+	private readonly onFailure: (error: Error) => void;
+	private readonly options: { maxBytes: number; maxPacketBytes: number; maxPackets: number; timeoutMs: number };
+
+	constructor(
+		channel: IpcChannel,
+		onFailure: (error: Error) => void,
+		options = { maxBytes: 128 * 1024 * 1024, maxPacketBytes: 64 * 1024 * 1024, maxPackets: 256, timeoutMs: 30_000 },
+	) {
+		this.channel = channel;
+		this.onFailure = onFailure;
+		this.options = options;
+	}
+
+	get pendingBytes(): number {
+		return this.bytes;
+	}
+
+	get pendingPackets(): number {
+		return this.waiting.length + (this.inFlight ? 1 : 0);
+	}
+
+	send(packet: KernelPacket): Promise<void> {
+		if (this.failure) return Promise.reject(this.failure);
+		let bytes: number;
+		try {
+			bytes = serialize(packet).byteLength;
+		} catch (error) {
+			this.fail(new Error(`Kernel IPC serialization failed: ${errorText(error)}`));
+			return Promise.reject(this.failure);
+		}
+		if (
+			!this.channel.connected ||
+			bytes > this.options.maxPacketBytes ||
+			this.bytes + bytes > this.options.maxBytes ||
+			this.pendingPackets >= this.options.maxPackets
+		) {
+			this.fail(
+				new Error(this.channel.connected ? "Kernel IPC queue exceeded its limit" : "Kernel IPC disconnected"),
+			);
+			return Promise.reject(this.failure);
+		}
+		return new Promise((resolve, reject) => {
+			this.bytes += bytes;
+			this.waiting.push({ packet, bytes, resolve, reject });
+			this.drain();
+		});
+	}
+
+	close(error = new Error("Kernel IPC closed")): void {
+		this.fail(error, false);
+	}
+
+	private fail(error: Error, report = true): void {
+		if (this.failure) return;
+		this.failure = error;
+		clearTimeout(this.timer);
+		this.inFlight?.reject(error);
+		this.inFlight = undefined;
+		for (const job of this.waiting.splice(0)) job.reject(error);
+		this.bytes = 0;
+		if (report) this.onFailure(error);
+	}
+
+	/** A live peer may be CPU-starved indefinitely. Time alone is not transport failure. */
+	private checkChannel(): void {
+		this.timer = setTimeout(() => {
+			if (!this.channel.connected) this.fail(new Error("Kernel IPC disconnected"));
+			else this.checkChannel();
+		}, this.options.timeoutMs);
+		this.timer.unref();
+	}
+
+	private drain(): void {
+		if (this.failure || this.inFlight || !this.waiting.length) return;
+		const job = this.waiting.shift()!;
+		this.inFlight = job;
+		this.checkChannel();
+		try {
+			// A false return is pressure, not failure. Await the callback before sending the next packet.
+			this.channel.send(job.packet, (error) => {
+				if (this.inFlight !== job) return;
+				if (error) return this.fail(error);
+				clearTimeout(this.timer);
+				this.inFlight = undefined;
+				this.bytes -= job.bytes;
+				job.resolve();
+				this.drain();
+			});
+		} catch (error) {
+			this.fail(new Error(`Kernel IPC send failed: ${errorText(error)}`));
+		}
+	}
+}
+
+/** Explicit invocation keeps sender tests from installing process handlers or starting a kernel. */
+export function runKernelWorker(): void {
+	// Export remains off until the user explicitly opts in through telemetry settings.
+	configureNodeTelemetry({
+		enabled: false,
+		serviceName: "pilot.kernel",
+		serviceVersion: release.version,
+		environment: telemetryEnvironment(),
+		hostKind: localHostKind(),
+	});
+	let session: KernelSession | undefined;
+	let initialization: Promise<void> | undefined;
+	let commands: Promise<void> = Promise.resolve();
+	let updateRevision = 0;
+	/** Latest context sent while the kernel was still starting. */
+	let pendingMission: { context?: MissionContext } | undefined;
+	let pendingSlackLinked: boolean | undefined;
+	const configureTelemetry = (configuration: import("./protocol.ts").KernelTelemetryConfiguration) => {
+		setPerformanceCollectionEnabled(configuration.localDiagnostics);
+		setToolActivityCollectionEnabled(configuration.localDiagnostics);
+		configureNodeTelemetry({
+			enabled: configuration.enabled,
+			serviceName: "pilot.kernel",
+			serviceVersion: configuration.serviceVersion,
+			environment: configuration.environment,
+			hostKind: configuration.hostKind,
+			hostId: configuration.hostId,
+			...(configuration.endpoint ? { endpoint: configuration.endpoint } : {}),
+		});
+	};
+	const hostCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+	const workspaceCalls = new Map<string, (workspace?: WorkspaceContext) => void>();
+	const prepareWorkspace = () =>
+		new Promise<WorkspaceContext | undefined>((resolve) => {
+			const callId = randomUUID();
+			// Do not time out into a model request while the daemon might still be changing files.
+			workspaceCalls.set(callId, resolve);
+			void send({ type: "workspace.prepare", callId }).catch(() => {
+				workspaceCalls.delete(callId);
+				void shutdown(1);
+			});
+		});
+	/** Subagent commands may wait on a child worker; they never block session commands. */
+	const subagentCommands = new Set<Promise<void>>();
+	const clarificationCommands = new Set<Promise<void>>();
+	let exiting = false;
+	const sender = new IpcSender(
+		{
+			get connected() {
+				return !!process.send && process.connected;
+			},
+			send: (packet, callback) => process.send!(packet, callback),
+		},
+		(error) => {
+			console.error(`pilot: ${error.message}`);
+			void shutdown(1);
+		},
+	);
+	const send = (packet: KernelPacket) => sender.send(packet);
+	// Notification hooks cannot await. Their retention is still bounded by the same FIFO.
+	const notify = (packet: KernelPacket) => void send(packet).catch(() => undefined);
+	const call: HostCall = <M extends HostMethod>(method: M, args: HostCalls[M]["args"], signal?: AbortSignal) =>
+		new Promise((resolve, reject) => {
+			const callId = randomUUID();
+			if (signal?.aborted) {
+				reject(new Error("Diagnostic read cancelled"));
+				return;
+			}
+			const cancel = () => {
+				hostCalls.get(callId)?.reject(new Error("Diagnostic read cancelled"));
+				hostCalls.delete(callId);
+				// These host reads already support cancellation. Other calls only stop waiting locally.
+				if (method === "diagnostics.context" || method === "diagnostics.logs" || method === "screen")
+					notify({ type: "host.cancel", callId });
+			};
+			const timer = setTimeout(() => {
+				signal?.removeEventListener("abort", cancel);
+				hostCalls.delete(callId);
+				reject(new Error("pilotd did not answer the tool call"));
+			}, 60_000);
+			timer.unref();
+			hostCalls.set(callId, {
+				resolve: (value) => {
+					signal?.removeEventListener("abort", cancel);
+					clearTimeout(timer);
+					const nullable =
+						method === "mission" ||
+						method === "memory" ||
+						method === "knowledge" ||
+						method === "insights.backlog" ||
+						method === "liveUpdate.propose";
+					resolve((value ?? (nullable ? null : undefined)) as HostCalls[M]["result"]);
+				},
+				reject: (error) => {
+					signal?.removeEventListener("abort", cancel);
+					clearTimeout(timer);
+					reject(error);
+				},
+			});
+			signal?.addEventListener("abort", cancel, { once: true });
+			send({ type: "host.call", callId, method, args } as HostCallPacket).catch((error: unknown) => {
+				hostCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
+				hostCalls.delete(callId);
+			});
+		});
+
+	async function shutdown(code = 0): Promise<void> {
+		if (exiting) return;
+		exiting = true;
+		const watchdog = setTimeout(() => process.exit(1), 5_000);
+		watchdog.unref();
+		try {
+			await initialization?.catch(() => undefined);
+			await commands;
+			await session?.stopQuestionClarifications();
+			await Promise.allSettled(clarificationCommands);
+			await Promise.allSettled(subagentCommands);
+			await session?.close();
+			await nodeTelemetry().shutdown();
+		} catch (error) {
+			await send({ type: "error", message: `Shutdown failed: ${errorText(error)}` }).catch(() => undefined);
+			code = 1;
+		}
+		sender.close();
+		process.exit(code);
+	}
+
+	async function execute(
+		command: Exclude<
+			KernelCommand,
+			{ type: "start" | "shutdown" | "subagent" | "inspectJobs" | "update.pause" | "update.resume" }
+		>,
+	): Promise<void> {
+		await initialization;
+		if (!session) throw new Error("Kernel has not started");
+		switch (command.type) {
+			case "plan.start":
+				await session.submitPlanStart(command.requestId, command.content);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "planning.input":
+				await session.submitPlanning(command.input);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "reloadPi":
+				await session.reloadPi();
+				await send({ type: "piReloaded", requestId: command.requestId, commands: session.commands });
+				break;
+			case "systemMessageState.ack":
+				await session.acknowledgeSystemMessageState(command.id);
+				break;
+			case "sendHeldMessages":
+				await session.sendHeldMessages();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "discardHeldMessages":
+				await session.discardHeldMessages(command.submissionId);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "activity":
+				await session.recordActivity(command.requestId, command.text, command.event);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "input": {
+				const requestSpan = command.trace
+					? nodeTelemetry().startSpan(
+							"pilot.kernel.request",
+							{ "pilot.operation": "kernel.request" },
+							{ parent: command.trace },
+						)
+					: undefined;
+				const admissionSpan = command.trace
+					? nodeTelemetry().startSpan(
+							"pilot.message.send",
+							{ "pilot.operation": "message.send", "pilot.phase": "admission" },
+							{ parent: requestSpan?.carrier() ?? command.trace },
+						)
+					: undefined;
+				try {
+					const delivery = await session.submit(
+						command.requestId,
+						command.content,
+						command.mode,
+						command.onlyIfIdle,
+						command.reportDelivery,
+						command.event,
+						admissionSpan?.carrier() ?? command.trace,
+						command.resumeHeld,
+						command.answerQuestionId,
+						command.questionReplyId,
+						command.dedupeOnly,
+						command.interviewReply,
+					);
+					await send({ type: "accepted", requestId: command.requestId, ...delivery });
+					admissionSpan?.end();
+				} catch (error) {
+					admissionSpan?.finish("failed");
+					requestSpan?.finish("failed");
+					throw error;
+				} finally {
+					requestSpan?.end();
+				}
+				break;
+			}
+			case "abort": {
+				const withdrawn = await session.abort();
+				await send({ type: "aborted", requestId: command.requestId, ...(withdrawn.length ? { withdrawn } : {}) });
+				break;
+			}
+			case "pauseInputs":
+				await session.pauseInputs(command.revision);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "resumeInputs":
+				await session.resumeInputs(command.revision);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "rewind":
+			case "activateAttempt": {
+				const result =
+					command.type === "rewind"
+						? await session.rewind(command.action, command.entryId)
+						: await session.activateAttempt(command.attemptId);
+				await send({ type: "rewound", requestId: command.requestId, ...result });
+				break;
+			}
+			case "editQueuedMessage":
+				await session.editQueuedMessage(command.submissionId, command.content, command.mode, command.guardToken);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "changeModel":
+			case "changeModelConfiguration": {
+				const result = await session.changeModel(
+					command.model,
+					command.thinking,
+					command.type === "changeModelConfiguration"
+						? {
+								revalidate: () => call("model.configuration.guard", { requestId: command.requestId }),
+							}
+						: undefined,
+					command.type === "changeModel" && command.signedIn === true,
+				);
+				await send({
+					type: "modelChanged",
+					requestId: command.requestId,
+					model: session.model,
+					thinking: session.thinkingLevel,
+					usage: session.usage,
+					...result,
+				});
+				break;
+			}
+			case "continuation.pause":
+				await session.pauseForUpdate();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "removeQueuedMessage":
+				await session.removeQueuedMessage(command.submissionId, command.guardToken);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "compact":
+				await session.compact(command.instructions);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "inspectChildren":
+				await send({ type: "children", requestId: command.requestId, hasChildren: await session.hasChildren() });
+				break;
+			case "checkpointUpdate":
+				await session.checkpointForUpdate();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "checkpointLifecycle":
+				// Close pauses durable runs, interrupts unsafe tools and joins extension
+				// shutdown (including owned jobs/children) before acknowledging storage release.
+				await send({
+					type: "lifecycle.checkpointed",
+					requestId: command.requestId,
+					operationId: command.operationId,
+					...(await session.checkpointLifecycle(command.notifyUpdate ? command.operationId : undefined)),
+				});
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "watch":
+				await session.watch(
+					command.watchId,
+					(events) => send({ type: "events", watchId: command.watchId, events }),
+					command.includeTodos,
+					command.activityOnly,
+					command.recent,
+				);
+				break;
+			case "unwatch":
+				await session.unwatch(command.watchId);
+				break;
+		}
+	}
+
+	process.on("message", (message: unknown) => {
+		if (exiting || !message || typeof message !== "object") return;
+		const command = message as KernelCommand;
+		if (command.type === "shutdown") {
+			void shutdown();
+			return;
+		}
+		if (command.type === "host.result") {
+			const pending = hostCalls.get(command.callId);
+			hostCalls.delete(command.callId);
+			if (command.error !== undefined) pending?.reject(new Error(command.error));
+			else pending?.resolve(command.result);
+			return;
+		}
+		if (command.type === "workspace.prepared") {
+			workspaceCalls.get(command.callId)?.(command.workspace);
+			workspaceCalls.delete(command.callId);
+			return;
+		}
+		if (command.type === "mission.context") {
+			if (session) session.setMission(command.context);
+			else pendingMission = { ...(command.context ? { context: command.context } : {}) };
+			return;
+		}
+		if (command.type === "telemetry.configure") {
+			configureTelemetry(command.configuration);
+			return;
+		}
+		if (command.type === "diagnostics.configure") {
+			setPerformanceCollectionEnabled(command.enabled);
+			setToolActivityCollectionEnabled(command.enabled);
+			return;
+		}
+		if (command.type === "diagnostics.clear.prepare") {
+			void Promise.all([preparePerformanceClear(), prepareToolActivityClear()])
+				.then(() => send({ type: "accepted", requestId: command.requestId }))
+				.catch(() =>
+					send({ type: "error", requestId: command.requestId, message: "Could not prepare diagnostics" }),
+				);
+			return;
+		}
+		if (command.type === "slack.linked") {
+			if (session) session.setSlackLinked(command.linked);
+			else pendingSlackLinked = command.linked;
+			return;
+		}
+		if (command.type === "start" || command.type === "startConfiguration") {
+			if (command.type === "startConfiguration")
+				command.spec = { ...command.spec, configurationOnly: true, stopOnOpen: true };
+			if (initialization) return;
+			initialization = (async () => {
+				// Do not inherit another worker's accounting epoch in tests or delegated launches.
+				delete process.env.PILOT_USAGE_HISTORY;
+				delete process.env.PILOT_USAGE_PARENT;
+				if (command.spec.telemetry) configureTelemetry(command.spec.telemetry);
+				const { credentialEnvironment } = await import("../credentials/credential-client.ts");
+				for (const [key, value] of Object.entries(credentialEnvironment(command.spec.credentials))) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+				// Extensions resolve pi's agent directory from the environment, e.g. for the shared usage cache.
+				if (command.spec.agentDir) process.env.PI_CODING_AGENT_DIR = command.spec.agentDir;
+				if (command.spec.subscriptionPolicy)
+					process.env.PILOT_SUBSCRIPTION_POLICY = command.spec.subscriptionPolicy;
+				else delete process.env.PILOT_SUBSCRIPTION_POLICY;
+				if (command.spec.connectivityPolicy)
+					process.env.PILOT_CONNECTIVITY_POLICY = command.spec.connectivityPolicy;
+				else delete process.env.PILOT_CONNECTIVITY_POLICY;
+				// Bundled children inherit the same immutable authority ceiling, never a prompt-supplied level.
+				if (command.spec.pilot?.executionPermission)
+					process.env.PILOT_EXECUTION_PERMISSION = JSON.stringify(command.spec.pilot.executionPermission);
+				else delete process.env.PILOT_EXECUTION_PERMISSION;
+				const opened = await KernelSession.open(command.spec, {
+					call,
+					onSystemMessageState: (event) => {
+						void send({ type: "systemMessageState", event });
+					},
+					onWorking: (working, completion, execution) =>
+						notify({
+							type: "working",
+							working,
+							...(completion ? { completion } : {}),
+							...(execution ? { execution } : {}),
+						}),
+					onCompacting: (compacting) => notify({ type: "compacting", compacting }),
+					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
+					onToolActivity: (activity) => notify({ type: "tool.activity", activity }),
+					onToolsRunningChanged: (running) => notify({ type: "tools.running", running }),
+					onQuestionAwaited: (question) =>
+						notify({ type: "question.awaited", ...(question !== undefined ? { question } : {}) }),
+					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
+					onUsageChanged: (usage) => notify({ type: "usage", usage }),
+					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
+					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
+					onPullRequestAttempted: () => notify({ type: "pullRequest.attempted" }),
+					onRefsChanged: () => notify({ type: "refs.changed" }),
+					onGitHubAction: (action) => notify({ type: "github.action", action }),
+					onMcpUsed: (namespaces, failed) => notify({ type: "mcp.used", namespaces, failed }),
+					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
+					// The closed Insights profile has no workspace. Its daemon allowlist drops this request.
+					...(command.spec.role !== "insights" ? { prepareWorkspace } : {}),
+				});
+				if (pendingMission) opened.setMission(pendingMission.context);
+				if (pendingSlackLinked !== undefined) opened.setSlackLinked(pendingSlackLinked);
+				session = opened;
+				await send({
+					type: "ready",
+					modelConfiguration: 1,
+					questionClarification: 1,
+					toolsRunning: session.toolsRunning,
+					model: session.model,
+					thinking: session.thinkingLevel,
+					working: session.working,
+					...(session.compacting ? { compacting: true } : {}),
+					execution: await session.executionEvidence(),
+					usage: session.usage,
+					openTodoCount: session.openTodoCount,
+					...(session.completion ? { completion: session.completion } : {}),
+					commands: session.commands,
+					...(session.attempts ? { attempts: session.attempts } : {}),
+				});
+			})();
+			void initialization.catch(async (error) => {
+				await send({ type: "error", message: `Kernel failed to start: ${errorText(error)}` }).catch(
+					() => undefined,
+				);
+				await shutdown(1);
+			});
+			return;
+		}
+		if (command.type === "update.resume") {
+			updateRevision++;
+			session?.resumeAfterUpdate();
+			return;
+		}
+		if (command.type === "update.pause") {
+			const revision = ++updateRevision;
+			void (async () => {
+				await initialization;
+				await commands;
+				if (revision !== updateRevision) return;
+				if (!session) throw new Error("Kernel has not started");
+				await session.pauseForUpdate();
+				if (revision === updateRevision) await send({ type: "update.paused", id: command.id });
+			})().catch((error) =>
+				send({ type: "update.paused", id: command.id, error: errorText(error) }).catch(() => undefined),
+			);
+			return;
+		}
+		if (command.type === "inspectJobs") {
+			void (async () => {
+				await initialization;
+				if (!session) throw new Error("Kernel has not started");
+				await send({ type: "jobs", requestId: command.requestId, jobs: await session.jobs() });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
+			return;
+		}
+		if (command.type === "stopJob") {
+			void (async () => {
+				await initialization;
+				if (!session) throw new Error("Kernel has not started");
+				await session.stopJob(command.jobId);
+				await send({ type: "accepted", requestId: command.requestId });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
+			return;
+		}
+		if (command.type === "question.clarify") {
+			const before = commands;
+			// Provider waits must not sit in front of Stop/Pause on the command queue.
+			const running = (async () => {
+				await initialization;
+				await before;
+				if (!session) throw new Error("Kernel has not started");
+				await session.clarifyQuestion(
+					{ operationId: command.requestId, questionId: command.questionId, question: command.question },
+					(signal) => call("question.guard", { requestId: command.requestId }, signal),
+				);
+				await send({ type: "accepted", requestId: command.requestId });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
+			clarificationCommands.add(running);
+			void running.finally(() => clarificationCommands.delete(running));
+			return;
+		}
+		if (command.type === "subagent") {
+			const running = (async () => {
+				await initialization;
+				if (!session) throw new Error("Kernel has not started");
+				await session.subagentCommand(
+					command.action === "send"
+						? {
+								action: "send",
+								name: command.name,
+								message: command.message ?? "",
+								mode: command.mode,
+								requestId: command.requestId,
+							}
+						: { action: "stop", name: command.name, requestId: command.requestId },
+				);
+				await send({ type: "accepted", requestId: command.requestId });
+			})().catch((error) =>
+				send({
+					type: "error",
+					requestId: command.requestId,
+					message: formatFailure(error, "Command subagent"),
+				}).catch(() => undefined),
+			);
+			subagentCommands.add(running);
+			void running.finally(() => subagentCommands.delete(running));
+			return;
+		}
+		commands = commands
+			.then(() => execute(command))
+			.catch((error) =>
+				send({
+					type: "error",
+					requestId: "requestId" in command ? command.requestId : undefined,
+					message: formatFailure(error, `Command ${command.type}`),
+					...(error instanceof ConversationBusy ? { code: "busy" as const } : {}),
+					...(error instanceof QuestionReplyRefused ? { code: "stale_question" as const } : {}),
+					...(error instanceof InputGenerationRefused ? { code: "stopped" as const } : {}),
+				}).catch(() => undefined),
+			);
+	});
+	process.on("disconnect", () => {
+		sender.close(new Error("Kernel IPC disconnected"));
+		void shutdown();
+	});
+	process.on("SIGTERM", () => void shutdown());
+	process.on("SIGINT", () => void shutdown());
+}

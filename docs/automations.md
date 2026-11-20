@@ -65,6 +65,6 @@ the native app's authority and the Automations switch. Questions pause the curre
 node until answered. Stop never silently restarts a flow. Progress and failures use
 session automation state, with no new desktop controls in the engine MVP.
 
-The [flow format and execution contract](technical/agent-flows.md) defines the JSON
+The [flow format and execution contract](../packages/daemon/src/flows/agent-flows.md) defines the JSON
 format, worker → reviewer example, durable recovery and limits. Multiple writing
 nodes, automatic starts and advanced graphs are later options, not part of this MVP.

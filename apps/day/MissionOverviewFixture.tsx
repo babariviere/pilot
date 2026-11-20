@@ -5,15 +5,15 @@
 import { keymap, mount, signal, View } from "nsh";
 import type { Freshness, MissionPage, Problem, TaskLine, TaskWorkState } from "pilot-day/native";
 import { TodayFeed } from "pilot-day/native";
-import { anchorOnScreen, type Span } from "./contentAnchor";
-import { type Day, mirrorDay } from "./day";
-import type { DayFeed } from "./feeds";
-import { scrollOf } from "./kept";
-import { MockDayScreen, openMockChat, openPlanning } from "./mockFeeds";
-import { ScriptedThreads } from "./threadDemo";
-import { mirrorThreads } from "./threadFeed";
+import { type Day, mirrorDay } from "./app/day";
+import { scrollOf } from "./app/kept";
+import { MockDayScreen, openMockChat, openPlanning } from "./app/testing/mockFeeds";
+import { openMission } from "./app/view";
+import { anchorOnScreen, type Span } from "./missions/contentAnchor";
+import { ScriptedThreads } from "./sessions/threadDemo";
+import { mirrorThreads } from "./sessions/threadFeed";
+import type { DayFeed } from "./sources/feeds";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
-import { openMission } from "./view";
 
 type Situation = "running" | "waiting" | "paused" | "empty" | "completed" | "unread" | "older" | "offline";
 const SITUATIONS: Situation[] = ["running", "waiting", "paused", "empty", "completed", "unread", "older", "offline"];

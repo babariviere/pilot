@@ -12,16 +12,16 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 test("a test's file name decides its suite", () => {
 	for (const [path, suite] of [
 		["packages/daemon/src/new-feature.test.ts", "integration"],
-		["packages/kernel/src/model.integration.test.ts", "integration"],
-		["packages/daemon/src/changes.stress.test.ts", "stress"],
-		["packages/daemon/src/github.fast.test.ts", "fast"],
+		["packages/kernel/src/models/model.integration.test.ts", "integration"],
+		["packages/daemon/src/changes/changes.stress.test.ts", "stress"],
+		["packages/daemon/src/sources/github/github.fast.test.ts", "fast"],
 		["scripts/test-suites.fast.test.ts", "fast"],
-		["apps/day/node-tests/refresh.test.ts", "integration"],
+		["apps/day/node-tests/sources/refresh.test.ts", "integration"],
 	])
 		assert.equal(testSuite(path!), suite, path);
 	assert.ok(
-		testWeight("packages/daemon/src/shared-workspaces-import.integration.test.ts") >
-			testWeight("packages/daemon/src/github.fast.test.ts"),
+		testWeight("packages/daemon/src/workspaces/shared-workspaces-import.integration.test.ts") >
+			testWeight("packages/daemon/src/sources/github/github.fast.test.ts"),
 	);
 });
 
@@ -32,7 +32,7 @@ test("discovery visits package sources, Day node tests and runner tests, never d
 		"packages/a/src/nested/one.test.ts",
 		"packages/a/node_modules/two.test.ts",
 		"packages/a/test/legacy-fixture.ts",
-		"apps/day/node-tests/three.test.ts",
+		"apps/day/node-tests/sources/three.test.ts",
 		"apps/day/Screen.test.tsx",
 		"scripts/runner.test.ts",
 		"scripts/bench/nested.test.ts",
@@ -41,7 +41,7 @@ test("discovery visits package sources, Day node tests and runner tests, never d
 		await writeFile(join(root, path), "");
 	}
 	assert.deepEqual((await discoverTests(root)).sort(), [
-		"apps/day/node-tests/three.test.ts",
+		"apps/day/node-tests/sources/three.test.ts",
 		"packages/a/src/nested/one.test.ts",
 		"scripts/runner.test.ts",
 	]);
@@ -63,15 +63,15 @@ test("the macos lane is a checked subset and stale configuration fails loudly", 
 	const files = await discoverTests(root);
 	assert.deepEqual(testLaneFiles(files, "all"), files);
 	const macos = testLaneFiles(files, "macos");
-	assert.ok(macos.includes("packages/kernel/src/ask.integration.test.ts"));
+	assert.ok(macos.includes("packages/kernel/src/tools/ask/ask.integration.test.ts"));
 	assert.ok(!macos.includes("packages/daemon/src/new-feature.test.ts"));
 	assert.throws(
 		() =>
 			testLaneFiles(
-				files.filter((path) => path !== "packages/kernel/src/ask.integration.test.ts"),
+				files.filter((path) => path !== "packages/kernel/src/tools/ask/ask.integration.test.ts"),
 				"macos",
 			),
-		/Configured tests were not discovered: packages\/kernel\/src\/ask.integration.test.ts/,
+		/Configured tests were not discovered: packages\/kernel\/src\/tools\/ask\/ask.integration.test.ts/,
 	);
 	assert.throws(
 		() =>

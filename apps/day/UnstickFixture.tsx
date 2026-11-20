@@ -2,9 +2,9 @@
 // with Unstick's repair agent. Mock data.
 import { mount, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { feedbackDraft, feedbackOpen } from "./feedbackView";
-import { openPlanning } from "./mockFeeds";
-import { Unstick } from "./Unstick";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { feedbackDraft, feedbackOpen } from "./feedback/feedbackView";
+import { Unstick } from "./missions/planning/Unstick";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 type Repair = NonNullable<NonNullable<PlanPage["unstick"]>["repair"]>;

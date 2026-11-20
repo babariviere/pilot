@@ -52,7 +52,7 @@ Failed tools or Stop prevent a requested
 clean reset. **Compact** still requests a model summary; very small windows can also
 use native summarization. Kept history does not guarantee that the model recalls it.
 
-[Technical details and compatibility limits](technical/posthorse.md).
+[Technical details and compatibility limits](../packages/kernel/src/history/posthorse.md).
 
 Changing providers may need a separate continuation. Read its confirmation and
 finish or stop background jobs and close live terminals first.

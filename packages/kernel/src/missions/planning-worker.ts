@@ -1,0 +1,84 @@
+/** Private, versioned worker binding. Never accepted from model arguments or generic SpawnRequest. */
+import type {
+	DurableOperation,
+	InterviewVersion,
+	MissionRevisionDelta,
+	OperationHost,
+	PlanWrite,
+} from "@pilot/protocol";
+import { canonicalJSON } from "../history/canonical-json.ts";
+
+export const PLANNING_PROFILE = {
+	version: 1,
+	id: "native-mission-planning",
+	source: "https://github.com/mattpocock/skills",
+	commit: "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+} as const;
+
+export interface PlanningWorkerBinding {
+	version: 1;
+	profile: typeof PLANNING_PROFILE;
+	home: string;
+	host: OperationHost;
+	projectId: string;
+	ownerSessionId: string;
+	missionId: string;
+	enrollmentId: string;
+	creationOperationId: string;
+}
+export interface PlanningRound extends InterviewVersion {
+	operationId: string;
+	contextDigest: string;
+}
+export type PlanningWorkerRequest =
+	| { action: "read"; revision?: number }
+	| { action: "knowledge"; id: string; revision: number }
+	| { action: "replaced"; task?: number }
+	| { action: "receipt"; operationId: string }
+	| { action: "write"; toolCallId: string; request: PlanWrite }
+	| {
+			action: "revision";
+			toolCallId: string;
+			request: {
+				purpose: "revision-propose";
+				source: string;
+				summary: string;
+				delta: MissionRevisionDelta;
+				/** The thread whose handoff this answers. Each thread keeps its own pending proposal. */
+				topicId?: string;
+			};
+	  }
+	| {
+			action: "questions";
+			toolCallId: string;
+			request: Extract<import("@pilot/protocol").InterviewWrite, { purpose: "interview-questions" }>;
+	  };
+export interface PlanningWorkerReply {
+	value: unknown;
+	blocked?: boolean;
+	/** Saved before returning the tool, not a promise awaiting human answers. */
+	hold?: PlanningRound;
+}
+export interface PlanningInput {
+	binding: PlanningWorkerBinding;
+	operation: DurableOperation;
+	hold: PlanningRound | null;
+	content: string;
+}
+export function assertPlanningBinding(binding: PlanningWorkerBinding): void {
+	if (
+		binding?.version !== 1 ||
+		canonicalJSON(binding.profile) !== canonicalJSON(PLANNING_PROFILE) ||
+		!binding.home?.startsWith("/") ||
+		![
+			binding.projectId,
+			binding.ownerSessionId,
+			binding.missionId,
+			binding.enrollmentId,
+			binding.creationOperationId,
+		].every((id) => typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id)) ||
+		!binding.host?.daemonId ||
+		!binding.host.lineageId
+	)
+		throw new Error("Trusted planning worker binding unavailable");
+}

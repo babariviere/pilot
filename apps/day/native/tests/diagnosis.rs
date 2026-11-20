@@ -2,7 +2,7 @@
 include!("support/intake_fixture.rs");
 #[test]
 fn privacy_controls_preserve_opt_ins_and_unknown_receipts_across_reopen() {
-    let mut f = Fixture::with_daemon("day-diagnostics.ts");
+    let mut f = Fixture::with_daemon("day/day-diagnostics.ts");
     let b = f.bridge();
     let first = f.call(&b, "day.diagnosis.read", json!({}));
     let s = &first["value"]["snapshot"];
@@ -51,7 +51,7 @@ fn privacy_controls_preserve_opt_ins_and_unknown_receipts_across_reopen() {
 }
 #[test]
 fn native_refuses_secret_collector_paths_before_any_send() {
-    let mut f = Fixture::with_daemon("day-diagnostics.ts");
+    let mut f = Fixture::with_daemon("day/day-diagnostics.ts");
     let b = f.bridge();
     let read = f.call(&b, "day.diagnosis.read", json!({}));
     let binding = &read["value"]["snapshot"]["binding"];

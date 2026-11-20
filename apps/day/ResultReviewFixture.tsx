@@ -1,18 +1,18 @@
 // Invented service data only. Exercises the production result page and its Review code page over a scripted
 // result (deliveryDemo.ts) and a scripted private review, not a second screen.
 import { keymap, mount, signal, View } from "nsh";
-import { DeliveryScreen } from "./DeliveryScreen";
-import { ScriptedDelivery } from "./deliveryDemo";
-import { mirrorDelivery } from "./deliveryFeed";
-import { backNotes, type DeliveryPlace, deliveryRoute, openDelivery } from "./deliveryView";
-import { openDay } from "./mockFeeds";
+import { openDay } from "./app/testing/mockFeeds";
+import { DeliveryScreen } from "./missions/delivery/DeliveryScreen";
+import { ScriptedDelivery } from "./missions/delivery/deliveryDemo";
+import { mirrorDelivery } from "./missions/delivery/deliveryFeed";
+import { backNotes, type DeliveryPlace, deliveryRoute, openDelivery } from "./missions/delivery/deliveryView";
 import {
 	captureReviewDrafts,
 	type ResultReviewEntry,
 	type ResultReviewSource,
 	restoreReviewDrafts,
 	reviewDrafts,
-} from "./resultReview";
+} from "./missions/review/resultReview";
 import { Block, Body, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const KEY = "task/mock-project/native/native-4";

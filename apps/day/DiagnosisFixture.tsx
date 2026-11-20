@@ -1,8 +1,12 @@
 // Test-only scripted service. No operational evidence or network access.
 import { mount, Scroll, signal } from "nsh";
-import { DiagnosisReply, DiagnosisSettings } from "./DiagnosisSettings";
-import type { DiagnosisControls, DiagnosisOperation, DiagnosisSnapshot } from "./diagnosisControls";
-import { restoreDiagnosis, savedDiagnosis } from "./diagnosisDraft";
+import { DiagnosisReply, DiagnosisSettings } from "./settings/diagnostics/DiagnosisSettings";
+import type {
+	DiagnosisControls,
+	DiagnosisOperation,
+	DiagnosisSnapshot,
+} from "./settings/diagnostics/diagnosisControls";
+import { restoreDiagnosis, savedDiagnosis } from "./settings/diagnostics/diagnosisDraft";
 import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const snapshot = signal<DiagnosisSnapshot | null>({

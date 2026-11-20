@@ -27,7 +27,7 @@ stays explicitly unverified when the record cannot prove it. Diagnostic chat
 addresses remain available as selectable text. Reading a problem never retries
 work or grants permission. Earlier/offline reads keep their warnings visible.
 
-You can [re-plan an older mission](technical/day-mission-migration.md) and open **Read previous mission**
+You can [re-plan an older mission](../apps/day/missions/day-mission-migration.md) and open **Read previous mission**
 from its successor. History, chats and unpublished work stay with the original. Managed Linear resources
 are not transferred automatically.
 
@@ -54,7 +54,7 @@ The backend now supports reviewed mission revisions. Proposed changes do nothing
 confirm the exact saved version. Completed work and earlier decisions stay in history.
 Coordinator context uses the current agreement, active decisions and current work, not old
 plans or retired decision bodies. History remains available on demand. This does not erase
-earlier chat text or reset chats. See [the backend contract](technical/mission-revisions.md)
+earlier chat text or reset chats. See [the backend contract](../packages/daemon/src/missions/planning/mission-revisions.md)
 for its safety limits.
 
 An early Revisit mockup kept three steps apart:
@@ -70,7 +70,7 @@ An early Revisit mockup kept three steps apart:
    resumes and permits nothing. A lost answer stays unconfirmed until you check; Pilot never
    sends it twice.
 
-For the current Day flow, see [revisions and migration](technical/day-mission-migration.md).
+For the current Day flow, see [revisions and migration](../apps/day/missions/day-mission-migration.md).
 
 In coordinator-owned planning, the coordinator maintains scope, assignments, and
 acceptance criteria. Workers report progress, evidence, and blockers and propose
@@ -79,7 +79,7 @@ planning changes. Evidence alone is not acceptance or permission to expand scope
 Task owners can save versioned movement reports through the mission tool. These are
 agent assessments, not verified progress or accepted delivery. Old reports can become
 stale when their assignment, owner or context changes. Missing reports mean unknown.
-Day's current [Pause and Resume controls](technical/day-execution-controls.md) have their own admission and receipt checks.
+Day's current [Pause and Resume controls](../apps/day/missions/planning/day-execution-controls.md) have their own admission and receipt checks.
 
 Coordinators can answer ordinary member questions within the approved mission scope.
 Replies are attributed to the coordinator.
@@ -98,7 +98,7 @@ user-pinned order still apply. Unknown starts use exact lookup, never another st
 Unrequested tasks are not execution grants. This does not enable Autopilot or grant spend.
 Dispatch stays blocked unless the host has a qualified current dispatch/model/budget
 policy source. This source is not yet bound in production. Queuing is not permission
-to bypass that missing gate. See [the queue API](technical/mission-continuation.md).
+to bypass that missing gate. See [the queue API](../packages/daemon/src/missions/lifecycle/mission-continuation.md).
 
 Decision updates follow the current task's decision pins. Decisions marked for everyone
 remain mission-wide rules. Unassociated guidance goes to the coordinator for routing,
@@ -106,7 +106,7 @@ not every worker. Routine additions are grouped for up to 30 seconds; changed gu
 and shared rules reach affected live chats immediately as passive context. Offline chats
 reconcile when reopened. These notices do not start work, answer questions, or prove that
 an agent applied the guidance. Full decisions and history remain available on demand.
-See [decision routing](technical/mission-decision-routing.md) for the exact rules and limits.
+See [decision routing](../packages/daemon/src/missions/interviews/mission-decision-routing.md) for the exact rules and limits.
 
 Day's saved Wayfinder planning records distinguish **Needs research**, **Needs grilling** and
 **Needs prototype**. A prototype is a small disposable experiment for a named uncertainty during
@@ -119,7 +119,7 @@ question is ready, Pilot starts one read-only prototype chat for it, with the mo
 chat publishes one NSH mock with the variants, and Pilot links it to the mission. The planner then asks
 you about it, and the round shows **The prototype**, which opens in the app's isolated preview (**Full window**
 shows it over the whole page). A prototype chat has no time limit; its cost limit is shown, not enforced. See
-[mission prototypes](technical/mission-prototypes.md).
+[mission prototypes](../packages/daemon/src/missions/planning/workers/mission-prototypes.md).
 After the plan is published, a builder whose task needs a UI prototype asks Pilot for one itself. Pilot makes
 it in a read-only chat, links the mock to the task and sends it to the builder, which then asks you to choose.
 You do not confirm the prototype first; you answer once, when you choose.

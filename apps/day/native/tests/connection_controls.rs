@@ -3,7 +3,7 @@ include!("support/intake_fixture.rs");
 
 #[test]
 fn connection_setup_is_additive_and_lost_ack_never_replays_after_reopen() {
-    let mut f = Fixture::with_daemon("day-connections.ts");
+    let mut f = Fixture::with_daemon("day/day-connections.ts");
     let b = f.bridge();
     let first = f.call(&b, "day.connections.read", json!({}));
     let s = &first["value"]["snapshot"];

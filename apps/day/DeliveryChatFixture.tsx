@@ -3,12 +3,17 @@
 // chat is and the one action that moves it. Continue goes to a script that
 // counts it and sets the chat working, as the next read would.
 import { mount, signal, View } from "nsh";
-import { chatRoute } from "./chatView";
-import { DeliveryScreen } from "./DeliveryScreen";
-import { ScriptedDelivery } from "./deliveryDemo";
-import { type DeliveredWork, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
-import { openDay, openMockChat } from "./mockFeeds";
-import { mirrorSessionChat, type SessionChatSource } from "./sessionChat";
+import { openDay, openMockChat } from "./app/testing/mockFeeds";
+import { DeliveryScreen } from "./missions/delivery/DeliveryScreen";
+import { ScriptedDelivery } from "./missions/delivery/deliveryDemo";
+import {
+	type DeliveredWork,
+	deliveryKey,
+	mirrorDelivery,
+	type VerificationSubject,
+} from "./missions/delivery/deliveryFeed";
+import { chatRoute } from "./sessions/chatView";
+import { mirrorSessionChat, type SessionChatSource } from "./sessions/sessionChat";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const subject: VerificationSubject = { kind: "task", projectId: "p", missionId: "m", taskId: "t" };

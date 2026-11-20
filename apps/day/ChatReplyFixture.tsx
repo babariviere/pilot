@@ -1,7 +1,7 @@
 import { keymap, mount } from "nsh";
-import { ChatScreen } from "./ChatScreen";
-import type { Day } from "./day";
-import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
+import type { Day } from "./app/day";
+import { ChatScreen } from "./sessions/ChatScreen";
+import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessions/sessionChat";
 import { WindowCanvas } from "./ui";
 
 const chat: SessionChat = {

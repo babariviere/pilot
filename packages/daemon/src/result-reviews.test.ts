@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { DeliveredWork, NativeReviewSnapshot } from "@pilot/protocol";
-import { MissionStore } from "./missions.ts";
+import { MissionStore } from "./missions/missions.ts";
 import { ResultReviews } from "./result-reviews.ts";
 
 test("line comments read original bytes, reject unrelated snapshots and keep old context after a new result", async () => {

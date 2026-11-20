@@ -2,12 +2,12 @@
 // (bridge.ts), and the flush a close runs. The test scripts every root reply.
 import { mount, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { ConnectedPlans } from "./planFeed";
-import { ScriptedChats } from "./chatDemo";
-import { mirrorChats } from "./chatFeed";
-import { InterviewDoc } from "./InterviewDoc";
-import { flushAll } from "./planCommands";
-import { mirrorPlanning } from "./planning";
+import { InterviewDoc } from "./missions/interviews/InterviewDoc";
+import { flushAll } from "./missions/planning/planCommands";
+import { ConnectedPlans } from "./missions/planning/planFeed";
+import { mirrorPlanning } from "./missions/planning/planning";
+import { ScriptedChats } from "./sessions/chatDemo";
+import { mirrorChats } from "./sessions/chatFeed";
 import { Block, Button, Buttons, Column, Page, Panel, Section, WindowCanvas } from "./ui";
 
 const plans = mirrorPlanning(new ConnectedPlans("fixture", null), mirrorChats(new ScriptedChats()));

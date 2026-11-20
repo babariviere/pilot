@@ -9,7 +9,7 @@ cd "$(dirname "$0")/../../.."
 usage() {
 	cat >&2 <<'EOF'
 Usage: apps/day/scripts/before-after.sh [-r REV] [--before REV] [--new-screen] [--filter NAME] [--out DIR] TEST_FILE
-  TEST_FILE      capture test, relative to apps/day (for example Native.test.tsx)
+  TEST_FILE      capture test, relative to apps/day (for example app/Native.test.tsx)
   -r REV         After revision (default @)
   --before REV   Before revision (default: the parent of REV)
   --new-screen   capture only After when the screen has no Before
@@ -81,7 +81,9 @@ checkout after "$after"
 if [[ "$new_screen" == 0 ]]; then
 	checkout before "$before"
 	# The same capture steps on both sides, so a new or changed test still compares like with like.
-	cp "$work/after/apps/day/$test_file" "$work/before/apps/day/$test_file"
+	before_test="$work/before/apps/day/$test_file"
+	mkdir -p "$(dirname "$before_test")"
+	cp "$work/after/apps/day/$test_file" "$before_test"
 fi
 
 capture after

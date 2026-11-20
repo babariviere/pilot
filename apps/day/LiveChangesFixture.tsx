@@ -1,7 +1,7 @@
 import { mount, signal, View } from "nsh";
-import { ChatScreen } from "./ChatScreen";
-import { openDay, openMockChat } from "./mockFeeds";
-import { type LiveChangesResult, mirrorSessionChat, type SessionChat } from "./sessionChat";
+import { openDay, openMockChat } from "./app/testing/mockFeeds";
+import { ChatScreen } from "./sessions/ChatScreen";
+import { type LiveChangesResult, mirrorSessionChat, type SessionChat } from "./sessions/sessionChat";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const source = openMockChat().source;

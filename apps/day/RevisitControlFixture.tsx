@@ -1,7 +1,7 @@
 // Production Revisit views with a canonical selective-checkpoint-shaped mock read.
 import { mount } from "nsh";
-import type { PlanningFeed } from "./feeds";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
+import type { PlanningFeed } from "./sources/feeds";
 
 const day = openDay("quiet");
 const plans = openPlanning("revisit");

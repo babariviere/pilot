@@ -2,9 +2,9 @@
 // first task can start. Mock data; nothing here reads or sends anything real.
 import { mount } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import type { PlanningFeed } from "./feeds";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
-import { openMission } from "./view";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
+import { openMission } from "./app/view";
+import type { PlanningFeed } from "./sources/feeds";
 
 const day = openDay();
 const plans = openPlanning("review");

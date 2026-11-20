@@ -34,10 +34,10 @@ bash crates/scripts/cargo.sh test --locked --manifest-path updater/Cargo.toml --
 
 Use the [Day guide](../apps/day/README.md) for app checks and
 [`apps/day/scripts`](../apps/day/scripts/) for
-[native helpers and package inputs](../docs/technical/day-package-inputs.md).
+[native helpers and package inputs](../apps/day/scripts/day-package-inputs.md).
 
 The old [`pilot-visual-worker`](https://github.com/babariviere/pilot/tree/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/visual-worker)
 and its [native C engine](https://github.com/babariviere/pilot/tree/753b2f5cca1119d4c185c04fe60844d21431c928/apps/macos/Sources/PilotVisualEngine)
-are retired. Day builds [`pilot-artifact-host`](../docs/technical/nsh-artifact-source.md#availability-and-remaining-gates)
-from its own native crate for NSH artifacts. The [Node retained-visual worker](../docs/technical/retained-visual-precheck.md)
+are retired. Day builds [`pilot-artifact-host`](../packages/artifacts/src/nsh/nsh-artifact-source.md#availability-and-remaining-gates)
+from its own native crate for NSH artifacts. The [Node retained-visual worker](../packages/artifacts/README.md)
 is separate and remains host-only.

@@ -1,6 +1,6 @@
 /** Service/setup entry point. Run with the packaged Node from the actual pilotd service policy. */
 import { rename, writeFile } from "node:fs/promises";
-import { probeLinuxCoordinatorIsolation } from "./linux-coordinator.ts";
+import { probeLinuxCoordinatorIsolation } from "./runtime/coordination/linux-coordinator.ts";
 
 const result = await probeLinuxCoordinatorIsolation();
 // Service ExecStartPre records its own policy result without preventing an otherwise healthy daemon.

@@ -1,6 +1,6 @@
 import { mount, signal } from "nsh";
-import { findingGoal, openFindingDraft, restoreOtherDraft } from "./insightsWork";
-import { goalDraft } from "./planView";
+import { findingGoal, openFindingDraft, restoreOtherDraft } from "./insights/insightsWork";
+import { goalDraft } from "./missions/planning/planView";
 import { Block, Body, Button, Buttons, Field, WindowCanvas } from "./ui";
 
 const sent = signal("");

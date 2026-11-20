@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { SharedWorkspaceStore } from "../../packages/daemon/src/shared-workspaces.ts";
-import type { Runner } from "../../packages/daemon/src/workspaces.ts";
+import { SharedWorkspaceStore } from "../../packages/daemon/src/workspaces/shared-workspaces.ts";
+import type { Runner } from "../../packages/daemon/src/workspaces/workspaces.ts";
 import { loadBaseline } from "./baseline.ts";
 
 const root = await mkdtemp(join(tmpdir(), "pilot-cleanup-bench-"));
@@ -42,7 +42,7 @@ try {
 	if (baseline) {
 		const loaded = await loadBaseline<{ SharedWorkspaceStore: typeof SharedWorkspaceStore }>(
 			baseline,
-			new URL("../../packages/daemon/src/shared-workspaces.ts", import.meta.url),
+			new URL("../../packages/daemon/src/workspaces/shared-workspaces.ts", import.meta.url),
 			"jj",
 		);
 		cleanupBaseline = loaded.cleanup;

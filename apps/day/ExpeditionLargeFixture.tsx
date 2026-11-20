@@ -2,9 +2,9 @@
 // as the still chart on the planning page shows it. Every record is invented mock data.
 import { computed, mount, Scroll } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { chartState, ExpeditionChart } from "./ExpeditionChart";
-import { openPlanning } from "./mockFeeds";
-import { largeMap } from "./mockLargeMap";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { largeMap } from "./app/testing/mockLargeMap";
+import { chartState, ExpeditionChart } from "./missions/planning/ExpeditionChart";
 import { Block, Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("wayfinder");

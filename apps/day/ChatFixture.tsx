@@ -5,13 +5,13 @@
 // the words and the user's own choice.
 import { mount, Scroll, View } from "nsh";
 import { PlanFeed } from "pilot-day/native";
-import { DEMO_PROJECTS, ScriptedChats } from "./chatDemo";
-import { mirrorChats } from "./chatFeed";
-import { NewScreen } from "./NewScreen";
-import { mirrorPlanning } from "./planning";
-import { planRoute } from "./planView";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import { NewScreen } from "./missions/intake/NewScreen";
+import { mirrorPlanning } from "./missions/planning/planning";
+import { planRoute } from "./missions/planning/planView";
+import { DEMO_PROJECTS, ScriptedChats } from "./sessions/chatDemo";
+import { mirrorChats } from "./sessions/chatFeed";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 const chats = new ScriptedChats(DEMO_PROJECTS, DEMO_PROJECTS[0].projectId);
 const plans = mirrorPlanning(new PlanFeed("fresh"), mirrorChats(chats));

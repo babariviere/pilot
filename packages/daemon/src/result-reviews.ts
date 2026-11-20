@@ -8,10 +8,10 @@ import type {
 	ResultReviewReceipt,
 	VerificationSubject,
 } from "@pilot/protocol";
-import { lineExcerpt } from "./human-review-anchors.ts";
-import type { MissionStore } from "./missions.ts";
-import type { NativeReviewReader } from "./native-review.ts";
-import { canonicalJSON, OperationRejected, payloadHash } from "./operation-journal.ts";
+import { lineExcerpt } from "./reviews/human/human-review-anchors.ts";
+import type { MissionStore } from "./missions/missions.ts";
+import type { NativeReviewReader } from "./reviews/native/native-review.ts";
+import { canonicalJSON, OperationRejected, payloadHash } from "./transport/operations/operation-journal.ts";
 import { verificationKey } from "./user-verification.ts";
 
 interface Dependencies {

@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 from pathlib import Path
+import re
 import tempfile
 import subprocess
 import tomllib
@@ -183,7 +184,7 @@ class QualificationTests(unittest.TestCase):
         bundle.write_json(runtime / "package.json", {"version":"1.2.3"})
         build = dict(schema=1, source=self.source, platform="darwin", arch="arm64",
                      version="1.2.3", node="24.21.0", protocol=1)
-        for name in bundle.REQUIRED:
+        for name in (*bundle.REQUIRED, *bundle.FEATURE_RESOURCES):
             path = runtime / name
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists():
@@ -197,6 +198,17 @@ class QualificationTests(unittest.TestCase):
         bundle.write_json(native / "manifest.json", dict(schema=1, source=self.source,
                           target=day.TARGET, binaries=entries))
         self.assertEqual(self.qualify(runtime=runtime, native=native)["runtime_build"], build)
+        funding_worker = runtime / bundle.FEATURE_RESOURCES[-1]
+        funding_worker.unlink()
+        for name in bundle.LEGACY_RESOURCES:
+            path = runtime / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"legacy runtime fixture")
+        with self.assertRaisesRegex(ValueError, "funding-worker"):
+            bundle.validate_runtime(runtime, self.source)
+        for name in bundle.FEATURE_RESOURCES[:-1]:
+            (runtime / name).unlink()
+        self.assertEqual(bundle.validate_runtime(runtime, self.source), build)
         bundle.write_json(runtime / "runtime-build.json", dict(build, source="b" * 40))
         with self.assertRaisesRegex(ValueError, "Runtime build identity"):
             self.qualify(runtime=runtime, native=native)
@@ -293,11 +305,18 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("discover -s apps/day/scripts -p 'test_*.py'", job)
         native = (ROOT / ".github/workflows/day-qualification.yml").read_text()
         self.assertIn("--frozen-lockfile --ignore-scripts", native)
-        self.assertIn('NSH_DAY_REAL_CARGO=$(rustup which --toolchain 1.99.1 cargo)', native)
+        self.assertIn("RUSTUP_TOOLCHAIN: 1.99.1", native)
         self.assertIn('bundle_runtime.py native --gui day --source "$SOURCE"', native)
         self.assertIn("$stage/nsh/bin/nsh", native)
         self.assertIn(day.CLI_SHA256, native)
-        self.assertIn("for file in App Plan Intake Update ", native)
+        tests = re.search(r"for file in (.+); do\s+apps/day/nsh\.sh test", native)
+        self.assertIsNotNone(tests)
+        files = tests.group(1).split()
+        self.assertEqual({Path(name).name for name in files},
+                         {"App", "Plan", "Intake", "Update", "Feedback", "FeedbackBridge",
+                          "SlackSettings", "Thread", "ThreadBridge"})
+        for name in files:
+            self.assertTrue((ROOT / "apps/day" / (name + ".test.tsx")).is_file(), name)
         self.assertIn("--manifest-path apps/day/native/Cargo.toml --features macos-host --lib", native)
         self.assertIn("--test boundary --test connected -- --test-threads=1", native)
         self.assertNotIn("nsh.sh test Native", native)
@@ -315,6 +334,18 @@ class WorkflowTests(unittest.TestCase):
 
 
 class DependencyPreparationTests(unittest.TestCase):
+    def test_day_cargo_wrapper_uses_path_for_cargo_and_its_children(self):
+        with tempfile.TemporaryDirectory(prefix="day-cargo-path-") as directory:
+            cargo = Path(directory) / "cargo"
+            cargo.write_text('#!/bin/bash\nprintf "%s\\n" "$CARGO" "$@"\n')
+            cargo.chmod(0o755)
+            output = subprocess.check_output(
+                [ROOT / "apps/day/scripts/cargo", "build", "--locked"],
+                env={"PATH": directory + ":/usr/bin:/bin", "CARGO": "/not/the/cargo/on/path"},
+                text=True,
+            )
+            self.assertEqual(output.splitlines(), [str(cargo), "build", "--locked"])
+
     def test_preparation_fetches_only_locks_and_never_builds_or_rewrites_source(self):
         spec = importlib.util.spec_from_file_location("prepare_day", ROOT / "apps/day/scripts/prepare-day-qualification.py")
         prepare = importlib.util.module_from_spec(spec)

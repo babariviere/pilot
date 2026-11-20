@@ -8,8 +8,8 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocket, WebSocketServer } from "ws";
-import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
-import { nativeIntakeFixture } from "../native-intake.fixture.ts";
+import { PILOT_CAPABILITY_HEADER } from "../day/host/native-app-capability.ts";
+import { nativeIntakeFixture } from "../day/intake/native-intake.fixture.ts";
 
 const f = await nativeIntakeFixture(),
 	ledger = join(f.home, "commands.jsonl");

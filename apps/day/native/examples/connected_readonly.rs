@@ -1,5 +1,7 @@
 //! Explicit read-only real-host integration check, not signed/native acceptance.
 //! No daemon discovery/start, model selection, provider send or domain write.
+#[path = "../tests/support/app_source.rs"]
+mod app_source;
 use nsh_core::prelude::*;
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, compile_tsx};
@@ -53,18 +55,7 @@ fn receive<T>(
 
 fn entry(directory: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    for item in std::fs::read_dir(app)? {
-        let path = item?.path();
-        let name = path
-            .file_name()
-            .ok_or("missing source name")?
-            .to_string_lossy();
-        if ((name.ends_with(".ts") || name.ends_with(".tsx")) && !name.ends_with(".test.tsx"))
-            || name == "theme.json"
-        {
-            std::fs::copy(&path, directory.join(name.as_ref()))?;
-        }
-    }
+    app_source::copy(&app, directory)?;
     std::fs::write(
         directory.join("nsh.json"),
         json!({"name":"Read-only host check",

@@ -1,52 +1,97 @@
 //! Trusted native Today host. Owns sockets, journal and admission outside the VM.
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
+#[path = "artifacts/host/artifacts.rs"]
 pub(crate) mod artifacts;
+#[path = "attention/host/attention.rs"]
 pub mod attention;
+#[path = "host/core/bridge.rs"]
 mod bridge;
+#[path = "changes/host/changes.rs"]
 mod changes;
+#[path = "settings/connection_controls.rs"]
 pub(crate) mod connection_controls;
+#[path = "delivery/delivery.rs"]
 pub(crate) mod delivery;
+#[path = "delivery/delivery_artifact.rs"]
 pub(crate) mod delivery_artifact;
+#[path = "delivery/delivery_work.rs"]
 pub(crate) mod delivery_work;
+#[path = "diagnostics/host/diagnosis.rs"]
 pub(crate) mod diagnosis;
+#[path = "planning/host/enrollment.rs"]
 mod enrollment;
+#[path = "feedback/feedback.rs"]
 pub(crate) mod feedback;
+#[path = "today/host/finished_today.rs"]
 pub(crate) mod finished_today;
+#[path = "insights/mod.rs"]
 pub(crate) mod insights;
+#[path = "intake/host/intake.rs"]
 pub(crate) mod intake;
+#[path = "planning/host/inventory.rs"]
 mod inventory;
+#[path = "host/core/journal.rs"]
 mod journal;
+#[path = "knowledge/knowledge.rs"]
 pub(crate) mod knowledge;
+#[path = "missions/host/linear_publisher.rs"]
 pub(crate) mod linear_publisher;
+#[path = "missions/host/migration.rs"]
 pub(crate) mod migration;
+#[path = "settings/model_controls.rs"]
 pub(crate) mod model_controls;
 #[cfg(target_os = "macos")]
+#[path = "ritual/host/native_clock.rs"]
 mod native_clock;
+#[path = "window/host/navigation.rs"]
 pub(crate) mod navigation;
+#[path = "chats/host/new_chat.rs"]
 pub(crate) mod new_chat;
+#[path = "updates/host/official_root.rs"]
 pub mod official_root;
+#[path = "updates/host/official_startup.rs"]
 mod official_startup;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
+#[path = "updates/host/official_update.rs"]
 pub mod official_update;
+#[path = "planning/host/plan_sources.rs"]
 pub(crate) mod plan_sources;
+#[path = "planning/host/planning.rs"]
 mod planning;
+#[path = "planning/host/planning_chat.rs"]
 mod planning_chat;
+#[path = "service/power.rs"]
 mod power;
+#[path = "settings/preferences.rs"]
 pub(crate) mod preferences;
+#[path = "settings/projects.rs"]
 pub(crate) mod projects;
+#[path = "delivery/result_review.rs"]
 pub(crate) mod result_review;
+#[path = "ritual/host/ritual.rs"]
 pub mod ritual;
+#[path = "today/host/schedules.rs"]
 pub(crate) mod schedules;
+#[path = "screen_agent/screen.rs"]
 pub(crate) mod screen;
+#[path = "search/search.rs"]
 pub(crate) mod search;
+#[path = "chats/host/session_chat.rs"]
 mod session_chat;
+#[path = "settings/shown.rs"]
 mod shown;
+#[path = "settings/slack_controls.rs"]
 pub(crate) mod slack_controls;
+#[path = "missions/host/threads.rs"]
 pub(crate) mod threads;
+#[path = "today/host/today_scope.rs"]
 pub(crate) mod today_scope;
+#[path = "host/core/transport.rs"]
 mod transport;
+#[path = "updates/host/update_loss.rs"]
 mod update_loss;
+#[path = "updates/host/updates.rs"]
 pub mod updates;
 
 use crate::{
@@ -68,6 +113,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use transport::Transport;
+#[path = "window/host/window.rs"]
 pub mod window;
 
 /// Native selection captured by the app, never inferred from a cached mission.

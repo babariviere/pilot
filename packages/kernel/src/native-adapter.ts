@@ -66,56 +66,56 @@ import {
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
 import type { TraceCarrier } from "@pilot/telemetry";
-import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
-import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
-import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
-import { askSettings, createAskSession } from "./ask-runtime.ts";
-import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
-import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
-import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
-import { type CoordinatorSkillResource, snapshotCoordinatorSkills } from "./coordinator-skill-resources.ts";
-import { coordinatorSourceBridge } from "./coordinator-sources.ts";
-import { installCredentialBrokerHooks } from "./credential-hooks.ts";
-import { DIAGNOSTIC_CONTEXT_TOOL } from "./diagnostic-context-tool.ts";
-import { DIAGNOSTIC_HISTORY_TOOL } from "./diagnostic-history-tool.ts";
-import { DIAGNOSTIC_LOG_TOOL } from "./diagnostic-log-tool.ts";
-import { DIAGNOSTICS_TOOL } from "./diagnostics-tool.ts";
-import { createExplorationTools } from "./exploration-tools.ts";
+import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./session/activity/activity.ts";
+import { ARTIFACT_SKILL_PATH } from "./artifacts/artifact-skill.ts";
+import { type ArtifactToolOptions, createArtifactTools } from "./artifacts/artifact-tools.ts";
+import { askSettings, createAskSession } from "./tools/ask/ask-runtime.ts";
+import { ASK_TOOL_NAMES, createAskTools } from "./tools/ask/ask-tools.ts";
+import { bundledAskTools, bundledResourceLoader } from "./runtime/bundled-extensions.ts";
+import { OfflineGate, offlineRequestStream } from "./runtime/connectivity.ts";
+import { type CoordinatorSkillResource, snapshotCoordinatorSkills } from "./missions/coordinator-skill-resources.ts";
+import { coordinatorSourceBridge } from "./missions/coordinator-sources.ts";
+import { installCredentialBrokerHooks } from "./credentials/credential-hooks.ts";
+import { DIAGNOSTIC_CONTEXT_TOOL } from "./diagnostics/diagnostic-context-tool.ts";
+import { DIAGNOSTIC_HISTORY_TOOL } from "./diagnostics/diagnostic-history-tool.ts";
+import { DIAGNOSTIC_LOG_TOOL } from "./diagnostics/diagnostic-log-tool.ts";
+import { DIAGNOSTICS_TOOL } from "./diagnostics/diagnostics-tool.ts";
+import { createExplorationTools } from "./tools/exploration/exploration-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
-import { type FundingStreamOptions, fundingOutputLimit, fundingPayload } from "./funding-runtime.ts";
-import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
-import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
-import { createInterviewTool, createMissionInterviewPort } from "./interview-tool.ts";
-import { OwnedJobGroups } from "./job-groups.ts";
-import { JobHistory } from "./job-history.ts";
-import { drainLifecycleJobs, runningJobs } from "./jobs.ts";
-import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
-import { assertBuildingSkills, BUILDING_SKILL_PATHS } from "./mission-building-skills.ts";
+import { type FundingStreamOptions, fundingOutputLimit, fundingPayload } from "./funding/funding-runtime.ts";
+import { INSIGHTS_BACKLOG_TOOL } from "./insights/insights-backlog-tool.ts";
+import { INSIGHTS_HISTORY_TOOL } from "./insights/insights-history-tool.ts";
+import { createInterviewTool, createMissionInterviewPort } from "./missions/interview-tool.ts";
+import { OwnedJobGroups } from "./tools/jobs/job-groups.ts";
+import { JobHistory } from "./tools/jobs/job-history.ts";
+import { drainLifecycleJobs, runningJobs } from "./tools/jobs/jobs.ts";
+import { MEMORY_TOOL_NAMES } from "./history/memory-tools.ts";
+import { assertBuildingSkills, BUILDING_SKILL_PATHS } from "./missions/mission-building-skills.ts";
 import {
 	assertInterviewSkills,
 	INTERVIEW_SKILL_ADAPTATION,
 	INTERVIEW_SKILL_PATHS,
-} from "./mission-interview-skills.ts";
-import { createMissionPlanTool, type NativePlanningPort } from "./mission-plan-tool.ts";
+} from "./missions/mission-interview-skills.ts";
+import { createMissionPlanTool, type NativePlanningPort } from "./missions/mission-plan-tool.ts";
 import {
 	assertPlanningSkills,
 	PLANNING_SKILL_ADAPTATION,
 	PLANNING_SKILL_PATHS,
 	planningToolAllowed,
-} from "./mission-planning-skills.ts";
+} from "./missions/mission-planning-skills.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
-import type { AskContext } from "./policy.ts";
-import { Posthorse } from "./posthorse.ts";
-import { QUESTION_STYLE } from "./question-style.ts";
-import { withReferenceSources } from "./reference-sources.ts";
-import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
-import { SCOPED_METRICS_TOOL } from "./scoped-metrics-tool.ts";
-import { SCREEN_TOOL_NAMES } from "./screen-tools.ts";
-import { SHELL_STATUS_DETAIL, shellDeadline } from "./shell-deadline.ts";
-import type { SubagentBridge } from "./subagents.ts";
-import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
-import { ToolActivityTracker, toolActivityExtension } from "./tool-activity.ts";
-import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
+import type { AskContext } from "./runtime/policy.ts";
+import { Posthorse } from "./session/lifecycle/posthorse.ts";
+import { QUESTION_STYLE } from "./tools/questions/question-style.ts";
+import { withReferenceSources } from "./tools/sources/reference-sources.ts";
+import { REPAIR_PROPOSAL_TOOL } from "./diagnostics/repair-proposal-tool.ts";
+import { SCOPED_METRICS_TOOL } from "./tools/metrics/scoped-metrics-tool.ts";
+import { SCREEN_TOOL_NAMES } from "./tools/screen/screen-tools.ts";
+import { SHELL_STATUS_DETAIL, shellDeadline } from "./tools/codemode/shell-deadline.ts";
+import type { SubagentBridge } from "./tools/jobs/subagents.ts";
+import { type ReportSubscriptionLimit, subscriptionRecovery } from "./funding/subscription-limit.ts";
+import { ToolActivityTracker, toolActivityExtension } from "./session/activity/tool-activity.ts";
+import { contextUsage, type KernelUsage, UsageTracker } from "./funding/usage.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
@@ -131,9 +131,9 @@ export interface NativeAdapterOptions {
 	/** Context management is unavailable to legacy read-only roles. */
 	posthorseEligible?: () => boolean;
 	/** Trusted IPC-backed source admission, only for a daemon-managed coordinator worker. */
-	coordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
+	coordinatorSources?: import("./missions/coordinator-sources.ts").ReadCoordinatorSources;
 	/** Host-resolved dependency and linked-project roots that read tools may open by absolute path. */
-	readReferenceSources?: import("./reference-sources.ts").ReadReferenceSources;
+	readReferenceSources?: import("./tools/sources/reference-sources.ts").ReadReferenceSources;
 	/** Host-selected new-flow interview only. No legacy auto-enrollment or worker wiring. */
 	missionInterview?: boolean;
 	/** Explicit host-only planning profile. Denies external writes and all execution tools. */

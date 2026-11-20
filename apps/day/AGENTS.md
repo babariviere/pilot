@@ -5,7 +5,8 @@
 - The default entry (`App.tsx`) is the connected app and never shows mock data.
   Missing or unreadable sources show an honest unavailable state.
 - Keep mock worlds test-only (`MockApp.tsx`, scenario and `*Fixture.tsx` entries,
-  `mockFeeds.tsx`, `mockSession.ts`, `*Demo.ts`, `native/src/fixture.rs`).
+  `app/testing/`, feature `*Demo.ts` files,
+  `native/src/testing/fixture.rs`).
   Runtime modules must not import them.
 - Do not enable live profiles or treat test coverage as production or packaging
   acceptance.
@@ -26,6 +27,9 @@
 - Follow "Live data in the UI" in [CODING_STANDARDS.md](../../CODING_STANDARDS.md) for every read, refresh and write.
 - Keep entries beside `nsh.json`, which supplies their theme and capabilities.
   Keep the default entry's capabilities deny-all.
+- Keep screens and NSH tests in their feature directories. Pass Day-relative
+  test paths to `nsh.sh`. In tests, `open()` paths are test-relative, but screenshot
+  paths stay under `output/` relative to the command's working directory.
 - Preserve stable identities: `pilot-day/native`, `dev.pilot.day`, and existing
   storage, update, profile and receipt identities. Pilot is the product;
   Today is a view.

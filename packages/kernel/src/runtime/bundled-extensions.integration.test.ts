@@ -1,0 +1,1061 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type TestContext, test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { PILOT_CHILD_PROFILE_PATH } from "@babariviere/pi-extensions/profile";
+import {
+	fauxAssistantMessage,
+	fauxProvider,
+	InMemoryCredentialStore,
+	InMemoryModelsStore,
+} from "@earendil-works/pi-ai";
+import {
+	createMcpExtension,
+	getPackageDir,
+	type McpTransportFactory,
+	ModelRuntime,
+	SettingsManager,
+	wrapRegisteredTool,
+} from "@earendil-works/pi-coding-agent";
+import type { JsonObject } from "@earendil-works/pi-durable";
+import type { UsageObservation } from "@pilot/protocol";
+import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, installBundledAnthropicAuth } from "./bundled-extensions.ts";
+import { credentialEnvironment } from "../credentials/credential-client.ts";
+import { groupAbsent } from "../tools/jobs/job-groups.ts";
+import { NativeAdapter } from "../native-adapter.ts";
+import { startParentBridge } from "../worker/parent-bridge.ts";
+import { createTodoTool } from "../tools/todos/todo-tool.ts";
+import { applyTodo, type TodoRecord } from "../tools/todos/todos.ts";
+
+type ChildPacket = {
+	type: string;
+	id?: string;
+	error?: string;
+	result?: { ok: boolean; error?: string; answer?: { text: string } };
+};
+
+async function obsoleteAuth(root: string): Promise<string> {
+	const pkg = join(root, "obsolete-auth");
+	await mkdir(join(pkg, "src"), { recursive: true });
+	await writeFile(
+		join(pkg, "package.json"),
+		JSON.stringify({ name: "@gotgenes/pi-anthropic-auth", version: "0.0.0", pi: { extensions: ["src/index.ts"] } }),
+	);
+	const path = join(pkg, "src", "index.ts");
+	await writeFile(
+		path,
+		`throw new Error('Obsolete auth import must never execute'); export default () => { throw new Error('Obsolete auth factory must never execute'); };`,
+	);
+	return path;
+}
+
+async function fixture(t: TestContext) {
+	const root = await mkdtemp(join(tmpdir(), "pilot-bundled-"));
+	const agentDir = join(root, "agent");
+	await mkdir(agentDir);
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	const adapters: NativeAdapter[] = [];
+	let freshHistory = true;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	t.after(async () => {
+		for (const adapter of adapters.reverse()) await adapter.close();
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		await rm(root, { recursive: true, force: true });
+	});
+	t.mock.method(globalThis, "fetch", () => assert.fail("Bundled integration tests must stay offline"));
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStore: new InMemoryModelsStore(),
+		refreshOnCreate: false,
+		allowModelNetwork: false,
+	});
+	const faux = fauxProvider({ provider: "pilot-bundled", models: [{ id: "offline" }] });
+	runtime.registerNativeProvider(faux.provider);
+	const open = async (
+		loaderOptions?: Partial<NonNullable<Parameters<typeof NativeAdapter.open>[0]["loaderOptions"]>>,
+	) => {
+		const adapter = await NativeAdapter.open({
+			cwd: root,
+			agentDir,
+			sessionFile: join(root, "parent.jsonl"),
+			jobHistoryFresh: freshHistory,
+			sessionId: "bundled-test",
+			hostTools: [
+				createTodoTool(
+					async () => [],
+					() => "bundled-test",
+				),
+			],
+			projectTrusted: false,
+			loaderOptions: { cwd: root, agentDir, ...loaderOptions },
+			settingsManager: SettingsManager.inMemory({ defaultTools: ["+codemode"], codemode: { mode: "only" } }),
+			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+		});
+		freshHistory = false;
+		adapters.push(adapter);
+		return adapter;
+	};
+	return { root, agentDir, runtime, faux, open, adapters };
+}
+
+test("clean configuration has all bundled tools and required auth across reload", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	for (const name of [
+		"applyPatch",
+		"web",
+		"browser",
+		"todo",
+		"jobs",
+		"subagent",
+		"code_call_paths",
+		"code_impact",
+		"code_search",
+		"code_symbols",
+	])
+		assert.ok(adapter.session.getCallableToolNames().includes(name), name);
+	assert.deepEqual(
+		adapter.extension.tools?.map((tool) => tool.name),
+		["codemode"],
+	);
+	const commands = adapter.session.extensionRunner.getRegisteredCommands();
+	assert.ok(commands.some((command) => command.name === "anthropic-auth:status"));
+	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
+	assert.deepEqual(await adapter.jobs(), []);
+	await adapter.session.reload();
+	for (const name of [
+		"jobs",
+		"subagent",
+		"todo",
+		"web",
+		"code_call_paths",
+		"code_impact",
+		"code_search",
+		"code_symbols",
+	])
+		assert.ok(adapter.session.getCallableToolNames().includes(name));
+	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
+});
+
+test("Build shell is discoverable through codemode and command syntax errors do not withdraw access", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	assert.deepEqual(
+		adapter.extension.tools?.map((tool) => tool.name),
+		["codemode"],
+	);
+	assert.ok(adapter.session.getCallableToolNames().includes("bash"));
+	const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+	adapter.session.agent.state.messages.push(
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "shell-discovery", name: "codemode", arguments: {} },
+			{ stopReason: "toolUse" },
+		),
+	);
+	const result = await codemode.execute(
+		"shell-discovery",
+		{
+			code: `
+if (!(await searchTools("bash")).some(tool => tool.name === "bash")) throw new Error("Shell not discovered");
+if (!await describeTool("bash")) throw new Error("Shell declaration missing");
+const first = await tools.bash({command: "printf shell-fixture-ok"});
+if (first.exit_code !== 0 || first.output !== "shell-fixture-ok") throw new Error("Harmless command failed");
+text(first);
+const failed = await tools.bash({command: "if then"});
+if (failed.exit_code === 0 || !failed.output.includes("syntax error")) throw new Error("Syntax failure not reported");
+text(failed);
+const last = await tools.bash({command: "printf shell-still-available"});
+if (last.exit_code !== 0 || last.output !== "shell-still-available") throw new Error("Shell access changed");
+text(last);
+`,
+		},
+		undefined,
+	);
+	assert.ok(!result.isError, JSON.stringify(result));
+	const output = JSON.stringify(result.content);
+	assert.match(output, /bash/);
+	assert.match(output, /shell-fixture-ok/);
+	assert.match(output, /exit_code/);
+	assert.match(output, /syntax error/i);
+	assert.match(output, /shell-still-available/);
+	assert.doesNotMatch(output, /permission denied|denies tool|not available/i);
+	assert.ok(adapter.session.getCallableToolNames().includes("bash"));
+
+	// Withdrawing one adapter's shell must not change another Build's permissions.
+	const other = await NativeAdapter.open({
+		cwd: f.root,
+		agentDir: f.agentDir,
+		sessionFile: join(f.root, "other.jsonl"),
+		projectTrusted: false,
+		settingsManager: SettingsManager.inMemory({ defaultTools: ["bash"] }),
+		sessionOptions: { modelRuntime: f.runtime, model: f.faux.getModel() },
+	});
+	f.adapters.push(other);
+	adapter.setToolActive("bash", false);
+	assert.ok(!adapter.session.getCallableToolNames().includes("bash"));
+	assert.ok(other.session.getCallableToolNames().includes("bash"));
+});
+
+test("bundled filesystem policy blocks root searches and unsafe deletions without edit restrictions", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	for (const [name, input] of [
+		["bash", { command: "find / -maxdepth 0" }],
+		["jobs", { action: "start", name: "root-scan", command: "find / -maxdepth 0" }],
+		["bash", { command: "rm -rf ~" }],
+		["jobs", { action: "start", name: "unsafe-delete", command: "rm -rf /Users" }],
+	] as const) {
+		const decision = await adapter.session.extensionRunner.emitToolCall({
+			type: "tool_call",
+			toolCallId: "blocked-root-search",
+			toolName: name,
+			input,
+		});
+		assert.equal(decision?.block, true);
+		assert.match(decision?.reason ?? "", /filesystem root|home directory|system directory/);
+	}
+	const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+	const input = {
+		code: `
+try {
+	await tools.bash({command: "find / -maxdepth 0"});
+	throw new Error("Root search was not blocked");
+} catch (error) {
+	if (!String(error).includes("filesystem root")) throw error;
+	text(String(error));
+}
+text(await tools.bash({command: "printf allowed > allowed.txt"}));
+`,
+	};
+	adapter.session.agent.state.messages.push(
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "nested-root-search", name: "codemode", arguments: input },
+			{ stopReason: "toolUse" },
+		),
+	);
+	const result = await codemode.execute("nested-root-search", input, undefined);
+	assert.ok(!result.isError, JSON.stringify(result));
+	assert.match(JSON.stringify(result.content), /filesystem root/);
+	assert.equal(await readFile(join(f.root, "allowed.txt"), "utf8"), "allowed");
+	assert.deepEqual(await adapter.jobs(), []);
+});
+
+test("host reload discovers edited extensions, preserves host policy and fails closed until repaired", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	const native = adapter.session;
+	const directory = join(f.agentDir, "extensions");
+	await mkdir(directory);
+	const path = join(directory, "reload-fixture.ts");
+	await writeFile(path, `export default pi => pi.registerCommand('reload-first', {handler: async () => {}});`);
+	adapter.setToolActive("todo", false);
+	await adapter.reload();
+	assert.ok(native.extensionRunner.getRegisteredCommands().some((command) => command.name === "reload-first"));
+	assert.equal(native.getActiveToolNames().includes("todo"), false);
+	assert.ok(native.getActiveToolNames().includes("codemode"));
+	await assert.rejects(native.prompt("Must never generate"), /Only durable Harness/);
+	await writeFile(path, `export default () => { throw new Error('broken-reload-fixture'); };`);
+	await assert.rejects(adapter.reload(), /broken-reload-fixture/);
+	await assert.rejects(adapter.prepareInput("blocked"), /reload failed/);
+	await writeFile(path, `export default pi => pi.registerCommand('reload-repaired', {handler: async () => {}});`);
+	await adapter.reload();
+	assert.equal(adapter.session, native);
+	assert.ok(native.extensionRunner.getRegisteredCommands().some((command) => command.name === "reload-repaired"));
+	assert.ok(!native.extensionRunner.getRegisteredCommands().some((command) => command.name === "reload-first"));
+	assert.equal(await adapter.prepareInput("usable"), "usable");
+});
+
+test("reload rereads mcp.json and closes old transports before connecting the replacement roster", async (t) => {
+	const f = await fixture(t);
+	const connections: string[] = [];
+	const closes: string[] = [];
+	const createTransport: McpTransportFactory = (entry) => {
+		type Transport = ReturnType<McpTransportFactory>;
+		const messages = new Set<Parameters<Transport["onMessage"]>[0]>();
+		const closed = new Set<() => void>();
+		return {
+			start: async () => {
+				connections.push(entry.name);
+			},
+			send: async (message) => {
+				if (!("id" in message) || !("method" in message)) return;
+				const result =
+					message.method === "initialize"
+						? {
+								protocolVersion: "2025-11-25",
+								capabilities: { tools: {} },
+								serverInfo: { name: entry.name, version: "1" },
+							}
+						: message.method === "tools/list"
+							? { tools: [{ name: "ping", inputSchema: { type: "object" } }] }
+							: { content: [{ type: "text", text: entry.name }] };
+				queueMicrotask(() => {
+					for (const listener of messages) listener({ jsonrpc: "2.0", id: message.id!, result });
+				});
+			},
+			close: async () => {
+				closes.push(entry.name);
+				for (const listener of [...closed]) listener();
+			},
+			onMessage(listener) {
+				messages.add(listener);
+				return () => {
+					messages.delete(listener);
+				};
+			},
+			onClose(listener) {
+				closed.add(listener);
+				return () => {
+					closed.delete(listener);
+				};
+			},
+			onError() {
+				return () => {};
+			},
+		};
+	};
+	const config = (name: string) =>
+		writeFile(
+			join(f.agentDir, "mcp.json"),
+			JSON.stringify({ mcpServers: { [name]: { url: "https://offline.invalid/mcp" } } }),
+		);
+	await config("before");
+	const adapter = await f.open({ extensionFactories: [createMcpExtension({ createTransport })] });
+	const names = async () => {
+		const runner = adapter.session.extensionRunner;
+		await runner.emitToolCall({
+			type: "tool_call",
+			toolCallId: "mcp-list",
+			toolName: "codemode",
+			input: { code: "text(ALL_TOOLS);" },
+		});
+		return adapter.session.getCallableToolNames();
+	};
+	assert.ok((await names()).includes("mcp__before__ping"));
+	await config("after");
+	await adapter.reload();
+	assert.deepEqual(closes, ["before"]);
+	const tools = await names();
+	assert.ok(tools.includes("mcp__after__ping"));
+	assert.ok(!tools.includes("mcp__before__ping"));
+	assert.deepEqual(connections, ["before", "after"]);
+});
+
+test("personal profile, Posthorse and auth copies never evaluate, while unrelated extensions still load", async (t) => {
+	const f = await fixture(t);
+	const marker = join(f.root, "duplicate-ran");
+	const pkg = join(f.root, "personal-package");
+	const posthorse = join(f.root, "personal-posthorse");
+	await mkdir(posthorse);
+	await writeFile(
+		join(posthorse, "package.json"),
+		JSON.stringify({ name: "pi-posthorse", pi: { extensions: ["index.ts"] } }),
+	);
+	await writeFile(
+		join(posthorse, "index.ts"),
+		"throw new Error('Duplicate Posthorse must never import'); export default () => {};",
+	);
+	await mkdir(join(pkg, "extensions", "jobs"), { recursive: true });
+	await mkdir(join(f.agentDir, "extensions"));
+	await writeFile(
+		join(pkg, "package.json"),
+		JSON.stringify({ name: "@babariviere/pi-extensions", pi: { extensions: ["extensions/*/index.ts"] } }),
+	);
+	await mkdir(join(pkg, "extensions", "todos"), { recursive: true });
+	await writeFile(
+		join(pkg, "extensions", "todos", "index.ts"),
+		"throw new Error('File-backed todos must not import'); export default () => {};",
+	);
+	const duplicate = join(pkg, "extensions", "jobs", "index.ts");
+	await writeFile(
+		duplicate,
+		`import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'duplicate'); export default () => {};`,
+	);
+	await symlink(duplicate, join(f.agentDir, "extensions", "renamed.ts"));
+	await symlink(ANTHROPIC_AUTH_PATH, join(f.agentDir, "extensions", "personal-auth.ts"));
+	await writeFile(
+		join(f.agentDir, "extensions", "extra.ts"),
+		`export default pi => pi.registerCommand('extra', {description:'kept', handler: async () => {}});`,
+	);
+	await writeFile(
+		join(f.agentDir, "settings.json"),
+		JSON.stringify({ packages: [pkg, posthorse], extensions: [await obsoleteAuth(f.root)] }),
+	);
+	const adapter = await NativeAdapter.open({
+		cwd: f.root,
+		agentDir: f.agentDir,
+		sessionFile: join(f.root, "parent.jsonl"),
+		projectTrusted: false,
+		sessionOptions: { modelRuntime: f.runtime, model: f.faux.getModel() },
+	});
+	f.adapters.push(adapter);
+	for (let pass = 0; pass < 2; pass++) {
+		await assert.rejects(readFile(marker), { code: "ENOENT" });
+		const commands = adapter.session.extensionRunner.getRegisteredCommands();
+		assert.equal(commands.filter((command) => command.name === "anthropic-auth:status").length, 1);
+		assert.ok(commands.some((command) => command.name === "extra"));
+		assert.ok(adapter.session.getCallableToolNames().includes("jobs"));
+		if (!pass) await adapter.session.reload();
+	}
+});
+
+for (const nested of [false, true])
+	test(`bundled jobs execute and close through ${nested ? "codemode" : "direct"} calls`, async (t) => {
+		const f = await fixture(t);
+		const adapter = await f.open();
+		const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(`const fs=require('node:fs'); if(JSON.parse(fs.readFileSync(${JSON.stringify(join(f.root, "parent.jsonl.job-history"))},'utf8')).state!=='unknown') throw Error('job entered before admission history'); process.stdout.write('bundled-job-ok');`)}`;
+		const execute = async (name: string, args: JsonObject) => {
+			adapter.session.agent.state.messages.push(
+				fauxAssistantMessage(
+					{ type: "toolCall", id: "bundled-job", name, arguments: args },
+					{ stopReason: "toolUse" },
+				),
+			);
+			const definition = adapter.session.getToolDefinition(name)!;
+			const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === name)!.sourceInfo;
+			return wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner).execute(
+				"bundled-job",
+				args,
+			);
+		};
+		const result = nested
+			? await execute("codemode", {
+					code: `text(await tools.jobs(${JSON.stringify({ action: "start", name: "test", command })}));`,
+				})
+			: await execute("jobs", { action: "start", name: "test", command });
+		assert.ok(!result.isError, JSON.stringify(result));
+		const list = (await execute("jobs", { action: "list" })).structuredContent as Array<{ id: string }>;
+		assert.equal(list.length, 1);
+		const done = await execute("jobs", { action: "wait", id: list[0]!.id, waitMs: 5000 });
+		assert.equal((done.structuredContent as { state: string }).state, "done");
+		await adapter.close();
+	});
+
+for (const nested of [false, true])
+	test(`failed admission history prevents ${nested ? "nested" : "direct"} job execution`, async (t) => {
+		const f = await fixture(t);
+		const adapter = await f.open();
+		const history = join(f.root, "parent.jsonl.job-history");
+		const effect = join(f.root, "must-not-run");
+		await rm(history);
+		await mkdir(history);
+		const args = { action: "start", name: "blocked", command: `printf unsafe > ${JSON.stringify(effect)}` };
+		const name = nested ? "codemode" : "jobs";
+		const definition = adapter.session.getToolDefinition(name)!;
+		const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === name)!.sourceInfo;
+		const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
+		const input = nested ? { code: `text(await tools.jobs(${JSON.stringify(args)}));` } : args;
+		adapter.session.agent.state.messages.push(
+			fauxAssistantMessage(
+				{ type: "toolCall", id: "blocked-job", name, arguments: input },
+				{ stopReason: "toolUse" },
+			),
+		);
+		if (nested) {
+			const result = await tool.execute("blocked-job", input);
+			assert.ok(result.isError, "nested provider must not enter after failed durable admission");
+			assert.match(
+				JSON.stringify(result.content),
+				/EISDIR|directory/,
+				"nested call reached the history write guard",
+			);
+		} else await assert.rejects(tool.execute("blocked-job", input), /EISDIR|directory/);
+		await assert.rejects(readFile(effect), { code: "ENOENT" });
+		assert.deepEqual(await adapter.jobs(), []);
+		await assert.rejects(adapter.checkpointJobs(), /descendant exit is unconfirmed/);
+	});
+
+test("lifecycle job cleanup stops its leader but refuses unproven descendant exit", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	const definition = adapter.session.getToolDefinition("jobs")!;
+	const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "jobs")!.sourceInfo;
+	const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
+	const args = { action: "start", name: "owned", command: "exec sleep 600" };
+	adapter.session.agent.state.messages.push(
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "lifecycle-job", name: "jobs", arguments: args },
+			{ stopReason: "toolUse" },
+		),
+	);
+	const started = await tool.execute("lifecycle-job", args);
+	assert.ok(!started.isError, JSON.stringify(started));
+	assert.equal((await adapter.jobs()).length, 1);
+	await assert.rejects(adapter.checkpointJobs(), /descendant exit is unconfirmed/);
+	assert.deepEqual(await adapter.jobs(), []);
+	assert.equal(await adapter.hasChildren(), false, "clear direct-child census is not a descendant-exit receipt");
+	await assert.rejects(adapter.checkpointJobs(), /descendant exit is unconfirmed/, "refusal stays latched");
+	await adapter.close();
+	assert.equal(f.faux.state.callCount, 0);
+});
+
+for (const nested of [false, true])
+	for (const mode of ["checkpoint", "tool-stop", "native-stop", "natural-exit"] as const)
+		test(`lifecycle drains same-group descendant but refuses subtree proof after ${mode} (${nested ? "nested" : "direct"})`, {
+			timeout: 20_000,
+		}, async (t) => {
+			const f = await fixture(t);
+			let adapter = await f.open();
+			const child = join(f.root, "resistant.cjs");
+			const ready = join(f.root, "resistant.pid");
+			const heartbeat = join(f.root, "resistant.heartbeat");
+			const stop = join(f.root, "resistant.stop");
+			await writeFile(
+				child,
+				`const fs=require('node:fs');
+process.on('SIGTERM',()=>{});
+fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));
+let tick=0;
+const timer=setInterval(()=>{
+ if(fs.existsSync(${JSON.stringify(stop)})){ clearInterval(timer); return; }
+ fs.appendFileSync(${JSON.stringify(heartbeat)},String(++tick)+'\\n');
+},20);
+`,
+			);
+			const waitFor = async (condition: () => Promise<boolean>) => {
+				const deadline = Date.now() + 5_000;
+				while (!(await condition())) {
+					assert.ok(Date.now() < deadline, "controlled descendant fixture deadline");
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+			};
+			const read = (path: string) =>
+				readFile(path, "utf8").catch((error) => {
+					if (error.code === "ENOENT") return "";
+					throw error;
+				});
+			let pid: number | undefined;
+			try {
+				const definition = adapter.session.getToolDefinition("jobs")!;
+				const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "jobs")!.sourceInfo;
+				const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
+				const args = {
+					action: "start",
+					name: "resistant",
+					command: `${JSON.stringify(process.execPath)} ${JSON.stringify(child)} & ${mode === "natural-exit" ? `until test -f ${JSON.stringify(ready)}; do sleep 0.01; done` : "wait"}`,
+				};
+				adapter.session.agent.state.messages.push(
+					fauxAssistantMessage(
+						{ type: "toolCall", id: "resistant-job", name: "jobs", arguments: args },
+						{ stopReason: "toolUse" },
+					),
+				);
+				let started: Awaited<ReturnType<typeof tool.execute>>;
+				if (nested) {
+					const definition = adapter.session.getToolDefinition("codemode")!;
+					const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "codemode")!.sourceInfo;
+					const input = { code: `text(await tools.jobs(${JSON.stringify(args)}));` };
+					adapter.session.agent.state.messages.push(
+						fauxAssistantMessage(
+							{ type: "toolCall", id: "nested-resistant", name: "codemode", arguments: input },
+							{ stopReason: "toolUse" },
+						),
+					);
+					const result = await wrapRegisteredTool(
+						{ definition, sourceInfo },
+						adapter.session.extensionRunner,
+					).execute("nested-resistant", input);
+					assert.ok(!result.isError, JSON.stringify(result));
+					const listed = await tool.execute("nested-list", { action: "list" });
+					started = { ...listed, structuredContent: (listed.structuredContent as { id: string }[])[0] };
+				} else started = await tool.execute("resistant-job", args);
+				assert.ok(!started.isError);
+				const jobId = (started.structuredContent as { id: string }).id;
+				await waitFor(async () => {
+					const value = Number(await read(ready));
+					if (!Number.isSafeInteger(value) || value <= 0) return false;
+					pid = value;
+					return true;
+				});
+				if (mode !== "checkpoint") {
+					if (mode === "tool-stop") await tool.execute("pre-cancel", { action: "stop", id: jobId });
+					if (mode === "native-stop") await adapter.stopJob(jobId);
+					const terminal = await tool.execute("pre-finished", { action: "wait", id: jobId, waitMs: 5_000 });
+					assert.ok(!terminal.isError);
+					assert.deepEqual(await adapter.jobs(), [], "first lifecycle read is already empty");
+				}
+				let failure: unknown;
+				try {
+					await adapter.checkpointJobs();
+				} catch (error) {
+					failure = error;
+				}
+				assert.deepEqual(await adapter.jobs(), [], "direct-job stop/wait already settled");
+				assert.equal(await adapter.hasChildren(), false, "direct census is still not a subtree proof");
+				await waitFor(async () => {
+					try {
+						process.kill(pid!, 0);
+						return false;
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+						throw error;
+					}
+				});
+				const groups = join(f.root, "parent.jsonl.job-groups");
+				const names = await readdir(groups);
+				assert.equal(names.length, 1);
+				const evidence = JSON.parse(await readFile(join(groups, names[0]!), "utf8"));
+				assert.equal(evidence.scope, "process-group");
+				assert.equal(evidence.state, "group-empty");
+				assert.equal(evidence.jobId, jobId);
+				assert.equal(groupAbsent(evidence.pgid), true);
+				assert.match(
+					String(failure),
+					/descendant exit is unconfirmed/,
+					"group exit cannot certify unrestricted subtree exit",
+				);
+				await assert.rejects(
+					adapter.checkpointJobs(),
+					/descendant exit is unconfirmed/,
+					"empty registry cannot clear uncertainty",
+				);
+				await adapter.close();
+				adapter = await f.open();
+				// Simulate pruned/unavailable terminal rows. Historical safety must come
+				// from pre-admission storage, not the recovered provider's current list.
+				const recoveredDefinition = adapter.session.getToolDefinition("jobs")!;
+				const recoveredExecute = recoveredDefinition.execute;
+				t.mock.method(recoveredDefinition, "execute", async (...args: Parameters<typeof recoveredExecute>) =>
+					(args[1] as { action?: string }).action === "list"
+						? { content: [], details: undefined, structuredContent: [] }
+						: recoveredExecute.apply(recoveredDefinition, args),
+				);
+				assert.deepEqual(await adapter.jobs(), []);
+				await assert.rejects(
+					adapter.checkpointJobs(),
+					/descendant exit is unconfirmed/,
+					"reopen cannot clear historical uncertainty",
+				);
+				assert.equal(f.faux.state.callCount, 0);
+			} finally {
+				// The fixture's private stop file shuts down only its exact child. Never
+				// signal a retained PID after reparenting or rely on the broken group timer.
+				await writeFile(stop, "stop");
+				if (pid)
+					await waitFor(async () => {
+						try {
+							process.kill(pid!, 0);
+							return false;
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+							throw error;
+						}
+					});
+			}
+		});
+
+test("an actual setsid escape survives group drain and keeps update checkpoint refused", {
+	timeout: 30_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	const ready = join(f.root, "escaped.ready");
+	const heartbeat = join(f.root, "escaped.heartbeat");
+	const stop = join(f.root, "escaped.stop");
+	const stopped = join(f.root, "escaped.stopped");
+	const script = join(f.root, "escape.cjs");
+	const child = `const fs=require('node:fs');
+const deadline=setTimeout(()=>process.exit(2),15000);
+process.on('SIGTERM',()=>{});
+fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));
+const timer=setInterval(()=>{
+ if(fs.existsSync(${JSON.stringify(stop)})){
+  fs.writeFileSync(${JSON.stringify(stopped)},'stopped'); clearInterval(timer); clearTimeout(deadline); return;
+ }
+ fs.appendFileSync(${JSON.stringify(heartbeat)},'x');
+},10);`;
+	await writeFile(
+		script,
+		`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'}).unref();`,
+	);
+	const waitFor = async (condition: () => Promise<boolean>) => {
+		const deadline = Date.now() + 10_000;
+		while (!(await condition())) {
+			assert.ok(Date.now() < deadline, "escaped fixture deadline");
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+	};
+	const read = (path: string) =>
+		readFile(path, "utf8").catch((error) => {
+			if (error.code === "ENOENT") return "";
+			throw error;
+		});
+	let escaped: number | undefined;
+	try {
+		const definition = adapter.session.getToolDefinition("jobs")!;
+		const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "jobs")!.sourceInfo;
+		const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
+		const args = {
+			action: "start",
+			name: "escape-fixture",
+			command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+		};
+		adapter.session.agent.state.messages.push(
+			fauxAssistantMessage(
+				{ type: "toolCall", id: "escape-fixture", name: "jobs", arguments: args },
+				{ stopReason: "toolUse" },
+			),
+		);
+		const result = await tool.execute("escape-fixture", args);
+		assert.ok(!result.isError, JSON.stringify(result));
+		await waitFor(async () => {
+			const pid = Number(await read(ready));
+			if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+			escaped = pid;
+			return true;
+		});
+		await tool.execute("escape-wait", {
+			action: "wait",
+			id: (result.structuredContent as { id: string }).id,
+			waitMs: 5000,
+		});
+		await assert.rejects(adapter.checkpointJobs(), /descendant exit is unconfirmed/);
+		const directory = join(f.root, "parent.jsonl.job-groups");
+		const names = await readdir(directory);
+		assert.equal(names.length, 1);
+		const evidence = JSON.parse(await readFile(join(directory, names[0]!), "utf8"));
+		assert.equal(evidence.scope, "process-group");
+		assert.equal(evidence.state, "group-empty");
+		assert.equal(groupAbsent(evidence.pgid), true);
+		assert.notEqual(escaped, evidence.pgid, "detached:true creates a separate session/group (setsid)");
+		assert.equal(groupAbsent(escaped!), false, "escaped subtree is outside group-only proof");
+		const before = await read(heartbeat);
+		await waitFor(async () => (await read(heartbeat)).length > before.length);
+		assert.equal(JSON.parse(await readFile(join(f.root, "parent.jsonl.job-history"), "utf8")).state, "unknown");
+		await adapter.close();
+		const reopened = await f.open();
+		await assert.rejects(reopened.checkpointJobs(), /descendant exit is unconfirmed/);
+	} finally {
+		// Private cooperative stop reaches ONLY this known escaped fixture. Never
+		// signal a saved PID/PGID after reparenting, even to repair a failing test.
+		await writeFile(stop, "stop");
+		await adapter.close();
+		if (escaped) {
+			await waitFor(async () => groupAbsent(escaped!));
+			assert.equal(await read(stopped), "stopped");
+		}
+	}
+});
+
+test("real Build subagent inherits PR delivery, required auth and safeguards without recursive orchestration", {
+	timeout: 30_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const marker = join(f.root, "child-profile.json");
+	await writeFile(join(f.root, "child-fixture.tsx"), "export const ChildFixture = () => <button />;");
+	const publication = join(f.root, "child-publication");
+	const todos: TodoRecord[] = [];
+	const policy = join(f.root, "subscription-policy.json");
+	const savePolicy = (blocked: boolean) =>
+		writeFile(
+			policy,
+			JSON.stringify({
+				version: 1,
+				windows: blocked ? [{ provider: "openai", label: "Usage limit", usedPercent: 100 }] : [],
+			}),
+		);
+	await savePolicy(false);
+	let reported!: () => void;
+	const limitReported = new Promise<void>((resolve) => {
+		reported = resolve;
+	});
+	const accountingEpoch = { generation: randomUUID(), captureFloor: 0, retentionFloor: 0 };
+	const parent = { sourceId: randomUUID(), operationId: "tool:7" };
+	const usage = new Map<string, UsageObservation>();
+	let usageComplete!: () => void;
+	const usageCaptured = new Promise<void>((resolve) => {
+		usageComplete = resolve;
+	});
+	const bridge = await startParentBridge(
+		async (args, actor) => applyTodo(todos, args, actor),
+		async (limit) => {
+			assert.equal(limit.provider, "openai");
+			assert.equal(todos.length, 1, "the child's preceding tool completed before its usage pause");
+			await savePolicy(true);
+			reported();
+		},
+		async (row) => {
+			usage.set(row.operationId, row);
+			if ([...usage.values()].filter((row) => row.kind === "request").length === 4) usageComplete();
+			return "stored";
+		},
+		async () => accountingEpoch,
+	);
+	t.after(() => bridge.close());
+	const installed = fileURLToPath(
+		new URL("../extensions/subagents/worker-bootstrap.mjs", `file://${PILOT_CHILD_PROFILE_PATH}`),
+	);
+	const fixturePath = join(f.agentDir, "offline-provider.ts");
+	await writeFile(
+		fixturePath,
+		`
+import { appendFileSync, writeFileSync } from 'node:fs';
+import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
+import { Type } from ${JSON.stringify(import.meta.resolve("typebox"))};
+export default pi => {
+	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async (_id, {command}) => { appendFileSync(${JSON.stringify(publication)}, command + "\\n"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
+ const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});
+ faux.setResponses([
+  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const symbols = await tools.code_symbols({query:"ChildFixture",exact:true,path:"child-fixture.tsx"}); if (symbols.results[0]?.name !== "ChildFixture") throw new Error("child exploration failed"); for (const parts of [["rm","-rf","~"],["rm","-rf","/Users"],["find","/","-maxdepth","0"],["fd",".","/"],["jj","git","push","--bookmark","fix/child"],["gh","pr","create"],["gh","pr","merge","1"],["gh","repo","delete","fixture/repo","--yes"]]) { try { await tools.bash({command:parts.join(" ")}); } catch {} } const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage("", {stopReason:'error',errorMessage:'usage_limit_reached'}),
+  fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
+ ]);
+ pi.registerProvider(faux.provider);
+ pi.on('session_start', (_event, ctx) => writeFileSync(${JSON.stringify(marker)}, JSON.stringify({tools: pi.getAllTools().map(t => t.name), auth: typeof ctx.modelRegistry.getRegisteredProviderConfig('anthropic')?.streamSimple})));
+};`,
+	);
+	await writeFile(
+		join(f.agentDir, "settings.json"),
+		JSON.stringify({
+			extensions: [fixturePath, await obsoleteAuth(f.root)],
+			defaultProvider: "openai-codex",
+			defaultModel: "offline",
+			defaultTools: ["+codemode"],
+			codemode: { mode: "only" },
+		}),
+	);
+	const child = spawn(process.execPath, [installed], {
+		cwd: f.root,
+		stdio: ["ignore", "ignore", "pipe", "ipc"],
+		env: {
+			...process.env,
+			...credentialEnvironment(undefined),
+			NODE_OPTIONS: undefined,
+			PILOT_CONNECTIVITY_POLICY: undefined,
+			PI_OFFLINE: "1",
+			PI_CODE_MODE_SUBAGENT: "1",
+			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
+			PILOT_PI_EXTENSIONS_PROFILE: CHILD_PROFILE_PATH,
+			PILOT_ANTHROPIC_AUTH_EXTENSION: ANTHROPIC_AUTH_PATH,
+			PILOT_SUBSCRIPTION_POLICY: policy,
+			PILOT_USAGE_HISTORY: JSON.stringify({ ...accountingEpoch, attribution: { chatId: randomUUID() } }),
+			PILOT_USAGE_STORAGE: join(f.root, "child-storage"),
+			PILOT_USAGE_PARENT: JSON.stringify(parent),
+			PILOT_EXECUTION_PERMISSION: JSON.stringify({ authorizationId: "child-grant", level: "implement" }),
+		},
+	});
+	const closed = once(child, "exit");
+	t.after(async () => {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		await closed;
+	});
+	let stderr = "";
+	child.stderr!.on("data", (chunk) => {
+		stderr = (stderr + String(chunk)).slice(-8192);
+	});
+	const packets: Array<ChildPacket> = [];
+	const listeners = new Set<() => void>();
+	child.on("message", (message) => {
+		packets.push(message as ChildPacket);
+		for (const listener of listeners) listener();
+	});
+	const packet = (type: string, id?: string) =>
+		new Promise<ChildPacket>((resolve, reject) => {
+			const timeout = setTimeout(() => {
+				listeners.delete(check);
+				reject(new Error(`Missing child ${type}: ${stderr}`));
+			}, 20_000);
+			const check = () => {
+				const error = packets.find((packet) => packet.type === "error");
+				const found = packets.find((packet) => packet.type === type && (id === undefined || packet.id === id));
+				if (!error && !found) return;
+				clearTimeout(timeout);
+				listeners.delete(check);
+				if (error) reject(new Error(error.error ?? "Child failed"));
+				else resolve(found!);
+			};
+			listeners.add(check);
+			check();
+		});
+	child.send({
+		type: "start",
+		spec: {
+			name: "offline-child",
+			directory: join(f.root, "child-storage"),
+			request: {
+				agent: { config: { name: "task" }, systemPrompt: "", sourcePath: "<builtin>", scope: "builtin" },
+				task: "Push the task branch and open a PR through the offline stubs. Never merge or delete remote resources.",
+				index: 0,
+				overrides: { model: "openai-codex/offline" },
+			},
+			context: {
+				cwd: f.root,
+				sessionId: "bundled-test",
+				sessionFile: join(f.root, "parent.jsonl"),
+				runId: "test",
+				timeoutMs: 20_000,
+				projectTrusted: false,
+			},
+		},
+	});
+	await packet("ready");
+	const observed = JSON.parse(await readFile(marker, "utf8"));
+	assert.equal(observed.auth, "function");
+	for (const name of [
+		"web",
+		"browser",
+		"todo",
+		"applyPatch",
+		"code_call_paths",
+		"code_impact",
+		"code_search",
+		"code_symbols",
+	])
+		assert.ok(observed.tools.includes(name), name);
+	for (const name of ["jobs", "subagent"]) assert.ok(!observed.tools.includes(name), name);
+	for (const id of ["first", "second"]) {
+		child.send({ type: "input", id, message: "Reply", followUp: false });
+		if (id === "first") {
+			await limitReported;
+			assert.ok(!packets.some((packet) => packet.type === "answer"), "the child remains pending, not failed");
+			await savePolicy(false);
+		}
+		const answer = await packet("answer", id);
+		assert.equal(answer.result?.ok, true, answer.result?.error ?? stderr);
+		assert.match(answer.result?.answer?.text ?? "", /CHILD_(?:PROFILE|FOLLOWUP)_OK/);
+	}
+	child.send({ type: "stop", id: "stop" });
+	assert.equal(todos.length, 1, "child's tool writes to the parent list, not workspace files");
+	assert.equal(todos[0].title, "From real child");
+	assert.deepEqual(
+		(await readFile(publication, "utf8")).trim().split("\n"),
+		["jj git push --bookmark fix/child", "gh pr create"],
+		"implement children can push task branches and open PRs, but merge and deletion never execute",
+	);
+	assert.ok(todos[0].assigned_to_session);
+	await packet("stopped", "stop");
+	await usageCaptured;
+	const requests = [...usage.values()].filter((row) => row.kind === "request");
+	assert.equal(requests.length, 4, "the rejected response and its retried invocation have separate identities");
+	assert.equal(
+		new Set(requests.map((row) => row.sourceId)).size,
+		1,
+		"the original child source survives tool rounds and follow-ups",
+	);
+	assert.notEqual(requests[0]!.sourceId, parent.sourceId);
+	for (const row of requests) {
+		assert.deepEqual(row.parent, parent);
+		assert.deepEqual(row.physicalModel, { provider: "openai-codex", model: "offline" });
+		assert.ok(row.tokens);
+	}
+	child.send({ type: "pause" });
+	await packet("paused");
+	await closed;
+});
+
+test("daemon auth installation preserves static Anthropic model definitions and request configuration", async (t) => {
+	const f = await fixture(t);
+	const modelsPath = join(f.agentDir, "models.json");
+	await writeFile(
+		modelsPath,
+		JSON.stringify({
+			providers: {
+				anthropic: {
+					baseUrl: "https://example.invalid/custom",
+					headers: { "x-offline-fixture": "preserved" },
+					models: [
+						{
+							id: "claude-offline",
+							name: "Offline fixture",
+							api: "anthropic-messages",
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 32_000,
+							maxTokens: 16,
+						},
+					],
+				},
+			},
+		}),
+	);
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath,
+		modelsStore: new InMemoryModelsStore(),
+		refreshOnCreate: false,
+		allowModelNetwork: false,
+	});
+	const before = runtime.getModel("anthropic", "claude-offline");
+	assert.ok(before);
+	const authBefore = await runtime.getAuth(before, { apiKey: "sk-ant-api03-offline-fixture" });
+	const configBefore = runtime.getCompatibilityRequestConfig(before);
+	await installBundledAnthropicAuth(runtime, f.agentDir);
+	assert.deepEqual(runtime.getModel("anthropic", "claude-offline"), before);
+	assert.deepEqual(await runtime.getAuth(before, { apiKey: "sk-ant-api03-offline-fixture" }), authBefore);
+	assert.equal(before.baseUrl, "https://example.invalid/custom");
+	assert.deepEqual(runtime.getCompatibilityRequestConfig(before), configBefore);
+	assert.equal(configBefore.headers?.["x-offline-fixture"], "preserved");
+});
+
+for (const apiKey of ["sk-ant-api03-offline-fixture", "sk-ant-oat01-offline-fixture"])
+	test(`required auth ${apiKey.includes("oat") ? "shapes OAuth" : "preserves API-key"} requests on the real transport`, async (t) => {
+		const f = await fixture(t);
+		await installBundledAnthropicAuth(f.runtime, f.agentDir);
+		const model = f.runtime.getModels("anthropic")[0]!;
+		assert.ok(model);
+		let body: Record<string, unknown> | undefined;
+		const events = [
+			{
+				type: "message_start",
+				message: {
+					id: "offline",
+					type: "message",
+					role: "assistant",
+					model: model.id,
+					content: [],
+					stop_reason: null,
+					stop_sequence: null,
+					usage: { input_tokens: 1, output_tokens: 0 },
+				},
+			},
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
+			{ type: "content_block_stop", index: 0 },
+			{
+				type: "message_delta",
+				delta: { stop_reason: "end_turn", stop_sequence: null },
+				usage: { output_tokens: 1 },
+			},
+			{ type: "message_stop" },
+		];
+		const result = await f.runtime.completeSimple(
+			{ ...model, baseUrl: "https://example.invalid" },
+			{
+				systemPrompt:
+					"You are an expert coding assistant operating inside pi, a coding agent harness.\n\n<docs>\nPi documentation (read only when the user asks about pi itself, its SDK). REMOVE_THIS_DOC_SECTION\n</docs>\n\n<pilot>\nPRESERVE_PILOT_POLICY\n</pilot>",
+				messages: [{ role: "user", content: "Synthetic offline request", timestamp: 1 }],
+			},
+			{
+				apiKey,
+				maxRetries: 0,
+				maxTokens: 16,
+				onPayload: (payload) => ({ ...(payload as object), metadata: { user_id: "caller-hook" } }),
+				fetch: async (input, init) => {
+					body = (await new Request(input, init).json()) as Record<string, unknown>;
+					return new Response(
+						events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+						{ headers: { "content-type": "text/event-stream" } },
+					);
+				},
+			},
+		);
+		assert.equal(result.stopReason, "stop", result.errorMessage ?? "Assertion failed");
+		assert.deepEqual(body?.metadata, { user_id: "caller-hook" });
+		const payload = JSON.stringify(body);
+		assert.match(payload, /PRESERVE_PILOT_POLICY/);
+		if (apiKey.includes("oat")) {
+			assert.match(payload, /x-anthropic-billing-header/);
+			assert.doesNotMatch(payload, /REMOVE_THIS_DOC_SECTION/);
+		} else {
+			assert.doesNotMatch(payload, /x-anthropic-billing-header/);
+			assert.match(payload, /REMOVE_THIS_DOC_SECTION/);
+		}
+	});

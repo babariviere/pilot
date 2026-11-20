@@ -45,7 +45,7 @@ fn prepare(f: &Fixture, b: &Bridge) -> Value {
 
 #[test]
 fn profile_only_explicit_choice_stale_setup_lost_ack_and_restart_are_lookup_only() {
-    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
+    let mut f = Fixture::with_daemon("day/planning/day-planning-enrollment.ts");
     command(&mut f, "quiet", true);
     let (host, b) = global(&f);
     assert_eq!(prepare(&f, &b)["error"], "unavailable");
@@ -133,7 +133,7 @@ fn profile_only_explicit_choice_stale_setup_lost_ack_and_restart_are_lookup_only
 
 #[test]
 fn changed_project_and_unavailable_configured_model_never_fall_back_or_enroll() {
-    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
+    let mut f = Fixture::with_daemon("day/planning/day-planning-enrollment.ts");
     command(&mut f, "quiet", true);
     let (host, b) = global(&f);
     choose(&f, &b);
@@ -168,7 +168,7 @@ fn changed_project_and_unavailable_configured_model_never_fall_back_or_enroll() 
 
 #[test]
 fn legacy_enrollment_uncertainty_is_shown_and_checked_by_exact_lookup() {
-    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
+    let mut f = Fixture::with_daemon("day/planning/day-planning-enrollment.ts");
     command(&mut f, "quiet", true);
     let source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
     let host = f.host_for_options(
@@ -208,7 +208,7 @@ fn legacy_enrollment_uncertainty_is_shown_and_checked_by_exact_lookup() {
 
 #[test]
 fn similar_uncertain_creations_require_an_explicit_new_request_and_keep_exact_lookup() {
-    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
+    let mut f = Fixture::with_daemon("day/planning/day-planning-enrollment.ts");
     command(&mut f, "quiet", true);
     let (host, b) = global(&f);
     choose(&f, &b);

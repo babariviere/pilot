@@ -3,9 +3,9 @@
 // source: the card names the exact pinned revision and one press reads it once.
 import { mount, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { FullArtifact } from "./ArtifactShelf";
-import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
-import { RoundPrototype } from "./RoundPrototype";
+import { FullArtifact } from "./artifacts/ArtifactShelf";
+import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifacts/artifactReads";
+import { RoundPrototype } from "./artifacts/RoundPrototype";
 import { Column, Page, PageFoot, Panel, WindowCanvas } from "./ui";
 
 const reads = signal<string[]>([]);

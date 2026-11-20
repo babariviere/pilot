@@ -5,8 +5,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { PILOT_CAPABILITY_HEADER } from "../packages/daemon/src/native-app-capability.ts";
-import { canonicalJSON, OperationJournal, payloadHash } from "../packages/daemon/src/operation-journal.ts";
+import { PILOT_CAPABILITY_HEADER } from "../packages/daemon/src/day/host/native-app-capability.ts";
+import { canonicalJSON, OperationJournal, payloadHash } from "../packages/daemon/src/transport/operations/operation-journal.ts";
 import { ownRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
 import {
 	digest,

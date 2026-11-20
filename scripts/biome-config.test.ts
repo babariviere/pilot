@@ -23,7 +23,7 @@ test("formatting skips target caches and installer-owned skill lock metadata", a
 	await symlink(join(directory, "missing-cache"), join(project, "nested/helper/target"), "dir");
 	await mkdir(join(project, "target"));
 	await writeFile(join(project, "target/invalid.json"), "{ invalid local build output");
-	const source = join(project, "apps/day/source.ts");
+	const source = join(project, "apps/day/sources/source.ts");
 	await writeFile(source, "export const source={value:1};");
 	const result = spawnSync(
 		process.execPath,

@@ -3,9 +3,15 @@
 // exact revision, one press reads that revision once, and a refusal shows
 // nothing earlier. The project page and one mission's section share rows.
 import { keymap, mount, Scroll, signal, View } from "nsh";
-import { createShelf, FullArtifact, MissionArtifacts } from "./ArtifactShelf";
-import { ArtifactsScreen } from "./ArtifactsScreen";
-import { type ArtifactRow, type ArtifactSource, type ListResult, type ReadResult, readRefused } from "./artifactReads";
+import { createShelf, FullArtifact, MissionArtifacts } from "./artifacts/ArtifactShelf";
+import { ArtifactsScreen } from "./artifacts/ArtifactsScreen";
+import {
+	type ArtifactRow,
+	type ArtifactSource,
+	type ListResult,
+	type ReadResult,
+	readRefused,
+} from "./artifacts/artifactReads";
 import { Block, Button, Buttons, Caption, Column, Page, Panel, WindowCanvas } from "./ui";
 
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";

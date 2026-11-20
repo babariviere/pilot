@@ -27,28 +27,40 @@ if [[ "${1:-}" == mock ]]; then
 	cd "$here"
 	case "${2:-}:${3:-}" in
 		run:*Fixture.tsx|test:*.test.ts|test:*.test.tsx) ;;
-		*) echo 'Usage: nsh.sh mock {run <NameFixture.tsx>|test <Name.test.tsx>} [NSH options]' >&2; exit 2 ;;
+		*) echo 'Usage: nsh.sh mock {run <NameFixture.tsx>|test <day-relative test file>} [NSH options]' >&2; exit 2 ;;
 	esac
-	entry="$3"
-	if [[ "$entry" == */* || "$entry" == -* || ! -f "$entry" ]]; then
-		echo 'Use a fixture or test filename from apps/day.' >&2
-		exit 2
-	fi
+	entry="${3#./}"
+	case "/$entry/" in
+		//*|/-*|*/../*|*/./*) echo 'Use a path relative to apps/day.' >&2; exit 2 ;;
+	esac
 	mkdir -p .nsh output
 	mock="$(mktemp -d "$here/.nsh/mock.XXXXXX")"
 	trap 'rm -rf "$mock"' EXIT
 	# NSH requires assets inside the app directory. Copy the source and assets,
 	# not the mixed app config, Rust targets or generated declarations.
-	cp -R ./*.ts ./*.tsx icons fonts ui theme.json "$mock/"
+	snapshot="$mock/apps/day"
+	mkdir -p "$snapshot"
+	shopt -s nullglob
+	cp -R ./*.ts ./*.tsx app artifacts changes feedback insights missions screen-agent search \
+		sessions settings sources today updates icons fonts ui theme.json "$snapshot/"
+	# Preserve the relative import of the one shared runtime helper.
+	shared=packages/kernel/src/diagnostics
+	mkdir -p "$mock/$shared"
+	cp "../../$shared/feedback-paths.ts" "$mock/$shared/"
 	for fixture in fixtures/inspection fixtures/recovery; do
-		mkdir -p "$mock/$fixture"
-		cp "$fixture/nsh.json" "$fixture"/*.tsx "$mock/$fixture/"
+		mkdir -p "$snapshot/$fixture"
+		cp "$fixture/nsh.json" "$fixture"/*.tsx "$snapshot/$fixture/"
 	done
-	ln -s "$here/output" "$mock/output"
-	printf '%s\n' '{"name":"Pilot Day (mock)","id":"test.pilot.day.mock","theme":"theme.json","capabilities":{}}' > "$mock/nsh.json"
-	cd "$mock"
-	shift
-	CARGO=/usr/bin/false "$cli" "$@"
+	if [[ ! -f "$snapshot/$entry" ]]; then
+		echo "nsh.sh: no fixture or test at '$entry' in the Day mock snapshot" >&2
+		exit 2
+	fi
+	ln -s "$here/output" "$snapshot/output"
+	printf '%s\n' '{"name":"Pilot Day (mock)","id":"test.pilot.day.mock","theme":"theme.json","capabilities":{}}' > "$snapshot/nsh.json"
+	cd "$snapshot"
+	action="$2"
+	shift 3
+	CARGO=/usr/bin/false "$cli" "$action" "$entry" "$@"
 	exit
 fi
 # shellcheck source=apps/day/scripts/build-env.sh

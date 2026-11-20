@@ -1,8 +1,8 @@
 // Fixture data only. The real read-only chat screen renders a service queue reason.
 import { mount } from "nsh";
-import { ChatScreen } from "./ChatScreen";
-import { openDay, openMockChat } from "./mockFeeds";
-import { mirrorSessionChat, type SessionChat } from "./sessionChat";
+import { openDay, openMockChat } from "./app/testing/mockFeeds";
+import { ChatScreen } from "./sessions/ChatScreen";
+import { mirrorSessionChat, type SessionChat } from "./sessions/sessionChat";
 
 const source = openMockChat().source;
 const queued = (chat: SessionChat | null): SessionChat | null =>

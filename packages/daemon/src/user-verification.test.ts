@@ -13,11 +13,11 @@ import type {
 	UserVerificationIntent,
 	VerificationSubject,
 } from "@pilot/protocol";
-import { MissionControls } from "./mission-controls.ts";
-import { MissionReports } from "./mission-reports.ts";
-import { MissionStore } from "./missions.ts";
-import { OperationJournal, payloadHash } from "./operation-journal.ts";
-import { ProjectStore } from "./projects.ts";
+import { MissionControls } from "./missions/lifecycle/mission-controls.ts";
+import { MissionReports } from "./missions/threads/mission-reports.ts";
+import { MissionStore } from "./missions/missions.ts";
+import { OperationJournal, payloadHash } from "./transport/operations/operation-journal.ts";
+import { ProjectStore } from "./projects/projects.ts";
 import { ResultReviews } from "./result-reviews.ts";
 import { FINAL_REPLY_CHARS, UserVerifications } from "./user-verification.ts";
 import { pauseParticipants } from "./testing/pause-participants.ts";

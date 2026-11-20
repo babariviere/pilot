@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { ProjectMemoryService } from "../../packages/daemon/src/project-memory.ts";
+import { ProjectMemoryService } from "../../packages/daemon/src/projects/memory/project-memory.ts";
 
 const count = Number(process.argv[2] ?? 100_000);
 if (!Number.isSafeInteger(count) || count < 100 || count > 1_000_000)

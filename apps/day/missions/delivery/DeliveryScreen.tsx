@@ -1,0 +1,1576 @@
+// One delivered result: the agent's report, its outputs, where it stands
+// and the user's own check. The page reads the exact canonical result;
+// only Mark done, Send back and Reopen send, each once, for exactly the
+// result and revision shown. Opening a link, ticking a reminder or reading
+// the page records nothing and is never the user's check. A press on a web
+// link asks native to read the result again and hand exactly that address
+// to the browser, once; nothing retries it. Ticked reminders are kept with
+// the window only. A command whose answer is lost stays Unknown, with Check
+// only, until its own receipt says how it ended.
+// An artifact's pinned revision shows its saved source as plain text on a
+// press of Inspect source, read once. NSH opens in the app's isolated native
+// preview: the primary useful output opens when the page opens.
+// Each output keeps its own view; previews pause out of view. Its row offers
+// Share and the full window for what it shows. A newer result or lost read
+// hides them and closes a full window opened from them; looking records nothing.
+import { cleanup, effect, keymap, Scroll, signal, untracked, View, type ViewRef } from "nsh";
+import type { Day } from "../../app/day";
+import { keepField, keepScroll } from "../../app/kept";
+import { goHome } from "../../app/nav";
+import { pageScroll, scrolled } from "../../app/onScreen";
+import { setFor } from "../../app/view";
+import {
+	ArtifactBody,
+	ArtifactTools,
+	closeFullFor,
+	InFullNote,
+	inFull,
+	openFull,
+	paneLine,
+} from "../../artifacts/ArtifactViewer";
+import { LinkedFeedback } from "../../feedback/LinkedFeedback";
+import { ContinueRow } from "../../sessions/ChatScreen";
+import { ChatWaits } from "../../sessions/ChatWaits";
+import { openChat } from "../../sessions/chatView";
+import type { SessionChatMirror } from "../../sessions/sessionChat";
+import { artifactPreviewsAvailable } from "../../sources/bridge";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	Columns,
+	Composer,
+	EmptyLine,
+	ExpandableRow,
+	glide,
+	Icon,
+	Link,
+	Notice,
+	Num,
+	Option,
+	Options,
+	Page,
+	PageHead,
+	Panel,
+	Question,
+	Quote,
+	Row,
+	RowDetail,
+	RowGroup,
+	Rows,
+	Section,
+	Spacer,
+	State,
+	TextField,
+} from "../../ui";
+import { CodeChanges, CodeReviewScreen, ReviewStatus } from "../review/CodeReviewScreen";
+import { OutputComparison } from "../review/OutputComparison";
+import {
+	connectedResultReview,
+	forgetReviewDraft,
+	keepReviewDraft,
+	type ResultReviewSource,
+	reviewKey,
+} from "../review/resultReview";
+import { type ReviewSession, reviewSession } from "../review/reviewSession";
+import { artifactSelection } from "./deliveryArtifact";
+import type { AgentWork, OwnedChange } from "./deliveryBridge";
+import {
+	type ArtifactLink,
+	type Assessment,
+	type DeliveredWork,
+	type DeliveryMirror,
+	type DeliveryOp,
+	linkUrl,
+	type OutputLink,
+	webLink,
+} from "./deliveryFeed";
+import { noScreens, screenIds, screenLine, screenPairs } from "./deliveryScreens";
+import {
+	type Attempt,
+	agentLine,
+	agentWork,
+	artifactLine,
+	attemptName,
+	attemptOutcome,
+	attemptsOf,
+	backNotes,
+	backOpen,
+	chatNow,
+	checkLine,
+	closeDelivery,
+	codeReviewed,
+	codeReviewRoute,
+	type DeliveryPlace,
+	deliveryMessages,
+	doneAsk,
+	dropInspections,
+	hideArtifact,
+	hideWork,
+	type Inspection,
+	inspectArtifact,
+	inspectionCurrent,
+	inspectionOf,
+	lastInspection,
+	NOTE_LIMIT,
+	openCodeReview,
+	outputMessages,
+	ownPullRequests,
+	prName,
+	prObservation,
+	productionLine,
+	prState,
+	pullRequestLine,
+	pullRequestOpen,
+	reminderKey,
+	reminders,
+	selectionLine,
+	setNote,
+	setTicks,
+	shortId,
+	showWork,
+	titleOf,
+	unsettledLine,
+	utf8,
+	whenOf,
+	workOnOpen,
+} from "./deliveryView";
+
+/** One line of "Where this stands": what, then its state. */
+function Stand(props: { label: string; value: string; testID: string; tone?: "needs" }) {
+	return (
+		<View class="flex-row gap-4">
+			<View class="w-28">
+				<Caption tone="faint">{props.label}</Caption>
+			</View>
+			<Body testID={props.testID} tone={props.tone ?? "default"} grow>
+				{props.value}
+			</Body>
+		</View>
+	);
+}
+
+/** A labelled paragraph of the agent's account. */
+function Said(props: { label: string; text: string }) {
+	return (
+		<If when={props.text.trim()}>
+			<View class="gap-0.5">
+				<Caption tone="faint">{props.label}</Caption>
+				<Body measure>{props.text}</Body>
+			</View>
+		</If>
+	);
+}
+
+/** The agent's account of the result. Its words, never Pilot's check. */
+function Report(props: { work: DeliveredWork }) {
+	const w = () => props.work;
+	const refs = () =>
+		(w().nonCodeDelivery?.references ?? [])
+			.map((r) => (r.kind === "brief" ? `Brief, revision ${r.revision}` : `Artifact, revision ${r.revision}`))
+			.join(" · ");
+	const nothing = () =>
+		!w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome && !w().workerDelivery;
+	return (
+		<Section testID="delivery-report" title="Report">
+			<Block gap={3} selectable>
+				<Said
+					label="Outcome"
+					text={
+						w().workerDelivery?.summary ??
+						w().submission?.claim ??
+						w().chatReport?.answer ??
+						w().outcome?.reason ??
+						""
+					}
+				/>
+				<Said label="Goal and scope" text={w().scope ?? ""} />
+				<Said label="Task state (not acceptance)" text={w().taskState ?? ""} />
+				<Said
+					label="Risks and limits"
+					text={
+						w().submission?.limitations ||
+						w().nonCodeDelivery?.limitations ||
+						w().chatReport?.limits ||
+						"No separate risk statement was provided."
+					}
+				/>
+				<Caption tone="faint">The agent reports</Caption>
+				<If when={w().completion}>
+					<Caption tone="faint">
+						The commit and checks below are agent-reported. Publication is not independently verified here.
+					</Caption>
+					<Said label="Checks it ran" text={w().completion?.checks ?? ""} />
+					<Said label="Open issues" text={w().completion?.issues ?? ""} />
+				</If>
+				<If when={w().nonCodeDelivery}>
+					<Said label="Checks it ran" text={w().nonCodeDelivery?.checks ?? ""} />
+					<Said label="It points to" text={refs()} />
+				</If>
+				<If when={w().workerDelivery}>
+					<View testID="delivery-worker-report" class="gap-3">
+						<Caption tone="faint">
+							The worker's delivery report. No coordinator runs this mission: marking it done finishes the task,
+							and Pilot starts the next ready tasks.
+						</Caption>
+						<Said label="Checks it ran" text={w().workerDelivery?.checks ?? ""} />
+						<Said label="Open issues" text={w().workerDelivery?.issues ?? ""} />
+						<Said label="Next step" text={w().workerDelivery?.nextStep ?? ""} />
+						<Said label="Evidence" text={(w().workerDelivery?.evidence ?? []).join("\n")} />
+					</View>
+				</If>
+				<If when={(w().coordinatorRequests?.length ?? 0) > 0}>
+					<View testID="delivery-coordinator-requests" class="gap-1">
+						<Caption tone="faint">It asks the coordinator. No coordinator runs this mission yet:</Caption>
+						<Each of={w().coordinatorRequests ?? []} key={(r) => r.id}>
+							{(r) => <Body measure>{r().text}</Body>}
+						</Each>
+						<Caption tone="faint">Answer with Send back, or in a thread with the mission.</Caption>
+					</View>
+				</If>
+				<If when={w().outcome && (!w().chatReport || w().outcome?.reason)}>
+					<Said label="It says" text={w().outcome?.reason || "The chat says it is done."} />
+				</If>
+				<If when={w().outcome && w().chatReport}>
+					<View testID="delivery-chat-report" class="gap-3">
+						<Said label="How it knows" text={w().chatReport?.howItKnows ?? ""} />
+						<Said label="Next step for you" text={w().chatReport?.nextStep ?? ""} />
+						<Said
+							label="Links"
+							text={(w().chatReport?.links ?? [])
+								.map((l) => (l.title ? `${l.title} · ${l.url}` : l.url))
+								.join("\n")}
+						/>
+					</View>
+				</If>
+				<If when={w().outcome && !w().chatReport && w().finalReply}>
+					<View testID="delivery-final-reply" class="gap-0.5">
+						<Caption tone="faint">Its last message</Caption>
+						<Body measure>{w().finalReply?.text ?? ""}</Body>
+						<If when={w().finalReply?.shortened}>
+							<Caption tone="faint">Shortened here. The chat keeps the whole message.</Caption>
+						</If>
+					</View>
+				</If>
+				<If when={nothing()}>
+					<Body tone="muted">No report with this result.</Body>
+				</If>
+				<Caption tone="faint">The agent's account is evidence, not your acceptance.</Caption>
+				<If when={w().revisionRecipientSessionId}>
+					<Caption>
+						Send back routes revisions through this mission's coordinator, with your saved context. Independent
+						work continues.
+					</Caption>
+				</If>
+			</Block>
+		</Section>
+	);
+}
+
+/**
+ * The worker's captures of the app, one row per screen. A row opens Before and After under it, reading the side
+ * shown once. The first opens with the page; one opens at a time.
+ */
+function Screens(props: { mirror: DeliveryMirror; work: DeliveredWork; fresh: boolean; resultKey: string }) {
+	const pairs = () => screenPairs(props.work);
+	const open = signal<string | null>(untracked(() => pairs()[0]?.key ?? null));
+	const rows = new Map<string, ViewRef>();
+	const close = (key: string) => {
+		open.set(null);
+		rows.get(key)?.focus();
+	};
+	return (
+		<If when={props.work.screens}>
+			<Section testID="delivery-screens" title="Screens" count={pairs().length}>
+				<If when={noScreens(props.work)}>
+					<Block>
+						<Said label="It has no captures" text={noScreens(props.work)} />
+					</Block>
+				</If>
+				<Each of={pairs()} key={(p) => p.key}>
+					{(p) => (
+						<ExpandableRow
+							open={open() === p().key}
+							testID={`screen-${p().key}`}
+							accessibilityLabel={`${p().title}: ${screenLine(p())}`}
+							anchor={(node) => rows.set(p().key, node)}
+							onToggle={() => open.set(open() === p().key ? null : p().key)}
+							content={
+								<If when={open() === p().key}>
+									<Block>
+										<OutputComparison
+											work={props.work}
+											source={props.mirror.source}
+											fresh={props.fresh}
+											resultKey={`${props.resultKey}#screen-${p().key}`}
+											pair={p()}
+											testID="screens"
+											onClose={() => close(p().key)}
+										/>
+									</Block>
+								</If>
+							}
+						>
+							<Icon name={open() === p().key ? "chevron" : "right"} tint="tint-muted-foreground" />
+							<BodyStrong grow>{p().title}</BodyStrong>
+							<Caption>{screenLine(p())}</Caption>
+						</ExpandableRow>
+					)}
+				</Each>
+			</Section>
+		</If>
+	);
+}
+
+/** A pull request's short name, such as "PR #12". */
+function shortName(r: OutputLink): string {
+	return prName(r).split(" · ")[0];
+}
+
+/**
+ * One artifact the agent linked: its title, kind and pinned revision, and Inspect source when it has a pin.
+ * What it shows can go to the full window, as a copy that closes once the row's read is no longer current.
+ */
+function ArtifactOutput(props: {
+	mirror: DeliveryMirror;
+	place: DeliveryPlace;
+	work: DeliveredWork;
+	link: ArtifactLink;
+	fresh: boolean;
+	anchors: Map<string, ViewRef>;
+}) {
+	const key = () => props.place.key;
+	const pinned = () => !!artifactSelection(props.work, props.link);
+	const mine = () => (props.fresh ? inspectionOf(key(), props.work, props.link) : null);
+	const reading = () => mine()?.state === "reading";
+	const name = () => props.link.title || "the artifact";
+	const fullId = `output:${props.place.key}|${props.link.sessionId}/${props.link.artifactId}`;
+	cleanup(() => closeFullFor(fullId));
+	const full = (back: () => void) => {
+		const shown = mine();
+		if (shown?.state !== "shown") return;
+		const key = props.place.key;
+		const work = props.work;
+		const link = props.link;
+		openFull({
+			shown,
+			id: fullId,
+			live: () => inspectionOf(key, work, link)?.generation === shown.generation,
+			back,
+		});
+	};
+	let sourceAnchor: ViewRef | undefined;
+	let previewAnchor: ViewRef | undefined;
+	return (
+		<Row
+			title={props.link.title || "Artifact"}
+			meta={artifactLine(props.link)}
+			trailing={
+				<If
+					when={pinned()}
+					else={
+						<Caption tone="faint">
+							{props.work.subject.kind === "task" ? "No pinned revision" : "No source here"}
+						</Caption>
+					}
+				>
+					<Button
+						small
+						label={reading() ? "Reading…" : mine() && !mine()?.preview ? "Hide source" : "Inspect source"}
+						testID={`output-source-${props.link.artifactId}`}
+						accessibilityLabel={
+							mine() && !mine()?.preview
+								? `Hide the source of ${name()}.`
+								: `Show the saved source of ${name()}, revision ${props.link.revision}, as plain text. Looking records nothing.`
+						}
+						disabled={reading() || !props.fresh}
+						anchor={(node) => {
+							sourceAnchor = node;
+							props.anchors.set(props.link.artifactId, node);
+						}}
+						onPress={() => {
+							if (sourceAnchor) props.anchors.set(props.link.artifactId, sourceAnchor);
+							if (mine() && !mine()?.preview) {
+								glide();
+								hideArtifact(key(), props.link);
+							} else void inspectArtifact(props.mirror.source, key(), props.work, props.link);
+						}}
+					/>
+					<If when={props.link.kind === "image" || (props.link.kind === "nsh" && artifactPreviewsAvailable())}>
+						<Button
+							small
+							label={mine()?.preview ? "Hide preview" : "Preview"}
+							testID={`output-preview-${props.link.artifactId}`}
+							disabled={reading() || !props.fresh}
+							anchor={(node) => {
+								previewAnchor = node;
+							}}
+							onPress={() => {
+								if (previewAnchor) props.anchors.set(props.link.artifactId, previewAnchor);
+								if (mine()?.preview) {
+									glide();
+									hideArtifact(key(), props.link);
+								} else void inspectArtifact(props.mirror.source, key(), props.work, props.link, "preview");
+							}}
+						/>
+					</If>
+					<If when={mine()}>
+						<ArtifactTools
+							shown={mine() as Inspection}
+							testID={`output-${props.link.artifactId}`}
+							onFull={full}
+						/>
+					</If>
+				</If>
+			}
+			detail={
+				<If when={mine()}>
+					<RowDetail>
+						<Caption tone="faint">{paneLine(mine() as Inspection)}</Caption>
+						<If when={!inFull(fullId)} else={<InFullNote />}>
+							<ArtifactBody shown={mine() as Inspection} />
+						</If>
+					</RowDetail>
+				</If>
+			}
+		/>
+	);
+}
+
+/**
+ * What the agent linked and saved. A web link opens in the browser on a
+ * press, when this window can open links. An artifact's pinned revision
+ * shows its saved source as plain text on a press. Neither records anything.
+ */
+function Outputs(props: {
+	mirror: DeliveryMirror;
+	place: DeliveryPlace;
+	work: DeliveredWork;
+	fresh: boolean;
+	anchors: Map<string, ViewRef>;
+}) {
+	const w = () => props.work;
+	const key = () => props.place.key;
+	const commit = () => w().completion?.commit ?? w().workerDelivery?.commit;
+	const count = () => w().pullRequests.length + w().artifacts.length + (commit() ? 1 : 0);
+	const web = () => props.mirror.view().webLinks;
+	const opening = (r: OutputLink) => props.mirror.view().opening.includes(`${key()}#${r.id}`);
+	const say = (m: string) => setFor(outputMessages, key(), m);
+	// Compare outputs sits by the heading and opens Before and After under it.
+	const comparing = signal(false);
+	const comparable = () => props.fresh && w().artifacts.filter((a) => artifactSelection(w(), a)).length > 1;
+	let compareButton: ViewRef | undefined;
+	const open = (r: OutputLink) => {
+		say("");
+		void props.mirror.source.open(w(), r).then((result) => {
+			if (result.status === "opened") say(`Sent ${shortName(r)} to your browser. Nothing was recorded.`);
+			else if (result.message) say(result.message);
+		});
+	};
+	return (
+		<Section
+			testID="delivery-outputs"
+			title="Outputs"
+			count={count()}
+			action={
+				<If when={comparable()}>
+					<Link
+						label={comparing() ? "Close comparison" : "Compare outputs"}
+						testID="outputs-compare"
+						anchor={(node) => {
+							compareButton = node;
+						}}
+						onPress={() => comparing.set(!comparing())}
+					/>
+				</If>
+			}
+		>
+			<If when={comparing() && comparable()}>
+				<Block>
+					<OutputComparison
+						work={w()}
+						source={props.mirror.source}
+						fresh={props.fresh}
+						resultKey={key()}
+						onClose={() => {
+							comparing.set(false);
+							compareButton?.focus();
+						}}
+					/>
+				</Block>
+			</If>
+			<If when={count() === 0}>
+				<EmptyLine text="The agent linked no outputs to this result." />
+			</If>
+			<Rows>
+				{/* Keep text selection outside the press target (in the row's detail) so native repeated clicks still open it. */}
+				<Each of={w().pullRequests} key={(r) => r.id}>
+					{(r) => (
+						<Row
+							testID={web() && webLink(r()) ? `output-open-${r().id}` : undefined}
+							title={prName(r())}
+							state={prState(r())}
+							trailing={
+								<If when={web() && webLink(r())}>
+									<Num>{opening(r()) ? "Opening…" : "Open ↗"}</Num>
+								</If>
+							}
+							accessibilityLabel={`Open ${shortName(r())} in your browser. Opening it records nothing.`}
+							onPress={web() && webLink(r()) ? () => open(r()) : undefined}
+							detail={
+								<RowDetail>
+									<View selectable>
+										<Caption tone="faint">{linkUrl(r())}</Caption>
+										<If when={r().kind === "github.pr"}>
+											<Caption tone="faint">{prObservation(r())}</Caption>
+										</If>
+									</View>
+								</RowDetail>
+							}
+						/>
+					)}
+				</Each>
+				<Each of={w().artifacts} key={(a) => `${a.sessionId}/${a.artifactId}`}>
+					{(a) => (
+						<ArtifactOutput
+							mirror={props.mirror}
+							place={props.place}
+							work={w()}
+							link={a()}
+							fresh={props.fresh}
+							anchors={props.anchors}
+						/>
+					)}
+				</Each>
+				<If when={commit()}>
+					<Row title={`Commit ${commit()?.slice(0, 12) ?? ""}`} meta="Source, as the agent recorded it" />
+				</If>
+			</Rows>
+			<If when={outputMessages()[key()] || w().pullRequests.length > 0 || w().artifacts.length > 0}>
+				<Block>
+					<If when={outputMessages()[key()]}>
+						<Body role="alert" testID="output-message" tone="muted">
+							{outputMessages()[key()] ?? ""}
+						</Body>
+					</If>
+					<If when={w().pullRequests.length > 0}>
+						<Caption tone="faint">
+							{web()
+								? "Opening a link shows it in your browser. It records nothing; only Mark done is your check."
+								: "Pilot cannot open links in this window. Copy one; opening it records nothing."}
+						</Caption>
+					</If>
+					<If when={w().artifacts.length > 0}>
+						<Caption tone="faint">
+							Inspect source shows the saved text of a pinned revision. NSH previews run apart from Pilot and
+							change only their own state. Looking records nothing.
+						</Caption>
+					</If>
+				</Block>
+			</If>
+		</Section>
+	);
+}
+
+/** One owned change from a retained comparison, and how it changed. */
+function Change(props: { change: OwnedChange }) {
+	const c = () => props.change;
+	const shown = () => (c().state === "shown" ? (c() as Extract<OwnedChange, { state: "shown" }>) : null);
+	const seedLine = () => {
+		const s = shown();
+		if (!s || s.seed === "current") return "";
+		return s.seed === "retained-observation"
+			? "Read from Pilot's saved observations of this change. Later history may be missing."
+			: "Read from its first revision only. Later history may be missing.";
+	};
+	return (
+		<If
+			when={shown()}
+			else={
+				<Row
+					title="Pilot cannot show this change here. It may be older than change tracking, or its history moved on."
+					wrap
+					selectable
+				/>
+			}
+		>
+			<Row
+				title={`Change ${shortId(shown()?.changeId ?? "")}`}
+				state={shown()?.current === "present" ? "In the repository" : "No longer in the repository"}
+				meta={
+					shown()?.baselineCommitId
+						? `Started on ${shortId(shown()?.baselineCommitId ?? "")}. Created as ${shortId(shown()?.creationCommitId ?? "")}.`
+						: `Starting point not recorded. Created as ${shortId(shown()?.creationCommitId ?? "")}.`
+				}
+				wrap
+				selectable
+				detail={
+					<RowDetail>
+						<View selectable class="gap-0.5">
+							<Each of={shown()?.revisions ?? []} key={(r) => r.commitId}>
+								{(r) => (
+									<Caption testID={`agent-work-revision-${r().commitId}`}>
+										{`${shortId(r().commitId)} on ${r().parents.map(shortId).join(", ") || "no parent"}${r().ownedChange ? "" : " · a related change"}`}
+									</Caption>
+								)}
+							</Each>
+							<If when={shown()?.more}>
+								<Caption tone="faint">Older revisions are not shown.</Caption>
+							</If>
+							<If when={seedLine()}>
+								<Caption tone="faint">{seedLine()}</Caption>
+							</If>
+							<Caption tone="faint">
+								{`Read at repository operation ${shortId(shown()?.operationId ?? "")}. Another chat may have made that operation.`}
+							</Caption>
+						</View>
+					</RowDetail>
+				}
+			/>
+		</If>
+	);
+}
+
+/** One push or pull request attempt: its saved outcome, never a guess. */
+function AttemptRow(props: { attempt: Attempt }) {
+	const t = () => props.attempt;
+	const outcome = () => attemptOutcome(t());
+	const at = () => (t().result ?? t().dispatch ?? t().legacy)?.at ?? 0;
+	return (
+		<Row
+			mark={outcome().known ? undefined : "needs"}
+			title={attemptName(t())}
+			meta={t().legacy ? `${whenOf(at())}. An older record: Pilot kept no separate attempt.` : whenOf(at())}
+			wrap
+			selectable
+			trailing={<Caption testID={`agent-work-outcome-${t().id}`}>{outcome().word}</Caption>}
+			detail={
+				<If when={selectionLine(t())}>
+					<RowDetail>
+						<Caption tone="faint">{selectionLine(t())}</Caption>
+					</RowDetail>
+				</If>
+			}
+		/>
+	);
+}
+
+/** What the read found: owned changes, saved pushes and pull requests, and what GitHub showed. */
+function WorkRecord(props: { work: DeliveredWork; record: AgentWork }) {
+	const r = () => props.record;
+	const pub = () => r().publication;
+	const shownPub = () => {
+		const p = pub();
+		return p.state === "shown" ? p : null;
+	};
+	const attempts = () => attemptsOf(shownPub()?.actions ?? []);
+	const prs = () => ownPullRequests(props.work).filter((p) => p.kind === "github.pr");
+	return (
+		<View>
+			<RowGroup label="Changes it owns" />
+			<If when={r().changes.length === 0}>
+				<EmptyLine text="This result names no retained change. Pilot does not guess one from authors or the workspace." />
+			</If>
+			<Rows>
+				<Each of={r().changes} key={(c) => c.snapshotId}>
+					{(c) => <Change change={c()} />}
+				</Each>
+			</Rows>
+			<If when={r().moreChanges}>
+				<EmptyLine text="More retained changes are not shown." />
+			</If>
+
+			<RowGroup label="Pushes and pull requests" />
+			<If
+				when={shownPub()}
+				else={<EmptyLine text="Pilot cannot read this chat's saved pushes and pull requests here." />}
+			>
+				<EmptyLine
+					text={
+						shownPub()?.scope === "mission"
+							? "Saved by the chat that did this, while in this mission. They may cover more than this task."
+							: "Saved by this chat."
+					}
+				/>
+				<If when={attempts().length === 0}>
+					<EmptyLine text="None saved. Pushes Pilot did not see are not shown." />
+				</If>
+				<Rows>
+					<Each of={attempts()} key={(a) => a.id}>
+						{(a) => <AttemptRow attempt={a()} />}
+					</Each>
+				</Rows>
+				<If when={shownPub()?.more}>
+					<EmptyLine text="Older records are not shown." />
+				</If>
+			</If>
+
+			<RowGroup label="Seen on GitHub" />
+			<If when={prs().length === 0}>
+				<EmptyLine text="No pull request is linked to this result." />
+			</If>
+			<Rows>
+				<Each of={prs()} key={(p) => p.id}>
+					{(p) => (
+						<Row
+							title={prName(p()).split(" · ")[0]}
+							state={prState(p())}
+							meta={prObservation(p())}
+							wrap
+							selectable
+						/>
+					)}
+				</Each>
+			</Rows>
+			<If when={prs().length > 0}>
+				<EmptyLine text="Pilot did not read the pull request's head revision here, so it cannot say which revision GitHub has." />
+			</If>
+		</View>
+	);
+}
+
+/**
+ * What Pilot recorded about the agent's work, folded until asked. Opening it
+ * reads once and records nothing. It is not the agent's report, a merge, a
+ * release or the user's check.
+ */
+function AgentWorkPanel(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: DeliveredWork; fresh: boolean }) {
+	const key = () => props.place.key;
+	const read = () => {
+		const r = agentWork()[key()];
+		return r && r.deliveryId === props.work.deliveryId ? r : null;
+	};
+	const owned = () => !!props.work.ownerSessionId;
+	const toggle = () => {
+		if (read()) {
+			glide();
+			hideWork(key());
+		} else void showWork(props.mirror.source, key(), props.work);
+	};
+	return (
+		<Section
+			testID="agent-work"
+			title="Agent work"
+			action={
+				<If when={owned()}>
+					<Link
+						label={read() ? "Hide" : "Show"}
+						testID="agent-work-toggle"
+						accessibilityLabel={
+							read()
+								? "Hide the agent's work record."
+								: "Show the changes this agent owns and its saved pushes and pull requests. Reading records nothing."
+						}
+						disabled={!props.fresh && !read()}
+						onPress={toggle}
+					/>
+				</If>
+			}
+			footnote={
+				read()
+					? "This is Pilot's record. It is separate from the agent's report, a merge, a release and your check."
+					: undefined
+			}
+		>
+			<If
+				when={read()}
+				else={
+					<EmptyLine
+						text={
+							owned()
+								? "The changes this agent owns and its pushes and pull requests, as Pilot recorded them."
+								: "No agent chat is named for this result, so Pilot has no work record to show."
+						}
+					/>
+				}
+			>
+				<If when={read()?.state === "reading"}>
+					<EmptyLine text="Reading the agent's work…" />
+				</If>
+				<If when={read()?.state === "refused"}>
+					<Notice testID="agent-work-off" placement="section" text={read()?.message ?? ""} />
+				</If>
+				<If when={read()?.state === "shown" && read()?.work}>
+					<WorkRecord work={props.work} record={read()?.work as AgentWork} />
+				</If>
+			</If>
+		</Section>
+	);
+}
+
+/**
+ * Where the chat is while nothing is delivered, with the one action that moves it: Open chat, Continue (sent
+ * once, only when the service says it can), Answer (questions are answered on Today) or, for a chat that ended its
+ * turn with no result and no question, its last message with Reply and Continue.
+ */
+function ChatNow(props: { day: Day; work: DeliveredWork; placeKey: string; reread: () => void }) {
+	const now = () => chatNow(props.work);
+	const id = () => props.work.ownerSessionId ?? "";
+	return (
+		<If when={now()}>
+			{(n) => (
+				<Section testID="delivery-chat-now" title="Chat">
+					<Block gap={3}>
+						<State
+							testID="delivery-chat-line"
+							kind={n().move === "open" && props.work.chat?.state === "working" ? "working" : "needs"}
+							label={n().line}
+							plain
+						/>
+						<If when={n().move === "continue" && props.day.chat}>
+							<ContinueRow
+								source={(props.day.chat as SessionChatMirror).source}
+								sessionId={id()}
+								failed={props.work.chat?.state === "failed"}
+								onSent={props.reread}
+							/>
+						</If>
+						<If when={n().move === "reply" && props.day.chat}>
+							<ChatWaits
+								chat={(props.day.chat as SessionChatMirror).source}
+								sessionId={id()}
+								says={props.work.chat?.says}
+								canContinue={props.work.chat?.canContinue === true}
+								place={`delivery/${props.placeKey}`}
+								onSent={props.reread}
+							/>
+						</If>
+						<Buttons>
+							<If when={n().move === "answer"}>
+								<Button
+									testID="delivery-chat-answer"
+									label="Answer"
+									accessibilityLabel="Answer its question on Today, where Pilot shows what needs you."
+									onPress={goHome}
+								/>
+							</If>
+							<If
+								when={n().move === "open"}
+								else={
+									<Link
+										testID="delivery-chat-open"
+										label="Open chat"
+										accessibilityLabel="Open its chat, read only. Opening it sends nothing."
+										onPress={() => openChat(id(), "Result")}
+									/>
+								}
+							>
+								<Button
+									testID="delivery-chat-open"
+									label="Open chat"
+									accessibilityLabel="Open its chat, read only. Opening it sends nothing."
+									onPress={() => openChat(id(), "Result")}
+								/>
+							</If>
+						</Buttons>
+					</Block>
+				</Section>
+			)}
+		</If>
+	);
+}
+
+/** The four lines: the agent, the pull request, production and the user's check. Never one merged state. */
+function Stands(props: { work: DeliveredWork; unsettled: DeliveryOp | undefined }) {
+	const merged = () => ownPullRequests(props.work).some((r) => r.pullRequest?.state === "merged");
+	return (
+		<Section testID="delivery-stands" title="Where this stands">
+			<Block gap={3} selectable>
+				<Stand label="Agent" testID="stand-agent" value={agentLine(props.work)} />
+				<Stand label="Pull request" testID="stand-pr" value={pullRequestLine(props.work)} />
+				<Stand
+					label="Production"
+					testID="stand-production"
+					value={productionLine(props.work)}
+					tone={merged() ? "needs" : undefined}
+				/>
+				<Stand label="Your check" testID="stand-check" value={checkLine(props.work, props.unsettled)} />
+			</Block>
+		</Section>
+	);
+}
+
+/** Reminders for the user's own look. Ticking one sends nothing; the window keeps the ticks. */
+function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
+	const id = () => reminderKey(props.place.key, props.work.deliveryId ?? "");
+	const items = () => {
+		const out = [{ id: "report", label: "Read the agent's report" }];
+		for (const r of ownPullRequests(props.work).slice(0, 3)) {
+			out.push({ id: `pr-${r.id}`, label: `Looked at ${prName(r).split(" · ")[0]}` });
+		}
+		const art = props.work.artifacts[0];
+		if (art) out.push({ id: `art-${art.artifactId}`, label: `Looked at ${art.title || "the artifact"}` });
+		return out;
+	};
+	const ticked = () => reminders()[id()] ?? [];
+	return (
+		<Options multiple>
+			<Each of={items()} key={(i) => i.id}>
+				{(i) => (
+					<Option
+						multiple
+						compact
+						testID={`reminder-${i().id}`}
+						title={i().label}
+						tickTestID={`reminder-ticked-${i().id}`}
+						checked={ticked().includes(i().id)}
+						onChange={() =>
+							setTicks(
+								id(),
+								ticked().includes(i().id) ? ticked().filter((x) => x !== i().id) : [...ticked(), i().id],
+							)
+						}
+					/>
+				)}
+			</Each>
+		</Options>
+	);
+}
+
+/**
+ * A note on the whole result: a general comment, which Send back includes, or the private My notes, which it never
+ * does. Both use the review's existing save paths and never go to GitHub.
+ */
+function NoteEditor(props: { review: ReviewSession; placeKey: string }) {
+	const r = props.review;
+	const mine = () => r.draft().kind === "note";
+	const body = () => (r.draft().anchor.kind === "general" ? r.draft().body : "");
+	const field = keepField(`review:${r.key}`, () => `delivery/${props.placeKey}`, body);
+	return (
+		<View class="gap-1.5">
+			<Composer
+				field={
+					<TextField
+						variant="composer"
+						testID="review-body"
+						ref={field.ref}
+						onFocus={field.focus}
+						onSelectionChange={field.select}
+						accessibilityLabel={
+							mine() ? "My notes. Only for you; Send back never includes them." : "Your note on this result."
+						}
+						placeholder={mine() ? "Notes only for you" : "A note on this result. Send back includes it."}
+						multiline
+						autoFocus
+						value={body()}
+						disabled={r.busy() || r.pending().length > 0}
+						onChange={({ value }) =>
+							keepReviewDraft(r.key, { kind: r.draft().kind, anchor: { kind: "general" }, body: value })
+						}
+					/>
+				}
+				bar={
+					<>
+						{/* Save comes first in Tab order, as before; the bar keeps it at the right. */}
+						<Spacer />
+						<Button
+							kind="primary"
+							label={r.busy() ? "Saving…" : mine() ? "Save my notes" : "Save note"}
+							testID="note-save"
+							disabled={r.disabled() || utf8(body()) > NOTE_LIMIT || (!mine() && !body().trim())}
+							onPress={() => void r.save()}
+						/>
+						<Button
+							kind="quiet"
+							small
+							label="Cancel"
+							testID="note-cancel"
+							disabled={r.busy()}
+							onPress={() => {
+								glide();
+								r.editorOpen.set(false);
+							}}
+						/>
+						<Button
+							kind="quiet"
+							small
+							label="Discard"
+							testID="note-discard"
+							disabled={r.busy() || r.pending().length > 0}
+							onPress={() => {
+								glide();
+								forgetReviewDraft(r.key);
+								r.editorOpen.set(false);
+							}}
+						/>
+					</>
+				}
+			/>
+			<If when={utf8(body()) > NOTE_LIMIT}>
+				<Caption tone="needs">This note is too long to save. Shorten it first.</Caption>
+			</If>
+			<Caption tone="faint">
+				{mine()
+					? "Only for you. Send back never includes them, and nothing goes to GitHub."
+					: "Kept with this result and counted with your comments. Send back includes it; nothing goes to GitHub."}
+			</Caption>
+		</View>
+	);
+}
+
+/** The user's own check: reminders, Mark done, Send back and a note, or how the last check ended. */
+function YourCheck(props: {
+	mirror: DeliveryMirror;
+	place: DeliveryPlace;
+	work: DeliveredWork;
+	title: string;
+	review?: ReviewSession;
+	/** Review code is the page's primary command until the user opens it. */
+	reviewFirst: boolean;
+}) {
+	const key = () => props.place.key;
+	const w = () => props.work;
+	const v = () => props.mirror.view();
+	const unsettled = () => v().unsettled.find((o) => o.key === key());
+	const sending = () => v().sending.includes(key());
+	const note = () => backNotes()[key()] ?? "";
+	const open = () => backOpen()[key()] === true;
+	const say = (m: string) => setFor(deliveryMessages, key(), m);
+	const shownState = () => (w().verificationCurrent ? w().verification?.state : undefined);
+	const asked = () => {
+		const a = doneAsk();
+		return a && a.key === key() ? a : null;
+	};
+	// The Done asked about is the one sent: a newer result closes it instead.
+	const askedCurrent = () => {
+		const a = asked();
+		return !!a && a.deliveryId === w().deliveryId && a.revision === w().verificationRevision;
+	};
+	const tooLong = () => utf8(note()) > NOTE_LIMIT;
+	const field = keepField(`note:${key()}`, () => `delivery/${key()}`, note);
+	const noting = () => props.review?.editorOpen() === true;
+
+	const send = async (action: Assessment) => {
+		const shown = w();
+		if (sending() || !shown.deliveryId) return;
+		const words = action === "send_back" ? note() : "";
+		say("");
+		doneAsk.set(null);
+		const r = await props.mirror.source.assess(shown, action, words);
+		if (r.status === "accepted") {
+			if (action === "send_back" && backNotes()[key()] === words) {
+				setNote(key(), "");
+				setFor(backOpen, key(), false);
+			}
+			return;
+		}
+		say(r.message);
+	};
+	const markDone = () => {
+		const shown = w();
+		if (!shown.deliveryId) return;
+		if (pullRequestOpen(shown)) {
+			glide();
+			doneAsk.set({ key: key(), deliveryId: shown.deliveryId, revision: shown.verificationRevision });
+			return;
+		}
+		void send("done");
+	};
+	const openPrs = () =>
+		ownPullRequests(w())
+			.filter((r) => r.pullRequest?.state !== "merged")
+			.map((r) => prName(r).split(" · ")[0]);
+	const checkable = () =>
+		!unsettled() &&
+		!w().pendingOperationId &&
+		!!w().deliveryId &&
+		shownState() !== "done" &&
+		shownState() !== "sent_back";
+	return (
+		<Question
+			testID="your-check"
+			title="Is this result done?"
+			foot={
+				<If when={checkable() && !open() && !asked() && !noting()}>
+					<Button
+						kind={props.reviewFirst ? "secondary" : "primary"}
+						label={sending() ? "Sending…" : "Mark done"}
+						testID="mark-done"
+						disabled={sending()}
+						onPress={markDone}
+					/>
+					<Button
+						label="Send back…"
+						testID="send-back-open"
+						disabled={sending()}
+						onPress={() => {
+							glide();
+							setFor(backOpen, key(), true);
+						}}
+					/>
+					<If when={props.review}>
+						<Button
+							label="Add a note"
+							testID="add-note"
+							disabled={props.review?.disabled() ?? true}
+							onPress={() => {
+								glide();
+								props.review?.startEditor("comment");
+							}}
+						/>
+						<Button
+							label="My notes…"
+							testID="my-notes"
+							disabled={props.review?.disabled() ?? true}
+							onPress={() => {
+								glide();
+								props.review?.startEditor("note");
+							}}
+						/>
+					</If>
+				</If>
+			}
+		>
+			<If when={unsettled()}>
+				<Notice
+					testID="delivery-unknown"
+					text={
+						unsettled()?.checking
+							? "Checking that it arrived…"
+							: unsettled()
+								? unsettledLine(unsettled() as DeliveryOp, props.title)
+								: ""
+					}
+					detail={`${unsettled()?.note ? `Your note: ${unsettled()?.note ?? ""} ` : ""}Pilot will not send it again. Check only reads its saved answer.`}
+					action={
+						// Pilot checks by itself first; the button is the fallback after its tries.
+						<If when={!unsettled()?.checking}>
+							<Button
+								small
+								label="Check"
+								testID="delivery-check"
+								accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
+								onPress={() => {
+									const op = unsettled();
+									if (!op) return;
+									say("");
+									void props.mirror.source.check(op.operationId).then((r) => {
+										if (r.status !== "accepted") say(r.message);
+									});
+								}}
+							/>
+						</If>
+					}
+				/>
+			</If>
+			<If when={!unsettled() && !!w().pendingOperationId}>
+				<Body tone="muted">
+					An earlier check of this result is waiting for Pilot to confirm it. Nothing can be sent until then.
+				</Body>
+			</If>
+			<If when={!unsettled() && !w().pendingOperationId && !w().deliveryId}>
+				<Body tone="muted">
+					There is nothing to check yet. The agent has not delivered a result Pilot can show.
+				</Body>
+			</If>
+			<If when={!unsettled() && !w().pendingOperationId && shownState() === "done"}>
+				<View testID="delivery-done" class="gap-2">
+					<Body measure>
+						You marked this done. That means you accept the result. It does not merge, release or reply to anyone.
+					</Body>
+					<Buttons>
+						<Button
+							label="Reopen"
+							testID="delivery-reopen"
+							disabled={sending()}
+							onPress={() => void send("reopen")}
+						/>
+					</Buttons>
+				</View>
+			</If>
+			<If when={!unsettled() && !w().pendingOperationId && shownState() === "sent_back"}>
+				<View testID="delivery-sent-back" class="gap-2">
+					<Body measure>
+						You sent this back. The agent has your note; its next result shows on Today to check.
+					</Body>
+					<Body tone="muted">{w().verification?.note ?? ""}</Body>
+					<Buttons>
+						<Button
+							label="Reopen"
+							testID="delivery-reopen"
+							disabled={sending()}
+							onPress={() => void send("reopen")}
+						/>
+					</Buttons>
+				</View>
+			</If>
+			<If when={checkable()}>
+				<View class="gap-3">
+					<Caption tone="faint">
+						Reminders only. Ticks send nothing and stay with this window; you decide when it is done.
+					</Caption>
+					<Reminders place={props.place} work={w()} />
+					<If when={open()}>
+						<View class="gap-1.5">
+							<Composer
+								field={
+									<TextField
+										variant="composer"
+										testID="send-back-note"
+										ref={field.ref}
+										accessibilityLabel="What should change. The agent gets this note."
+										multiline
+										autoFocus
+										value={note()}
+										onChange={({ value }) => setNote(key(), value)}
+										onFocus={field.focus}
+										onSelectionChange={field.select}
+										placeholder="What should change? The agent gets this note."
+									/>
+								}
+								bar={
+									<>
+										{/* Send back comes first in Tab order, as before; the bar keeps it at the right. */}
+										<Spacer />
+										<Button
+											kind="primary"
+											label={sending() ? "Sending…" : "Send back"}
+											testID="send-back"
+											disabled={sending() || note().trim() === "" || tooLong()}
+											onPress={() => void send("send_back")}
+										/>
+										<Button
+											kind="quiet"
+											small
+											label="Cancel"
+											testID="send-back-cancel"
+											disabled={sending()}
+											onPress={() => {
+												glide();
+												setFor(backOpen, key(), false);
+											}}
+										/>
+									</>
+								}
+							/>
+							<If when={tooLong()}>
+								<Caption tone="needs">This note is too long to send. Shorten it first.</Caption>
+							</If>
+							<Caption tone="faint">
+								Pilot sends it once, as a message to the agent that did the work. Nothing else starts.
+							</Caption>
+						</View>
+					</If>
+					<If when={asked()}>
+						<Quote testID="done-confirm">
+							<Body>
+								{`${openPrs().join(", ") || "Its pull request"} ${openPrs().length > 1 ? "are" : "is"} not merged. Done means you accept the result now. Pilot won't merge it, and it won't count as released.`}
+							</Body>
+							<If when={!askedCurrent()}>
+								<Caption tone="needs">This result changed since you asked. Cancel and look again.</Caption>
+							</If>
+							<Buttons>
+								<Button
+									kind="primary"
+									label={sending() ? "Sending…" : "Mark done anyway"}
+									testID="done-anyway"
+									disabled={sending() || !askedCurrent()}
+									onPress={() => void send("done")}
+								/>
+								<Button
+									label="Cancel"
+									testID="done-cancel"
+									disabled={sending()}
+									onPress={() => doneAsk.set(null)}
+								/>
+							</Buttons>
+						</Quote>
+					</If>
+					<If when={noting() && !open() && !asked()}>
+						<NoteEditor review={props.review as ReviewSession} placeKey={key()} />
+					</If>
+					<If when={!open() && note()}>
+						<Caption tone="faint">Your unsent note is kept. Send back… shows it again.</Caption>
+					</If>
+					<Each of={props.review?.general() ?? []} key={(e) => e.operationId}>
+						{(e) => (
+							<Quote testID="saved-general">
+								<Caption>Your note · goes with Send back</Caption>
+								<Body>{e().body}</Body>
+							</Quote>
+						)}
+					</Each>
+					<If when={props.review?.note() && !noting()}>
+						<Quote testID="saved-note">
+							<Caption>My notes · only for you</Caption>
+							<Body>{props.review?.note() ?? ""}</Body>
+						</Quote>
+					</If>
+				</View>
+			</If>
+			<If when={props.review}>
+				<ReviewStatus review={props.review as ReviewSession} />
+			</If>
+			<If when={deliveryMessages()[key()]}>
+				<Body role="alert" testID="delivery-message" tone="needs">
+					{deliveryMessages()[key()] ?? ""}
+				</Body>
+			</If>
+		</Question>
+	);
+}
+
+/**
+ * The page of one delivered result, over Today or a mission. Opening it
+ * reads the result; that read sends, settles and records nothing.
+ */
+export function DeliveryScreen(props: {
+	day: Day;
+	place: DeliveryPlace;
+	reviewSource?: ResultReviewSource;
+	onBackFromJump?: () => boolean;
+}) {
+	const mirror = props.day.delivery as DeliveryMirror;
+	const key = props.place.key;
+	const entry = () => mirror.view().entries[key];
+	const work = () => entry()?.snapshot ?? null;
+	const reading = signal(true);
+	void mirror.source.read(props.place.subject).then(() => reading.set(false));
+	const missionTitle = () => {
+		const s = props.place.subject;
+		if (s.kind !== "task") return undefined;
+		const t = props.day.today();
+		return [...t.moving, ...t.notMoving, ...t.unreported].find((m) => m.id === s.missionId)?.title;
+	};
+	const title = () => props.place.title || work()?.title || titleOf(key, props.place.subject, missionTitle());
+	const origin = () =>
+		props.place.subject.kind === "task" ? `A task in ${missionTitle() ?? "a mission"}` : "A standalone chat";
+	const fresh = () => !!work() && !entry()?.reason;
+	const subject = props.place.subject;
+	const feedbackScope =
+		subject.kind === "task"
+			? { kind: "mission" as const, id: subject.missionId, projectId: subject.projectId }
+			: { kind: "chat" as const, id: subject.sessionId, projectId: subject.projectId };
+	// A shown source or preview is only for the exact pin of the result as last
+	// read. A newer result, a changed pin or a failed read drops it at once.
+	effect(() => {
+		const w = work();
+		const ok = fresh();
+		untracked(() => dropInspections(key, (i) => !!w && ok && inspectionCurrent(i, key, w)));
+	});
+	// The first pinned image or native preview opens once per delivery:
+	// Hide keeps one closed, and a newer delivery opens its own. The sandbox,
+	// not a press, is the safety boundary. Others open on a press.
+	let previewed = "";
+	effect(() => {
+		const w = work();
+		if (!w?.deliveryId || !fresh() || w.deliveryId === previewed) return;
+		previewed = w.deliveryId;
+		// Screens opens its own first pair; the same capture does not open twice.
+		const screens = screenIds(w);
+		const shown = w.artifacts
+			.filter(
+				(a) =>
+					(a.kind === "image" || (a.kind === "nsh" && artifactPreviewsAvailable())) &&
+					!screens.has(a.artifactId) &&
+					artifactSelection(w, a),
+			)
+			.slice(0, 1);
+		untracked(() => {
+			for (const link of shown) void inspectArtifact(mirror.source, key, w, link, "preview");
+		});
+	});
+	const anchors = new Map<string, ViewRef>();
+	// A coordinator thread's Agent work link opens it with the page, once.
+	effect(() => {
+		const w = work();
+		if (workOnOpen() !== key || !w?.deliveryId || !w.ownerSessionId || !fresh()) return;
+		untracked(() => {
+			workOnOpen.set(null);
+			void showWork(mirror.source, key, w);
+		});
+	});
+	// An open output comparison owns Escape first. Otherwise the note closes and keeps its words,
+	// then the source or preview opened last, then the page.
+	keymap.bind(
+		"escape",
+		() => {
+			const last = lastInspection(key);
+			if (codeReviewRoute() === key) return;
+			if (doneAsk()?.key === key) doneAsk.set(null);
+			else if (backOpen()[key]) {
+				glide();
+				setFor(backOpen, key, false);
+			} else if (last) {
+				glide();
+				hideArtifact(key, { sessionId: last.pin.sourceSessionId, artifactId: last.pin.artifactId });
+				anchors.get(last.pin.artifactId)?.focus();
+			} else if (!props.onBackFromJump?.()) closeDelivery();
+		},
+		{ when: "always" },
+	);
+	const unsettled = () => mirror.view().unsettled.find((o) => o.key === key);
+	const reviewSource = props.reviewSource ?? connectedResultReview();
+	const onLater = () => {
+		void mirror.source.readSaved();
+		closeDelivery();
+	};
+	return (
+		<If when={codeReviewRoute() === key} else={<ResultPage />}>
+			<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
+				{(w) => (
+					<CodeReviewScreen
+						mirror={mirror}
+						place={props.place}
+						work={w()}
+						fresh={fresh()}
+						title={title()}
+						source={reviewSource}
+					/>
+				)}
+			</Each>
+		</If>
+	);
+
+	function ResultPage() {
+		const scroll = keepScroll(`delivery/${key}`);
+		return (
+			<Scroll
+				class="flex-1"
+				contentOffset={scroll.contentOffset}
+				scrollEventThrottle={100}
+				ref={pageScroll}
+				onScroll={(e) => {
+					scroll.onScroll(e);
+					scrolled();
+				}}
+			>
+				<Page testID="delivery">
+					<PageHead title={title()} text={origin()}>
+						<If when={props.day.search && fresh() && work()?.deliveryId}>
+							<InspectInWindow
+								title={title()}
+								context={destinationProject() || origin()}
+								text={[
+									work()?.scope,
+									agentLine(work()!),
+									work()?.workerDelivery?.summary,
+									work()?.completion?.checks ?? work()?.workerDelivery?.checks,
+									work()?.completion?.issues ?? work()?.workerDelivery?.issues,
+								]
+									.filter(Boolean)
+									.join("\n\n")}
+							/>
+						</If>
+					</PageHead>
+					<Panel
+						testID="delivery-panel"
+						notice={
+							<If when={entry()?.reason}>
+								<Notice testID="delivery-off" placement="panel" text={entry()?.reason ?? ""} />
+							</If>
+						}
+					>
+						<If
+							when={work()}
+							else={
+								<Column>
+									<Block>
+										<Body tone="muted">
+											{reading() && !entry()?.reason
+												? "Reading this result…"
+												: "Pilot cannot show this result now."}
+										</Body>
+									</Block>
+								</Column>
+							}
+						>
+							<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
+								{(w) => {
+									const review =
+										reviewSource && w().deliveryId
+											? reviewSession(w, fresh, reviewSource, onLater)
+											: undefined;
+									const reviewFirst = () => !!review && review.hasCode() && !codeReviewed()[reviewKey(w())];
+									// The user's check is the Question and leads the main column, then the chat's next step and
+									// the report; where the result stands sits beside them.
+									return (
+										<Columns
+											main={
+												<>
+													<Section title="Your check">
+														<YourCheck
+															mirror={mirror}
+															place={props.place}
+															work={w()}
+															title={title()}
+															review={review}
+															reviewFirst={reviewFirst()}
+														/>
+													</Section>
+													<ChatNow
+														day={props.day}
+														work={w()}
+														placeKey={props.place.key}
+														reread={() => void mirror.source.read(props.place.subject)}
+													/>
+													<Report work={w()} />
+													<Screens
+														mirror={mirror}
+														work={w()}
+														fresh={fresh()}
+														resultKey={props.place.key}
+													/>
+													<If when={review}>
+														<Block>
+															<CodeChanges
+																review={review as ReviewSession}
+																work={w()}
+																placeKey={key}
+																primary={
+																	reviewFirst() &&
+																	!backOpen()[key] &&
+																	doneAsk()?.key !== key &&
+																	!review?.editorOpen()
+																}
+																onOpen={() => openCodeReview(key)}
+															/>
+														</Block>
+													</If>
+													<Outputs
+														mirror={mirror}
+														place={props.place}
+														work={w()}
+														fresh={fresh()}
+														anchors={anchors}
+													/>
+												</>
+											}
+											side={
+												<>
+													<Stands work={w()} unsettled={unsettled()} />
+													<If when={w().deliveryId}>
+														<AgentWorkPanel
+															mirror={mirror}
+															place={props.place}
+															work={w()}
+															fresh={fresh()}
+														/>
+													</If>
+													<If when={props.day.feedback && w().deliveryId}>
+														<LinkedFeedback
+															mirror={props.day.feedback!}
+															scope={feedbackScope}
+															disabled={!fresh()}
+														/>
+													</If>
+												</>
+											}
+										/>
+									);
+								}}
+							</Each>
+						</If>
+					</Panel>
+				</Page>
+			</Scroll>
+		);
+	}
+}
+
+import { InspectInWindow } from "../../artifacts/InspectionWindow";
+import { destinationProject } from "../../search/workSearch";

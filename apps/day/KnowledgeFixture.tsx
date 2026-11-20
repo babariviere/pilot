@@ -1,7 +1,7 @@
 // Invented records and scripted replies, test-only. No daemon or model.
 import { mount, Scroll, signal } from "nsh";
-import { KnowledgeSection, type LibraryCall } from "./KnowledgeSection";
-import { restoreKnowledge, savedKnowledge } from "./knowledgeView";
+import { KnowledgeSection, type LibraryCall } from "./settings/projects/KnowledgeSection";
+import { restoreKnowledge, savedKnowledge } from "./settings/projects/knowledgeView";
 import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const writes = signal(0);

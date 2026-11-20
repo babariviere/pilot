@@ -1,0 +1,266 @@
+// The feedback page's place and its one unsent draft: the words and, when
+// the user kept one, the exact mission or chat they are about. Opening the
+// page from a mission names that mission only when the draft is empty; a
+// draft with words keeps its own origin until the user picks another.
+// Leaving the page, closing or updating keeps the draft (windowState.ts);
+// only Send sends it, once.
+// Unsent answers to a triage's question and the project the user chose for
+// triage are kept the same way. Restoring them sends and starts nothing.
+import { signal } from "nsh";
+import { glide } from "../ui";
+import type { UserFeedbackOriginRef } from "./feedbackFeed";
+
+/** Whether the feedback page is open, over the screen it was opened from. */
+export const feedbackOpen = signal(false);
+
+/** Attention keys deferred in this window, saved across close and update. */
+export const feedbackLater = signal<string[]>([]);
+
+/** Window-local history search, kept while navigating elsewhere. */
+export const feedbackSearch = signal("");
+
+/** Unsent feedback, exactly as typed, and the origin the user kept. */
+export type FeedbackDraft = {
+	text: string;
+	origin: UserFeedbackOriginRef | null;
+	attachments?: import("./feedbackFeed").UserFeedback["attachments"];
+};
+
+const EMPTY: FeedbackDraft = { text: "", origin: null };
+
+/** The window's unsent feedback. Kept across pages, close and update. */
+export const feedbackDraft = signal<FeedbackDraft>(EMPTY);
+
+/** Drafts put aside to write another item. Saved with this window, never submitted on restore. */
+export const feedbackKeptDrafts = signal<FeedbackDraft[]>([]);
+
+export function feedbackDraftKey(d: FeedbackDraft): string {
+	return JSON.stringify({
+		text: d.text,
+		origin: originKey(d.origin),
+		attachments: (d.attachments ?? []).map((a) => [a.uploadId, a.sha256, a.bytes]),
+	});
+}
+
+type SavedFeedbackView = Pick<
+	import("pilot-day/native").SavedView,
+	| "feedbackOpen"
+	| "feedback"
+	| "feedbackImages"
+	| "feedbackDrafts"
+	| "feedbackProject"
+	| "feedbackAnswers"
+	| "feedbackLater"
+>;
+
+/** Unfinished imports block capture and close with the same explanation. */
+export function feedbackCloseRefusal(): string | null {
+	return feedbackImageBusy() || feedbackImagePending()
+		? "Finish attaching your feedback image, or remove it before closing."
+		: null;
+}
+
+export function captureFeedbackView(): SavedFeedbackView {
+	return {
+		feedbackOpen: feedbackOpen(),
+		feedback: savedFeedback(),
+		feedbackImages: JSON.stringify(feedbackDraft().attachments ?? []),
+		feedbackDrafts: feedbackKeptDrafts().map((d) => JSON.stringify(d)),
+		feedbackProject: feedbackProject() ?? "",
+		feedbackAnswers: savedAnswers(),
+		feedbackLater: feedbackLater(),
+	};
+}
+
+/** Every restored draft stays unsent and keeps its own origin. */
+export function restoreFeedbackView(view: SavedFeedbackView) {
+	restoreFeedback(view.feedback ?? "");
+	const images = view.feedbackImages;
+	if (images) feedbackDraft.update((d) => ({ ...d, attachments: JSON.parse(images) }));
+	feedbackKeptDrafts.set((view.feedbackDrafts ?? []).map((d) => JSON.parse(d)));
+	feedbackOpen.set(view.feedbackOpen === true);
+	feedbackProject.set(view.feedbackProject || null);
+	restoreAnswers(view.feedbackAnswers ?? []);
+	feedbackLater.set(view.feedbackLater ?? []);
+}
+
+export function keepFeedbackDraft(d: FeedbackDraft) {
+	if (d.text === "" && !d.attachments?.length) return;
+	feedbackKeptDrafts.update((all) =>
+		all.some((other) => feedbackDraftKey(other) === feedbackDraftKey(d)) ? all : [...all, d],
+	);
+}
+
+export function forgetKeptFeedback(d: FeedbackDraft) {
+	feedbackKeptDrafts.update((all) => all.filter((other) => feedbackDraftKey(other) !== feedbackDraftKey(d)));
+}
+
+/** Swap rather than overwrite the current draft. Image bytes in an unfinished import must finish first. */
+export function resumeFeedbackDraft(d: FeedbackDraft) {
+	if (feedbackImageBusy() || feedbackImagePending()) return;
+	keepFeedbackDraft(feedbackDraft());
+	forgetKeptFeedback(d);
+	feedbackDraft.set(d);
+	feedbackMessage.set("");
+}
+
+/** Unfinished image imports block close rather than silently losing their bytes. */
+export const feedbackImageBusy = signal(false);
+export const feedbackPendingImage = signal<{ data: string; uploadId: string | null } | null>(null);
+export function feedbackImagePending(): boolean {
+	return feedbackPendingImage() !== null;
+}
+
+/**
+ * Another origin the page was opened from, while the draft has words about
+ * a different one. The user may switch to it; nothing switches by itself.
+ */
+export const feedbackOffer = signal<{ origin: UserFeedbackOriginRef | null } | null>(null);
+
+/** What the last Send or Check said, or "". */
+export const feedbackMessage = signal("");
+
+/**
+ * The project agents triage and fix feedback in, as the user chose it on
+ * this page, or null. Nothing chooses it for the user. While one is chosen,
+ * a saved Send also starts its triage there. Kept across close and update.
+ */
+export const feedbackProject = signal<string | null>(null);
+
+/** An unsent answer to one triage question: the suggestions picked (from 0) and the user's own words. */
+export type AnswerDraft = { picks: number[]; text: string };
+
+/** Unsent answers by "<triage chat>/<question>". Only an accepted answer clears one. */
+export const answerDrafts = signal<Record<string, AnswerDraft>>({});
+
+export function setAnswerDraft(key: string, draft: AnswerDraft | null) {
+	answerDrafts.update((all) => {
+		const next = { ...all };
+		if (draft && (draft.picks.length > 0 || draft.text !== "")) next[key] = draft;
+		else delete next[key];
+		return next;
+	});
+}
+
+/** What the last step on each saved item said, by feedback ID. */
+export const stepMessages = signal<Record<string, string>>({});
+
+export function setStepMessage(feedbackId: string, message: string) {
+	stepMessages.update((all) => ({ ...all, [feedbackId]: message }));
+}
+
+/** An origin as one key, such as "mission/<id>", or "" for Pilot in general. */
+export function originKey(origin: UserFeedbackOriginRef | null): string {
+	if (!origin) return "";
+	return origin.kind === "mission" ? `mission/${origin.missionId}` : `chat/${origin.sessionId}`;
+}
+
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** The origin a key names, or undefined when it is not valid. */
+export function originFrom(key: string): UserFeedbackOriginRef | null | undefined {
+	if (key === "") return null;
+	const at = key.indexOf("/");
+	const kind = key.slice(0, at);
+	const id = key.slice(at + 1);
+	if (at <= 0 || !ID.test(id)) return undefined;
+	if (kind === "mission") return { kind: "mission", missionId: id };
+	if (kind === "chat") return { kind: "chat", sessionId: id };
+	return undefined;
+}
+
+/**
+ * Opens the feedback page from `from`: a mission or chat, or null for Pilot
+ * in general. Opening only reads; it never sends or moves typed words.
+ */
+/**
+ * Opens Feedback with words someone else wrote for the user to check, such as the repair agent's
+ * findings. They fill only an empty draft: the user's own words are never replaced. Nothing is sent.
+ */
+export function openFeedbackWith(from: UserFeedbackOriginRef | null, text: string) {
+	const d = feedbackDraft();
+	openFeedback(from);
+	if (d.text === "" && !d.attachments?.length && !feedbackImagePending() && !feedbackImageBusy())
+		feedbackDraft.set({ ...feedbackDraft(), text });
+}
+
+export function openFeedback(from: UserFeedbackOriginRef | null) {
+	glide();
+	feedbackMessage.set("");
+	const d = feedbackDraft();
+	if (d.text === "" && !d.attachments?.length && !feedbackImagePending() && !feedbackImageBusy()) {
+		feedbackDraft.set({ ...d, origin: from });
+		feedbackOffer.set(null);
+	} else {
+		feedbackOffer.set(originKey(d.origin) === originKey(from) ? null : { origin: from });
+	}
+	feedbackOpen.set(true);
+}
+
+/** Back to the screen under it. The draft stays. */
+export function closeFeedback() {
+	feedbackOpen.set(false);
+	feedbackOffer.set(null);
+}
+
+/** The draft as a saved window keeps it: "<origin>\n<text>", or "" without words. */
+export function savedFeedback(): string {
+	const d = feedbackDraft();
+	return d.text === "" && !d.attachments?.length ? "" : `${originKey(d.origin)}\n${d.text}`;
+}
+
+/** Shows a kept draft again, as unsent words with their own origin. Restoring sends nothing. */
+export function restoreFeedback(saved: string) {
+	const at = saved.indexOf("\n");
+	const origin = at < 0 ? undefined : originFrom(saved.slice(0, at));
+	feedbackDraft.set(origin === undefined ? EMPTY : { text: saved.slice(at + 1), origin });
+	feedbackOffer.set(null);
+	feedbackMessage.set("");
+}
+
+/** Unsent answers as a saved window keeps them: "<chat>/<question>\n<picks from 1>\n<text>". */
+export function savedAnswers(): string[] {
+	return Object.entries(answerDrafts()).map(([key, d]) => `${key}\n${d.picks.map((n) => n + 1).join(",")}\n${d.text}`);
+}
+
+/** Shows kept answers again, each with its own question. Restoring sends nothing. */
+export function restoreAnswers(saved: string[]) {
+	const out: Record<string, AnswerDraft> = {};
+	for (const line of saved) {
+		const first = line.indexOf("\n");
+		const second = line.indexOf("\n", first + 1);
+		if (first <= 0 || second < 0) continue;
+		const picks = line.slice(first + 1, second);
+		out[line.slice(0, first)] = {
+			picks: picks === "" ? [] : picks.split(",").map((n) => Number(n) - 1),
+			text: line.slice(second + 1),
+		};
+	}
+	answerDrafts.set(out);
+}
+
+/** Starts from nothing, as a new window does. */
+export function forgetFeedback() {
+	feedbackPendingImage.set(null);
+	feedbackImageBusy.set(false);
+	feedbackOpen.set(false);
+	feedbackDraft.set(EMPTY);
+	feedbackKeptDrafts.set([]);
+	feedbackOffer.set(null);
+	feedbackMessage.set("");
+	feedbackProject.set(null);
+	answerDrafts.set({});
+	stepMessages.set({});
+	feedbackLater.set([]);
+	feedbackSearch.set("");
+}
+
+/** A local date such as "9 Nov", or "" when it cannot be read. */
+export function dayOf(ms: number): string {
+	if (!Number.isFinite(ms)) return "";
+	try {
+		return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+	} catch {
+		return "";
+	}
+}

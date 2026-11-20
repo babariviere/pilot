@@ -1,0 +1,270 @@
+// State the New and planning screens own: what the user is looking at and
+// typing, before an intent carries it to Rust. Keyed by interview and
+// question, so it survives reordering, new rounds and hot updates.
+import { type Signal, signal } from "nsh";
+import type { ChatChoice } from "pilot-day/native";
+import { closeMission } from "../../app/view";
+import type { ChatMode } from "../../sessions/chatFeed";
+
+export { answerKey, atQuestion, focusAsk, focusField, put, seeAll, writing } from "../interviews/interviewView";
+
+/** New, or one mission's planning, or null for Today and missions. */
+export type PlanRoute = { kind: "new" } | { kind: "plan"; missionId: string; fromInterviewProject?: string } | null;
+
+/** Where the planning screens are. Null shows Today or a mission. */
+export const planRoute = signal<PlanRoute>(null);
+
+/** What the user wrote on New, exactly. */
+export const goalDraft = signal("");
+/**
+ * The old mission New's words re-plan, set by its "Re-plan as a new mission".
+ * Only Plan sends it, and it goes when the words go.
+ */
+export const replacesDraft = signal<{ missionId: string; title: string } | null>(null);
+/**
+ * The request in New (a Linear issue or Slack message) New's words plan, set by
+ * its "Plan a mission". Only Plan sends it, and it goes when the words go.
+ */
+export const requestDraft = signal<RequestDraft | null>(null);
+export type RequestDraft = {
+	itemId: string;
+	revision: number;
+	title: string;
+	source: string;
+	manageStatus?: boolean;
+};
+
+/** New's other draft, kept exactly as it was while a linked mission draft is in New. */
+export type OtherNewDraft = {
+	goal: string;
+	pick: { projectId: string; mode: ChatMode } | null;
+	replaces: { missionId: string; title: string } | null;
+	request: RequestDraft | null;
+	funding: { project: string; quickFix: string; mission: string | null } | null;
+};
+
+/**
+ * A mission draft from Feedback, linked to one saved feedback and the exact
+ * proposal the user saw. New's words, project and allowance are its own while
+ * it is there; Plan sends the link with them, once. New's other draft is kept
+ * aside unchanged. Only an accepted Plan with `replace` chosen drops it.
+ */
+export type LinkedMissionDraft = {
+	feedbackId: string;
+	triageSessionId: string;
+	proposalDigest: string;
+	/** The feedback's words, shortened, as "From Feedback" shows them. */
+	title: string;
+	/** The project of the triage or prototype that proposed it. */
+	projectId: string;
+	/** Whether an accepted Plan replaces the other draft. Off until the user chooses it. */
+	replace: boolean;
+	/** The goal exactly as drafted from the proposal: words that differ are the user's edits. */
+	drafted: string;
+	other: OtherNewDraft | null;
+};
+export const linkedMission = signal<LinkedMissionDraft | null>(null);
+/** Whether New waits for the user to confirm a direct start. */
+export const confirmingStart = signal(false);
+/** The last message New's intents returned. */
+export const newMessage = signal("");
+/** Whether New sent something and waits for its answer. */
+export const newBusy = signal(false);
+
+/**
+ * The project and access the user chose on New, themselves. Null until they
+ * choose: New never chooses one for them (not the window's own project,
+ * Today's or the last one used). A choice stays with New's words; it never
+ * changes an existing chat.
+ */
+export const chatPick = signal<{ projectId: string; mode: ChatMode } | null>(null);
+/** Pilot's passive selection for that choice: what a new chat names, and what a close saves. */
+export const chatChoice = signal<ChatChoice | null>(null);
+/** Whether Pilot is reading the chosen project's setup. */
+export const chatSelecting = signal(false);
+/** Why the chosen project cannot be used now, or "". */
+export const chatNote = signal("");
+/** Whether the project list is open: Escape closes it, not New. */
+export const projectsOpen = signal(false);
+/** The draft a restored window had chosen. If Pilot saved its creation, New shows how it ended. */
+export const restoredDraft = signal<string | null>(null);
+
+/** Unsaved answer text, exactly as typed, by answer key. */
+export const answerDrafts = signal<Record<string, string>>({});
+/** The suggestion the user picked and Rust has not saved yet, by answer key. Null is "Something else". */
+export const answerPicks = signal<Record<string, string | null>>({});
+/** The last message a save returned, by answer key. */
+export const answerMessages = signal<Record<string, string>>({});
+/**
+ * Words written for an earlier wording of a question, by answer key. Pilot
+ * stopped saving them when the question changed: they answer the old
+ * wording, so only the user can reuse them. They never block closing.
+ */
+export const keptAnswers = signal<Record<string, string>>({});
+/** The last message a submission or check returned, by mission. */
+export const planMessages = signal<Record<string, string>>({});
+/** Whether a submission waits for its saves and its answer, by interview. */
+export const submitting = signal<Record<string, boolean>>({});
+/** Whether the fog of war is open, by mission. */
+export const fogOpen = signal<Record<string, boolean>>({});
+/** Whether the planning chat is open, by mission. */
+export const chatOpen = signal<Record<string, boolean>>({});
+/** Whether a map question shows its full record, by mission and question. */
+export const mapOpen = signal<Record<string, boolean>>({});
+/** Whether the map's settled questions are open, by mission. */
+export const settledOpen = signal<Record<string, boolean>>({});
+/** Whether an earlier round's answers are open, by mission and round. */
+export const roundOpen = signal<Record<string, boolean>>({});
+/** The revision whose confirmation the user opened, exactly as shown, by mission. */
+export const revisionShown = signal<Record<string, { revisionId: string; digest: string }>>({});
+/** Whether a Revisit intent waits for its answer, by mission. */
+export const revisitBusy = signal<Record<string, boolean>>({});
+/** The last message a Revisit intent returned, by mission. */
+export const revisitMessages = signal<Record<string, string>>({});
+/** Whether a part of the Revisit is open, by mission and part. */
+export const revisitOpen = signal<Record<string, boolean>>({});
+
+/** Removes one key from a keyed store. */
+export function drop<T>(store: Signal<Record<string, T>>, key: string) {
+	if (!(key in store())) return;
+	store.update((all) => {
+		const next = { ...all };
+		delete next[key];
+		return next;
+	});
+}
+
+type SavedPlanningDraft = Pick<
+	import("pilot-day/native").SavedView,
+	"goal" | "chat" | "chatChosen" | "replanningFrom" | "linkedMission"
+>;
+
+/** Keeps New's exact words and the user's explicit project choice. */
+export function capturePlanningDraft(): SavedPlanningDraft {
+	const linked = linkedMission();
+	return {
+		goal: goalDraft(),
+		chat: chatChoice(),
+		chatChosen: chatChoice() !== null && chatPick() !== null,
+		replanningFrom: replacesDraft(),
+		linkedMission: linked ? JSON.stringify(linked) : "",
+	};
+}
+
+/** A saved linked mission draft, or null when it is missing or not one. */
+function savedLinked(text: string): LinkedMissionDraft | null {
+	if (!text) return null;
+	try {
+		const l = JSON.parse(text);
+		const str = (v: unknown) => typeof v === "string";
+		const o = l.other;
+		const other =
+			o &&
+			str(o.goal) &&
+			(o.pick === null || (str(o.pick?.projectId) && (o.pick.mode === "build" || o.pick.mode === "ask")))
+				? (o as OtherNewDraft)
+				: null;
+		if (![l.feedbackId, l.triageSessionId, l.proposalDigest, l.title, l.projectId].every(str)) return null;
+		return {
+			feedbackId: l.feedbackId,
+			triageSessionId: l.triageSessionId,
+			proposalDigest: l.proposalDigest,
+			title: l.title,
+			projectId: l.projectId,
+			replace: l.replace === true,
+			// Without it, every word counts as the user's edit, so nothing drops them unasked.
+			drafted: str(l.drafted) ? l.drafted : "",
+			other: other && {
+				goal: other.goal,
+				pick: other.pick ? { projectId: other.pick.projectId, mode: other.pick.mode } : null,
+				replaces: other.replaces ?? null,
+				request: other.request ?? null,
+				funding: other.funding ?? null,
+			},
+		};
+	} catch {
+		return null;
+	}
+}
+
+/** Restores a place without opening it or starting planning. */
+export function restorePlanningPlace(view: Pick<import("pilot-day/native").SavedView, "place" | "id">) {
+	planRoute.set(
+		view.place === "new" ? { kind: "new" } : view.place === "plan" ? { kind: "plan", missionId: view.id } : null,
+	);
+}
+
+/** A restored choice must be selected again; it is never a new chat intent. */
+export function restorePlanningDraft(view: SavedPlanningDraft) {
+	goalDraft.set(view.goal);
+	replacesDraft.set(view.goal.trim() ? (view.replanningFrom ?? null) : null);
+	requestDraft.set(null);
+	const chat = view.chat;
+	const linked = savedLinked(view.linkedMission ?? "");
+	linkedMission.set(linked);
+	// A linked draft's project is its proposal's: never another choice.
+	chatPick.set(
+		linked
+			? { projectId: linked.projectId, mode: "build" }
+			: chat && view.chatChosen === true
+				? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" }
+				: null,
+	);
+	chatChoice.set(null);
+	restoredDraft.set(chat?.draftId ?? null);
+}
+
+/** How many answer drafts remain after their save queue completes. */
+export function pendingAnswers(): number {
+	return Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
+}
+
+export function resetPlanningView() {
+	answerDrafts.set({});
+	answerPicks.set({});
+	answerMessages.set({});
+	keptAnswers.set({});
+	planMessages.set({});
+	submitting.set({});
+	fogOpen.set({});
+	roundOpen.set({});
+	planRoute.set(null);
+	goalDraft.set("");
+	replacesDraft.set(null);
+	requestDraft.set(null);
+	linkedMission.set(null);
+	confirmingStart.set(false);
+	newMessage.set("");
+	newBusy.set(false);
+	chatPick.set(null);
+	chatChoice.set(null);
+	chatSelecting.set(false);
+	chatNote.set("");
+	projectsOpen.set(false);
+	restoredDraft.set(null);
+}
+
+/** Opens New. */
+export function openNew() {
+	closeMission();
+	confirmingStart.set(false);
+	planRoute.set({ kind: "new" });
+}
+
+/** Opens one mission's planning. */
+export function openPlan(missionId: string) {
+	closeMission();
+	planRoute.set({ kind: "plan", missionId });
+}
+
+/** Open the current interview by mission, not by a possibly replaced round ID. */
+export function openPlannerInterview(missionId: string, projectId: string) {
+	closeMission();
+	planRoute.set({ kind: "plan", missionId, fromInterviewProject: projectId });
+}
+
+/** Back to Today. Drafts stay. */
+export function closePlanning() {
+	confirmingStart.set(false);
+	planRoute.set(null);
+}

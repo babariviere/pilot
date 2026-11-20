@@ -13,7 +13,9 @@
 // it with the chosen fix. Mockups read from a scripted artifact source.
 import { mount, signal, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
-import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifacts/artifactReads";
 import {
 	type FeedbackItem,
 	type FeedbackSource,
@@ -29,13 +31,11 @@ import {
 	type UserFeedbackOrigin,
 	type UserFeedbackProposal,
 	type UserFeedbackWorkView,
-} from "./feedbackFeed";
-import { openFeedbackWith } from "./feedbackView";
-import { MockDayScreen, openDay } from "./mockFeeds";
-import { goalDraft } from "./planView";
-import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
+} from "./feedback/feedbackFeed";
+import { openFeedbackWith } from "./feedback/feedbackView";
+import { goalDraft } from "./missions/planning/planView";
+import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessions/sessionChat";
 import { Block, Button, Buttons, Caption } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 type Next = "accept" | "unknown" | "reject";
 
@@ -450,7 +450,7 @@ class ScriptedChat implements SessionChatSource {
 				? [
 						row("10", "you", "Show the assignee on each plan row."),
 						row("11", "pilot", "I added the assignee to each plan row."),
-						row("11.0", "step", "Read apps/day/PlanScreen.tsx"),
+						row("11.0", "step", "Read apps/day/missions/planning/PlanScreen.tsx"),
 						row("12", "pilot", "Plan.test.tsx passes."),
 					]
 				: [row("4", "you", "Triage this feedback.")],

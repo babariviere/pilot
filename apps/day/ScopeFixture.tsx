@@ -5,15 +5,15 @@
 // the window's screen state, as an update or a close would.
 import { effect, mount, Scroll, signal, untracked, View } from "nsh";
 import { PlanFeed, TodayFeed } from "pilot-day/native";
-import { ScriptedChats } from "./chatDemo";
-import { mirrorChats } from "./chatFeed";
-import { mirrorDay } from "./day";
-import { MockDayScreen } from "./mockFeeds";
-import { mirrorPlanning } from "./planning";
-import { ScriptedScope } from "./scopeDemo";
-import { mirrorScope, todayProject } from "./todayScope";
+import { mirrorDay } from "./app/day";
+import { MockDayScreen } from "./app/testing/mockFeeds";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import { mirrorPlanning } from "./missions/planning/planning";
+import { ScriptedChats } from "./sessions/chatDemo";
+import { mirrorChats } from "./sessions/chatFeed";
+import { ScriptedScope } from "./today/scopeDemo";
+import { mirrorScope, todayProject } from "./today/todayScope";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 const feed = new TodayFeed("decisions");
 const scope = new ScriptedScope(() => feed.snapshot());

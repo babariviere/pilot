@@ -2,8 +2,8 @@
 // counted, and a question gets a canned answer at once. Mock data.
 import { mount, Scroll, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { InterviewDoc } from "./InterviewDoc";
-import { openPlanning } from "./mockFeeds";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { InterviewDoc } from "./missions/interviews/InterviewDoc";
 import { Column, Page, PageFoot, Panel, Section, WindowCanvas } from "./ui";
 
 const plans = openPlanning("wayfinder");

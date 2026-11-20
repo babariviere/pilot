@@ -33,7 +33,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, mode = "read
 		`
 import { ownRuntime } from ${JSON.stringify(new URL("./runtime-owner.ts", import.meta.url).href)};
 import { activateRuntime } from ${JSON.stringify(new URL("./runtime-bootstrap.ts", import.meta.url).href)};
-import { daemonHello } from ${JSON.stringify(new URL("./hello.ts", import.meta.url).href)};
+import { daemonHello } from ${JSON.stringify(new URL("./transport/hello.ts", import.meta.url).href)};
 import { loadConfig } from ${JSON.stringify(new URL("./config.ts", import.meta.url).href)};
 import { writeFile } from 'node:fs/promises';
 const home=process.env.PILOT_HOME, port=Number(process.env.PILOT_PORT);

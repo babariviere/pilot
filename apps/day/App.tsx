@@ -3,6 +3,6 @@
 // no examples. Mock scenarios are test fixtures (MockApp.tsx and others).
 // It mounts here, not in an imported module, so the theme is set first.
 import { mount } from "nsh";
-import { Connected } from "./ConnectedDay";
+import { Connected } from "./app/ConnectedDay";
 
 mount(() => <Connected />);

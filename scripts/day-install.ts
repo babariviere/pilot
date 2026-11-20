@@ -8,8 +8,8 @@ import { request } from "node:http";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { PILOT_CAPABILITY_HEADER } from "../packages/daemon/src/native-app-capability.ts";
-import { canonicalJSON, payloadHash } from "../packages/daemon/src/operation-journal.ts";
+import { PILOT_CAPABILITY_HEADER } from "../packages/daemon/src/day/host/native-app-capability.ts";
+import { canonicalJSON, payloadHash } from "../packages/daemon/src/transport/operations/operation-journal.ts";
 import {
 	inspectRuntime,
 	ownerRecordNames,

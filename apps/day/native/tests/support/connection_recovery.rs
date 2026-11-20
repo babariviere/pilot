@@ -12,7 +12,7 @@ fn recovery_entry() -> PathBuf {
     source.push_str(
         r#"
 import { host as probeHost } from "nsh";
-import { readAgain as probeRead } from "./connection";
+import { readAgain as probeRead } from "./sources/connection";
 probeHost.on("test.read", () => { void probeRead(); });
 probeHost.on("test.identity", () => { probeHost.params.day.window = "changed-window"; });
 "#,

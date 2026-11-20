@@ -1,6 +1,6 @@
 /** Release-time only. Keep accounting's isolated worker free of the per-isolate TS parser. */
 import assert from "node:assert/strict";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -129,28 +129,23 @@ export async function checkUsageWorker(directory) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	const [action, directory] = process.argv.slice(2);
+	const [action, directory, layout, ...extra] = process.argv.slice(2);
 	assert.ok(
-		directory && (action === "build" || action === "check"),
-		"Usage: build-usage-worker.mjs build|check src-directory",
+		directory &&
+			(action === "build" || action === "check") &&
+			(layout === undefined || layout === "--usage-only") &&
+			!extra.length,
+		"Usage: build-usage-worker.mjs build|check <src-directory> (or <usage-directory> --usage-only)",
 	);
-	if (action === "build") await buildUsageWorker(resolve(directory));
-	else await checkUsageWorker(resolve(directory));
-	// Historical isolated usage benchmarks stage only the usage leaf. Current full runtimes
-	// include funding.ts and must generate and verify both leaves through this same build step.
-	if (
-		await access(join(directory, "funding.ts")).then(
-			() => true,
-			() => false,
-		)
-	) {
-		if (action === "build") await buildFundingWorker(resolve(directory));
-		else await checkFundingWorker(resolve(directory));
+	// Packagers always require both leaves. Only isolated probes pass a standalone usage directory.
+	const usageOnly = layout === "--usage-only";
+	const usage = usageOnly ? resolve(directory) : resolve(directory, "models/usage");
+	const funding = resolve(directory, "models/funding");
+	if (action === "build") {
+		await buildUsageWorker(usage);
+		if (!usageOnly) await buildFundingWorker(funding);
 	} else {
-		const daemon = await readFile(join(directory, "daemon.ts"), "utf8").catch((error) => {
-			if (error.code === "ENOENT") return "";
-			throw error;
-		});
-		assert.ok(!daemon.includes('"./funding.ts"'), "Current runtime is missing its funding source");
+		await checkUsageWorker(usage);
+		if (!usageOnly) await checkFundingWorker(funding);
 	}
 }

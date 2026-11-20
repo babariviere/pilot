@@ -1,9 +1,9 @@
 // Fixture data only. Real screen, no provider or Slack access.
 import { mount, signal } from "nsh";
-import { type IntakeSource, type IntakeView, mirrorIntake } from "./intakeFeed";
-import { SlackReportsScreen } from "./SlackReportsScreen";
-import type { ReportDetails, SlackControls, SlackSnapshot } from "./slackControls";
-import { restoreSlackReports, savedSlackReports } from "./slackView";
+import { type IntakeSource, type IntakeView, mirrorIntake } from "./missions/intake/intakeFeed";
+import type { ReportDetails, SlackControls, SlackSnapshot } from "./settings/connections/slackControls";
+import { SlackReportsScreen } from "./sources/slack/SlackReportsScreen";
+import { restoreSlackReports, savedSlackReports } from "./sources/slack/slackView";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const snapshot = signal<SlackSnapshot | null>({

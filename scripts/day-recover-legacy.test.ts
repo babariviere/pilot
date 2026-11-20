@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ownRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
-import { UpdateReservation } from "../packages/daemon/src/update-reservation.ts";
+import { UpdateReservation } from "../packages/daemon/src/runtime/updates/update-reservation.ts";
 import { recoverOnce, verifyLegacyLeaseReleased } from "./day-recover-legacy.ts";
 
 test("legacy shutdown proves lease release without enrolling the existing profile", async () => {

@@ -1,9 +1,9 @@
 // Synthetic recovery UI only. No daemon, credentials, processes or filesystem.
 import { host, mount, signal } from "nsh";
-import { ChatScreen } from "./ChatScreen";
-import type { Day } from "./day";
-import { restoreRecoveryNotes, savedRecoveryNotes } from "./recoveryDraft";
-import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
+import type { Day } from "./app/day";
+import { ChatScreen } from "./sessions/ChatScreen";
+import { restoreRecoveryNotes, savedRecoveryNotes } from "./sessions/recovery/recoveryDraft";
+import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessions/sessionChat";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const sends = signal(0);

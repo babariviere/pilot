@@ -62,7 +62,6 @@ jobs:
         run: |
           set -euo pipefail
           rustup toolchain install 1.99.1 --profile minimal
-          echo "NSH_DAY_REAL_CARGO=$(rustup which --toolchain 1.99.1 cargo)" >> "$GITHUB_ENV"
           echo "RUSTC=$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_ENV"
           stage="$RUNNER_TEMP/nsh-0.6.1"
           mkdir "$stage"
@@ -93,7 +92,9 @@ jobs:
           apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml --features macos-host --test artifact_preview
           node apps/day/scripts/test-artifact-source.mjs
           # NSH accepts one path per invocation. Native and ThreadNative need a visible target.
-          for file in App Plan Intake Update Feedback FeedbackBridge SlackSettings Thread ThreadBridge; do apps/day/nsh.sh test "$file.test.tsx"; done
+          for file in App missions/planning/Plan missions/intake/Intake updates/Update feedback/Feedback feedback/FeedbackBridge settings/connections/SlackSettings sessions/Thread sessions/ThreadBridge; do
+            apps/day/nsh.sh test "$file.test.tsx"
+          done
       - name: Stage source-matched runtime and shared native helpers
         env:
           SOURCE: ${{ inputs.ref }}

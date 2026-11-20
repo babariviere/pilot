@@ -16,7 +16,7 @@ Commit `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`, inspected 2026-11-09.
 - `skills/productivity/grilling/SKILL.md`
 - `skills/engineering/domain-modeling/{SKILL.md,ADR-FORMAT.md,GLOSSARY-FORMAT.md}`
 
-Adapter: `src/mission-interview-skills.ts`. It changes the interaction surface, not these sources.
+Adapter: `src/missions/mission-interview-skills.ts`. It changes the interaction surface, not these sources.
 
 ## planning
 
@@ -29,7 +29,7 @@ Commit `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`, inspected 2026-11-09.
   the limited route.
 
 No setup or install skill is needed: Pilot supplies the native storage adapter. Tracker, branch, local
-markdown, subagent and execution instructions are not authority. `src/mission-planning-skills.ts` supplies
+markdown, subagent and execution instructions are not authority. `src/missions/mission-planning-skills.ts` supplies
 the native adapter and the deny-by-default tool profile. Research is linked project Knowledge, prototypes are
 linked native artifacts from separately authorized work, and planning hands off through existing agreements.
 
@@ -44,7 +44,7 @@ Commit `5863806dd4e15c63174bee4e7515a4256792ecfa`, inspected 2026-11-17.
 - `skills/productivity/writing-for-agents/{SKILL.md,SKILL-MECHANICS.md}`
 
 Every Build chat loads them, except coordinator chats. Ask, interview and planning chats do not. `BUILDING_SKILL_ADAPTATION` in
-`src/mission-building-skills.ts` is one line in the mission builder prompt:
+`src/missions/mission-building-skills.ts` is one line in the mission builder prompt:
 
 - `implement` is the entry point. It names `tdd` and `code-review`; `tdd` names `codebase-design`.
 - The spec is read with the mission tool: `get` with the task id, `brief` and `decisions`.

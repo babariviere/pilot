@@ -7,10 +7,10 @@ import type {
 	UserVerificationLookup,
 	VerificationSubject,
 } from "@pilot/protocol";
-import type { MissionStore } from "./missions.ts";
-import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
-import type { ProjectStore } from "./projects.ts";
-import type { SessionManager } from "./sessions.ts";
+import type { MissionStore } from "./missions/missions.ts";
+import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./transport/operations/operation-journal.ts";
+import type { ProjectStore } from "./projects/projects.ts";
+import type { SessionManager } from "./sessions/sessions.ts";
 
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const hash = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);

@@ -12,9 +12,9 @@ import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import { openSessionStorage } from "@pilot/kernel/testing";
 import type { AgentEvent, SessionState } from "@pilot/protocol";
-import { ProjectStore } from "../projects.ts";
-import { type SessionFactories, SessionManager, type SessionManagerOptions } from "../sessions.ts";
-import { type SessionWorker } from "../kernel-worker.ts";
+import { ProjectStore } from "../projects/projects.ts";
+import { type SessionFactories, SessionManager, type SessionManagerOptions } from "../sessions/sessions.ts";
+import { type SessionWorker } from "../sessions/workers/kernel-worker.ts";
 import { copyGitSeed } from "./git-seed.ts";
 import { offlineSessionOptions } from "./offline-session-options.ts";
 

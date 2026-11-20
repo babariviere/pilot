@@ -4,8 +4,8 @@
 // Reads arrive by shortcut, so the focused field keeps the focus.
 import { keymap, mount, Scroll, signal, View } from "nsh";
 import type { PlanPage, PlanRow } from "pilot-day/native";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
-import { PlannerWaits } from "./Unstick";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
+import { PlannerWaits } from "./missions/planning/Unstick";
 import { Block, Button, Buttons, Caption, Column, Page, Panel, Section, WindowCanvas } from "./ui";
 
 const SAYS = "Which database should the export use? Tell me and I will go on.";

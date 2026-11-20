@@ -28,7 +28,7 @@ impl Fixture {
     }
     fn script(name: &str) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures")
+            .join("../../../packages/daemon/src/fixtures/day/planning")
             .join(if name == "day-published-plan.ts" {
                 "day-planning-worker.ts"
             } else {

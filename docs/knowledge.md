@@ -27,7 +27,7 @@ add or remove this project's preferences; nothing is saved until you press Save.
 
 Mission records hold current agreement and work. Knowledge holds sourced project
 understanding. Posthorse keeps working context. Existing memory and history are
-unchanged. See the [backend contract](technical/project-preferences.md) for limits.
+unchanged. See the [backend contract](../packages/daemon/src/projects/project-preferences.md) for limits.
 
 ## Memory
 

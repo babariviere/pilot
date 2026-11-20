@@ -25,7 +25,7 @@ struct Fixture {
 impl Fixture {
     #[allow(dead_code)] // Shared by integration targets that use different entry points.
     fn new() -> Self {
-        Self::with_daemon("day-intake.ts")
+        Self::with_daemon("day/day-intake.ts")
     }
     fn with_daemon(fixture: &str) -> Self {
         let mut command = Command::new("node");

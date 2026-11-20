@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SharedWorkspaceStore } from "../shared-workspaces.ts";
-import { type Runner, run } from "../workspaces.ts";
+import { SharedWorkspaceStore } from "../workspaces/shared-workspaces.ts";
+import { type Runner, run } from "../workspaces/workspaces.ts";
 import { copyGitSeed } from "./git-seed.ts";
 
 const command = (file: string, cwd: string, args: string[]) =>

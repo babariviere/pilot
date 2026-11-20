@@ -1,0 +1,554 @@
+# Testing and test speed
+
+Node 24 strips our erasable TypeScript directly. Tests use `node:test`, isolated processes, and
+fresh temporary state. Model tests use faux providers, never user accounts.
+
+## Commands
+
+| Command                     | Scope                                                                 |
+| --------------------------- | --------------------------------------------------------------------- |
+| `pnpm test:fast`            | `*.fast.test.ts`: unit and offline service tests for quick feedback   |
+| `pnpm test:integration`     | Every other test: repository, process, persistence and kernel tests   |
+| `pnpm test:stress`          | `*.stress.test.ts`: large diffs, fan-out and 10,000-event regressions |
+| `pnpm test`                 | Every suite on the current host                                       |
+| `pnpm test -- --lane=macos` | The OS-sensitive files that CI repeats on macOS                       |
+| `pnpm test:timings`         | Every suite plus the slowest test-file execution times                |
+
+A test's file name decides its suite (`scripts/test-suites.ts`): `*.fast.test.ts` is fast,
+`*.stress.test.ts` is stress, and every other test, including `*.integration.test.ts`, is integration.
+The runner finds `*.test.ts` under `packages/*/src`, in `apps/day/node-tests` (Day modules run under Node
+with a stubbed NSH) and directly in `scripts/`. `--list` prints a selection without running it. Native Node
+test flags can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
+
+CI ([tests.yaml](../.github/workflows/tests.yaml), shared by `pr.yaml` and `main.yaml`) runs every
+suite and the typecheck on Ubuntu x86-64. The macOS arm64 job repeats the `macos` lane, a list of
+OS-sensitive files in `scripts/test-suites.ts` that also run on Linux, plus packaging and relocated
+production-runtime checks. PRs also build and validate the Linux production package. Tests are
+informational: `release.yaml` never waits for them. Running the macOS lane on another OS fails
+(listing it is allowed). The runner fails when a macOS lane path or a scheduling weight pattern in
+`scripts/test-suites.ts` names no discovered file.
+
+Concurrency and the per-test deadline come from `testLimits` in `scripts/test-suites.ts`
+(`PILOT_TEST_CONCURRENCY`, `PILOT_TEST_TIMEOUT_MS`); the Linux CI job sets its own concurrency.
+More Git/jj and compiler processes can make individual tests slower on a busy machine. The runner starts
+known expensive workspace groups early to avoid a long tail. Reported file durations exclude
+imports/startup and overlap, so do not sum them as wall time. Tests with explicit timeouts keep their
+own limits.
+
+To run just affected files without importing every file in a suite:
+
+```sh
+node --test --test-force-exit --test-concurrency=2 packages/daemon/src/sources/github/github.fast.test.ts
+```
+
+### Managed manual Review proof
+
+Run the daemon-only fake-agent journey with inherited `PILOT_*` settings removed:
+
+```sh
+bash -c 'for key in ${!PILOT_@}; do unset "$key"; done; exec node --test --test-timeout=120000 --test-concurrency=2 packages/daemon/src/reviews/human/manual-review-flow.integration.test.ts'
+```
+
+The test creates a new managed standalone Build chat through `SessionManager`. A fake worker makes
+real jj commits in TMPDIR. Its idle packet runs production ownership observation and retained capture.
+Daemon reads discover the chat, exact comparison, patch and source. Nothing seeds ownership or diffs.
+The fixture saves a line-anchored draft and submits Comment and Request changes through the ordinary
+native-capability routes and durable operation admission. It reopens daemon/session/SQLite storage
+and checks the original target, text, anchor, disposition, draft and operation receipts as exact
+stored JSON values. A new revision has no inherited review. Duplicate operations deduplicate, lost ACKs
+use lookup without resubmission, and stale packages, changed targets and changed operation bytes fail.
+
+The native authority is the disposable profile's real app capability, not an agent-tool grant or a
+body-supplied actor. This simulates a native user action; it does not prove human presence or exercise
+the UI. No product provider, live review, required request, reviewer, merge or acceptance gate runs.
+
+Manual feedback has no rollout flag in `HumanReviews`, `WorkflowConfirmations`, retained access or the
+server routes. Normal daemon startup supplies their stores and app capability service. Approve still
+refuses because production required-check and fresh-agent-review producers are absent, not because
+of a feature flag. This test does not invent passing prerequisites or enable those producers.
+
+### Heavy verification
+
+Iterate with affected test files. Run relevant full suites once before publishing,
+not after each edit. Use background jobs for long checks. Coordinate native
+compilation so independent workspaces do not compete for the compiler lane.
+
+The obsolete Swift GUI and its lint/test/cache tooling are removed. A dependency-free
+helper-only SwiftPM package, shared SystemEvents sources and Rust sleep-parity inputs remain;
+see [shared macOS support](../apps/day/macos/README.md). Use [Day verification](../apps/day/README.md#check)
+for the native app and [crate CI](../crates/README.md#checks) for the shared Rust crates.
+Run `python3 scripts/validate-workflows.py` from the repository root after editing workflows.
+
+### Local measurements
+
+On 2026-10-13, sequential runs on macOS arm64 (Node 24.21.0, pnpm 12.10.1, jj 0.46.0, 11 logical CPUs),
+the same installed dependencies, and no competing Swift build produced:
+
+| Selection                                   | File concurrency | Wall time | Passed / skipped |
+| ------------------------------------------- | ---------------- | --------- | ---------------- |
+| Main `522759f`, original `tsx` full command | 2                | 197.11s   | 867 / 14         |
+| Changed full command with `--tsx`           | 2                | 212.78s   | 877 / 14         |
+| Changed full command, native Node           | 2                | 155.81s   | 877 / 14         |
+| Changed full command, native Node           | 4                | 90.41s    | 877 / 14         |
+| Changed fast group, native Node             | 2                | 5.63s     | 341 / 0          |
+
+The like-for-like default full command improved about 21%, despite adding ten tests. All original
+workspace/stress test declarations remain, and renderer-dependent skips are unchanged. These are single
+local samples, not a CI guarantee. Keep concurrency 2 as the safe default; 4 is an opt-in for headroom.
+The split suite with `tsx` was slower than main in this sample; native Node avoids that added loader
+overhead. Do not assume splitting alone or seed copies alone explain the combined improvement.
+The baseline used a temporary snapshot of main with the same installed dependencies and independent
+test state. The original audit's 323.86s and an early verification overlapping a cold Swift build are
+not suitable isolated comparisons. Swift CI cache savings require a subsequent Actions cache hit.
+
+The runner's `--tsx` option used for that comparison has since been removed. Do not benchmark a full
+suite concurrently with a Swift build or another suite.
+
+Benchmarks that load one historical module into the current dependency tree
+require matching source layouts. To compare a revision before the feature-folder
+move, run its benchmark from a separate checkout instead.
+
+## Bundled extension verification
+
+`packages/kernel/src/runtime/bundled-extensions.integration.test.ts` uses fresh agent directories, synthetic
+providers and mocked transport responses. It checks the default profile, reload, pre-import suppression
+of package/symlink duplicates, unrelated personal extensions, direct/nested jobs, a real child worker's
+inherited profile/auth and repeated IPC input/stop, static model configuration and API-key/OAuth request
+shaping. Ask tests ensure personal, project and inline extension factories never execute.
+The [runtime smoke check](../apps/day/macos/scripts/check-runtime.sh) also
+exercises parent/child profile loading, Ask web and daemon auth from the isolated production install, both
+before and after relocation.
+
+To compare profile overhead on synthetic large history and streaming, without account access:
+
+```sh
+node packages/kernel/src/runtime/bundled-extensions.bench.ts 5
+```
+
+The baseline disables only the bundled capability profile, retaining mandatory auth and the same
+Pi 1.1.0 runtime. This is a feature-overhead comparison, not a Pi 1.0.4 versus 1.1.0 benchmark. It seeds
+10,000 messages and streams a 65,536-character faux answer through the real Harness/native adapter.
+It alternates variants and excludes the first warmup pair from medians. On 2026-10-14, Node 24.21.0 on
+macOS arm64, five samples after the suites completed gave:
+
+| Metric                           | Baseline | Bundled |
+| -------------------------------- | -------- | ------- |
+| First in-process profile startup | 93 ms    | 579 ms  |
+| Warm startup median              | 23 ms    | 103 ms  |
+| Streaming median                 | 215 ms   | 232 ms  |
+| Streaming CPU median             | 250 ms   | 259 ms  |
+
+The added profile has a startup and small measured streaming cost, not a demonstrated speedup.
+RSS output is whole-process data with shared module caches and GC across alternating samples, not
+isolated per-profile memory overhead. This does not measure a real provider, browser, idle authenticated
+usage polling, daemon first-request latency or live GUI responsiveness. No GUI/storage path changed.
+Repository-wide lint still reports pre-existing assignment-expression errors in `jobs.ts` and
+`system-events-helper.ts`; the new bundled-profile implementation, integration tests and benchmark lint cleanly.
+
+## Provider error recovery
+
+`steering.integration.test.ts` exercises the durable Harness queue policy, not the unused native
+session loop. It reproduces the SDK's one-at-a-time mode and checks Pilot's existing all-at-once
+steering policy with distinct ordered messages and per-submission placement/settlement. The offline
+matrix covers arrivals during drain, duplicate request IDs, captured-row edits/removals, separate
+follow-ups, model failure, Stop, SQLite reopen, held-input revisions and pending questions. Queue
+controls cannot answer a question; only an explicit user reply releases its deferred automatic input.
+
+The replay receipt shortcut previously reported every `unanswered` submission as `stopped`, even when
+the saved reason was `model_error`. That mismatch exists in pre-planning source `c2ca28c7` and reproduces
+on `fb2f68c0`; it was not introduced by planning continuation. Fresh admission and completion already
+classify `aborted`/`reset` as stopped and other unanswered reasons as failed. Replay now uses that same
+mapping without changing the saved receipt or admitting work. The batch-placement regression covers
+model failure and explicit Stop, before and after SQLite reopen, ordinary and dedupe-only retries,
+no repeated input hooks/provider calls, and exact read-only receipt equality. Against the original
+shortcut, failure reports stopped incorrectly while the explicit Stop case passes. With the fix, both
+pass. This changes only the delivery report, not recovery, queue admission or Unknown/no-replay rules.
+
+The pinned `pi-durable@1.5.0` patch keeps final/reset boundaries steer-first like pi: follow-ups
+wait until no steer is selected, then retain their own one-at-a-time/all setting. It changes only
+selection, leaving atomic placement, individual submission ACKs and question holding unchanged.
+
+Pi 1.5 removes its event API. Pilot owns the unchanged wire event types in
+`packages/protocol/src/chats/agent-events.ts` and translates public bounded conversation
+observations plus stored commits in `packages/kernel/src/session/activity/agent-events.ts`. It keeps
+only the legacy active context, not compacted raw history. Slow listeners retain
+at most 100 pending batches before replacement by a current snapshot. Attachment,
+compaction, cancellation and window-crossing coverage is in `agent-events.test.ts`.
+`progress.persistWithinMs: 0` preserves Pilot's existing stored-progress boundary;
+this migration does not opt into the SDK's new one-second crash-loss window.
+`node packages/kernel/src/session/activity/agent-events.bench.ts 3` measures attachment and streaming
+with 10,000 entries and a 64 KiB faux answer, without network or account access.
+
+The 2026-11-04 SDK migration full run passed 3,519 of 3,549 tests (five skipped).
+Three SDK-sensitive failures were fixed and their files rerun: faux cache tokens
+are no longer double-counted, and mission authoring now uses `prepareArguments`
+instead of unsupported TypeBox refinements. The MCP bundle-hash fixture was also
+updated and rerun. The remaining 21 failures reproduce on the preceding main
+snapshot with Pi 1.4: 15 daemon fixtures lack the newer Insights subscription,
+two session lifecycle expectations are stale, two Ask tests select the wrong
+fixture file, the mission-context CPU budget fails locally, and the usage-worker
+fixture cannot relocate this Homebrew Node 26's dynamic libnode. The full gate
+is not green; these baseline failures were not suppressed or changed.
+
+After the suites, three warm samples per version on macOS arm64/Node 26.13.0
+(one warmup discarded) compared Pi 1.4 at `9584c973` with this migration. The
+benchmark used 10,000 entries, a 64 KiB answer at 16,384 tokens/sec, and 256-token
+chunks, with immediate progress persistence on both versions:
+
+| Median                  | Pi 1.4   | Pi 1.5   |
+| ----------------------- | -------- | -------- |
+| Legacy watch attachment | 5.2 ms   | 7.9 ms   |
+| Streaming wall time     | 1,037 ms | 1,024 ms |
+| Streaming CPU           | 56 ms    | 61 ms    |
+| Whole-process RSS       | 183 MB   | 192 MB   |
+
+Attachment and CPU cost increased; no speedup or memory reduction is claimed.
+RSS includes previous samples and GC, not isolated retained/idle memory. This
+does not qualify real-provider latency, large tool output, disk I/O or GUI smoothness.
+
+`shell-deadline.test.ts` uses isolated real shell process groups plus fake-clock deadline boundaries.
+It covers a nonterminating process and child, explicit cancellation, silent valid work with an extended
+deadline, quick failure, process cleanup, elapsed notices without invented progress, and timer/listener
+release. `model.integration.test.ts` drives both direct and nested codemode shell timeouts through the
+real Harness/native adapter with faux models, then reopens only those synthetic sessions to assert no
+retry/replay and admit subsequent work. No diagnosed chat is opened or changed.
+
+Pi's Anthropic serializer moves images out of failed tool results. The model integration fixture
+persists a codemode image-then-error, reopens the failed chat and completes through the real Anthropic
+serializer with offline SSE, checking that the error result is text-only, the image is still sent, and
+history, request hooks and already-committed tool effects remain intact.
+
+## Diagnostic redaction responsiveness
+
+`diagnostic-redaction.stress.test.ts` runs twelve ordered synthetic records (six colon-rich URL-like
+records just below 64 KB and six credential-bearing counterparts) through the production log sanitizer,
+with a 5 ms heartbeat, event-loop histogram and unrelated loopback HTTP requests on the same thread.
+All three maximum-delay budgets are 200 ms. It checks unchanged results/order and requires both heartbeat
+and HTTP activity. The watchdog reports CPU stalls, waiting and likely sleep separately; sleep makes the
+measurement inconclusive and skips the latency assertions, never counting as a CPU regression or a repair success.
+`event-loop-watchdog.fast.test.ts` also checks equal-duration CPU and sleep pauses using deterministic clocks.
+
+An offline macOS arm64/Node 24.21.0 reproduction on 2026-10-19 recorded six CPU stalls before the fix,
+with maximum heartbeat/HTTP/event-loop delays of 1,604/1,604/1,604 ms (8,163 ms total main-thread CPU).
+The same isolated fixture after the fix measured 7/6/6 ms and 45 ms CPU, with no CPU stalls or sleep pauses.
+These are single local samples, not a production latency guarantee. The URL credential matcher tried
+overlapping user/password classes at every colon when no terminal `@` existed. A bounded lookahead now
+rejects that case in one scan without changing credential rules, avoiding the need to introduce async
+ordering or worker ownership into this bounded operation. Log-reader redaction timings use the fixed
+`diagnostics.redact` label in the existing bounded slow-section tracker (100 ms threshold), never log content.
+
+This fixture measures the sanitizer and a minimal HTTP server, not complete pilotd, GUI responsiveness,
+provider streaming or disk I/O. It confirms a reproducible blocking path, not the cause of any historical
+stall: the reviewed evidence did not identify a callback, and no diagnosed chat or user history is read.
+
+Run it alone, without competing builds, for comparable before/after measurements:
+
+```sh
+node --test packages/daemon/src/runtime/diagnostics/diagnostic-redaction.stress.test.ts
+```
+
+## Daemon activity hot path
+
+```sh
+node scripts/bench/daemon-activity.ts 55f111dc46c6670a959f147c5451b7b39550de27
+```
+
+This offline fixture compares the baseline's session-membership and member-run/completion reads with the
+current implementation. It seeds 1,000 tasks with 8,000-character bodies, ten owned by the observed member,
+then processes 100 summary reads, one run snapshot and 20 completion observations per sample. It alternates variants,
+discards a warmup pair and reports median wall/process CPU time from five samples. Stores are independent
+temporary copies; no real chats, providers, credentials or network services are opened. Database setup and
+index migration are outside the measurement. This isolates synchronous store work, not whole-daemon latency,
+Git diff performance, IPC throughput or live GUI responsiveness. Run without a competing local test/build.
+
+## Mission startup recovery
+
+```sh
+node scripts/bench/mission-recovery.ts 965ff12b 3
+```
+
+This offline probe alternates baseline/current notice recovery with real mission-context subscribers,
+using three in-memory missions, 120 members and 240 tasks with 8,000-character bodies. It excludes
+setup/imports, discards one warmup pair and reports medians. No daemon, workers, accounts, network
+services or user state are opened. On 2026-10-16, macOS arm64/Node 24.21.0, three samples measured:
+
+| Metric                      | Before             | After        |
+| --------------------------- | ------------------ | ------------ |
+| Recovery wall / process CPU | 10,031 / 10,039 ms | 259 / 259 ms |
+| Mission notifications       | 360                | 3            |
+| Full detail reads           | 14,403             | 123          |
+
+Recovery still reconciles every member/hand-linked PR and completion. One transaction now publishes
+final contexts once per affected mission after phase reconciliation, instead of rebuilding all member
+contexts after each recovered PR. `mission-notices.fast.test.ts` guards final task/phase/cache state and
+notification fan-out; `missions.test.ts` guards nested batching, membership and rollback. This isolates
+synchronous recovery cost, not full daemon launch time, provider startup or live GUI responsiveness.
+
+## Native model-catalog ownership
+
+`model-catalog-owner.test.ts` checks one serialized full-refresh/availability lane per native runtime,
+queued registration coalescing, trailing invalidation, explicit option boundaries, credential changes,
+independent cancellation and error recovery. Concurrent callers share pending availability work, not
+settled results or credentials. Worker catalogs remain separate because extension providers are local
+to each session. The broker's canonical reads and concurrency/queue limits are unchanged.
+
+`credential-broker.test.ts` drives eight overlapping real SDK availability calls through a temporary
+broker, plus native startup with twelve extension provider registrations. Without ownership, the
+availability burst fails with `Credential broker busy`; with ownership all eight calls succeed.
+These are offline fixtures with synthetic auth, not real accounts or a live GUI launch check.
+
+A count-only Pi 1.1.0 probe with eight concurrent callers and a synthetic asynchronous credential
+store reduced credential reads from 1,328 to 166, and peak concurrent SDK read invocations from 672
+to 84. Runtime creation was outside the count; network model refresh was disabled. These are
+operation counts, not broker socket concurrency, wall-time measurements or streaming benchmarks.
+
+## Shared model discovery
+
+`shared-model-catalog.test.ts` covers shared pending/settled discovery, source invalidation, TTL,
+cancellation, bounded admission, failure recovery and metadata filtering. `shared-catalog.integration.test.ts`
+uses the real SDK and same-host broker to check concurrent startup, project scopes, worker provider
+overrides, virtual routing, runtime keys, live config/login/logout changes, operation types and independent
+host credentials. A blocked discovery must not block a model request. Existing credential-broker and
+per-runtime catalog-owner tests retain their canonical OAuth, Jiti and registration regressions.
+
+```sh
+node packages/daemon/src/models/shared-model-catalog.bench.ts 12 3
+```
+
+This offline probe alternates per-worker discovery and daemon-owned discovery across twelve real child
+processes, with the merged two-start admission limit retained in both variants. Ready workers remain
+resident. It excludes one warmup pair and reports three sample pairs. Temporary agent directories,
+synthetic configuration and a minimal environment prevent account or provider access. The baseline
+disables only the shared catalog capability; the merged per-runtime startup fixes remain active.
+
+On 2026-10-16, macOS arm64/Node 24.21.0, medians of the three sample measurements were:
+
+| Metric                                            |  Per-worker | Daemon-owned |
+| ------------------------------------------------- | ----------: | -----------: |
+| Shared discovery passes                           |          12 |            1 |
+| Canonical credential reads                        |       4,536 |          378 |
+| Median catalog startup                            |      102 ms |        22 ms |
+| p95 catalog startup                               |      141 ms |        72 ms |
+| Complete cohort startup (including child imports) |    3,497 ms |     3,082 ms |
+| Largest 5 ms heartbeat gap                        |     14.7 ms |      11.1 ms |
+| p95 broker status response                        |     2.37 ms |      1.65 ms |
+| Controller/daemon peak RSS                        |   262.7 MiB |    265.8 MiB |
+| Sum of resident worker RSS                        | 2,074.8 MiB |  2,067.7 MiB |
+
+The static catalog snapshot was 2,799 bytes. An earlier full-copy implementation increased worker RSS
+by about 350 MiB for this cohort; static-definition reuse removed that cost. RSS differences in the final
+probe are small and noisy, not evidence of a memory reduction. This measures SDK catalog startup and
+broker responsiveness, not Harness/history reopening, live providers, GUI responsiveness, large streaming
+conversations or sandboxed worker startup. The controller is not a complete running pilotd. Source
+signatures are checked on demand, with a five-minute backstop for ambient sources; no polling is added.
+
+The daemon does not load project or personal extension factories. Registered providers, virtual models,
+runtime keys and explicitly private SDK stores/catalog endpoints stay local. Refreshed models reuse
+worker-local transport templates; when a transport cannot be represented that way, workers restore its
+cached request configuration locally without repeating shared network discovery. Authentication is
+resolved again in the requesting process for every model request, through the canonical broker.
+
+## Durable todo progress probe
+
+An offline probe on 2026-10-15 (macOS arm64, Node 24.21.0) seeded 10,000 transcript entries and
+256 todos with 768,000 bytes of Markdown. Five samples of 20 unchanged reads compared the prior
+`TodosWatch.refresh()` filesystem metadata scan with a warm `TodoProgressDoc` snapshot. Median wall
+time was 29.45 ms versus 0.019 ms; process CPU was 67.60 ms versus 0.026 ms. Twenty fresh read-only
+SQLite count reads took 4.20 ms wall and 4.84 ms CPU. Creation and initial imports were outside the
+measurement. No providers, accounts or GUI were used.
+
+This isolates repeated progress retrieval, not streaming or whole-daemon latency. The new implementation
+does not schedule those unchanged reads at all: committed document watches replace the one-second
+filesystem poll. Count-only cold reads use the same bounded reader queue as transcript reads, without
+materializing transcript entries or todo Markdown. Live counts arrive on worker readiness/mutations.
+`todos.test.ts` covers bounded latest-only documents, concurrent child writes, restart and workspace
+replacement; the real child-process profile test checks structured todo calls through codemode.
+
+## Cold subagent reader startup
+
+```sh
+node packages/kernel/src/tools/jobs/subagent-reader-startup.bench.ts 4cc44c17 4 5
+```
+
+This offline probe alternates five fresh reader threads from each revision, with four bounded CPU-busy
+threads owned and terminated by the probe. It materializes baseline source and package metadata in a
+temporary directory, reuses the identical dependency installation, and reads the same synthetic live
+`runs.sqlite` under its writer lease. It never starts an agent or uses real accounts. Omit the second
+argument (or use `0`) to measure ambient load alone. All readers, load threads and temporary files are
+released on completion or failure.
+
+JSON lines separate Worker `online`, bootstrap, cold import completion and first snapshot. Load hooks
+count module loads/source bytes; CPU and heap belong to the reader thread at import completion, not
+whole-process RSS. The 30-second probe ceiling deliberately permits observations beyond the old
+five-second fixture budget. It is not a production deadline. Fresh threads have independent module
+caches even when the parent process has already imported the same modules.
+
+The live-reader test uses a post-import readiness message, not Worker `online`, before starting its
+unchanged snapshot/delta polling budgets. The overall 20-second test bound, unchanged-data assertion,
+full snapshot and incremental-entry assertions remain. Readiness is internal control traffic, never
+transcript data. Normal cold reads do not load the coding SDK; saved compaction statistics still load
+its estimator lazily to preserve the existing numbers. `cold-reader-imports.test.ts` guards the ordinary
+reader entrypoints against accidentally restoring eager SDK imports.
+
+On 2026-10-15, macOS arm64/Node 24.21.0, five alternating pairs against `4cc44c17` with four busy
+threads and ambient one-minute load 35–61 gave the following medians (ranges in parentheses):
+
+| Metric                              | Baseline             | Changed            |
+| ----------------------------------- | -------------------- | ------------------ |
+| First snapshot                      | 10.93s (5.92–16.14s) | 5.94s (3.31–7.27s) |
+| Thread online                       | 83ms (47–204ms)      | 101ms (36–209ms)   |
+| After import completion to snapshot | 134ms (45–207ms)     | 135ms (85–138ms)   |
+| Import thread CPU                   | 1146ms               | 430ms              |
+| Module loads / source bytes         | 1696 / 8.29MB        | 752 / 1.67MB       |
+| Heap after imports                  | 49.1MB               | 24.5MB             |
+
+The unchanged live-reader fixture also failed on clean `4cc44c17` with no updates after its polls
+expired under load. The graph reached the SDK through `chat-events.ts`'s estimator and
+`attention.ts` importing the question entry constant from the tool implementation. Each fresh thread
+paid that eager import cost before its first read. Removing those dependencies reduces the work, but
+import scheduling alone still exceeds five seconds under heavy load. That is why readiness separates
+module startup from the read budget rather than merely replacing one timeout number. This probe
+isolates cold startup of a tiny transcript, not disk-cold OS caches, large-history rendering or GUI
+responsiveness. It does not claim a fixed speedup under arbitrary machine load.
+
+## Startup/update stall attribution
+
+`sessions.ts` times synchronous metadata load/capture/parse/encode, context construction, worker acquisition,
+factory invocation, publication, IPC sends and update prepare/pause/resume. These use fixed content-free labels
+in the existing bounded `DaemonOperations` tracker (100 ms threshold, 16 recent sections, at most 64 aggregate
+kinds). Factory timing covers only its synchronous prefix. It does not count awaited isolation, worker readiness,
+filesystem waits or provider time as synchronous preparation. No prompt, path, session ID, command payload or
+error text is added to these labels. Thrown errors and return values pass through unchanged.
+
+```sh
+node --test packages/daemon/src/runtime/lifecycle/startup-preparation.stress.test.ts
+node scripts/bench/startup-preparation.ts 1264a9e29168b24b42e3a274a9ac61af69bf5e36 3
+```
+
+The offline probe uses real session metadata recovery, durable outbox handling, lifecycle diagnostics and
+`GET /api/sessions`, with synthetic workers and pending inputs. It covers eight 8 KB inputs and 150 256 KB
+inputs. A 5 ms heartbeat and event-loop histogram run throughout startup, queued cancellation and update
+pause/resume. Each maximum delay must stay below 250 ms. It checks two-start admission, exact once-only input
+IDs, cancellation before admission, update exclusion during startup, completed startup and lifecycle/pause
+ordering. Sleep makes the latency result inconclusive, never a successful repair. Unit tests check fixed timing
+labels, IPC content exclusion and that a simulated 2,041 ms asynchronous wait does not inflate synchronous timing.
+
+On macOS arm64, Node 24.21.0, three alternating baseline/current pairs after one discarded warmup pair gave:
+
+| Large synthetic cohort                                           | Baseline | Instrumented |
+| ---------------------------------------------------------------- | -------: | -----------: |
+| Median local startup, including metadata/outbox and cancellation | 2,432 ms |     2,446 ms |
+| Median update pause/resume including metadata persistence        |   363 ms |       314 ms |
+| Median main-thread CPU, startup through update                   | 2,554 ms |     2,500 ms |
+| Largest heartbeat gap across measured pairs                      |    31 ms |        14 ms |
+| Largest daemon HTTP read latency across measured pairs           |    43 ms |        17 ms |
+| Largest event-loop histogram sample across measured pairs        |    31 ms |        14 ms |
+| CPU stalls above 250 ms / sleep pauses                           |    0 / 0 |        0 / 0 |
+| Provider time (no provider calls)                                |     0 ms |         0 ms |
+
+This is attribution and regression coverage, not a verified repair of a historical stall. Neither revision
+reproduced the reported approximately two-second synchronous interval. Differences between these small samples
+are not a speedup claim. Total cohort CPU is not one uninterrupted callback. The probe excludes real kernel
+imports/extensions, production IPC serialization, workspace preparation, OS isolation, provider requests and
+native GUI responsiveness. No diagnosed chat, history, credentials or live service is read or changed. Without
+a reproduced blocker or a correlated slow-section label, moving work to a thread would be speculative.
+
+## Worker recovery admission
+
+`subagent-activity.test.ts` covers idle-parent activity and completion replay, update/sleep recovery,
+daemon restart and confirmed kernel exit with pending child work. `subagent-pause.integration.test.ts`
+uses faux models through the bundled subagent supervisor and a real child process. It pauses during an
+in-flight child tool (update) or generation (sleep), replaces the kernel, checks that committed effects
+are not replayed, and verifies exactly one child-result follow-up reaches the idle parent. No live
+accounts or workspaces are opened.
+
+A synthetic summary probe on 2026-10-15 compared the prior background-work predicate with the
+child-aware predicate, alternating five pairs of 10,000 summary reads over 1,000 metadata records.
+Each record held 100 children with the working child last. Median wall time was 101.2ms before and
+102.1ms after. This isolates the in-memory summary projection under a worst-position scan, not real
+provider streaming, GUI rendering or cold database recovery. No polling, history reads or child
+process inspection were added to the activity path.
+
+`packages/daemon/src/sessions/workers/worker-starts.fast.test.ts` and `sessions.test.ts` cover a 150-session recovery burst,
+two concurrent cold starts, FIFO admission, per-session coalescing, failure release, queued Stop,
+role changes, archival, sleep and shutdown. The limit lasts through worker readiness, not the agent's
+run. Memory wake failure or its 1.2-second deadline remains nonfatal; the kernel integration fixture
+also checks timer cleanup on success, error and timeout.
+
+On 2026-10-15, macOS arm64/Node 26.10.0, a local offline probe compared `9c221642` with this change in
+five alternating pairs. It seeded 150 initializing sessions with stable pending input IDs and used
+faux workers with 2ms synchronous constructor work and held readiness promises. A 1ms heartbeat ran
+during metadata loading and admission. Medians, with no competing verification commands:
+
+| Metric                                                    | Before | After |
+| --------------------------------------------------------- | ------ | ----- |
+| Workers constructed before releasing readiness            | 150    | 2     |
+| Time until `load()` returned and metadata could be listed | 315ms  | 13ms  |
+| Largest heartbeat gap                                     | 306ms  | 5ms   |
+
+This isolates admission pressure, not real extension load time, provider streaming, large-history
+rendering, GUI launch latency or total retained worker memory. All admitted agents may still run
+concurrently. Two connected but stalled initializations can hold both slots: elapsed time alone must
+not revoke a live writer's storage lease. No live chats, credentials or model services were used.
+
+## Subscription admission
+
+`subscription-policy.test.ts` and `session-subscription-usage.test.ts` cover the 99% boundary, all-window
+blocking, fresh lower readings, reset timers, unknown/error/stale readings, per-chat force expiry and
+restart persistence, and children using another provider. `subscription-pause.integration.test.ts`
+checks the real parent Harness/native adapter, safe tool drainage and SQLite recovery without replay.
+`subscription-limit.test.ts` and `subscription-limit.integration.test.ts` cover provider-reported
+exhaustion, persisted admission acknowledgement, request-only recovery after a committed tool result,
+restart recovery and Stop. They exclude transient throttling, authentication and API billing failures.
+The pinned pi-extensions gate tests cover child admission, direct model/compaction calls and aborts.
+Continuation tests cover provider-neutral handoffs, same-provider model changes, ownership transfer,
+read-only originals and journal recovery. All providers and cache data in these checks are synthetic.
+
+Run `node packages/kernel/src/funding/subscription-gate.bench.ts` for the incremental gate cost. On macOS arm64,
+five alternating samples of 1,000 sequential admissions measured medians of 0.14ms wall/0.14ms CPU
+without a configured gate and 58ms wall/63ms CPU with an empty policy file (about 58µs per admission).
+File reads are asynchronous; there are no timers while unblocked, and only blocked requests wait on a
+cancellable two-second local-file check. This isolates the new boundary, not large-history preparation,
+provider/GUI latency, or disk-cold performance. Parked never-opened chats update display policy in memory
+instead of writing admission files on every usage change; files are persisted before workers resume.
+
+## Workspace fixtures and clocks
+
+Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real
+Git/jj safety, failure and crash assertions are retained, not replaced by replay. `testing/git-seed.ts`
+builds immutable Git-only seeds once per test process, then copies independent objects, refs, config and
+files for every case. No hard links, alternates, mutable shared stores or copied jj workspace paths are
+used. Seed preparation disables ambient Git config, signing, templates and hooks.
+
+Use completion promises or transport barriers to observe asynchronous work. Fake clocks can exercise
+deadline boundaries without waiting for production timeout lengths. Keep real timers where the test is
+specifically about native process cancellation, I/O or scheduling. Test cleanup must release any gated
+operation even when an assertion fails. Polling helpers should use monotonic time if tests freeze `Date`.
+
+## Offline API cassettes
+
+`packages/daemon/src/testing/cassette.ts` is a replay-only helper. Examples for GitHub, Linear and Slack
+live under `packages/daemon/src/fixtures/cassettes`, and `service-cassettes.fast.test.ts` drives the real
+adapters and parsers through them. The versioned JSON format is:
+
+```json
+{
+	"version": 1,
+	"entries": [{ "request": { "tool": "issues", "args": { "team": "example" } }, "response": { "issues": [] } }]
+}
+```
+
+- `cassetteRunner` matches executable plus the complete argv, including GitHub's GraphQL query and
+  variables. It never runs `gh` or a fallback process. Cwd, environment and timeout are not recorded.
+- `cassetteSource` matches the fixed source tool plus every JSON argument, including scope, fields,
+  cursor and page bounds. Only object key order and omitted `undefined` properties are normalized;
+  array order, request order and values must match exactly.
+- Responses are copied per call. Unexpected, reordered or extra calls fail immediately. Call
+  `assertDone()` to catch missing calls and unused responses. Mismatch diagnostics do not echo payloads.
+- There is no live fallback or recording mode, including on a cache miss. Author synthetic fixtures
+  explicitly and review contract changes before updating them. Never commit raw account responses,
+  private messages, repository data, model prompts, authorization headers, cookies or signed URLs.
+  Use fake identities and public example domains, not merely redacted tokens in otherwise private data.
+
+Keep small inline fakes for dynamic scenarios and error injection. Cassettes complement those tests;
+they do not replace real daemon HTTP/WebSocket tests or certify compatibility with a live provider.

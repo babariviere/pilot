@@ -16,18 +16,18 @@ import type {
 	SpawnRequest,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { RepositoryChanges } from "./changes.ts";
-import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
-import { MissionService } from "./mission-service.ts";
-import { MissionStore } from "./missions.ts";
-import { ModelCatalog } from "./models.ts";
-import { ProjectStore } from "./projects.ts";
-import { SessionManager } from "./sessions.ts";
-import { SourceRegistry } from "./sources.ts";
-import { TelemetrySettingsService } from "./telemetry-settings.ts";
-import { TerminalManager } from "./terminals.ts";
+import { RepositoryChanges } from "./changes/changes.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./runtime/contracts/errors.ts";
+import { MissionService } from "./missions/mission-service.ts";
+import { MissionStore } from "./missions/missions.ts";
+import { ModelCatalog } from "./models/models.ts";
+import { ProjectStore } from "./projects/projects.ts";
+import { SessionManager } from "./sessions/sessions.ts";
+import { SourceRegistry } from "./sources/sources.ts";
+import { TelemetrySettingsService } from "./runtime/telemetry/telemetry-settings.ts";
+import { TerminalManager } from "./sessions/terminals/terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
-import { TrackedItemStore } from "./tracked-items.ts";
+import { TrackedItemStore } from "./sources/tracking/tracked-items.ts";
 
 test("mission diagnostics page persisted Linear failures independently of tasks without remote work", async (t) => {
 	const home = mkdtempSync(join(tmpdir(), "mission-sync-diagnostics-"));

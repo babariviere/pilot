@@ -1,10 +1,10 @@
 // Isolated fixture: unknown receipts and a new draft, never real creation.
 import { mount, View } from "nsh";
 import type { PlanOutcome } from "pilot-day/native";
-import type { PlanningFeed } from "./feeds";
-import { openPlanning } from "./mockFeeds";
-import { NewScreen } from "./NewScreen";
-import { goalDraft } from "./planView";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { NewScreen } from "./missions/intake/NewScreen";
+import { goalDraft } from "./missions/planning/planView";
+import type { PlanningFeed } from "./sources/feeds";
 import { Block, Caption } from "./ui";
 
 const plans = openPlanning("fresh");

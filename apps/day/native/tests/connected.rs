@@ -17,8 +17,8 @@
 //! of the same exact names (no daemon, no `NativeHost`): a read and empty
 //! list, refusals that are not an empty list, Read again, invalidations that
 //! read only the root's cached list, and a page older than the inventory.
-#[path = "support/day_library.rs"]
-mod day_library;
+#[path = "support/app_source.rs"]
+mod app_source;
 use nsh_core::prelude::*;
 use nsh_engine::{EngineConfig, HostCall, HostChannel};
 use nsh_testing::{Headless, compile_tsx};
@@ -55,27 +55,7 @@ fn entry() -> PathBuf {
     let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = std::env::temp_dir().join(format!("day-connected-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    for file in std::fs::read_dir(&app).unwrap() {
-        let path = file.unwrap().path();
-        let name = path.file_name().unwrap().to_str().unwrap().to_owned();
-        if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
-            && !name.ends_with(".test.tsx")
-        {
-            // Relocate the one shared, Node-free leaf with the fixture sources.
-            let source = std::fs::read_to_string(&path).unwrap().replace(
-                "../../packages/kernel/src/feedback-paths",
-                "./feedback-paths",
-            );
-            std::fs::write(dir.join(&name), source).unwrap();
-        }
-    }
-    std::fs::copy(
-        app.join("../../packages/kernel/src/feedback-paths.ts"),
-        dir.join("feedback-paths.ts"),
-    )
-    .unwrap();
-    // The component library lives in ui/; screens import it as "./ui".
-    day_library::copy(&app, &dir);
+    app_source::copy(&app, &dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})
@@ -244,7 +224,7 @@ impl Fixture {
     }
     fn with_args(args: &[&str]) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures/day-planning-enrollment.ts");
+            .join("../../../packages/daemon/src/fixtures/day/planning/day-planning-enrollment.ts");
         let mut child = Command::new("node")
             .arg(script)
             .args(args)

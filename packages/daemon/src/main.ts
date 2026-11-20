@@ -2,7 +2,7 @@
 /** pilotd entry. Enable Node's on-disk compile cache before importing the daemon's module graph. */
 import { enableCompileCache } from "node:module";
 import { runtimeEnvironment } from "@pilot/kernel/runtime-environment";
-import { timestampConsole } from "./logging.ts";
+import { timestampConsole } from "./runtime/diagnostics/logging.ts";
 import { bootstrapRuntime } from "./runtime-bootstrap.ts";
 
 enableCompileCache();

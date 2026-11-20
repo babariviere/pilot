@@ -2,8 +2,8 @@
 // arrived) and whose next answer is lost: it stays unconfirmed until Check
 // again reads that it finished. Nothing is sent twice.
 import { mount } from "nsh";
-import { MockDayScreen, openDay, openUpdate } from "./mockFeeds";
-import { showUpdate } from "./updateView";
+import { MockDayScreen, openDay, openUpdate } from "./app/testing/mockFeeds";
+import { showUpdate } from "./updates/updateView";
 
 const day = openDay("quiet");
 const update = openUpdate("trouble");

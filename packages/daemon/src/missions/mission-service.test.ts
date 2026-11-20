@@ -1,0 +1,9529 @@
+import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { type TestContext, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { type KernelCommand, type KernelPacket, type KernelSpec, PLANNING_PROFILE } from "@pilot/kernel";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
+import type { MissionDecision, MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
+import { WebSocket } from "ws";
+import { ArtifactStore } from "@pilot/artifacts";
+import { CriticalReviewStore } from "../reviews/critical/critical-review-store.ts";
+import { CriticalReviewVault } from "../reviews/critical/critical-review-vault.ts";
+import { Conflict } from "../runtime/contracts/errors.ts";
+import type { NonCodePolicyWrite } from "./delivery/mission-non-code-acceptance.ts";
+import type { ReviewProducer, ReviewResultWrite } from "./review/mission-review-contract.ts";
+import { optionalReviewSeeds } from "./review/mission-review-seeds.ts";
+import { MissionService, type RetainedBriefConfiguration } from "./mission-service.ts";
+import { draftMessage } from "./threads/mission-task-message.ts";
+import { MissionStore } from "./missions.ts";
+import { ModelCatalog } from "../models/models.ts";
+import { NativeReviewReader } from "../reviews/native/native-review.ts";
+import { KnowledgeService } from "../projects/knowledge/project-knowledge.ts";
+import { ProjectStore } from "../projects/projects.ts";
+import type { PullRequestOptions } from "../sources/github/pull-requests/pull-requests.ts";
+import { DependencySources } from "../projects/knowledge/reference-sources.ts";
+import { retainedReviewDescriptor } from "../reviews/retained/retained-review-contract.ts";
+import type { ReviewSnapshot, ReviewSnapshotStore } from "../reviews/snapshots/review-snapshots.ts";
+import { SessionManager } from "../sessions/sessions.ts";
+import { CommandRejected, type SessionWorker } from "../sessions/workers/kernel-worker.ts";
+import { SUBSCRIPTION_USAGE_MAX_AGE_MS, type SubscriptionUsageSource } from "../models/usage/subscription-usage.ts";
+import { TerminalManager } from "../sessions/terminals/terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "../testing/daemon-server.ts";
+import { legacyGitHub } from "../sources/github/testing/legacy-github.ts";
+import type { HostResult } from "../testing/fake-kernel-worker.ts";
+import { offlineSessionOptions } from "../testing/offline-session-options.ts";
+import { requiredAuthRegistration } from "../testing/required-auth.ts";
+
+function testArtifacts(f: { home: string; sessions: SessionManager }, sessionId: string) {
+	const store = new ArtifactStore(join(f.home, "data", "sessions", sessionId), {
+		sessionId,
+		projectId: f.sessions.get(sessionId)?.projectId,
+	});
+	return {
+		create: (value: { kind: "nsh"; title: string; source: string }) => store.create({ ...value, entry: "test.tsx" }),
+		update: async (id: string, value: { kind: "nsh"; title: string; source: string }, revision?: number) =>
+			store.update(id, { ...value, entry: "test.tsx" }, revision ?? (await store.get(id)).revision),
+	};
+}
+
+test("ownership scope is creation-only trusted builder assignment metadata, never legacy adoption", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const explorer = await f.spawn();
+	const reviewer = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Attribution",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	f.store.join(explorer.id, mission.id, { sessionId: lead.id }, "explorer");
+	f.store.join(reviewer.id, mission.id, { sessionId: lead.id }, "reviewer");
+	const task = f.store.addTask(mission.id, { title: "Build", sessionId: worker.id });
+	// biome-ignore lint/complexity/useLiteralKeys: Inspect the daemon-only mission bridge, not an agent API.
+	const admission = f.sessions["missions"]!.ownershipScope!;
+	assert.deepEqual(admission(worker.id), {
+		version: 1,
+		sessionId: worker.id,
+		missionId: mission.id,
+		taskIds: [task.id],
+	});
+	for (const id of [lead.id, explorer.id, reviewer.id, "missing"]) assert.equal(admission(id), undefined);
+	f.store.updateTask(mission.id, task.id, { status: "done" });
+	assert.equal(admission(worker.id), undefined);
+	const legacy = f.store.create({ projectId: f.project.id, title: "Legacy" });
+	f.store.join(worker.id, legacy.id);
+	const legacyTask = f.store.addTask(legacy.id, { title: "Legacy work", sessionId: worker.id });
+	assert.deepEqual(admission(worker.id), {
+		version: 1,
+		sessionId: worker.id,
+		missionId: legacy.id,
+		taskIds: [legacyTask.id],
+	});
+	// Assignment eligibility is not creation authority for an already-existing chat.
+	// biome-ignore lint/complexity/useLiteralKeys: Inspect the host-only initial recipe boundary.
+	assert.equal(f.sessions["creationOwnershipScope"](f.sessions["require"](worker.id)), undefined);
+});
+
+test("source scope IPC trusts current coordinator membership, retains delivered workspaces and revokes historical roots", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const unrelated = await f.spawn();
+	const wrongProject = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Sources",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	// biome-ignore lint/complexity/useLiteralKeys: Exercise daemon-owned metadata and its real worker IPC boundary.
+	const main = f.sessions["mainViews"].path(f.project.id);
+	const scratch = join(f.home, "data", "sessions", lead.id, "scratch");
+	await mkdir(main, { recursive: true });
+	await mkdir(scratch, { recursive: true });
+	// biome-ignore lint/complexity/useLiteralKeys: The service fixture intentionally has no repository or source preparation.
+	const leadMeta = f.sessions["require"](lead.id);
+	leadMeta.coordinatorView = {
+		originalCwd: f.project.path,
+		path: main,
+		scratch,
+		head: "a".repeat(40),
+		repository: f.project.path,
+	};
+	leadMeta.cwd = main;
+	const workspace = async (id: string) => {
+		// biome-ignore lint/complexity/useLiteralKeys: Set up exact host-created workspace destinations without cloning.
+		const meta = f.sessions["require"](id);
+		meta.cwd = join(f.home, "data", "sessions", id, "workspace");
+		meta.workspace = { source: f.project.path, base: "a".repeat(40), jj: false };
+		await mkdir(meta.cwd, { recursive: true });
+		return meta;
+	};
+	const memberMeta = await workspace(member.id);
+	await workspace(unrelated.id);
+	await workspace(wrongProject.id);
+	f.store.join(member.id, mission.id); // Explicitly joined membership is sufficient.
+	f.store.join(wrongProject.id, mission.id); // Even an inconsistent store row cannot cross the project fence.
+	const task = f.store.addTask(mission.id, { title: "Delivered source", sessionId: member.id });
+	await f.service.call(lead.id, "complete", {
+		id: task.id,
+		completion: { commit: "a".repeat(40), checks: "Synthetic", issues: "" },
+	});
+	memberMeta.archivedAt = Date.now(); // Delivered ownership still grants an extant archived workspace.
+	let sequence = 0;
+	const scope = async (id = lead.id, extras: Record<string, unknown> = {}) => {
+		const worker = f.workers.get(id)!;
+		const callId = `source-scope-${sequence++}`;
+		worker.onPacket({ type: "host.call", method: "source.scope", callId, args: { ...extras } } as KernelPacket);
+		return until(
+			() =>
+				worker.sent.find((command) => command.type === "host.result" && command.callId === callId) as
+					| HostResult<"source.scope">
+					| undefined,
+		);
+	};
+	const canonicalMember = await realpath(memberMeta.cwd);
+	assert.deepEqual((await scope()).result, {
+		main: await realpath(main),
+		scratch: await realpath(scratch),
+		members: [{ sessionId: member.id, path: canonicalMember }],
+	});
+	assert.ok(
+		(await scope(unrelated.id, { sessionId: lead.id, coordinator: true, projectId: f.project.id, roots: [main] }))
+			.error,
+	);
+	leadMeta.coordinatorView.path = f.other.path;
+	assert.ok((await scope()).error, "a stale view path cannot select another source root");
+	leadMeta.coordinatorView.path = main;
+	await rm(memberMeta.cwd, { recursive: true });
+	assert.deepEqual((await scope()).result!.members, [], "missing delivered workspaces are not recreated or granted");
+	await symlink(f.other.path, memberMeta.cwd);
+	assert.deepEqual((await scope()).result!.members, [], "symlink workspace roots never confer target access");
+	await rm(memberMeta.cwd);
+	await mkdir(memberMeta.cwd);
+	const continuation = await f.spawn();
+	// biome-ignore lint/complexity/useLiteralKeys: Model the existing durable continuation ownership transfer.
+	const next = f.sessions["require"](continuation.id);
+	next.cwd = memberMeta.cwd;
+	next.workspace = memberMeta.workspace;
+	next.workspaceOriginId = member.id;
+	memberMeta.continuedTo = next.id;
+	f.store.continueSession(member.id, next.id);
+	assert.deepEqual((await scope()).result!.members, [{ sessionId: next.id, path: canonicalMember }]);
+	f.store.leave(next.id);
+	assert.deepEqual(
+		(await scope()).result!.members,
+		[],
+		"task/completion/retirement history is not current membership",
+	);
+	f.store.join(next.id, mission.id);
+	assert.equal((await scope()).result!.members.length, 1, "an explicit fresh join grants current access again");
+	f.store.update(mission.id, { coordinatorSessionId: null });
+	assert.ok((await scope()).error, "revoked coordinator cannot renew an old scope");
+});
+
+test("reference sources IPC lists linked main views and pinned modules, never unlinked projects", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const third = await f.projects.create({ path: await mkdtemp(join(f.home, "third-")), workspace: "direct" });
+	const goModCache = join(f.home, "gomod");
+	const module = join(goModCache, "github.com", "!acme", "schema@v0.32.0");
+	await mkdir(module, { recursive: true });
+	await writeFile(
+		join(f.project.path, "go.mod"),
+		"module example.com/app\n\nrequire github.com/Acme/schema v0.32.0\n",
+	);
+	const host = f.sessions as unknown as {
+		dependencySources: DependencySources;
+		mainViews: { path(id: string): string };
+		currentMainView(id: string): Promise<string>;
+	};
+	host.dependencySources = new DependencySources({ goModCache });
+	const refreshed: string[] = [];
+	t.mock.method(host, "currentMainView", async (id: string) => {
+		refreshed.push(id);
+		return host.mainViews.path(id);
+	});
+	for (const id of [f.other.id, third.id]) await mkdir(host.mainViews.path(id), { recursive: true });
+	await f.projects.update(f.project.id, { linkedProjects: [f.other.id] });
+	let sequence = 0;
+	const references = async () => {
+		const worker = f.workers.get(chat.id)!;
+		const callId = `references-${sequence++}`;
+		worker.onPacket({ type: "host.call", method: "source.references", callId, args: {} } as KernelPacket);
+		return until(
+			() =>
+				worker.sent.find((command) => command.type === "host.result" && command.callId === callId) as
+					| HostResult<"source.references">
+					| undefined,
+		);
+	};
+	assert.deepEqual((await references()).result, [
+		{ kind: "linked", name: f.other.name, path: await realpath(host.mainViews.path(f.other.id)) },
+		{ kind: "dependency", name: "github.com/Acme/schema", version: "v0.32.0", path: await realpath(module) },
+	]);
+	assert.deepEqual(refreshed, [f.other.id], "linked main views refresh in the background, not per read");
+	await references();
+	assert.deepEqual(refreshed, [f.other.id]);
+	await f.projects.update(f.project.id, { linkedProjects: [] });
+	const after = (await references()).result!;
+	assert.ok(!after.some((source) => source.kind === "linked"), "an unlinked project's main view is not offered");
+});
+
+test("non-code delivery resolves pinned artifacts and cannot accept or retire work", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const other = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Research",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	f.service.join(other.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Research", sessionId: member.id });
+	f.store.writeBrief(mission.id, "Research scope", 0, { sessionId: lead.id });
+	const artifact = await testArtifacts(f, member.id).create({
+		title: "Report",
+		kind: "nsh",
+		source: "<p>Findings</p>",
+	});
+	const record = {
+		kind: "non-code",
+		references: [
+			{ kind: "brief", revision: 1 },
+			{ kind: "artifact", artifactId: artifact.id, revision: 1 },
+		],
+		checks: "Sources checked",
+		limitations: "Not independently reviewed",
+	};
+	await assert.rejects(f.service.saveNonCodeDelivery(other.id, task.id, record), /owner or coordinator/);
+	await assert.rejects(f.service.saveNonCodeDelivery(member.id, task.id, record), /authorized/);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: member.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const readArtifact = f.sessions.artifact.bind(f.sessions);
+	const mocked = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof readArtifact>) => {
+		const value = await readArtifact(...args);
+		return { ...value, sessionId: other.id };
+	});
+	await assert.rejects(f.service.saveNonCodeDelivery(member.id, task.id, record), /pinned/);
+	mocked.mock.restore();
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, {
+			...record,
+			references: [{ kind: "brief", revision: 2 }],
+		}),
+		/stale/,
+	);
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, {
+			...record,
+			references: [{ kind: "artifact", artifactId: artifact.id, revision: 2 }],
+		}),
+		/revision|not found/i,
+	);
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, { checks: "x", limitations: "", references: [] }),
+	);
+	await assert.rejects(f.service.saveNonCodeDelivery(member.id, task.id, { ...record, commit: "a".repeat(40) }));
+	assert.deepEqual(await f.service.saveNonCodeDelivery(member.id, task.id, record), record);
+	assert.deepEqual(await f.service.saveNonCodeDelivery(member.id, task.id, record), record);
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, { ...record, checks: "different" }),
+		/already has/,
+	);
+	assert.equal(f.store.task(mission.id, task.id).status, "todo");
+	assert.equal(f.store.completion(mission.id, task.id), undefined);
+	assert.equal(f.store.retiredMember(member.id), false);
+	await assert.rejects(f.service.call(member.id, "complete", { id: task.id, completion: record }), /coordinator/i);
+});
+
+test("revision-bound service submissions resolve exact artifacts, not latest, self-approval or claimed verification", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn(),
+		other = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Evidence",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	f.service.join(other.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Research",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Compare sources",
+			scope: "Report only",
+			criteria: ["Trace findings"],
+		},
+	});
+	const artifacts = testArtifacts(f, worker.id);
+	const artifact = await artifacts.create({ kind: "nsh", title: "Report", source: "<p>Original sources</p>" });
+	const request = {
+		version: 1,
+		operationId: "report",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "research",
+		claim: "Sources compared",
+		limitations: "No independent review",
+		coverage: [[0]],
+		evidence: [{ kind: "artifact", artifactId: artifact.id, revision: 1 }],
+	};
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, request), /authorized/);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	await assert.rejects(f.service.submitDeliveryEvidence(other.id, task.id, request), /owner or coordinator/);
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, { ...request, actor: lead.id }), /fields/);
+	await assert.rejects(
+		f.service.submitDeliveryEvidence(worker.id, task.id, { ...request, checksPassed: true }),
+		/fields/,
+	);
+	await assert.rejects(
+		f.service.submitDeliveryEvidence(worker.id, task.id, {
+			...request,
+			operationId: "snapshot-unavailable",
+			evidence: [{ kind: "snapshot", snapshotId: "a".repeat(64) }],
+		}),
+		/resolver is unavailable/,
+	);
+	const foreign = await f.spawn(f.other.id);
+	f.store.join(foreign.id, mission.id); // Synthetic invalid membership must not bypass the service project boundary.
+	await assert.rejects(f.service.submitDeliveryEvidence(foreign.id, task.id, request), /project/i);
+	await assert.rejects(f.service.evaluateDeliveryEvidence(foreign.id, task.id), /project/i);
+	const saved = await f.service.submitDeliveryEvidence(worker.id, task.id, request);
+	const judge = {
+		version: 1,
+		operationId: "review",
+		submissionId: saved.id,
+		expectedJudgementId: null,
+		decision: "approve",
+		reason: "Report is useful, required gates still unavailable",
+	};
+	await assert.rejects(f.service.judgeDeliveryEvidence(worker.id, task.id, judge), /Only the coordinator/);
+	const approval = await f.service.judgeDeliveryEvidence(lead.id, task.id, judge);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "current");
+	await artifacts.update(artifact.id, { kind: "nsh", title: "Report", source: "<p>Revised sources</p>" }, 1);
+	// A mutable latest pointer does not substitute revision 2 for the exact pinned revision 1.
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "current");
+	const changed = {
+		...request,
+		operationId: "report2",
+		expectedSubmissionId: saved.id,
+		evidence: [{ kind: "artifact", artifactId: artifact.id, revision: 2 }],
+	};
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, changed), /revision.*linked|pinned/i);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 2,
+		taskId: task.id,
+	});
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "stale");
+	const revised = await f.service.submitDeliveryEvidence(worker.id, task.id, changed);
+	assert.notEqual(revised.observations[0]?.sha256, saved.observations[0]?.sha256);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "stale");
+	const artifactRead = f.sessions.artifact.bind(f.sessions);
+	const corrupt = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof artifactRead>) => ({
+		...(await artifactRead(...args)),
+		source: "Altered content under the same revision",
+	}));
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "stale");
+	corrupt.mock.restore();
+	f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
+	assert.deepEqual(await f.service.submitDeliveryEvidence(worker.id, task.id, request), saved);
+	assert.deepEqual(await f.service.judgeDeliveryEvidence(lead.id, task.id, judge), approval);
+	const evaluation = await f.service.evaluateDeliveryEvidence(lead.id, task.id);
+	assert.equal(evaluation.eligibility, "unavailable");
+	assert.ok(Object.values(evaluation.verification).every((value) => value === "unavailable"));
+	assert.equal(f.store.task(mission.id, task.id).status, "todo");
+	assert.equal(f.store.retiredMember(worker.id), false);
+});
+
+test("dormant review service admits current project/actor before exact retries and retains only observed provenance", async (t) => {
+	let producer: ReviewProducer = { kind: "unavailable", reason: "No host output observation" };
+	let observerCalls = 0;
+	const f = await fixture(t, undefined, undefined, undefined, async () => {
+		observerCalls++;
+		return producer;
+	});
+	const lead = await f.spawn(),
+		worker = await f.spawn(),
+		other = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Reviews",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	f.service.join(other.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Sources", criteria: ["Trace evidence"] },
+	});
+	f.store.writeBrief(mission.id, "Approved", 0);
+	const profile = {
+		version: 1,
+		operationId: "profile",
+		profileId: "correctness",
+		expectedRevision: 0,
+		definition: optionalReviewSeeds().correctness,
+	};
+	await assert.rejects(f.service.saveReviewProfile(worker.id, profile), /coordinator/);
+	await f.service.saveReviewProfile(lead.id, profile);
+	const request: ReviewResultWrite = {
+		version: 1,
+		operationId: "review",
+		profileId: "correctness",
+		profileRevision: 1,
+		expectedResultId: null,
+		expectedContextFence: f.store.reviewContextFence(mission.id),
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment!,
+		intent: "research",
+		content: [{ kind: "brief", revision: 1 }],
+		context: [],
+		preferences: { unavailable: "No retained preference version" },
+		output: { state: "completed", outcome: "pass", reason: "No evidenced report concern" },
+		findings: [],
+		resolutions: [],
+		limitations: "No current source or independent verification",
+		confidence: "unavailable",
+	};
+	await assert.rejects(f.service.recordReviewResult(other.id, task.id, request), /current coordinator or task owner/);
+	await assert.rejects(
+		f.service.recordReviewResult(worker.id, task.id, { ...request, producer: { kind: "human" } }),
+		/fields/,
+	);
+	const saved = await f.service.recordReviewResult(worker.id, task.id, request);
+	assert.equal(observerCalls, 1);
+	assert.equal(saved.producer.kind, "unavailable"); // Chat-selected test/model is not observed output.
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current");
+	producer = {
+		kind: "observed-agent",
+		sessionId: other.id,
+		provider: "fixture",
+		model: "observed-output-model",
+		observationId: "output-1",
+	};
+	const next = await f.service.recordReviewResult(lead.id, task.id, {
+		...request,
+		operationId: "observed",
+		expectedResultId: saved.id,
+	});
+	assert.equal(next.recorderSessionId, lead.id);
+	assert.deepEqual(next.producer, producer);
+	assert.equal(next.independence, "unavailable"); // A different session is not proof.
+	assert.equal(next.humanAuthorship, "unavailable");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "outdated");
+	const foreign = await f.spawn(f.other.id);
+	f.store.join(foreign.id, mission.id); // Deliberately inconsistent store membership.
+	producer = { ...producer, sessionId: foreign.id };
+	await assert.rejects(
+		f.service.recordReviewResult(lead.id, task.id, {
+			...request,
+			operationId: "foreign-producer",
+			expectedResultId: next.id,
+			expectedContextFence: f.store.reviewContextFence(mission.id),
+		}),
+		/project/i,
+	);
+	const originalGet = f.sessions.get.bind(f.sessions);
+	const projectMoved = t.mock.method(f.sessions, "get", (id: string) => {
+		const result = originalGet(id);
+		return result && id === worker.id ? { ...result, projectId: f.other.id } : result;
+	});
+	await assert.rejects(f.service.recordReviewResult(worker.id, task.id, request), /project/i);
+	await assert.rejects(f.service.evaluateReviewResult(worker.id, saved.id), /project/i);
+	projectMoved.mock.restore();
+	const profileMoved = t.mock.method(f.sessions, "get", (id: string) => {
+		const result = originalGet(id);
+		return result && id === lead.id ? { ...result, projectId: f.other.id } : result;
+	});
+	await assert.rejects(f.service.saveReviewProfile(lead.id, profile), /project/i);
+	profileMoved.mock.restore();
+	f.store.writeBrief(mission.id, "Changed context", 1);
+	const stale = await f.service.evaluateReviewResult(lead.id, next.id);
+	assert.equal(stale.applicability, "outdated");
+	assert.equal(stale.liveSourceFreshness, "unavailable");
+	assert.equal(stale.acceptance, "unavailable");
+	assert.deepEqual(await f.service.recordReviewResult(worker.id, task.id, request), saved);
+	assert.equal(observerCalls, 3); // Exact retry did not run observer or resolve mutable source.
+	f.store.leave(worker.id);
+	await assert.rejects(f.service.recordReviewResult(worker.id, task.id, request), /membership/i);
+	assert.equal(f.store.task(mission.id, task.id).status, "todo");
+	assert.equal(f.store.completion(mission.id, task.id), undefined);
+	assert.equal(f.store.retiredMember(lead.id), false);
+});
+
+test("review artifact/context reads recheck pin ABA and trusted actor project after asynchronous access", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Review pins",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Sources", criteria: ["Trace evidence"] },
+	});
+	await f.service.saveReviewProfile(lead.id, {
+		version: 1,
+		operationId: "profile",
+		profileId: "correctness",
+		expectedRevision: 0,
+		definition: optionalReviewSeeds().correctness,
+	});
+	const artifact = await testArtifacts(f, worker.id).create({
+		kind: "nsh",
+		title: "Report",
+		source: "<p>Retained evidence</p>",
+	});
+	const link = { sessionId: worker.id, artifactId: artifact.id, revision: 1, taskId: task.id };
+	await f.service.linkArtifact(mission.id, link);
+	const ref = { kind: "artifact" as const, artifactId: artifact.id, revision: 1 };
+	const request: ReviewResultWrite = {
+		version: 1,
+		operationId: "review",
+		profileId: "correctness",
+		profileRevision: 1,
+		expectedResultId: null,
+		expectedContextFence: f.store.reviewContextFence(mission.id),
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment!,
+		intent: "research",
+		content: [ref],
+		context: [],
+		preferences: { references: [ref] },
+		output: { state: "completed", outcome: "pass", reason: "Report evidence" },
+		findings: [],
+		resolutions: [],
+		limitations: "Retained source only",
+		confidence: "low",
+	};
+	const original = f.sessions.artifact.bind(f.sessions);
+	let changed = false;
+	const churn = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof original>) => {
+		const value = await original(...args);
+		if (!changed) {
+			changed = true;
+			f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+			await f.service.linkArtifact(mission.id, link);
+		}
+		return value;
+	});
+	await assert.rejects(f.service.recordReviewResult(worker.id, task.id, request), /source\/context.*(changed|stale)/);
+	churn.mock.restore();
+	request.expectedContextFence = f.store.reviewContextFence(mission.id);
+	const saved = await f.service.recordReviewResult(worker.id, task.id, request);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current");
+	await testArtifacts(f, worker.id).update(
+		artifact.id,
+		{ kind: "nsh", title: "Report", source: "<p>New unpinned revision</p>" },
+		1,
+	);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current"); // Exact retained comparison only.
+	f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+	await f.service.linkArtifact(mission.id, link);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "outdated");
+	const get = f.sessions.get.bind(f.sessions);
+	let projectChanged = false;
+	const moved = t.mock.method(f.sessions, "get", (id: string) => {
+		const value = get(id);
+		return projectChanged && id === worker.id && value ? { ...value, projectId: f.other.id } : value;
+	});
+	const duringRead = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof original>) => {
+		const value = await original(...args);
+		projectChanged = true;
+		return value;
+	});
+	await assert.rejects(
+		f.service.recordReviewResult(worker.id, task.id, {
+			...request,
+			operationId: "project-race",
+			expectedResultId: saved.id,
+			expectedContextFence: f.store.reviewContextFence(mission.id),
+		}),
+		/project/i,
+	);
+	duringRead.mock.restore();
+	moved.mock.restore();
+	assert.equal(f.store.reviewHistory(mission.id, task.id).length, 1);
+});
+
+test("delivery evidence rechecks earlier artifact pins after later asynchronous reads", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Evidence",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Native UI record fixture",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Describe a native interaction",
+			scope: "Record fixtures, not UI implementation",
+			criteria: ["Capture", "Interaction report"],
+		},
+	});
+	const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
+	for (const title of ["Static capture fixture", "Interaction report fixture"]) {
+		const artifact = await testArtifacts(f, worker.id).create({
+			kind: "nsh",
+			title,
+			source: `<p>${title}. Not a native render or input test.</p>`,
+		});
+		await f.service.linkArtifact(mission.id, {
+			sessionId: worker.id,
+			artifactId: artifact.id,
+			revision: 1,
+			taskId: task.id,
+		});
+		refs.push({ kind: "artifact", artifactId: artifact.id, revision: 1 });
+	}
+	const request = {
+		version: 1,
+		operationId: "ui-fixture",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "native-ui",
+		claim: "Record examples only",
+		limitations: "No native renderer or interaction observed",
+		coverage: [[0], [1]],
+		evidence: refs,
+	};
+	const read = f.sessions.artifact.bind(f.sessions);
+	const revoke = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof read>) => {
+		const artifact = await read(...args);
+		if (artifact.id === refs[1]!.artifactId) f.store.unlinkArtifact(mission.id, refs[0]!.artifactId, {}, task.id);
+		return artifact;
+	});
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, request), /pinned/);
+	assert.equal(f.store.deliveryEvidence(mission.id, task.id).length, 0);
+	revoke.mock.restore();
+	const first = await read(worker.id, refs[0]!.artifactId, 1);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: first.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const saved = await f.service.submitDeliveryEvidence(worker.id, task.id, request);
+	const result = await f.service.evaluateDeliveryEvidence(lead.id, task.id);
+	assert.equal(saved.request.kind, "native-ui");
+	assert.equal(result.verification.independentReview, "unavailable");
+	assert.equal(result.eligibility, "unavailable");
+});
+
+test("frozen comparison identities are host-resolved, scoped to worker custody and never exact task proof", async (t) => {
+	let snapshot: ReviewSnapshot;
+	const f = await fixture(t, undefined, undefined, {
+		get: async (id) => {
+			if (!snapshot || snapshot.snapshotId !== id) throw new Error("Snapshot unavailable");
+			return snapshot;
+		},
+	});
+	const lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Code evidence",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Code",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Bound source",
+			scope: "One layer",
+			criteria: ["Retained source"],
+		},
+	});
+	const manifest: ReviewSnapshot["manifest"] = {
+		version: 1,
+		request: {
+			requestId: "capture",
+			repositoryId: "a".repeat(64),
+			changeId: "k".repeat(32),
+			operationId: "a".repeat(128),
+			base: { changeId: "l".repeat(32), commitId: "b".repeat(40) },
+			head: { changeId: "k".repeat(32), commitId: "c".repeat(40) },
+			scope: { kind: "layer" },
+			source: "committed",
+		},
+		provenance: {
+			capturedAt: 1,
+			taskAttribution: "unknown",
+			ledger: {
+				repositoryId: "a".repeat(64),
+				changeId: "k".repeat(32),
+				discovery: "complete",
+				ownership: {
+					status: "owned",
+					binding: {
+						version: 1,
+						sessionId: worker.id,
+						missionId: mission.id,
+						taskIds: [task.id],
+						repositoryId: "a".repeat(64),
+						repositoryPath: "/retained-host",
+						workspace: "pilot-worker-aaaaaaaaaaaaaaaa",
+						path: "/retired-worker",
+						startOperation: "a".repeat(128),
+					},
+					creation: {
+						changeId: "k".repeat(32),
+						commitId: "c".repeat(40),
+						operationId: "a".repeat(128),
+						kind: "workspace-created",
+					},
+					taskAttribution: "unknown",
+				},
+				current: {
+					status: "observed",
+					revisions: [{ changeId: "k".repeat(32), commitId: "c".repeat(40), parents: ["b".repeat(40)] }],
+				},
+			},
+		},
+		status: "complete",
+		omissions: [],
+		before: [],
+		after: [
+			{
+				path: "handler.ts",
+				mode: "100644",
+				gitOid: "e".repeat(40),
+				state: "text",
+				sha256: "f".repeat(64),
+				bytes: 100,
+			},
+		],
+		changes: [],
+		trees: { before: "d".repeat(40), after: "d".repeat(40) },
+		diff: { sha256: createHash("sha256").update("").digest("hex"), bytes: 0 },
+	};
+	const originalOwnership = structuredClone(manifest.provenance.ledger.ownership);
+	const pin = () => {
+		snapshot = {
+			snapshotId: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
+			manifest: structuredClone(manifest),
+		};
+	};
+	pin();
+	const request = {
+		version: 1,
+		operationId: "code-report",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "code",
+		claim: "Source retained",
+		limitations: "No test, review, landing or exact task proof",
+		coverage: [[0]],
+		evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+	};
+	const saved = await f.service.submitDeliveryEvidence(worker.id, task.id, request);
+	const evaluation = await f.service.evaluateDeliveryEvidence(lead.id, task.id);
+	assert.equal(saved.observations[0]?.sha256, snapshot!.snapshotId);
+	assert.equal(evaluation.verification.taskAtOperation, "unavailable");
+	assert.equal(evaluation.verification.liveSource, "unavailable");
+	assert.equal(evaluation.integration, "unavailable");
+	await f.service.saveReviewProfile(lead.id, {
+		version: 1,
+		operationId: "profile",
+		profileId: "correctness",
+		expectedRevision: 0,
+		definition: optionalReviewSeeds().correctness,
+	});
+	const citation = {
+		kind: "code" as const,
+		snapshotId: snapshot!.snapshotId,
+		side: "after" as const,
+		path: "handler.ts",
+		sha256: "f".repeat(64),
+		start: 0,
+		end: 50,
+	};
+	const review: ReviewResultWrite = {
+		version: 1,
+		operationId: "code-review",
+		profileId: "correctness",
+		profileRevision: 1,
+		expectedResultId: null,
+		expectedContextFence: f.store.reviewContextFence(mission.id),
+		definitionRevision: request.definitionRevision,
+		assignment: task.assignment!,
+		intent: "code",
+		content: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		context: [],
+		preferences: { unavailable: "No preference versions" },
+		output: { state: "completed", outcome: "fail", reason: "Missing boundary validation" },
+		findings: [
+			{
+				id: "trigger",
+				title: "Missing validation",
+				trigger: "Handler receives untrusted input",
+				cost: "Invalid state reaches persistence",
+				basis: "introduced",
+				severity: "high",
+				evidence: [citation],
+				counterevidence: "No validation is visible on this retained path",
+			},
+		],
+		resolutions: [],
+		limitations: "Static retained path, not runtime verification",
+		confidence: "medium",
+	};
+	for (const change of [
+		{ path: "missing.ts" },
+		{ sha256: "0".repeat(64) },
+		{ end: 101 },
+		{ side: "before" as const },
+	]) {
+		await assert.rejects(
+			f.service.recordReviewResult(worker.id, task.id, {
+				...review,
+				findings: [{ ...review.findings[0], evidence: [{ ...citation, ...change }] }],
+			}),
+			/exact retained text range/,
+		);
+	}
+	const reviewed = await f.service.recordReviewResult(worker.id, task.id, review);
+	const allocationRequest = {
+		version: 1,
+		action: "allocate",
+		operationId: "allocate-code",
+		expectedAllocationId: null,
+		reason: "Selected saved layer, not original task purpose",
+		submissionId: saved.id,
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: request.definitionRevision,
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		sources: saved.observations,
+	};
+	const allocation = await f.service.recordContributionAllocation(lead.id, task.id, allocationRequest);
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).applicability, "current");
+	assert.equal(allocation.historicalTaskAttribution, "unknown");
+	assert.equal(snapshot!.manifest.provenance.taskAttribution, "unknown");
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).eligibility, "unavailable");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "current");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).liveSourceFreshness, "unavailable");
+	// The production host entry reuses native retained custody, not the optional legacy evidence resolver.
+	const own = snapshot!.manifest.provenance.ledger.ownership;
+	assert.equal(own.status, "owned");
+	if (own.status !== "owned") throw new Error("fixture");
+	let passiveOperation = manifest.request.operationId;
+	const native = t.mock.method(
+		f.sessions,
+		"nativeReviewReader",
+		(_worker: string, _mission: string | undefined, _project: string, authorize: () => void) =>
+			new NativeReviewReader(
+				{
+					get: async () => structuredClone(snapshot!),
+					list: async () => ({ comparisons: [], next: null }),
+					read: async () => new Uint8Array(),
+					diff: async () => new Uint8Array(),
+				},
+				{
+					get: async () => structuredClone(snapshot!.manifest.provenance.ledger),
+					list: async () =>
+						structuredClone([
+							{
+								...snapshot!.manifest.provenance.ledger,
+								current: {
+									...snapshot!.manifest.provenance.ledger.current,
+									operationId: passiveOperation,
+								},
+							},
+						]),
+					binding: async () => ({
+						binding: structuredClone(own.binding),
+						cursor: passiveOperation,
+						coverage: "complete",
+						problem: null,
+						deliveryEnabled: true,
+					}),
+					head: async () => passiveOperation,
+				},
+				async () => {
+					authorize();
+					return structuredClone(own.binding);
+				},
+			),
+	);
+	const observed = await f.service.observeCodeDelivery(lead.id, task.id);
+	assert.equal(observed.status, "observed");
+	if (observed.status !== "observed") throw new Error("fixture");
+	assert.equal(observed.binding.status, "observed");
+	assert.equal(observed.binding.submissionId, saved.id);
+	assert.equal(observed.binding.allocationId, allocation.id);
+	assert.equal(observed.contributions.selected[0]?.status, "observed");
+	assert.equal(observed.contributions.inventory.status, "unknown");
+	assert.equal(observed.configuredChecks.status, "unknown");
+	assert.equal(observed.ownedPullRequests.discovery, "unknown");
+	assert.equal(observed.integration.status, "unknown");
+	const workerMeta = f.sessions["require"](worker.id);
+	const previousUrls = workerMeta.boundPullRequests;
+	workerMeta.boundPullRequests = ["https://github.com/o/r/pull/1"];
+	const changedSource = t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string) => {
+		passiveOperation = "f".repeat(128);
+		return { url, status: "unknown", reason: "fixture" };
+	});
+	assert.equal(
+		(await f.service.observeCodeDelivery(lead.id, task.id)).status,
+		"stale",
+		"source is rechecked after GitHub I/O",
+	);
+	changedSource.mock.restore();
+	workerMeta.boundPullRequests = previousUrls;
+	passiveOperation = manifest.request.operationId;
+	native.mock.restore();
+	// Same reference with altered retained bytes is not silently accepted as a fresh version.
+	snapshot!.manifest.omissions.push("corrupt manifest");
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).applicability, "unavailable");
+	assert.deepEqual(await f.service.lookupContributionAllocation(lead.id, task.id, allocationRequest), allocation);
+	assert.deepEqual(await f.service.recordContributionAllocation(lead.id, task.id, allocationRequest), allocation);
+	await assert.rejects(
+		f.service.recordContributionAllocation(lead.id, task.id, {
+			...allocationRequest,
+			operationId: "corrupt",
+			expectedAllocationId: allocation.id,
+		}),
+		/identity mismatch/,
+	);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
+	assert.deepEqual(await f.service.submitDeliveryEvidence(worker.id, task.id, request), saved);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "unavailable");
+	manifest.after.push({
+		path: "boundary.ts",
+		mode: "100644",
+		gitOid: "1".repeat(40),
+		state: "text",
+		sha256: "2".repeat(64),
+		bytes: 80,
+	});
+	pin();
+	const resolved = await f.service.recordReviewResult(worker.id, task.id, {
+		...review,
+		operationId: "recheck-path",
+		expectedResultId: reviewed.id,
+		content: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		output: { state: "completed", outcome: "pass", reason: "Boundary now rejects the triggering input" },
+		findings: [],
+		resolutions: [
+			{
+				resultId: reviewed.id,
+				findingId: "trigger",
+				assessment: "resolved",
+				triggeringPathReason:
+					"Validation at the boundary prevents the handler trigger; handler lines need not change",
+				evidence: [{ ...citation, snapshotId: snapshot!.snapshotId, path: "boundary.ts", sha256: "2".repeat(64) }],
+			},
+		],
+	});
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "outdated");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, resolved.id)).applicability, "current");
+	assert.equal(f.store.reviewResult(mission.id, reviewed.id)!.request.findings[0]!.id, "trigger");
+	for (const status of ["partial", "unavailable"] as const) {
+		manifest.status = status;
+		pin();
+		const record = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+			...request,
+			operationId: `code-${status}`,
+			expectedSubmissionId:
+				status === "partial"
+					? saved.id
+					: f.store.currentDeliveryEvidence(mission.id, task.id).find((r) => r.type === "submission")!.id,
+			evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		});
+		assert.equal(record.observations[0]?.availability, status);
+		await assert.rejects(
+			f.service.recordContributionAllocation(lead.id, task.id, {
+				...allocationRequest,
+				operationId: `allocate-${status}`,
+				expectedAllocationId: allocation.id,
+				submissionId: record.id,
+				sources: record.observations,
+			}),
+			/partial or unavailable/,
+		);
+		assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
+	}
+	if (manifest.provenance.ledger.ownership.status === "owned")
+		manifest.provenance.ledger.ownership.binding.missionId = "other";
+	pin();
+	await assert.rejects(
+		f.service.submitDeliveryEvidence(worker.id, task.id, {
+			...request,
+			operationId: "wrong-scope",
+			expectedSubmissionId: f.store
+				.currentDeliveryEvidence(mission.id, task.id)
+				.find((r) => r.type === "submission")!.id,
+			evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		}),
+		/not authorized/,
+	);
+	// Seed exact host observations so allocation itself, not submission admission, exercises custody rejection.
+	for (const mutation of ["other-mission", "other-worker", "unknown", "missing"] as const) {
+		manifest.provenance.ledger.ownership = structuredClone(originalOwnership);
+		if (manifest.provenance.ledger.ownership.status === "owned") {
+			if (mutation === "other-mission") manifest.provenance.ledger.ownership.binding.missionId = "other";
+			if (mutation === "other-worker") manifest.provenance.ledger.ownership.binding.sessionId = lead.id;
+		}
+		if (mutation === "unknown") manifest.provenance.ledger.ownership = { status: "unknown", reason: "unproven" };
+		manifest.status = "complete";
+		pin();
+		const ref = {
+			kind: "snapshot" as const,
+			snapshotId: mutation === "missing" ? "0".repeat(64) : snapshot!.snapshotId,
+		};
+		const current = f.store.currentDeliveryEvidence(mission.id, task.id).find((r) => r.type === "submission")!;
+		const submission = await f.store.submitDeliveryEvidence(
+			mission.id,
+			task.id,
+			worker.id,
+			{
+				...request,
+				operationId: `seed-${mutation}`,
+				expectedSubmissionId: current.id,
+				evidence: [ref],
+			},
+			async () => ({
+				reference: ref,
+				sourceOwnerSessionId: worker.id,
+				sha256: ref.snapshotId,
+				availability: "retained",
+			}),
+		);
+		await assert.rejects(
+			f.service.recordContributionAllocation(lead.id, task.id, {
+				...allocationRequest,
+				operationId: `allocate-${mutation}`,
+				expectedAllocationId: allocation.id,
+				submissionId: submission.id,
+				sources: submission.observations,
+			}),
+			/not authorized|unavailable|Snapshot unavailable/i,
+		);
+	}
+});
+
+test("dormant allocation uses exact pinned non-code revisions and current project admission even on recovery", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Allocation",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Bounded", criteria: ["Sources"] },
+	});
+	const artifact = await testArtifacts(f, worker.id).create({
+		kind: "nsh",
+		title: "Report",
+		source: "<p>Exact report v1</p>",
+	});
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+		version: 1,
+		operationId: "report",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "research",
+		claim: "Report",
+		limitations: "No proof of code-free work",
+		evidence: [{ kind: "artifact", artifactId: artifact.id, revision: 1 }],
+		coverage: [[0]],
+	});
+	const request = {
+		version: 1,
+		action: "allocate",
+		operationId: "allocate",
+		expectedAllocationId: null,
+		reason: "Select report scope only",
+		submissionId: submission.id,
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		sources: submission.observations,
+	};
+	await assert.rejects(f.service.recordContributionAllocation(worker.id, task.id, request), /coordinator/);
+	await assert.rejects(
+		f.service.recordContributionAllocation(lead.id, task.id, { ...request, actorSessionId: worker.id }),
+		/fields/,
+	);
+	const saved = await f.service.recordContributionAllocation(lead.id, task.id, request);
+	await testArtifacts(f, worker.id).update(
+		artifact.id,
+		{ kind: "nsh", title: "Report", source: "<p>Unselected v2</p>" },
+		1,
+	);
+	const result = await f.service.evaluateContributionAllocation(lead.id, saved.id);
+	assert.equal(result.applicability, "current");
+	assert.equal(result.scopeCoverage, "selected-only");
+	assert.equal(result.contributionCompleteness, "unavailable");
+	assert.equal(result.liveSourceFreshness, "unavailable");
+	assert.equal(result.eligibility, "unavailable");
+	const get = f.sessions.get.bind(f.sessions);
+	const moved = t.mock.method(f.sessions, "get", (id: string) => {
+		const s = get(id);
+		return s && id === lead.id ? { ...s, projectId: f.other.id } : s;
+	});
+	await assert.rejects(f.service.recordContributionAllocation(lead.id, task.id, request), /project/i);
+	await assert.rejects(f.service.lookupContributionAllocation(lead.id, task.id, request), /project/i);
+	await assert.rejects(f.service.evaluateContributionAllocation(lead.id, saved.id), /project/i);
+	moved.mock.restore();
+	const movedWorker = t.mock.method(f.sessions, "get", (id: string) => {
+		const s = get(id);
+		return s && id === worker.id ? { ...s, projectId: f.other.id } : s;
+	});
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, saved.id)).applicability, "unavailable");
+	await assert.rejects(
+		f.service.recordContributionAllocation(lead.id, task.id, {
+			...request,
+			operationId: "moved-worker",
+			expectedAllocationId: saved.id,
+		}),
+		/project/i,
+	);
+	movedWorker.mock.restore();
+	f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, saved.id)).applicability, "unavailable");
+	assert.deepEqual(await f.service.lookupContributionAllocation(lead.id, task.id, request), saved);
+	assert.deepEqual(await f.service.recordContributionAllocation(lead.id, task.id, request), saved);
+	f.store.leave(lead.id);
+	await assert.rejects(f.service.lookupContributionAllocation(lead.id, task.id, request), /membership/i);
+	assert.equal(f.store.completion(mission.id, task.id), undefined);
+});
+
+for (const race of ["pin-aba", "actor-project", "custodian-project", "coordinator-aba", "continuation"] as const) {
+	test(`allocation rechecks ${race} after asynchronous retained reads`, async (t) => {
+		const f = await fixture(t),
+			lead = await f.spawn(),
+			worker = await f.spawn();
+		const successor = race === "continuation" ? await f.spawn() : undefined;
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "Allocation race",
+			planningVersion: 1,
+			fromSessionId: lead.id,
+			draft: false,
+		});
+		f.service.join(worker.id, { missionId: mission.id });
+		const task = f.store.addTask(mission.id, {
+			title: "Report",
+			sessionId: worker.id,
+			assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Bounded", criteria: ["Sources"] },
+		});
+		const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
+		for (const title of ["Report", "Source"]) {
+			const artifact = await testArtifacts(f, worker.id).create({
+				kind: "nsh",
+				title,
+				source: `<p>${title}</p>`,
+			});
+			await f.service.linkArtifact(mission.id, {
+				sessionId: worker.id,
+				artifactId: artifact.id,
+				revision: 1,
+				taskId: task.id,
+			});
+			refs.push({ kind: "artifact", artifactId: artifact.id, revision: 1 });
+		}
+		const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+			version: 1,
+			operationId: "report",
+			expectedSubmissionId: null,
+			definitionRevision: f.store.sharedDefinitionRevision(task.id),
+			assignment: task.assignment,
+			kind: "research",
+			claim: "Report",
+			limitations: "Unverified",
+			evidence: refs,
+			coverage: [[0, 1]],
+		});
+		const request = {
+			version: 1,
+			action: "allocate",
+			operationId: "allocate",
+			expectedAllocationId: null,
+			reason: "Select retained scope",
+			submissionId: submission.id,
+			assignment: task.assignment,
+			ownerSessionId: worker.id,
+			definitionRevision: f.store.sharedDefinitionRevision(task.id),
+			expectedContextFence: f.store.allocationContextFence(mission.id),
+			sources: submission.observations,
+		};
+		const get = f.sessions.get.bind(f.sessions);
+		let moved: string | undefined;
+		t.mock.method(f.sessions, "get", (id: string) => {
+			const s = get(id);
+			return s && id === moved ? { ...s, projectId: f.other.id } : s;
+		});
+		const original = f.sessions.artifact.bind(f.sessions);
+		t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof original>) => {
+			const value = await original(...args);
+			if (value.id === refs[1]!.artifactId) {
+				if (race === "pin-aba") {
+					f.store.unlinkArtifact(mission.id, refs[0]!.artifactId, {}, task.id);
+					await f.service.linkArtifact(mission.id, {
+						sessionId: worker.id,
+						artifactId: refs[0]!.artifactId,
+						revision: 1,
+						taskId: task.id,
+					});
+				}
+				if (race === "actor-project") moved = lead.id;
+				if (race === "custodian-project") moved = worker.id;
+				if (race === "coordinator-aba") {
+					f.store.update(mission.id, { coordinatorSessionId: worker.id });
+					f.store.update(mission.id, { coordinatorSessionId: lead.id });
+				}
+				if (race === "continuation") f.store.continueSession(worker.id, successor!.id);
+			}
+			return value;
+		});
+		await assert.rejects(
+			f.service.recordContributionAllocation(lead.id, task.id, request),
+			/stale|changed|project|membership/i,
+		);
+		assert.deepEqual(f.store.contributionAllocationHistory(mission.id, task.id), []);
+	});
+}
+
+test("members read the old mission their mission re-plans, and nothing else", async (t) => {
+	const f = await fixture(t);
+	const old = f.store.create({ projectId: f.project.id, title: "Old mission", goal: "Ship" });
+	const done = f.store.addTask(old.id, { title: "Shipped importer", body: "Importer details" });
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Re-plan",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	await assert.rejects(f.service.call(lead.id, "replaced", {}), /does not re-plan/);
+	f.store.linkSuccessor(old.id, mission.id, f.project.id, "replan-op");
+	const view = (await f.service.call(lead.id, "replaced", {})) as { title: string; tasks: unknown[] };
+	assert.equal(view.title, "Old mission");
+	assert.deepEqual(view.tasks, [{ number: done.number, title: "Shipped importer", status: "todo" }]);
+	const one = (await f.service.call(lead.id, "replaced", { id: `#${done.number}` })) as { task: { body: string } };
+	assert.equal(one.task.body, "Importer details");
+	await assert.rejects(f.service.call(lead.id, "replaced", { id: "x" }), /task number/);
+});
+
+test("coordinator admits explorer research before a brief, preserving reports, proposals and Ask profile", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Research",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, {
+		title: "Investigate source",
+		body: "Find relevant behavior and report sources. No implementation.",
+	});
+	const explorer = (await f.service.call(lead.id, "start", { id: task.id, role: "explorer" })) as SessionSummary;
+	assert.equal(explorer.mode, "ask");
+	assert.equal(explorer.missionRole, "explorer");
+	assert.equal(f.sessions.get(lead.id)?.missionRole, "coordinator");
+	const worker = await until(() => f.workers.get(explorer.id));
+	assert.equal(worker.spec.mission?.role, "explorer");
+	assert.equal(worker.spec.mission?.briefRevision, 0);
+	assert.equal(worker.spec.pilot?.ask?.source, f.project.path);
+	assert.equal(worker.spec.pilot?.workspace, undefined);
+	assert.equal(((await f.service.call(explorer.id, "get", {})) as { role: string }).role, "explorer");
+	await f.service.call(explorer.id, "log", {
+		text: "Found current behavior; source: src/example.ts. Coverage incomplete.",
+	});
+	const comment = (await f.service.call(explorer.id, "comment", {
+		text: "Propose a narrower scope; may I inspect the external specification?",
+		targetSessionId: lead.id,
+	})) as { authorSessionId: string };
+	assert.equal(comment.authorSessionId, explorer.id);
+	const artifact = await testArtifacts(f, explorer.id).create({
+		title: "Findings proposal",
+		kind: "nsh",
+		source: "<p>Sources and limitations</p>",
+	});
+	await f.service.call(explorer.id, "attach", { artifactId: artifact.id, taskId: task.id });
+	assert.equal(f.store.detail(mission.id).artifacts[0]?.sessionId, explorer.id);
+	for (const [action, args] of [
+		["brief", { markdown: "Rewritten", expectedRevision: 0 }],
+		["decide", { text: "Own plan", actor: { sessionId: lead.id } }],
+		["task", { id: task.id, body: "New criteria" }],
+		["start", { id: task.id, role: "builder", actorSessionId: lead.id }],
+	] as const)
+		await assert.rejects(f.service.call(explorer.id, action, args), /Coordinator-owned|Only the mission coordinator/);
+	await assert.rejects(f.service.call(explorer.id, "task", { id: task.id, status: "blocked" }), /[Cc]oordinator/);
+	await f.service.call(lead.id, "task", { id: task.id, status: "blocked" });
+	assert.equal(f.store.task(mission.id, task.id).status, "blocked");
+	assert.equal(f.store.require(mission.id).briefRevision, 0);
+	assert.equal(f.service.context(explorer.id)?.role, "explorer");
+});
+
+test("project preferences IPC scopes planning coordinators; Knowledge is open to them except documentation batches", async (t) => {
+	const f = await fixture(t);
+	f.sessions.setKnowledge(new KnowledgeService(f.store, f.projects, f.sessions));
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Preferences",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const note = f.store.log(mission.id, { text: "Use short paragraphs." });
+	let held = false;
+	let revoked = false;
+	const detach = f.sessions.setPlanningBridge({
+		assert: () => {
+			if (revoked) throw new Conflict("Planning binding revoked");
+		},
+		held: () => held,
+		call: async () => {
+			throw new Error("No planner effects");
+		},
+		close: async () => {},
+	});
+	t.after(detach);
+	// biome-ignore lint/complexity/useLiteralKeys: Exercise the host-supplied binding, not a model argument.
+	const meta = f.sessions["require"](lead.id);
+	meta.planning = {
+		version: 1,
+		profile: PLANNING_PROFILE,
+		home: f.home,
+		host: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
+		projectId: f.project.id,
+		ownerSessionId: lead.id,
+		missionId: mission.id,
+		enrollmentId: "enrollment",
+		creationOperationId: "create",
+	};
+	const worker = await until(() => f.workers.get(lead.id));
+	const call = async (action: string, args: Record<string, unknown> = {}) => {
+		const callId = randomUUID();
+		worker.onPacket({
+			type: "host.call",
+			method: "knowledge",
+			callId,
+			args: { action: action as never, args: args as never },
+		});
+		return await until(() =>
+			worker.sent.find((p): p is HostResult<"knowledge"> => p.type === "host.result" && p.callId === callId),
+		);
+	};
+	assert.equal((await call("context")).error, undefined);
+	// Planners record research as Knowledge; documentation batches stay with ordinary coordinators.
+	assert.doesNotMatch((await call("create", {})).error ?? "", /only its bound native port/);
+	assert.match((await call("batch", {})).error ?? "", /only its bound native port/);
+	const input = {
+		operationId: "pref-op",
+		expectedRevision: 0,
+		entries: [{ id: "style", text: note.text }],
+		reason: "Explicit user choice",
+		source: { type: "mission_note", missionId: mission.id, eventId: note.id, quote: note.text },
+	};
+	held = true;
+	assert.match((await call("preferences.write", input)).error ?? "", /held/);
+	held = false;
+	assert.equal((await call("preferences.write", input)).error, undefined);
+	assert.equal((await call("preferences.lookup", { operationId: "pref-op" })).error, undefined);
+	revoked = true;
+	assert.match((await call("preferences.get")).error ?? "", /revoked/);
+	assert.equal(f.store.preferences.get(f.project.id).revision, 1);
+});
+
+test("knowledge IPC derives identity from the supervised chat and keeps explorers read-only", async (t) => {
+	const f = await fixture(t);
+	f.sessions.setKnowledge(new KnowledgeService(f.store, f.projects, f.sessions));
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Knowledge",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Investigate" });
+	const explorer = (await f.service.call(lead.id, "start", { id: task.id, role: "explorer" })) as SessionSummary;
+	const member = await f.spawn();
+	f.service.join(member.id, { missionId: mission.id });
+	const call = async (sessionId: string, action: string, args: Record<string, unknown>, operationId?: string) => {
+		const worker = await until(() => f.workers.get(sessionId));
+		const callId = randomUUID();
+		worker.onPacket({
+			type: "host.call",
+			method: "knowledge",
+			callId,
+			args: { action: action as never, args: args as never, operationId },
+		});
+		return (await until(() =>
+			worker.sent.find((command) => command.type === "host.result" && command.callId === callId),
+		)) as HostResult<"knowledge">;
+	};
+	const report = await testArtifacts(f, explorer.id).create({
+		title: "Findings",
+		kind: "nsh",
+		source: "<p>Sources and limitations</p>",
+	});
+	const entry = {
+		kind: "investigation",
+		title: "Source behavior",
+		synopsis: "What the source does today.",
+		body: "## Question\nWhat happens?\n\n## Findings\nF1 (observed): it works.\n\n## Limitations\nOne path only.",
+		sources: [{ type: "artifact", sessionId: explorer.id, artifactId: report.id, revision: report.revision }],
+	};
+	assert.match((await call(explorer.id, "create", entry, "explorer-op")).error ?? "", /read-only/);
+	assert.match((await call(member.id, "create", { ...entry, projectId: f.other.id }, "x")).error ?? "", /own project/);
+	const created = await call(member.id, "create", { ...entry, taskId: `#${task.number}` }, "member-op");
+	assert.equal(created.error, undefined);
+	const id = (created.result as { entry: { id: string; origin: Record<string, unknown> } }).entry.id;
+	const detail = (await call(explorer.id, "get", { id })).result as {
+		revision: { author: unknown };
+		entry: { origin: Record<string, unknown> };
+		missionLink: { linkRevision: number };
+	};
+	assert.deepEqual(detail.revision.author, { type: "session", sessionId: member.id });
+	assert.equal(detail.entry.origin.missionId, mission.id);
+	assert.equal(detail.entry.origin.taskId, task.id);
+	assert.equal(detail.missionLink.linkRevision, 0);
+	assert.match((await call(member.id, "link", { id, expectedLinkRevision: 0 })).error ?? "", /coordinator/);
+	assert.equal(
+		((await call(lead.id, "link", { id, expectedLinkRevision: 0 })).result as { linkRevision: number }).linkRevision,
+		1,
+	);
+	// The same operation retried after a lost result returns the saved entry.
+	const again = await call(member.id, "create", { ...entry, taskId: `#${task.number}` }, "member-op");
+	assert.equal((again.result as { replayed: boolean }).replayed, true);
+	assert.equal(f.store.knowledge.list(f.project.id, {}, undefined, 50).entries.length, 1);
+	// The IPC result is the ACK: it waits for durability, and a durability failure is an error, not success.
+	const durable = f.store.durable.bind(f.store);
+	let release: (() => void) | undefined;
+	f.store.durable = () => new Promise<void>((resolve) => (release = resolve));
+	const worker = f.workers.get(member.id)!;
+	const held = randomUUID();
+	worker.onPacket({
+		type: "host.call",
+		method: "knowledge",
+		callId: held,
+		args: { action: "create" as never, args: { ...entry, title: "Held" } as never, operationId: "held-op" },
+	});
+	// The entry is committed in memory; its ACK is still waiting on disk.
+	await until(() => release);
+	for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(
+		worker.sent.some((command) => command.type === "host.result" && command.callId === held),
+		false,
+	);
+	release!();
+	f.store.durable = durable;
+	const heldResult = (await until(() =>
+		worker.sent.find((command) => command.type === "host.result" && command.callId === held),
+	)) as HostResult<"knowledge">;
+	assert.equal(heldResult.error, undefined);
+	f.store.durable = () => Promise.reject(new Error("disk full"));
+	assert.match((await call(member.id, "create", { ...entry, title: "Lost" }, "failed-op")).error ?? "", /disk full/);
+	assert.match((await call(lead.id, "unlink", { id, expectedLinkRevision: 1 })).error ?? "", /disk full/);
+	f.store.durable = durable;
+});
+
+test("role admission refuses legacy adoption, Build conversion and incompatible task-holder reuse", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Roles", planningVersion: 1 });
+	assert.throws(() => f.service.join(member.id, { missionId: mission.id, role: "explorer" }), /existing Ask session/);
+	assert.equal(f.store.missionOf(member.id), undefined);
+	f.service.join(member.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Research" });
+	await assert.rejects(
+		f.service.startTask(mission.id, task.id, { role: "explorer", mode: "build" }),
+		/requires Ask mode/,
+	);
+	t.mock.method(f.sessions, "taskHolders", () => [f.sessions.get(member.id)!]);
+	await assert.rejects(f.service.startTask(mission.id, task.id, { role: "explorer" }), /different role\/profile/);
+	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+	const legacy = await f.service.create({ projectId: f.project.id, title: "Legacy" });
+	const legacyTask = f.store.addTask(legacy.mission.id, { title: "Legacy work" });
+	await assert.rejects(
+		f.service.startTask(legacy.mission.id, legacyTask.id, { role: "explorer" }),
+		/adoption is not supported/,
+	);
+	await assert.rejects(f.service.startTask(mission.id, task.id, { role: "coordinator" as never }), /role must be/);
+});
+
+test("role selection rechecks trusted coordinator identity after asynchronous spawn preparation", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const replacement = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Recheck",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(replacement.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Do not start" });
+	const before = f.sessions.list().length;
+	const spawn = f.sessions.spawn.bind(f.sessions);
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<SessionManager["spawn"]>) => {
+		f.store.update(mission.id, { coordinatorSessionId: replacement.id });
+		return spawn(...args);
+	});
+	await assert.rejects(
+		f.service.call(lead.id, "start", { id: task.id, role: "explorer", actorSessionId: replacement.id }),
+		/current mission coordinator/,
+	);
+	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+	assert.equal(f.sessions.list().length, before);
+	assert.deepEqual(f.store.members(mission.id).sort(), [lead.id, replacement.id].sort());
+});
+
+test("reviewer is additive metadata and omitted roles preserve builder and legacy starts", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Metadata", planningVersion: 1 });
+	for (const role of ["reviewer", undefined] as const) {
+		const task = f.store.addTask(mission.id, { title: "Work" });
+		const member = await f.service.startTask(mission.id, task.id, { role });
+		assert.equal(member.mode, "build");
+		assert.equal(member.missionRole, role ?? "builder");
+		assert.equal(f.service.context(member.id)?.role, role ?? "builder");
+	}
+	const legacy = await f.service.create({ projectId: f.project.id, title: "Legacy" });
+	const task = f.store.addTask(legacy.mission.id, { title: "Work" });
+	const member = await f.service.startTask(legacy.mission.id, task.id);
+	assert.equal(member.mode, "build");
+	assert.equal(member.missionRole, undefined);
+});
+
+test("legacy coordinator tool closes tasks without a commit while workers still need delivery", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Commit-free closure",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	for (const status of ["done", "dropped"] as const) {
+		const task = f.store.addTask(mission.id, { title: status, sessionId: member.id });
+		if (status === "done")
+			await assert.rejects(f.service.call(member.id, "task", { id: task.id, status }), /[Cc]oordinator/);
+		await f.service.call(lead.id, "task", { id: task.id, status });
+		assert.equal(f.store.task(mission.id, task.id).status, status);
+		assert.equal(f.store.completion(mission.id, task.id), undefined);
+	}
+	assert.equal(f.store.retiredMember(member.id), false);
+});
+
+test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR completion usable", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Owned planning",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const assignment = {
+		version: 1,
+		expectedRevision: 0,
+		intent: "Verify non-code outcome",
+		scope: "Research only",
+		criteria: ["Record sources and limitations"],
+	};
+	const task = (await f.service.call(lead.id, "task", { title: "Research", assignment, sessionId: member.id })) as {
+		id: string;
+	};
+	const call = async (sessionId: string, action: string, args: Record<string, unknown>) => {
+		const worker = f.workers.get(sessionId)!;
+		const callId = randomUUID();
+		worker.onPacket({
+			type: "host.call",
+			method: "mission",
+			callId,
+			args: { action: action as never, args: args as never },
+		});
+		return (await until(() =>
+			worker.sent.find((command) => command.type === "host.result" && command.callId === callId),
+		)) as HostResult<"mission">;
+	};
+	for (const [action, args] of [
+		["brief", { markdown: "Unauthorized", expectedRevision: 0 }],
+		["decide", { text: "Unauthorized", sessionId: lead.id, actor: {} }],
+		["task", { id: task.id, body: "Weakened", actor: { sessionId: lead.id } }],
+		["task", { id: task.id, assignment: { ...assignment, expectedRevision: 1 } }],
+		["task", { id: task.id, status: "done" }],
+	] as const)
+		assert.match((await call(member.id, action, args)).error ?? "", /Coordinator-owned/);
+	assert.equal((await call(lead.id, "brief", { markdown: "Coordinator spec", expectedRevision: 0 })).error, undefined);
+	const read = (await f.service.call(member.id, "get", { id: task.id })) as {
+		assignment: { revision: number; criteria: string[] };
+	};
+	assert.equal(read.assignment.revision, 1);
+	assert.deepEqual(read.assignment.criteria, assignment.criteria);
+	await assert.rejects(f.service.call(lead.id, "task", { id: task.id, assignment }), /Assignment revision conflict/);
+	assert.match((await call(member.id, "task", { id: task.id, status: "in_progress" })).error ?? "", /[Cc]oordinator/);
+	assert.equal((await call(lead.id, "task", { id: task.id, status: "in_progress" })).error, undefined);
+	assert.equal(
+		(
+			await call(member.id, "log", {
+				kind: "handoff",
+				text: "Research finished, no PR. Sources and limitations recorded; please evaluate criteria.",
+			})
+		).error,
+		undefined,
+	);
+	assert.equal(f.store.task(mission.id, task.id).status, "in_progress", "no fake PR-review submission status");
+	assert.match((await call(member.id, "complete", { id: task.id, completion: {} })).error ?? "", /coordinator/i);
+	assert.equal((await call(lead.id, "task", { id: task.id, status: "done" })).error, undefined);
+	assert.equal(f.store.task(mission.id, task.id).status, "done", "coordinator IPC finishes no-PR work");
+	assert.equal(f.store.retiredMember(member.id), false);
+	f.store.updateTask(mission.id, task.id, { status: "blocked" });
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const response = await fetch(
+		`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}/tasks/${task.id}`,
+		{
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ status: "done" }),
+		},
+	);
+	assert.equal(response.status, 200);
+	assert.equal(((await response.json()) as { status: string }).status, "done");
+});
+
+test("scripted coordinator planning journey reuses task APIs without worker admission", async (t) => {
+	// Script the intended choices, not a planner/model: these assertions prove API effects only.
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Import recovery",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const spawn = t.mock.method(f.sessions, "spawn", async () => {
+		throw new Error("Planning must not start workers");
+	});
+	await f.service.call(lead.id, "brief", {
+		markdown: "Recover interrupted local imports. Preserve item count and order. No cloud sync.",
+		expectedRevision: 0,
+	});
+	const assignment = {
+		version: 1,
+		expectedRevision: 0,
+		intent: "Recover interrupted imports",
+		scope: "Local import journal only. No cloud sync.",
+		criteria: ["Interrupted imports resume without lost or duplicate items"],
+	};
+	// Interview: agreed requirement gets coverage without another confirmation action.
+	const recovery = (await f.service.call(lead.id, "task", {
+		title: "Recover interrupted imports",
+		body: "Source: agreed interview requirement in brief revision 1.",
+		assignment,
+	})) as MissionDetail["tasks"][number];
+	assert.equal(recovery.status, "todo");
+	assert.equal(recovery.sessionId, undefined);
+	// Research: a concrete prerequisite, source reference and explicit blocker, not broader scope.
+	await f.service.call(member.id, "log", {
+		text: "Research: the local journal cannot distinguish unfinished imports.",
+	});
+	const prerequisite = (await f.service.call(lead.id, "task", {
+		title: "Detect unfinished local imports",
+		assignment: {
+			...assignment,
+			intent: "Identify unfinished imports before recovery",
+			criteria: ["Complete and unfinished local journal fixtures are distinguished"],
+		},
+	})) as MissionDetail["tasks"][number];
+	await f.service.call(lead.id, "link", {
+		taskId: prerequisite.id,
+		url: "https://example.com/local-import-journal",
+		title: "Journal research source",
+	});
+	await f.service.call(lead.id, "task", {
+		id: recovery.id,
+		status: "blocked",
+		body: `Blocked by #${prerequisite.number}: unfinished imports must be detectable first.`,
+		dependsOn: [prerequisite.id],
+	});
+	// Delivery/review: update already-covered acceptance on the same task, not a new task per notice.
+	const current = (await f.service.call(lead.id, "get", { id: recovery.id })) as typeof recovery;
+	await f.service.call(lead.id, "task", {
+		id: current.id,
+		assignment: {
+			...assignment,
+			expectedRevision: current.assignment!.revision,
+			criteria: [...assignment.criteria, "Recovery fixtures preserve original item order"],
+		},
+	});
+	// Duplicate delivery/review notices and resume: reread current coverage, with no unchanged write.
+	const before = f.store.detail(mission.id);
+	for (const _journey of ["delivery", "review", "duplicate review", "resume"]) {
+		const { tasks } = (await f.service.call(lead.id, "tasks", { filter: "all" })) as {
+			tasks: Array<{ number: number; assignment?: { revision: number } }>;
+		};
+		assert.equal(tasks.length, 2);
+		assert.equal(tasks.find((task) => task.number === recovery.number)?.assignment?.revision, 2);
+	}
+	assert.deepEqual(f.store.detail(mission.id), before, "coverage reads do not manufacture tasks or progress");
+	// An out-of-scope question stays a question. Only the coordinator can change the plan.
+	await f.service.call(member.id, "comment", {
+		text: "Should cloud sync be supported? Proposal only, outside the brief.",
+	});
+	await assert.rejects(
+		f.service.call(member.id, "task", { title: "Add cloud sync", assignment }),
+		/Coordinator-owned/,
+	);
+	assert.deepEqual(f.store.detail(mission.id).tasks, before.tasks);
+	assert.equal(f.store.detail(mission.id).comments.at(-1)?.authorSessionId, member.id);
+	assert.deepEqual(f.store.task(mission.id, recovery.id).dependsOn, [prerequisite.id]);
+	assert.equal(f.store.task(mission.id, recovery.id).status, "blocked");
+	assert.match(f.store.task(mission.id, recovery.id).body!, /Blocked by/);
+	assert.equal(
+		f.store.detail(mission.id).resources.find((link) => link.taskId === prerequisite.id)?.title,
+		"Journal research source",
+	);
+	assert.ok(f.store.detail(mission.id).tasks.every((task) => task.sessionId === undefined));
+	assert.equal(spawn.mock.callCount(), 0);
+});
+
+test("planning v1 reuses relevant decision audiences/pins and changes context when pins change", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Scoped context",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const all = f.store.addDecision(mission.id, "Mission invariant", {}, "all");
+	const coordinator = f.store.addDecision(mission.id, "Coordination policy", {}, "coordinator");
+	const pinned = f.store.addDecision(mission.id, "Relevant task choice", {}, "reference");
+	const unassociated = f.store.addDecision(mission.id, "Unrelated task choice", {}, "reference");
+	const task = f.store.addTask(mission.id, { title: "Relevant work", sessionId: member.id, decisionIds: [pinned.id] });
+	const context = f.service.context(member.id)!;
+	assert.equal(context.planningVersion, 1);
+	assert.equal(context.briefRevision, 0);
+	assert.deepEqual(
+		context.decisionEntries?.map((entry) => entry.id),
+		[all.id, pinned.id],
+	);
+	assert.deepEqual(
+		f.service.context(lead.id)?.decisionEntries?.map((entry) => entry.id),
+		[all.id, coordinator.id, pinned.id, unassociated.id],
+	);
+	await f.service.call(lead.id, "task", { id: task.id, decisionIds: [] });
+	assert.notEqual(f.service.context(member.id)?.decisionVersion, context.decisionVersion);
+	assert.deepEqual(
+		f.service.context(member.id)?.decisionEntries?.map((entry) => entry.id),
+		[all.id],
+	);
+	await f.service.call(lead.id, "task", {
+		id: task.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Scoped intent",
+			scope: "Only this task",
+			criteria: ["Relevant context"],
+		},
+	});
+	assert.equal(f.service.context(member.id)?.tasks[0]?.assignmentRevision, 1);
+	const summary = (await f.service.call(member.id, "get", {})) as { planningVersion: number };
+	assert.equal(summary.planningVersion, 1);
+	const detail = (await f.service.call(lead.id, "get", { id: task.id })) as { definitionRevision: number };
+	assert.equal(detail.definitionRevision, f.store.sharedDefinitionRevision(task.id));
+	const classification = {
+		version: 1,
+		effort: "medium",
+		difficulty: "routine",
+		risk: "low",
+		uncertainty: "known",
+		scope: "bounded",
+		role: "builder",
+		deliveryKind: "research",
+	};
+	const write = {
+		id: task.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 1,
+			expectedDefinitionRevision: detail.definitionRevision,
+			intent: "Scoped intent",
+			scope: "Only this task",
+			criteria: ["Relevant context"],
+			classification,
+		},
+	};
+	await assert.rejects(f.service.call(member.id, "task", write), /Coordinator-owned/);
+	await f.service.call(lead.id, "task", write);
+	assert.deepEqual(f.store.task(mission.id, task.id).assignment?.classification, classification);
+	await assert.rejects(f.service.call(lead.id, "task", write), /Assignment revision conflict/);
+});
+
+test("user start can resume an opted-in task holder without pretending the worker self-claimed", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Resume", planningVersion: 1 });
+	f.service.join(member.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Resume existing work" });
+	t.mock.method(f.sessions, "taskHolders", () => [f.sessions.get(member.id)!]);
+	const resumed = await f.service.startTask(mission.id, task.id);
+	assert.equal(resumed.id, member.id);
+	assert.equal(f.store.task(mission.id, task.id).sessionId, member.id);
+	assert.equal(f.store.task(mission.id, task.id).status, "in_progress");
+});
+
+test("agent authoring limits validate supplied writes without restricting legacy reads or unrelated edits", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Limits",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const call = (action: Parameters<MissionService["call"]>[1], args: Record<string, unknown>) =>
+		f.service.call(lead.id, action, args);
+	const title = "😀".repeat(200);
+	const body = "😀".repeat(4000);
+	const task = (await call("task", { title, body })) as { id: string };
+	for (const id of [undefined, task.id]) {
+		await assert.rejects(
+			call("task", { ...(id ? { id } : {}), title: `${title}x` }),
+			/201 characters; limit is 200.*Summarize and link/,
+		);
+		await assert.rejects(
+			call("task", { ...(id ? { id } : {}), title: "Valid", body: `${body}x` }),
+			/4001 characters; limit is 4000/,
+		);
+	}
+	await call("task", { id: task.id, title, body });
+	const ticket = (await call("link", { url: "https://linear.app/acme/issue/ENG-12" })) as { id: string };
+	await call("updateLink", { resourceId: ticket.id, linearRole: "managed" });
+	for (const [field, max] of [
+		["title", 200],
+		["body", 4000],
+	] as const) {
+		const before = f.store.tasks(mission.id).length;
+		await assert.rejects(
+			call("split", {
+				resourceId: ticket.id,
+				tasks: [{ title: "Must not be created" }, { title: "Split", [field]: "😀".repeat(max + 1) }],
+			}),
+			new RegExp(`${max + 1} characters; limit is ${max}`),
+		);
+		assert.equal(f.store.tasks(mission.id).length, before);
+	}
+	await call("split", { resourceId: ticket.id, tasks: [{ title: "x".repeat(200), body }] });
+	assert.equal(f.store.task(mission.id, task.id).title, title);
+	assert.equal(f.store.task(mission.id, task.id).body, body);
+	await call("decide", { text: "😀".repeat(1000) });
+	await assert.rejects(call("decide", { text: `${"😀".repeat(1000)}x` }), /1001 characters; limit is 1000/);
+	const decision = f.store.addDecision(mission.id, "x".repeat(1001));
+	await call("propose", { decisionId: decision.id, text: "😀".repeat(1000), reason: "Concise replacement" });
+	await assert.rejects(
+		call("propose", { decisionId: decision.id, text: "x".repeat(1001), reason: "Too long" }),
+		/1001 characters; limit is 1000/,
+	);
+	for (const expectedRevision of [0, 1]) {
+		await assert.rejects(
+			call("brief", { markdown: `${"😀".repeat(12000)}x`, expectedRevision }),
+			/12001 characters; limit is 12000/,
+		);
+		await call("brief", { markdown: `${expectedRevision}${"😀".repeat(11999)}`, expectedRevision });
+	}
+	// User/storage paths retain existing capacities. No new cap applies to loaded records.
+	const legacyBody = "x".repeat(6000);
+	const legacy = f.store.addTask(mission.id, { title: "Legacy", body: legacyBody });
+	const legacyBrief = "x".repeat(12001);
+	f.store.writeBrief(mission.id, legacyBrief, 2);
+	assert.equal(((await call("get", { id: legacy.id })) as { body: string }).body, legacyBody);
+	assert.equal(((await call("brief", {})) as { markdown: string }).markdown, legacyBrief);
+	assert.ok(JSON.stringify(await call("decisions", { filter: "all" })).includes(decision.text));
+	await call("task", { id: legacy.id, title: "Renamed", status: "blocked" });
+	assert.equal(f.store.task(mission.id, legacy.id).body, legacyBody);
+	await assert.rejects(call("task", { id: legacy.id, body: legacyBody }), /6000 characters; limit is 4000/);
+	assert.equal(f.store.task(mission.id, legacy.id).body, legacyBody);
+	await call("task", { id: legacy.id, body: "Summarized" });
+	assert.equal(f.store.task(mission.id, legacy.id).body, "Summarized");
+	// Synthetic imported legacy title, larger than current storage creation permits.
+	const legacyTitle = "x".repeat(201);
+	f.store["run"]("UPDATE tasks SET title = ? WHERE id = ?", legacyTitle, legacy.id);
+	assert.equal(((await call("get", { id: legacy.id })) as { title: string }).title, legacyTitle);
+	await call("task", { id: legacy.id, body: "Other field edited" });
+	assert.equal(f.store.task(mission.id, legacy.id).title, legacyTitle);
+	await assert.rejects(call("task", { id: legacy.id, title: legacyTitle }), /201 characters; limit is 200/);
+	await f.store.durable();
+});
+
+test("oversized imported mission text survives tool and HTTP reads without rewriting storage", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Legacy",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Task", body: "Body" });
+	const decision = f.store.addDecision(mission.id, "Decision");
+	f.store.writeBrief(mission.id, "Brief", 0);
+	const title = " Legacy 😀 ".repeat(201);
+	const body = " Body 語😀\n".repeat(20000);
+	const brief = " Brief 語😀\n".repeat(40000);
+	const text = " Decision 語😀\n".repeat(2000);
+	// Import directly, above both agent and user write limits, without a live-data migration.
+	f.store["run"]("UPDATE tasks SET title = ?, body = ? WHERE id = ?", title, body, task.id);
+	f.store["run"]("UPDATE decisions SET text = ? WHERE id = ?", text, decision.id);
+	f.store["run"]("UPDATE brief_revisions SET markdown = ? WHERE mission_id = ?", brief, mission.id);
+	f.store["run"]("UPDATE missions SET title = ?, goal = ? WHERE id = ?", title, body, mission.id);
+	const before = f.store.detail(mission.id);
+	assert.equal(((await f.service.call(lead.id, "get", { id: task.id })) as { body: string }).body, body);
+	assert.equal(((await f.service.call(lead.id, "brief", {})) as { markdown: string }).markdown, brief);
+	const decisions = (await f.service.call(lead.id, "decisions", { filter: "all" })) as {
+		decisions: { text: string }[];
+	};
+	assert.equal(decisions.decisions[0]?.text, text);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
+	const response = await fetch(base);
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), before);
+	for (const path of ["/brief", "/brief?revision=1"]) {
+		const response = await fetch(`${base}${path}`);
+		assert.equal(response.status, 200);
+		assert.equal((await response.json()).markdown, brief);
+	}
+	assert.deepEqual(f.store.detail(mission.id), before, "reads must not normalize or rewrite legacy content");
+	// Only the supplied field is validated on partial writes.
+	await f.service.call(lead.id, "task", { id: task.id, status: "blocked" });
+	assert.equal(f.store.task(mission.id, task.id).body, body);
+	assert.equal(f.store.task(mission.id, task.id).title, title);
+	const audience = await fetch(`${base}/decisions/${decision.id}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ audience: "reference" }),
+	});
+	assert.equal(audience.status, 200);
+	assert.equal((await audience.json()).text, text);
+	f.store.update(mission.id, { goal: "Updated goal" });
+	assert.equal(f.store.require(mission.id).title, title);
+	for (const [action, args] of [
+		["task", { id: task.id, title }],
+		["task", { id: task.id, body }],
+		["brief", { markdown: brief, expectedRevision: 1 }],
+		["decide", { text }],
+	] as const) {
+		await assert.rejects(f.service.call(lead.id, action, args), /characters; limit is/);
+	}
+	// HTTP/user writes retain their separate existing capacities too.
+	for (const [path, method, value] of [
+		["/brief", "PUT", { markdown: brief, expectedRevision: 1 }],
+		[`/tasks/${task.id}`, "PATCH", { title }],
+		[`/tasks/${task.id}`, "PATCH", { body }],
+		["/decisions", "POST", { text }],
+		[`/decisions/${decision.id}`, "PATCH", { text }],
+	] as const) {
+		const response = await fetch(`${base}${path}`, {
+			method,
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+		assert.equal(response.status, 400, await response.text());
+	}
+});
+
+test("coordinator tools associate, explicitly upgrade and split Linear ticket work with live context", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn(),
+		member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Delivery",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const ref = (await f.service.call(lead.id, "link", { url: "https://linear.app/acme/issue/ENG-12" })) as {
+		id: string;
+		linearRole: string;
+	};
+	assert.equal(ref.linearRole, "reference");
+	await assert.rejects(
+		f.service.call(lead.id, "link", { url: "https://linear.app/acme/issue/ENG-12", linearRole: "managed" }),
+		/PATCH/,
+	);
+	await assert.rejects(
+		f.service.call(member.id, "updateLink", { resourceId: ref.id, linearRole: "managed" }),
+		/Only the mission coordinator/,
+	);
+	await f.service.call(lead.id, "updateLink", { resourceId: ref.id, linearRole: "managed" });
+	await assert.rejects(
+		f.service.call(member.id, "split", { resourceId: ref.id, tasks: [{ title: "A" }] }),
+		/Only the mission coordinator/,
+	);
+	const split = (await f.service.call(lead.id, "split", {
+		resourceId: ref.id,
+		tasks: [{ title: "A" }, { title: "B" }],
+	})) as { tasks: { id: string }[] };
+	const existing = f.store.addTask(mission.id, { title: "Context only" });
+	await f.service.call(lead.id, "link", { taskId: existing.id, url: "https://linear.app/acme/issue/ENG-12" });
+	f.store.claimTask(mission.id, split.tasks[0]!.id, member.id);
+	assert.equal(f.service.context(lead.id)?.tickets?.[0]?.role, "managed");
+	assert.equal(f.service.context(member.id)?.tickets?.[0]?.role, "contribution");
+	const links = (await f.service.call(lead.id, "links", {})) as {
+		links: { resourceId?: string; linearRole?: string }[];
+	};
+	assert.ok(links.links.some((ref) => ref.linearRole === "managed" && ref.resourceId));
+	f.service.setLinearReader({
+		call: async () => ({
+			id: "ENG-12",
+			url: "https://linear.app/acme/issue/ENG-12",
+			title: "Ticket",
+			description: "Untrusted text",
+		}),
+	});
+	const context = (await f.service.call(lead.id, "ticket", { resourceId: ref.id })) as { description: string };
+	assert.equal(context.description, "Untrusted text");
+	assert.equal(JSON.stringify(f.service.context(lead.id)).includes("Untrusted text"), false);
+	// Detach first so the context read can observe removal during its await.
+	for (const resource of f.store.detail(mission.id).resources.filter((ref) => ref.linearRole === "contribution"))
+		f.store.removeResource(mission.id, resource.id);
+	f.service.setLinearReader({
+		call: async () => {
+			f.store.removeResource(mission.id, ref.id);
+			return { id: "ENG-12", url: "https://linear.app/acme/issue/ENG-12" };
+		},
+	});
+	await assert.rejects(f.service.call(lead.id, "ticket", { resourceId: ref.id }), /not found/);
+});
+
+test("mission drafts name the deliverables without repeating comment policy", () => {
+	const message = draftMessage("Plan");
+	assert.match(message, /short goal and draft the brief \(scope and requirements\)/);
+	assert.match(message, /record substantive agreed mission choices \(scope, behavior or tradeoffs\) with decide/);
+	assert.match(message, /keeping human-answer\/source references and explicit authority limits/);
+	assert.match(message, /decision text never grants tool\/runtime permission/);
+	assert.match(message, /keep routine directions\/status in task updates or log context, not decisions/);
+	assert.match(message, /appropriate lasting cross-mission preferences; discussion\/proposal is not agreement/);
+	assert.match(message, /create tasks with current status.*dependencies where order matters/);
+	assert.match(message, /Do not start implementing tasks/);
+	assert.doesNotMatch(message, /comments|resolve|reminders|decision ledger/);
+});
+
+test("PR guidance tool forwards live safeguards and recomputes task/link eligibility", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Delivery",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const url = "https://linear.app/acme/issue/ENG-12";
+	const manager = f.store.addResource(mission.id, { url, linearRole: "managed" });
+	const task = f.store.addTask(mission.id, { title: "Only work" });
+	f.store.addResource(mission.id, { url, taskId: task.id, linearRole: "contribution" });
+	const guidance = async () =>
+		(await f.service.call(lead.id, "prGuidance", { taskId: String(task.number) })) as {
+			tickets: { closingAllowed: boolean; directive: string }[];
+		};
+	assert.equal((await guidance()).tickets[0]!.closingAllowed, false);
+	f.service.setLinearClosingGuard(async (id, ref) => {
+		assert.equal(id, mission.id);
+		assert.equal(ref, manager.id);
+		return { allowed: true };
+	});
+	assert.equal((await guidance()).tickets[0]!.directive, "Related to ENG-12");
+	const earlier = f.store.addTask(mission.id, { title: "Another contributor" });
+	f.store.addResource(mission.id, { url, taskId: earlier.id, linearRole: "contribution" });
+	assert.equal((await guidance()).tickets[0]!.directive, "Related to ENG-12");
+	await assert.rejects(f.service.call(lead.id, "prGuidance", {}), /requires taskId/);
+});
+
+test("coordinator start and status return navigable chat links without starting status targets", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Delivery",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Implementation" });
+	const started = (await f.service.call(lead.id, "start", { id: task.id })) as { id: string; chatUrl: string };
+	assert.equal(started.chatUrl, `pilot://chat/${started.id}`);
+	assert.equal(new URL(started.chatUrl).pathname, `/${started.id}`);
+	const status = (await f.service.call(lead.id, "status", {})) as { members: { id: string; chatUrl: string }[] };
+	assert.equal(status.members.find((member) => member.id === started.id)?.chatUrl, started.chatUrl);
+	assert.equal(status.members.find((member) => member.id === lead.id)?.chatUrl, `pilot://chat/${lead.id}`);
+	await until(() => !f.sessions["starting"].has(started.id));
+	await f.sessions.stop(started.id);
+	await f.sessions.archive(started.id);
+	const spawn = t.mock.method(f.sessions, "spawn", async () => assert.fail("Reading status must not spawn a chat"));
+	const targeted = (await f.service.call(lead.id, "status", { targetSessionId: started.id })) as {
+		member: { id: string; chatUrl: string; archivedAt: number };
+	};
+	assert.equal(targeted.member.chatUrl, started.chatUrl);
+	assert.equal(targeted.member.id, started.id);
+	assert.ok(targeted.member.archivedAt);
+	assert.equal(spawn.mock.calls.length, 0);
+});
+
+test("gated starts retain preferred model, thinking and app start options together", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Combined" });
+	const first = f.store.addPhase(id, { name: "Build" });
+	const later = f.store.addPhase(id, { name: "Ship" });
+	f.store.addTask(id, { title: "Earlier", phaseId: first.id });
+	const task = await f.service.addTask(id, {
+		title: "Later",
+		phaseId: later.id,
+		preferredModel: "test/preferred",
+		preferredThinking: "high",
+	});
+	f.store.update(id, { phaseGating: true });
+	await f.service.updateTask(id, task.id, { phaseId: later.id, preferredThinking: "low" });
+	const gated = f.store.task(id, task.id);
+	assert.deepEqual(
+		[gated.phaseId, gated.preferredModel, gated.preferredThinking, gated.storedStatus],
+		[later.id, "test/preferred", "low", "todo"],
+	);
+	await assert.rejects(f.service.startTask(id, task.id), /earlier phases/);
+	await assert.rejects(
+		f.service.startTask(id, task.id, { overridePhaseGating: true }, "coordinator"),
+		/Only the user/,
+	);
+	const links = [{ url: "https://example.com/spec" }];
+	await assert.rejects(
+		f.service.startTask(id, task.id, { overridePhaseGating: true, baseBranch: "release", links }),
+		/private-clone project/,
+	);
+	assert.equal(f.store.detail(id).resources.length, 0);
+	const spawn = t.mock.method(f.sessions, "spawn", f.sessions.spawn.bind(f.sessions));
+	const started = await f.service.startTask(id, task.id, {
+		overridePhaseGating: true,
+		mode: "ask",
+		baseBranch: "release",
+		message: "Investigate only",
+		links,
+	});
+	const request = spawn.mock.calls[0]!.arguments[0];
+	assert.deepEqual([request.model, request.thinking, started.mode], ["test/preferred", "low", "ask"]);
+	assert.equal(request.baseBranch, "release");
+	assert.equal(f.store.task(id, task.id).storedStatus, "in_progress");
+	assert.equal(f.store.task(id, task.id).preferredModelSetBy, "user");
+	assert.deepEqual(
+		f.store.detail(id).resources.map((resource) => resource.url),
+		[links[0]!.url],
+	);
+});
+
+test("phase tools enforce roles, assign by name or ID, and summarize grouped progress", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Phases",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	await assert.rejects(
+		f.service.call(member.id, "phase", { operation: "create", name: "No" }),
+		/Only the mission coordinator/,
+	);
+	const first = (await f.service.call(lead.id, "phase", {
+		operation: "create",
+		name: "Build",
+		goal: "Foundation",
+	})) as { id: string };
+	const later = (await f.service.call(lead.id, "phase", { operation: "create", name: "Ship" })) as { id: string };
+	await f.service.call(member.id, "task", { title: "A", phase: "Build" });
+	await f.service.call(member.id, "task", { title: "B", phase: later.id });
+	f.store.update(mission.id, { phaseGating: true });
+	await assert.rejects(f.service.call(member.id, "claim", { id: "2", overridePhaseGating: true }), /coordinator/);
+	await assert.rejects(f.service.call(lead.id, "start", { id: "2", overridePhaseGating: true }), /earlier phases/);
+	await f.service.call(lead.id, "phase", { operation: "rename", phase: first.id, name: "Foundation" });
+	await f.service.call(lead.id, "phase", { operation: "reorder", phase: "Ship", order: 0 });
+	const get = (await f.service.call(member.id, "get", {})) as {
+		phases: { name: string; tasks: number[]; progress: { done: number; dropped: number; total: number } }[];
+	};
+	assert.deepEqual(
+		get.phases.map((phase) => phase.name),
+		["Ship", "Foundation", "No phase"],
+	);
+	assert.deepEqual(get.phases[0]!.tasks, [2]);
+	assert.deepEqual(get.phases[0]!.progress, { done: 0, dropped: 0, total: 1 });
+	await f.service.call(lead.id, "phase", { operation: "delete", phase: later.id });
+	assert.equal(f.store.resolveTask(mission.id, "2").phaseId, undefined);
+	await f.service.call(member.id, "task", { id: "1", phase: "" });
+	assert.equal(f.store.resolveTask(mission.id, "1").milestone, undefined);
+});
+
+test("user phase-gating override survives final spawn admission; changed gates are rechecked", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Gated" });
+	const first = f.store.addPhase(id, { name: "Build" });
+	const later = f.store.addPhase(id, { name: "Ship" });
+	f.store.addTask(id, { title: "A", phaseId: first.id });
+	const b = f.store.addTask(id, { title: "B", phaseId: later.id });
+	f.store.update(id, { phaseGating: true });
+	await assert.rejects(f.service.startTask(id, b.id), /earlier phases/);
+	const session = await f.service.startTask(id, b.id, { overridePhaseGating: true });
+	assert.equal(f.store.task(id, b.id).sessionId, session.id);
+	assert.equal(f.store.task(id, b.id).storedStatus, "in_progress");
+	f.store.releaseTask(id, b.id);
+	f.store.update(id, { phaseGating: false });
+	t.mock.method(f.sessions, "selectTaskModel", async () => {
+		f.store.update(id, { phaseGating: true });
+		return { model: "test/model", thinking: "medium" };
+	});
+	await assert.rejects(f.service.startTask(id, b.id), /earlier phases/);
+	assert.equal(f.store.task(id, b.id).sessionId, undefined);
+});
+
+test("a released task continues in the chat that held it instead of opening a duplicate", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Resumed" });
+	const task = f.store.addTask(id, {
+		title: "Take a book off the shelf",
+		body: "The server has DELETE /api/v1/library/books.",
+	});
+	const first = await f.service.startTask(id, task.id);
+	assert.equal(f.store.task(id, task.id).sessionId, first.id);
+	const worker = await until(() => f.workers.get(first.id));
+	// The chat's turn failed, so the coordinator released the claim and started the task again.
+	f.store.releaseTask(id, task.id);
+	const again = await f.service.startTask(id, task.id);
+	assert.equal(again.id, first.id, "a released task continues in the chat that held it");
+	assert.equal(f.store.task(id, task.id).sessionId, first.id);
+	assert.equal(f.workers.get(first.id), worker, "a restarted task opens no second chat");
+	const continuation = await until(() => {
+		const current = f.workers.get(first.id);
+		const inputs = [...(current?.requests ?? []), ...(current?.sent ?? [])]
+			.filter((command) => command.type === "input")
+			.map((command) => (command.type === "input" ? command.content : ""));
+		return inputs.find((content) => content.startsWith("Continue mission task #"));
+	});
+	assert.ok(continuation, "the continued task asks the chat to continue instead of starting over");
+});
+
+test("session summaries resolve current membership without attention or task-detail reads", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Fixture",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const get = t.mock.method(f.store, "get", () => assert.fail("summary must not count attention"));
+	const tasks = t.mock.method(f.store, "tasks", () => assert.fail("summary must not read task bodies"));
+	assert.equal(f.sessions.get(lead.id)?.activeMissionCoordinator, true);
+	assert.equal(f.sessions.get(member.id)?.missionId, mission.id);
+	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, undefined);
+	get.mock.restore();
+	tasks.mock.restore();
+	f.store.update(mission.id, { coordinatorSessionId: member.id });
+	assert.equal(f.sessions.get(lead.id)?.activeMissionCoordinator, undefined);
+	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, true);
+	f.store.update(mission.id, { status: "done" });
+	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, undefined);
+});
+
+test("linked PR polling projects owned resources without mission details or attention aggregates", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Active", tasks: [{ title: "Task" }] });
+	const owned = "https://github.com/octo/repo/pull/42";
+	f.store.addResource(id, { url: owned, taskId: "1" });
+	f.store.addResource(id, { url: "https://github.com/octo/repo/pull/43" });
+	f.store.addResource(id, { url: "https://example.com/reference", taskId: "1" });
+	const done = f.store.create({ projectId: f.project.id, title: "Done", tasks: [{ title: "Task" }] });
+	f.store.addResource(done.id, { url: "https://github.com/octo/repo/pull/44", taskId: "1" });
+	f.store.update(done.id, { status: "done" });
+	const pr = { number: 42, url: owned, title: "Change", state: "open" as const, checkedAt: 1 };
+	f.store.updatePullRequest(pr);
+	for (const method of ["list", "detail", "tasks", "get"] as const)
+		t.mock.method(f.store, method, () => assert.fail(`PR polling must not call ${method}`));
+	assert.deepEqual(
+		[...f.sessions["missions"]!.linkedPullRequests!()],
+		[{ url: owned, cwd: f.project.path, pullRequest: pr }],
+	);
+});
+
+test("planning title follows creation, promotion and shared renames; demotion keeps the last title", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const changes: SessionSummary[] = [];
+	f.sessions.onChange((session) => changes.push(session));
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared plan",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	assert.equal(f.sessions.get(lead.id)?.title, "Shared plan");
+	f.service.join(member.id, { missionId: mission.id });
+	f.store.update(mission.id, { coordinatorSessionId: member.id });
+	assert.equal(f.sessions.get(member.id)?.title, "Shared plan");
+	f.store.update(mission.id, { title: "Revised plan" });
+	assert.equal(f.sessions.get(member.id)?.title, "Revised plan");
+	assert.equal(f.sessions.get(lead.id)?.title, "Shared plan");
+	assert.ok(changes.some((session) => session.id === member.id && session.title === "Revised plan"));
+	const renamed = await f.sessions.rename(member.id, "  User\n chosen  ");
+	assert.equal(renamed.title, "User chosen");
+	assert.equal(f.store.require(mission.id).title, "User chosen");
+	await f.sessions.rename(lead.id, "Independent");
+	assert.equal(f.store.require(mission.id).title, "User chosen");
+	f.store.update(mission.id, { coordinatorSessionId: null });
+	f.store.update(mission.id, { title: "No leader" });
+	assert.equal(f.sessions.get(member.id)?.title, "User chosen");
+	await Promise.all(f.sessions["saving"].values());
+	const persisted = JSON.parse(await readFile(join(f.home, "data", "sessions", member.id, "meta.json"), "utf8"));
+	assert.equal(persisted.title, "User chosen");
+});
+
+test("promotion cancels a pending automatic title and does not start another generator", async (t) => {
+	const f = await fixture(t);
+	let resolve!: (title: string) => void;
+	const generated = new Promise<string>((done) => {
+		resolve = done;
+	});
+	const title = t.mock.fn(() => generated);
+	f.sessions["factories"].title = title;
+	const lead = await f.sessions.spawn({ projectId: f.project.id, message: "First message" });
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared plan",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	resolve("Unwanted automatic title");
+	await Promise.all(f.sessions["titleTasks"]);
+	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
+	assert.equal(f.sessions["require"](lead.id).titlePending, undefined);
+	const calls = title.mock.callCount();
+	f.sessions["generateTitle"](f.sessions["require"](lead.id));
+	assert.equal(title.mock.callCount(), calls);
+});
+
+test("startup repairs legacy planning titles durably and idempotently", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared plan",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	await Promise.all(f.sessions["saving"].values());
+	const path = join(f.home, "data", "sessions", lead.id, "meta.json");
+	const legacy = JSON.parse(await readFile(path, "utf8"));
+	legacy.title = "Legacy title";
+	legacy.titlePending = { cwd: f.project.path, message: "Legacy message" };
+	await writeFile(path, JSON.stringify(legacy));
+	const title = t.mock.fn(async () => "Wrong title");
+	f.sessions["factories"].title = title;
+	await f.sessions.load();
+	await Promise.all(f.sessions["saving"].values());
+	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
+	const repaired = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(repaired.title, mission.title);
+	assert.equal(repaired.titlePending, undefined);
+	await f.sessions.load();
+	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
+	assert.equal(title.mock.callCount(), 0);
+});
+
+test("coordinator replacement retires guidance, preserves historical pins and respects replacement audience", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	const old = f.store.addDecision(mission.id, "Old rule", {}, "reference");
+	const next = f.store.addDecision(mission.id, "Coordinator replacement text", {}, "coordinator");
+	const task = f.store.addTask(mission.id, { title: "Work", sessionId: worker.id, decisionIds: [old.id] });
+	const before = f.service.context(worker.id)!;
+	assert.deepEqual(before.decisions, ["D1: Old rule"]);
+	await assert.rejects(
+		f.service.call(worker.id, "supersede", { decisionId: "D1", replacementDecisionId: "D2" }),
+		/Only the mission coordinator/,
+	);
+	await assert.rejects(f.service.call(lead.id, "supersede", { decisionId: "D1" }), /requires/);
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
+	const foreignDecision = f.store.addDecision(foreign.id, "Foreign text");
+	await assert.rejects(
+		f.service.call(lead.id, "supersede", { decisionId: old.id, replacementDecisionId: foreignDecision.id }),
+		/Unknown decision/,
+	);
+	const definition = f.store.sharedDefinitionRevision(task.id);
+	const saved = (await f.service.call(lead.id, "supersede", {
+		decisionId: "D1",
+		replacementDecisionId: "D2",
+	})) as MissionDecision;
+	assert.equal(saved.replacement?.id, next.id);
+	assert.equal(saved.text, old.text);
+	assert.deepEqual(f.store.task(mission.id, task.id).decisionIds, [old.id]);
+	assert.equal(f.store.sharedDefinitionRevision(task.id), definition);
+	const after = f.service.context(worker.id)!;
+	assert.notEqual(after.decisionVersion, before.decisionVersion);
+	assert.deepEqual(after.decisions, [], "old pin does not select the replacement's text");
+	assert.deepEqual(after.decisionEntries, []);
+	assert.deepEqual(after.replacedDecisions, [{ number: 1, replacementNumber: 2 }]);
+	assert.deepEqual(after.decisionState?.find((d) => d.id === old.id)?.replacement, saved.replacement);
+	assert.equal(after.decisionState?.find((d) => d.id === next.id)?.selected, false);
+	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D2: Coordinator replacement text"]);
+	const pinned = (await f.service.call(worker.id, "get", { id: task.id })) as { decisions: MissionDecision[] };
+	assert.deepEqual(pinned.decisions, [
+		{
+			id: old.id,
+			number: old.number,
+			text: old.text,
+			audience: old.audience,
+			replacement: saved.replacement,
+			historical: true,
+			binding: false,
+		},
+	]);
+	const currentOnly = await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries });
+	assert.doesNotMatch(JSON.stringify(currentOnly), /Old rule/);
+	const read = (await f.service.call(worker.id, "decisions", {
+		filter: "all",
+		_promptDecisions: before.decisionEntries,
+	})) as {
+		decisions: MissionDecision[];
+	};
+	assert.deepEqual(
+		read.decisions.find((d) => d.id === old.id)?.replacement,
+		saved.replacement,
+		"same text cannot hide a replacement from a frozen prompt read",
+	);
+	for (const id of [lead.id, worker.id]) {
+		const command = await until(() =>
+			f.workers
+				.get(id)!
+				.sent.findLast(
+					(command) =>
+						command.type === "mission.context" &&
+						command.context?.decisionState?.some((d) => d.id === old.id && d.replacement),
+				),
+		);
+		assert.equal(command.type, "mission.context");
+	}
+	assert.deepEqual(
+		await f.service.call(lead.id, "supersede", { decisionId: old.id, replacementDecisionId: next.id }),
+		saved,
+	);
+	await f.service.call(lead.id, "task", { id: task.id, decisionIds: [old.id, next.id] });
+	assert.deepEqual(
+		f.service.context(worker.id)?.decisions,
+		["D2: Coordinator replacement text"],
+		"only an explicit replacement pin selects reference/coordinator text",
+	);
+	f.store.join(lead.id, foreign.id);
+	f.store.update(foreign.id, { coordinatorSessionId: lead.id });
+	await assert.rejects(
+		f.service.call(lead.id, "supersede", { decisionId: old.id, replacementDecisionId: next.id }),
+		/Unknown decision/,
+	);
+});
+
+test("replacement IPC acknowledgement waits for durability and rejects inconsistent project membership", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.addDecision(mission.id, "Old", {}, "all");
+	f.store.addDecision(mission.id, "New", {}, "all");
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	let waiting = false;
+	t.mock.method(f.store, "whenDurable", () => {
+		waiting = true;
+		return gate;
+	});
+	const worker = f.workers.get(lead.id)!;
+	worker.onPacket({
+		type: "host.call",
+		method: "mission",
+		callId: "supersede",
+		args: { action: "supersede", args: { decisionId: "D1", replacementDecisionId: "D2" } },
+	});
+	await until(() => waiting);
+	assert.ok(f.store.detail(mission.id).decisions[0]!.replacement);
+	assert.equal(
+		worker.sent.some((c) => c.type === "host.result" && c.callId === "supersede"),
+		false,
+	);
+	release();
+	const reply = await until(() => worker.sent.find((c) => c.type === "host.result" && c.callId === "supersede"));
+	assert.equal(reply.type, "host.result");
+	if (reply.type === "host.result") assert.equal(reply.error, undefined);
+	const wrongProject = await f.spawn(f.other.id);
+	f.store.join(wrongProject.id, mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: wrongProject.id });
+	await assert.rejects(
+		f.service.call(wrongProject.id, "supersede", { decisionId: "D1", replacementDecisionId: "D2" }),
+		/own project/,
+	);
+});
+
+test("revision reads recheck coordinator identity after durability and reject foreign project actors", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn(),
+		next = await f.spawn(),
+		foreign = await f.spawn(f.other.id);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Revisit" });
+	f.store.join(lead.id, id);
+	f.store.join(next.id, id);
+	f.store.update(id, { coordinatorSessionId: lead.id });
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	const wait = t.mock.method(f.store, "durable", () => gate);
+	const pending = f.service.call(lead.id, "revision-source", {});
+	f.store.update(id, { coordinatorSessionId: next.id });
+	release();
+	await assert.rejects(pending, /reader changed/);
+	wait.mock.restore();
+	f.store.join(foreign.id, id);
+	f.store.update(id, { coordinatorSessionId: foreign.id });
+	await assert.rejects(f.service.call(foreign.id, "revision-source", {}), /own project/);
+});
+
+test("Revisit local user revision routes discover pending and require fresh exact preview", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Revisit", brief: "Original" });
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}/revisions`;
+	const post = (path: string, body: unknown) =>
+		fetch(`${base}${path}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	const source = (await fetch(base).then((r) => r.json())) as { source: string };
+	const request = {
+		operationId: "revisit-exact",
+		source: source.source,
+		summary: "Reviewed scope",
+		delta: { markdown: "Changed" },
+	};
+	const proposed = await post("", request);
+	assert.equal(proposed.status, 201);
+	const p = (await proposed.json()) as { id: string; digest: string };
+	assert.equal(f.store.brief(mission.id)?.markdown, "Original");
+	let discovery = await fetch(base).then((r) => r.json());
+	assert.equal(discovery.pending.proposal.id, p.id);
+	assert.equal(discovery.pending.current, true);
+	f.store.update(mission.id, { title: "Changed during pause preparation" });
+	discovery = await fetch(base).then((r) => r.json());
+	assert.equal(discovery.pending.current, false);
+	const preview = await post(`/${p.id}/preview`, {
+		operationId: "fresh-preview",
+		source: discovery.source,
+		digest: p.digest,
+	});
+	assert.equal(preview.status, 201);
+	const fresh = await preview.json();
+	assert.deepEqual(fresh.repreviewOf, { id: p.id, digest: p.digest });
+	assert.deepEqual(await fetch(`${base}/operations/fresh-preview`).then((r) => r.json()), { proposal: fresh });
+	assert.deepEqual(await fetch(`${base}/operations/missing`).then((r) => r.json()), { proposal: null });
+	assert.equal((await post(`/${p.id}/confirm`, { digest: "stale", humanSource: "user:answer" })).status, 409);
+	assert.equal((await post(`/${p.id}/confirm`, { digest: p.digest, humanSource: "user:answer" })).status, 409);
+	const confirmed = await post(`/${fresh.id}/confirm`, { digest: fresh.digest, humanSource: "user:new-preview" });
+	assert.equal(confirmed.status, 200, await confirmed.text());
+	assert.equal(f.store.brief(mission.id)?.markdown, "Changed");
+	assert.equal(f.store.brief(mission.id, 1)?.markdown, "Original");
+	assert.equal((await fetch(`${base}/${p.id}`)).status, 200);
+	assert.equal((await fetch(base).then((r) => r.json())).pending, null);
+	assert.equal((await post("", { ...request, summary: "Conflicting reuse" })).status, 409);
+});
+
+test("local user replacement route preserves text and rejects bad links and inputs", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Choices" });
+	const old = f.store.addDecision(mission.id, "Old");
+	const next = f.store.addDecision(mission.id, "New");
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
+	const post = (decision: string, body: unknown) =>
+		fetch(`${base}/decisions/${decision}/supersede`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	for (const body of [
+		{},
+		{ replacementDecisionId: null },
+		{ replacementDecisionId: 7 },
+		{ replacementDecisionId: "" },
+	]) {
+		const response = await post("D1", body);
+		assert.equal(response.status, 400);
+		await response.arrayBuffer();
+	}
+	const response = await post("D1", { replacementDecisionId: "D2" });
+	assert.equal(response.status, 200);
+	const saved = (await response.json()) as MissionDecision;
+	assert.equal(saved.text, old.text);
+	assert.equal(saved.replacement?.id, next.id);
+	const retry = await post(old.id, { replacementDecisionId: next.id });
+	assert.equal(retry.status, 200);
+	assert.deepEqual(await retry.json(), saved);
+	const cycle = await post("D2", { replacementDecisionId: "D1" });
+	assert.equal(cycle.status, 409);
+	await cycle.arrayBuffer();
+	const detail = await fetch(base);
+	assert.equal(detail.status, 200);
+	assert.deepEqual(((await detail.json()) as MissionDetail).decisions[0], saved);
+});
+
+test("withdrawal proposals retain guidance until user acceptance and IPC waits for durability", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	const old = f.store.addDecision(mission.id, "Protected rule", {}, "reference");
+	const task = f.store.addTask(mission.id, { title: "Pinned", sessionId: worker.id, decisionIds: [old.id] });
+	const before = f.service.context(worker.id)!;
+	const args = { decisionId: "D1", withdraw: true, reason: "Obsolete", operationId: "request" };
+	await assert.rejects(f.service.call(worker.id, "propose", args), /Only the mission coordinator/);
+	for (const invalid of [
+		{ withdraw: false },
+		{ text: "Edit" },
+		{ remove: true },
+		{ reason: "" },
+		{ operationId: undefined },
+	])
+		await assert.rejects(f.service.call(lead.id, "propose", { ...args, ...invalid }));
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
+	const foreignDecision = f.store.addDecision(foreign.id, "Foreign");
+	await assert.rejects(
+		f.service.call(lead.id, "propose", { ...args, decisionId: foreignDecision.id }),
+		/Unknown decision/,
+	);
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	let waiting = false;
+	t.mock.method(f.store, "whenDurable", () => {
+		waiting = true;
+		return gate;
+	});
+	const native = f.workers.get(lead.id)!;
+	native.onPacket({ type: "host.call", method: "mission", callId: "withdrawal", args: { action: "propose", args } });
+	await until(() => waiting);
+	const proposal = f.store.proposals(mission.id)[0]!;
+	assert.equal(proposal.kind, "withdraw");
+	assert.equal(
+		native.sent.some((c) => c.type === "host.result" && c.callId === "withdrawal"),
+		false,
+	);
+	assert.deepEqual(f.service.context(worker.id)?.decisions, before.decisions);
+	assert.equal(f.service.context(worker.id)?.decisionVersion, before.decisionVersion);
+	release();
+	const reply = await until(() => native.sent.find((c) => c.type === "host.result" && c.callId === "withdrawal"));
+	assert.equal(reply.type, "host.result");
+	if (reply.type === "host.result") assert.equal(reply.error, undefined);
+	assert.deepEqual(await f.service.call(lead.id, "propose", args), proposal);
+	const definition = f.store.sharedDefinitionRevision(task.id);
+	f.store.resolveProposal(mission.id, proposal.id, true);
+	const saved = f.store.detail(mission.id).decisions[0]!;
+	const after = f.service.context(worker.id)!;
+	assert.deepEqual(after.decisions, []);
+	assert.deepEqual(after.decisionEntries, []);
+	assert.deepEqual(after.withdrawnDecisions, [{ number: 1 }]);
+	assert.deepEqual(f.service.context(lead.id)?.withdrawnDecisions, [{ number: 1 }]);
+	assert.notEqual(after.decisionVersion, before.decisionVersion);
+	assert.deepEqual(f.store.task(mission.id, task.id).decisionIds, [old.id]);
+	assert.equal(f.store.sharedDefinitionRevision(task.id), definition);
+	assert.doesNotMatch(
+		JSON.stringify(await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries })),
+		/Original protected rule/,
+	);
+	const read = (await f.service.call(worker.id, "decisions", {
+		filter: "all",
+		_promptDecisions: before.decisionEntries,
+	})) as {
+		decisions: MissionDecision[];
+	};
+	assert.deepEqual(
+		read.decisions[0]!.withdrawn,
+		saved.withdrawn,
+		"same text cannot hide retirement from frozen reads",
+	);
+	const pinned = (await f.service.call(worker.id, "get", { id: task.id })) as { decisions: MissionDecision[] };
+	assert.deepEqual(pinned.decisions[0]!.withdrawn, saved.withdrawn);
+	await until(() =>
+		f.workers
+			.get(worker.id)!
+			.sent.some(
+				(c) =>
+					c.type === "mission.context" && c.context?.decisionState?.some((d) => d.id === old.id && d.withdrawn),
+			),
+	);
+	const wrongProject = await f.spawn(f.other.id);
+	f.store.join(wrongProject.id, mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: wrongProject.id });
+	await assert.rejects(f.service.call(wrongProject.id, "propose", args), /own project/);
+	f.store.join(lead.id, foreign.id);
+	f.store.update(foreign.id, { coordinatorSessionId: lead.id });
+	await assert.rejects(f.service.call(lead.id, "propose", { ...args, decisionId: old.id }), /Unknown decision/);
+});
+
+test("user withdrawal acceptance HTTP waits for durability, preserves history and rejects conflicting outcomes", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const old = f.store.addDecision(mission.id, "Protected rule", {}, "all");
+	const proposal = f.store.proposeWithdrawal(mission.id, "D1", "Obsolete", "request", { sessionId: lead.id });
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
+	const post = (outcome: string, body: unknown = {}) =>
+		fetch(`${base}/decision-proposals/${proposal.id}/${outcome}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	const bad = await post("accept", { text: "Edit" });
+	assert.equal(bad.status, 400);
+	await bad.arrayBuffer();
+	assert.equal(f.store.proposals(mission.id)[0]!.status, "pending");
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	let waiting = false;
+	const durable = f.store.durable.bind(f.store);
+	t.mock.method(f.store, "durable", async () => {
+		waiting = true;
+		await gate;
+		await durable();
+	});
+	let acknowledged = false;
+	const pending = post("accept").then((response) => {
+		acknowledged = true;
+		return response;
+	});
+	await until(() => waiting);
+	assert.ok(f.store.detail(mission.id).decisions[0]!.withdrawn);
+	assert.equal(acknowledged, false);
+	release();
+	const response = await pending;
+	assert.equal(response.status, 200);
+	const accepted = await response.json();
+	const retry = await post("accept");
+	assert.equal(retry.status, 200);
+	assert.deepEqual(await retry.json(), accepted);
+	const conflict = await post("reject");
+	assert.equal(conflict.status, 409);
+	await conflict.arrayBuffer();
+	const detail = await fetch(base);
+	const saved = ((await detail.json()) as MissionDetail).decisions[0]!;
+	assert.equal(saved.text, old.text);
+	assert.equal(saved.withdrawn?.reason, "Obsolete");
+	assert.equal(saved.withdrawn?.proposalId, proposal.id);
+	assert.equal(saved.replacement, undefined);
+});
+
+test("decision audiences and task pins select prompts and avoid duplicate detail reads", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(worker.id, { missionId: mission.id, taskId: "1" });
+	const reference = f.store.addDecision(mission.id, "Reference");
+	const all = f.store.addDecision(mission.id, "Everyone", {}, "all");
+	const coordinator = f.store.addDecision(mission.id, "Coordinate", {}, "coordinator");
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D2: Everyone"]);
+	assert.deepEqual(f.service.context(worker.id)?.decisionState, [
+		{ id: reference.id, number: 1, text: "Reference", audience: "reference", selected: false },
+		{ id: all.id, number: 2, text: "Everyone", audience: "all", selected: true },
+		{ id: coordinator.id, number: 3, text: "Coordinate", audience: "coordinator", selected: false },
+	]);
+	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D1: Reference", "D2: Everyone", "D3: Coordinate"]);
+	await f.service.call(worker.id, "task", { id: "1", decisionIds: [reference.id, coordinator.id] });
+	assert.deepEqual(
+		new Set(f.service.context(worker.id)?.decisions),
+		new Set(["D1: Reference", "D2: Everyone", "D3: Coordinate"]),
+	);
+	assert.equal(f.service.context(worker.id)?.remainingDecisions, 0);
+	const before = f.service.context(worker.id)!.decisionEntries;
+	assert.deepEqual(
+		((await f.service.call(worker.id, "decisions", { _promptDecisions: before })) as { decisions: unknown[] })
+			.decisions,
+		[],
+	);
+	f.store.updateDecision(mission.id, all.id, "Revised");
+	f.store.removeDecision(mission.id, reference.id);
+	const result = (await f.service.call(worker.id, "decisions", { _promptDecisions: before })) as {
+		decisions: { text: string }[];
+		retired: { id: string; historical: boolean; binding: boolean }[];
+	};
+	assert.deepEqual(
+		result.decisions.map((d) => d.text),
+		["Revised"],
+	);
+	assert.deepEqual(result.retired, [{ id: reference.id, historical: true, binding: false }]);
+	await f.service.call(worker.id, "task", { id: "1", decisionIds: [] });
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D2: Revised"]);
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
+	const foreignDecision = f.store.addDecision(foreign.id, "Elsewhere");
+	await assert.rejects(
+		f.service.call(worker.id, "task", { id: "1", decisionIds: [foreignDecision.id] }),
+		/Unknown decision/,
+	);
+});
+
+test("single-task get includes dependencies, chat, cached links, artifacts and bounded activity", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.sessions, "refreshMissionPullRequests", () => {});
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const dependency = f.store.addTask(mission.id, { title: "Foundation", status: "done" });
+	const task = f.store.addTask(mission.id, {
+		title: "Implement",
+		body: "Acceptance criteria",
+		milestone: "Delivery",
+		dependsOn: [dependency.id],
+	});
+	const dependent = f.store.addTask(mission.id, { title: "Verify", dependsOn: [task.id] });
+	f.store.claimTask(mission.id, task.id, worker.id);
+	const url = "https://github.com/octo/repo/pull/42";
+	f.store.addResource(mission.id, { url, taskId: task.id, relationship: "reference" });
+	f.store.updatePullRequest({ number: 42, url, title: "Cached PR", state: "draft", checkedAt: Date.now() });
+	f.store.addResource(mission.id, { url: "https://example.com/spec", taskId: task.id });
+	f.store.addResource(mission.id, { url: "https://example.com/unrelated", taskId: dependent.id });
+	f.store.linkArtifact(mission.id, {
+		artifactId: "mock-layout",
+		sessionId: worker.id,
+		title: "Layout",
+		kind: "nsh",
+		revision: 2,
+		taskId: task.id,
+	});
+	for (let i = 0; i < 20; i++)
+		f.store.updateTask(mission.id, task.id, { title: `Implement ${i}` }, { sessionId: worker.id });
+	f.store.updateTask(mission.id, dependent.id, { title: "Unrelated activity" });
+	t.mock.method(f.store, "brief", () => assert.fail("targeted task must not read the brief"));
+	t.mock.method(f.store, "events", () => assert.fail("targeted task must not scan unfiltered activity"));
+	const read = async (id: string | number, action: "get" | "task" = "get") =>
+		(await f.service.call(lead.id, action, { id })) as {
+			id: string;
+			number: number;
+			body: string;
+			milestone: string;
+			dependsOn: number[];
+			dependents: number[];
+			assignee: { id: string; title: string; state: string } | null;
+			resources: { url: string; kind: string; state?: string; relationship: string }[];
+			artifacts: { artifactId: string; revision: number; kind: string }[];
+			recentActivity: { id: number; taskId: string; by: string }[];
+			activityCursor: number | null;
+		};
+	const full = await read(task.id);
+	assert.deepEqual(await read(`#${task.number}`), full);
+	assert.deepEqual(await read(task.number), full);
+	assert.deepEqual(await read(String(task.number), "task"), full);
+	assert.equal(full.id, task.id);
+	assert.equal(full.body, "Acceptance criteria");
+	assert.equal(full.milestone, "Delivery");
+	assert.deepEqual(full.dependsOn, [dependency.number]);
+	assert.deepEqual(full.dependents, [dependent.number]);
+	assert.deepEqual(full.assignee, { id: worker.id, title: worker.title, state: "idle" });
+	assert.equal(full.resources.length, 2);
+	assert.ok(
+		full.resources.some(
+			(ref) =>
+				ref.url === url && ref.kind === "github.pr" && ref.state === "draft" && ref.relationship === "reference",
+		),
+	);
+	assert.ok(full.resources.some((ref) => ref.kind === "url"));
+	assert.equal(full.artifacts[0]?.artifactId, "mock-layout");
+	assert.equal(full.artifacts[0]?.revision, 2);
+	assert.equal(full.artifacts[0]?.kind, "nsh");
+	assert.equal(full.recentActivity.length, 15);
+	assert.ok(full.recentActivity.every((event) => event.taskId === task.id && event.by === worker.id));
+	assert.equal(full.activityCursor, full.recentActivity.at(-1)?.id);
+	const older = (await f.service.call(lead.id, "activity", {
+		taskId: String(task.number),
+		cursor: full.activityCursor,
+	})) as { recentActivity: { id: number; taskId: string }[] };
+	assert.ok(older.recentActivity.every((event) => event.id < full.activityCursor! && event.taskId === task.id));
+	const empty = await read(dependency.id);
+	assert.equal(empty.body, "");
+	assert.equal(empty.assignee, null);
+	assert.deepEqual(empty.dependsOn, []);
+	assert.deepEqual(empty.dependents, [task.number]);
+	assert.equal(empty.activityCursor, null);
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other", tasks: [{ title: "Private" }] });
+	for (const id of ["999", f.store.tasks(foreign.id)[0]!.id, "", null])
+		await assert.rejects(f.service.call(lead.id, "get", { id }), /Unknown task|task id/);
+});
+
+test("activity filters precede limits and page stably through interleaved and new events", async (t) => {
+	const f = await fixture(t);
+	const worker = await f.spawn();
+	const outsider = await f.spawn();
+	const at = Date.parse("2026-10-14T12:00:00Z");
+	let now = at - 2000;
+	t.mock.method(Date, "now", () => now);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: worker.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Target" });
+	const other = f.store.addTask(mission.id, { title: "Other" });
+	const foreign = f.store.create({ projectId: f.project.id, title: "Elsewhere", tasks: [{ title: "Foreign" }] });
+	// All events share a timestamp, so only the event cursor gives lossless boundaries.
+	now = at;
+	const since = f.store.events(mission.id)[0]!.id;
+	for (let i = 0; i < 6; i++) {
+		f.store.updateTask(mission.id, task.id, { title: `Target ${i}` });
+		f.store.updateTask(mission.id, other.id, { title: `Noise ${i}` });
+		f.store.log(mission.id, { text: `Noise note ${i}` });
+		f.store.updateTask(foreign.id, f.store.tasks(foreign.id)[0]!.id, { title: `Foreign ${i}` });
+	}
+	type Page = {
+		recentActivity: { id: number; kind: string; taskId?: string; health?: string }[];
+		cursor: number | null;
+		recentUserNotes?: unknown[];
+	};
+	const read = async (args: Record<string, unknown> = {}) =>
+		(await f.service.call(worker.id, "activity", args)) as Page;
+	const filters = { taskId: `#${task.number}`, kind: "task", since, limit: 2 };
+	const first = await read(filters);
+	assert.equal(first.recentActivity.length, 2);
+	assert.equal(first.recentUserNotes, undefined);
+	assert.equal(first.cursor, first.recentActivity.at(-1)?.id);
+	f.store.updateTask(mission.id, task.id, { title: "Inserted after first page" });
+	const second = await read({ ...filters, cursor: first.cursor });
+	const last = await read({ ...filters, cursor: second.cursor });
+	assert.equal(last.cursor, null);
+	const ids = [...first.recentActivity, ...second.recentActivity, ...last.recentActivity].map((event) => event.id);
+	assert.equal(ids.length, 6);
+	assert.equal(new Set(ids).size, 6);
+	assert.deepEqual(
+		ids,
+		ids.toSorted((a, b) => b - a),
+	);
+	assert.ok(
+		[...first.recentActivity, ...second.recentActivity, ...last.recentActivity].every(
+			(event) => event.kind === "task" && event.taskId === task.id,
+		),
+	);
+	assert.deepEqual((await read({ taskId: task.id, since: "2026-10-14T12:00:00Z" })).recentActivity, []);
+	assert.equal((await read({ taskId: task.id, since: "2026-10-14T13:59:59+02:00" })).recentActivity.length, 7);
+	assert.deepEqual(
+		(await read({ taskId: task.id, since: first.recentActivity[0]!.id })).recentActivity.map((event) => event.kind),
+		["task"],
+	);
+	const note = f.store.log(mission.id, { text: "Health", health: "at_risk" });
+	assert.equal((await read({ kind: "update", limit: 1 })).recentActivity[0]?.health, "at_risk");
+	assert.equal((await read({ kind: "update", limit: 1 })).recentActivity[0]?.id, note.id);
+	assert.deepEqual(await read({ kind: "github" }), { recentActivity: [], cursor: null });
+	for (const args of [
+		{ limit: 0 },
+		{ limit: null },
+		{ limit: 101 },
+		{ limit: 1.5 },
+		{ limit: "2" },
+		{ cursor: 0 },
+		{ cursor: "1" },
+		{ since: "yesterday" },
+		{ since: "2026-10-14" },
+		{ since: -1 },
+		{ since: 1.5 },
+		{ since: null },
+		{ kind: "unknown" },
+	])
+		await assert.rejects(read(args), /limit|cursor|since|kind/);
+	await assert.rejects(read({ taskId: f.store.tasks(foreign.id)[0]!.id }), /Unknown task/);
+	await assert.rejects(f.service.call(outsider.id, "activity", {}), /not part of a mission/);
+	await assert.rejects(
+		f.service.call(worker.id, "log", { kind: "task", text: "Invalid log" }),
+		/kind must be update or handoff/,
+	);
+});
+
+test("compact get stays within estimated token budgets on a large fixture, with detail on demand", async (t) => {
+	const f = await fixture(t);
+	// No GitHub fetch or kernel wake-up is needed for agent reads.
+	t.mock.method(f.sessions, "refreshMissionPullRequests", () => {});
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared delivery",
+		fromSessionId: lead.id,
+		draft: false,
+		goal: "Ship a durable shared workflow with compact agent context and safe ownership.",
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const tasks = Array.from({ length: 82 }, (_, i) =>
+		f.store.addTask(mission.id, {
+			title: `Improve workflow validation and reference handling ${i + 1}`,
+			body: "Detailed acceptance criteria. ".repeat(100),
+			status: i < 49 ? "done" : i === 49 ? "in_progress" : i === 50 ? "in_review" : "todo",
+			milestone: i % 2 ? "Delivery" : "Foundation",
+			...(i === 49 ? { sessionId: worker.id } : {}),
+			...(i > 49 ? { dependsOn: ["50"] } : {}),
+		}),
+	);
+	for (let i = 0; i < 43; i++)
+		f.store.addResource(mission.id, {
+			taskId: tasks[i]!.id,
+			url: `https://github.com/octo/repo/pull/${i + 1}`,
+			title: "A long completed pull request title with stored review metadata",
+		});
+	f.store.addResource(mission.id, { taskId: tasks[49]!.id, url: "https://example.com/spec", title: "Specification" });
+	f.store.addResource(mission.id, { taskId: tasks[50]!.id, url: "https://github.com/octo/repo/pull/99" });
+	for (let i = 0; i < 64; i++)
+		f.store.linkArtifact(mission.id, {
+			artifactId: `artifact-${i}`,
+			sessionId: worker.id,
+			title: `Workflow layout ${i}`,
+			kind: "nsh",
+			taskId: tasks[i < 63 ? i % 49 : 49]!.id,
+		});
+	for (let i = 0; i < 30; i++)
+		f.store.addDecision(mission.id, `Rule ${i}: ${"Detailed binding reference. ".repeat(8)}`);
+	const reviewer = await f.spawn();
+	f.service.join(reviewer.id, { missionId: mission.id, taskId: "52" });
+	f.store.updateTask(mission.id, "52", { status: "blocked" });
+	f.store.addComment(mission.id, { text: "Review the validation requirement.", targetSessionId: lead.id });
+	for (let i = 0; i < 100; i++)
+		f.store.log(mission.id, { text: "Old history that must not be returned. ".repeat(20) });
+	f.store.writeBrief(mission.id, "# Specification\n" + "Details. ".repeat(1000), 0);
+	t.mock.method(f.store, "brief", () => assert.fail("agent summary must not read brief history"));
+	t.mock.method(f.store, "events", () => assert.fail("agent summary must not read events"));
+	t.mock.method(f.store, "userNotes", () => assert.fail("agent summary must not read user notes"));
+	for (const [member, budget] of [
+		[worker, 4000],
+		[lead, 8000],
+	] as const) {
+		const get = await f.service.call(member.id, "get", {});
+		const serialized = JSON.stringify(get);
+		t.diagnostic(
+			`${member.id === worker.id ? "worker" : "coordinator"} get: ${Buffer.byteLength(serialized)} bytes (~${Math.ceil(Buffer.byteLength(serialized) / 4)} tokens)`,
+		);
+		assert.ok(
+			Buffer.byteLength(serialized) < budget,
+			`get is ${Buffer.byteLength(serialized)} bytes, budget ${budget} (~${budget / 4} tokens)`,
+		);
+		assert.doesNotMatch(serialized, /Old history|Detailed acceptance|Detailed binding|completed pull request/);
+		assert.doesNotMatch(serialized, new RegExp(mission.id + "|" + worker.id + "|" + tasks[49]!.id));
+	}
+	const summary = (await f.service.call(worker.id, "get", {})) as {
+		counts: { doneTasks: number; links: number; artifacts: number; decisions: number };
+		tasks: { number: number; resources: unknown[]; artifacts: unknown[] }[];
+		openTasks: unknown[];
+	};
+	assert.deepEqual(summary.counts, { doneTasks: 49, droppedTasks: 0, links: 45, artifacts: 64, decisions: 30 });
+	assert.equal(summary.tasks[0]!.number, 50);
+	assert.equal(summary.tasks[0]!.resources.length, 1);
+	assert.equal(summary.tasks[0]!.artifacts.length, 1);
+	assert.equal(summary.openTasks.length, 32);
+	const coordinator = (await f.service.call(lead.id, "get", {})) as {
+		members: { title: string; state: string; tasks: number[] }[];
+		needsYou: { blockedTasks: number[]; comments: { text: string }[] };
+		prsInReview: { task: number; url: string }[];
+	};
+	assert.equal(coordinator.members.length, 3);
+	assert.ok(coordinator.members.some((member) => member.tasks.includes(52) && member.state === "idle"));
+	assert.deepEqual(coordinator.needsYou.blockedTasks, [52]);
+	assert.equal(coordinator.needsYou.comments[0]?.text, "Review the validation requirement.");
+	assert.equal(coordinator.prsInReview[0]?.task, 51);
+	const full = (await f.service.call(worker.id, "task", { id: "1" })) as { body: string; number: number };
+	assert.equal(full.number, 1);
+	assert.match(full.body, /Detailed acceptance/);
+	const readTasks = async (args: Record<string, unknown>) =>
+		((await f.service.call(worker.id, "tasks", args)) as { tasks: unknown[] }).tasks;
+	assert.equal((await readTasks({})).length, 33);
+	assert.equal((await readTasks({ mine: true })).length, 1);
+	assert.equal((await readTasks({ milestone: "Foundation" })).length, 16);
+	assert.equal((await readTasks({ filter: "done" })).length, 49);
+	assert.equal((await readTasks({ filter: "all" })).length, 82);
+	assert.equal(((await f.service.call(worker.id, "links", {})) as { links: unknown[] }).links.length, 2);
+	assert.equal(
+		((await f.service.call(worker.id, "links", { filter: "done" })) as { links: unknown[] }).links.length,
+		43,
+	);
+	assert.equal(((await f.service.call(worker.id, "artifacts", {})) as { artifacts: unknown[] }).artifacts.length, 1);
+	assert.equal(
+		((await f.service.call(worker.id, "artifacts", { taskId: "1", filter: "all" })) as { artifacts: unknown[] })
+			.artifacts.length,
+		2,
+	);
+	assert.equal(((await f.service.call(worker.id, "decisions", {})) as { decisions: unknown[] }).decisions.length, 30);
+	await assert.rejects(f.service.call(worker.id, "tasks", { filter: "bogus" }), /filter must be/);
+});
+
+test("delivered members stay unarchived, retain handoff, and new tasks start fresh chats", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { id } = f.store.create({
+		projectId: f.project.id,
+		title: "Synthetic delivery",
+		tasks: [{ title: "One" }, { title: "Two" }],
+	});
+	f.store.join(lead.id, id);
+	f.store.update(id, { coordinatorSessionId: lead.id });
+	f.service.join(member.id, { missionId: id, taskId: "1" });
+	f.service.notices.start();
+	const worker = f.workers.get(member.id)!;
+	worker.state = "working";
+	worker.onPacket({ type: "working", working: true });
+	const record = { commit: "a".repeat(40), checks: "Unit tests, changed behavior covered.", issues: "" };
+	await f.service.call(lead.id, "complete", { id: "1", completion: record });
+	assert.equal(f.sessions.get(member.id)!.archivedAt, undefined, "completion cannot stop its own live turn");
+	await assert.rejects(f.service.call(member.id, "claim", { id: "2" }), /coordinator/);
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(f.sessions.get(member.id)!.archivedAt, undefined, "delivery never archives the chat");
+	const detail = (await f.service.call(member.id, "get", { id: "1" })) as { completion: unknown };
+	assert.deepEqual(detail.completion, record);
+	const next = await f.service.startTask(id, "2");
+	assert.notEqual(next.id, member.id);
+	assert.equal(f.store.resolveTask(id, "2").sessionId, next.id);
+});
+
+async function organizationFixture(t: TestContext) {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Organization",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(member.id, mission.id);
+	const task = f.store.addTask(mission.id, { title: "Delivered", sessionId: member.id });
+	await f.service.call(lead.id, "complete", {
+		id: task.id,
+		completion: { commit: "a".repeat(40), checks: "Fixture delivery", issues: "" },
+	});
+	const worker = f.workers.get(member.id)!;
+	Object.assign(worker, { hasChildren: async () => false });
+	const passiveReader = f.sessions as unknown as { recentColdSnapshot(): Promise<{ events: unknown[] }> };
+	t.mock.method(passiveReader, "recentColdSnapshot", async () => ({ events: [] }));
+	const organize = (
+		action: "archiveWorker" | "restoreWorker" = "archiveWorker",
+		targetSessionId = member.id,
+		sender = lead.id,
+	) => f.service.call(sender, action, { targetSessionId });
+	return { ...f, lead, member, mission, task, worker, organize, passiveReader };
+}
+
+test("worker organization archives delivered work, repeats, lists and passively restores before explicit follow-up", async (t) => {
+	const f = await organizationFixture(t);
+	const tasks = f.store.tasks(f.mission.id);
+	const completion = f.store.completion(f.mission.id, f.task.id);
+	const requests = f.worker.requests.length;
+	const automation = f.sessions as unknown as {
+		startWorkspaceSetup(): Promise<void>;
+		startPostRun(): void;
+		startFlowAdvance(): void;
+	};
+	const setup = t.mock.method(automation, "startWorkspaceSetup", async () => assert.fail("no automatic setup"));
+	const postRun = t.mock.method(automation, "startPostRun", () => assert.fail("no automatic work"));
+	const flow = t.mock.method(automation, "startFlowAdvance", () => assert.fail("no automatic flow"));
+	const a = await f.organize();
+	assert.ok(f.sessions.get(f.member.id)!.archivedAt);
+	assert.deepEqual(await f.organize(), a);
+	const status = (await f.service.call(f.lead.id, "status", {})) as {
+		members: Array<{ id: string; archivedAt?: number }>;
+	};
+	assert.ok(status.members.find((m) => m.id === f.member.id)?.archivedAt);
+	const rejected = (await f.service.call(f.lead.id, "send", { targetSessionId: f.member.id, message: "Not yet" })) as {
+		delivery: string;
+	};
+	assert.equal(rejected.delivery, "rejected");
+	const restored = { sessionId: f.member.id, archivedAt: null };
+	assert.deepEqual(await f.organize("restoreWorker"), restored);
+	assert.deepEqual(await f.organize("restoreWorker"), restored);
+	assert.equal(f.worker.requests.length, requests, "archive/restore never delivers or replays input");
+	assert.deepEqual(f.store.tasks(f.mission.id), tasks);
+	assert.deepEqual(f.store.completion(f.mission.id, f.task.id), completion);
+	assert.equal(f.store.require(f.mission.id).status, "active");
+	// Sending is a distinct authorized operation after the passive restore.
+	setup.mock.restore();
+	postRun.mock.restore();
+	flow.mock.restore();
+	await f.service.call(f.lead.id, "send", { targetSessionId: f.member.id, message: "Authorized follow-up" });
+	assert.equal(f.worker.requests.length, requests + 1);
+	assert.equal(f.worker.requests.at(-1)!.type, "input");
+});
+
+test("worker organization refuses unrelated, self, non-coordinator, moved-project and unfinished targets", async (t) => {
+	const f = await organizationFixture(t);
+	const outsider = await f.spawn();
+	for (const action of ["archiveWorker", "restoreWorker"] as const) {
+		await assert.rejects(f.organize(action, f.member.id, f.member.id), /coordinator/);
+		await assert.rejects(f.organize(action, f.lead.id), /current worker/);
+		await assert.rejects(f.organize(action, outsider.id), /current worker/);
+	}
+	for (const status of ["todo", "in_progress", "blocked", "in_review", "delegated"] as const) {
+		f.store.updateTask(f.mission.id, f.task.id, { status });
+		await assert.rejects(f.organize(), /assigned work/);
+		assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	}
+	f.store.updateTask(f.mission.id, f.task.id, { status: "dropped" });
+	// biome-ignore lint/complexity/useLiteralKeys: Model a project move independent of cached membership.
+	const meta = f.sessions["require"](f.member.id);
+	meta.projectId = f.other.id;
+	await assert.rejects(f.organize(), /mission\/project/);
+	await assert.rejects(f.service.call(f.lead.id, "status", { targetSessionId: f.member.id }), /own project/);
+	meta.projectId = f.project.id;
+	const other = f.store.create({ title: "Other", projectId: f.project.id });
+	f.store.join(f.member.id, other.id);
+	await assert.rejects(f.organize(), /mission\/project/);
+});
+
+test("worker organization refuses busy tools, jobs, children, queued outbox and unresolved assistance", async (t) => {
+	const f = await organizationFixture(t);
+	// biome-ignore lint/complexity/useLiteralKeys: Exercise daemon state, not a forged tool payload.
+	const meta = f.sessions["require"](f.member.id);
+	for (const state of ["working", "starting"] as const) {
+		f.worker.state = state;
+		await assert.rejects(f.organize(), /active or pending/);
+	}
+	f.worker.state = "idle";
+	for (const key of ["busy", "toolsRunning", "compacting", "awaitingJobFollowUp"] as const) {
+		Object.assign(f.worker, { [key]: true });
+		await assert.rejects(f.organize(), /active or pending/);
+		Object.assign(f.worker, { [key]: false });
+	}
+	Object.assign(f.worker, { runningJobs: [{ id: "job" }] });
+	await assert.rejects(f.organize(), /active or pending/);
+	Object.assign(f.worker, { runningJobs: [], hasChildren: async () => true });
+	await assert.rejects(f.organize(), /subprocesses/);
+	Object.assign(f.worker, { hasChildren: async () => false });
+	meta.pending = [{ type: "input", requestId: "pending", content: "Unfinished", mode: "followUp" }];
+	meta.failure = "Stopped startup does not resolve queued input";
+	await assert.rejects(f.organize(), /active or pending/);
+	delete meta.pending;
+	delete meta.failure;
+	const comment = f.store.addComment(f.mission.id, { text: "Need help" }, { sessionId: f.member.id });
+	await assert.rejects(f.organize(), /assistance/);
+	f.store.resolveComment(f.mission.id, comment.id, {});
+	await f.organize();
+});
+
+for (const race of ["member", "member-aba", "coordinator", "assignment", "project", "busy"] as const) {
+	test(`worker organization rechecks ${race} across asynchronous child inspection`, async (t) => {
+		const f = await organizationFixture(t);
+		Object.assign(f.worker, {
+			hasChildren: async () => {
+				if (race === "member" || race === "member-aba") f.store.leave(f.member.id);
+				if (race === "member-aba") f.store.join(f.member.id, f.mission.id);
+				if (race === "coordinator") f.store.update(f.mission.id, { coordinatorSessionId: null });
+				if (race === "assignment") f.store.updateTask(f.mission.id, f.task.id, { status: "todo" });
+				// biome-ignore lint/complexity/useLiteralKeys: Model a metadata move at the awaited boundary.
+				if (race === "project") f.sessions["require"](f.member.id).projectId = f.other.id;
+				if (race === "busy") f.worker.busy = true;
+				return false;
+			},
+		});
+		await assert.rejects(f.organize(), /changed|mission\/project|active or pending/);
+		assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	});
+}
+
+test("worker organization refuses durable queue, question and unfinished tool snapshots without replay", async (t) => {
+	const f = await organizationFixture(t);
+	const base = { type: "snapshot", entries: [], inbox: [], tools: [], nestedTools: [], agent: {}, usage: {} };
+	for (const events of [
+		[{ type: "queue_update", items: [{ id: 1 }] }],
+		[{ type: "queue_update", items: [], automatic: [{ id: 2, held: true }] }],
+		[{ ...base, history: { question: { id: 3 } } }],
+		[{ ...base, run: { inputs: [] } }],
+		[{ ...base, tools: [{ id: "unfinished-effect" }] }],
+	]) {
+		t.mock.method(f.passiveReader, "recentColdSnapshot", async () => ({ events }));
+		await assert.rejects(f.organize(), /queued inputs, question or pending effects/);
+		assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	}
+});
+
+test("worker organization waits for task durability and refuses failed writes without claiming success", async (t) => {
+	const f = await organizationFixture(t);
+	const durable = t.mock.method(f.store, "durable", async () => {
+		throw new Error("durability failure");
+	});
+	await assert.rejects(f.organize(), /durability failure/);
+	assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	durable.mock.restore();
+	await Promise.all(f.sessions["saving"].values());
+	const directory = join(f.home, "data", "sessions", f.member.id);
+	const original = await readFile(join(directory, "meta.json"), "utf8");
+	await rm(join(directory, "meta.json"));
+	await mkdir(join(directory, "meta.json")); // Force archive's atomic rename to fail.
+	await assert.rejects(f.organize(), /EISDIR|ENOTEMPTY/);
+	assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	await rm(join(directory, "meta.json"), { recursive: true });
+	await writeFile(join(directory, "meta.json"), original);
+	await f.organize();
+	const stored = JSON.parse(await readFile(join(directory, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, f.sessions.get(f.member.id)!.archivedAt);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, true);
+});
+
+test("worker organization rechecks scope inside the metadata FIFO before rename", async (t) => {
+	const f = await organizationFixture(t);
+	await Promise.all(f.sessions["saving"].values());
+	let resolve!: () => void;
+	const held = {
+		promise: new Promise<void>((done) => {
+			resolve = done;
+		}),
+		resolve: () => resolve(),
+	};
+	f.sessions["saving"].set(f.member.id, held.promise);
+	const organize = f.organize();
+	const failure = assert.rejects(organize, /changed/);
+	await until(() => f.sessions["saving"].get(f.member.id) !== held.promise);
+	f.store.updateTask(f.mission.id, f.task.id, { status: "todo" });
+	held.resolve();
+	await failure;
+	assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	const stored = JSON.parse(await readFile(join(f.home, "data", "sessions", f.member.id, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, undefined);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, undefined);
+});
+
+test("worker organization reports the visible archive after post-rename durability failure and retries safely", async (t) => {
+	const f = await organizationFixture(t);
+	// biome-ignore lint/complexity/useLiteralKeys: Fail the final directory fsync after the actual rename.
+	const home = f.sessions["home"];
+	// biome-ignore lint/complexity/useLiteralKeys: Inject only after the real temporary metadata write, at the final guard.
+	const save = f.sessions["save"].bind(f.sessions);
+	const writer = f.sessions as unknown as { save: typeof save };
+	const failing = t.mock.method(writer, "save", (...args: Parameters<typeof save>) => {
+		const guard = args[4];
+		if (guard)
+			args[4] = () => {
+				guard();
+				Object.assign(f.sessions, { home: join(f.home, "missing-directory") });
+			};
+		return save(...args);
+	});
+	await assert.rejects(f.organize(), /ENOENT/);
+	const committed = f.sessions.get(f.member.id)!.archivedAt;
+	assert.ok(committed);
+	const stored = JSON.parse(await readFile(join(f.home, "data", "sessions", f.member.id, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, committed);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, true);
+	Object.assign(f.sessions, { home });
+	failing.mock.restore();
+	assert.deepEqual(await f.organize(), { sessionId: f.member.id, archivedAt: committed });
+});
+
+test("worker organization serializes opposite requests and rejects sends admitted behind archive", async (t) => {
+	const f = await organizationFixture(t);
+	const results = (await Promise.all([
+		f.organize(),
+		f.organize("restoreWorker"),
+		f.organize("restoreWorker"),
+	])) as Array<{ archivedAt: number | null }>;
+	assert.ok(results[0]!.archivedAt);
+	assert.equal(results[1]!.archivedAt, null);
+	assert.equal(results[2]!.archivedAt, null);
+	let release!: () => void;
+	let inspecting = false;
+	const held = new Promise<void>((done) => {
+		release = done;
+	});
+	Object.assign(f.worker, {
+		hasChildren: async () => {
+			inspecting = true;
+			await held;
+			return false;
+		},
+	});
+	const archive = f.organize();
+	await until(() => inspecting);
+	const requests = f.worker.requests.length;
+	const send = f.service.call(f.lead.id, "send", { targetSessionId: f.member.id, message: "Racing input" });
+	release();
+	await archive;
+	assert.equal(((await send) as { delivery: string }).delivery, "rejected");
+	assert.equal(f.worker.requests.length, requests);
+});
+
+test("worker organization rechecks restore after cold reads and retains archived state on failure", async (t) => {
+	const f = await organizationFixture(t);
+	const archived = await f.organize();
+	t.mock.method(f.passiveReader, "recentColdSnapshot", async () => {
+		f.worker.busy = true;
+		return { events: [] };
+	});
+	await assert.rejects(f.organize("restoreWorker"), /active or pending/);
+	assert.deepEqual(archived, { sessionId: f.member.id, archivedAt: f.sessions.get(f.member.id)!.archivedAt });
+});
+
+test("worker organization reports committed state when scope changes after rename during durability", async (t) => {
+	const f = await organizationFixture(t);
+	// biome-ignore lint/complexity/useLiteralKeys: Model scope loss while the real writer finishes its durable ACK.
+	const save = f.sessions["save"].bind(f.sessions);
+	const writer = f.sessions as unknown as { save: typeof save };
+	t.mock.method(writer, "save", async (...args: Parameters<typeof save>) => {
+		await save(...args);
+		if (args[4]) f.store.leave(f.member.id);
+	});
+	await assert.rejects(f.organize(), /organization committed \(archivedAt=\d+\).*changed/);
+	assert.ok(f.sessions.get(f.member.id)!.archivedAt);
+	const stored = JSON.parse(await readFile(join(f.home, "data", "sessions", f.member.id, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, f.sessions.get(f.member.id)!.archivedAt);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, true);
+});
+
+class FakeWorker implements SessionWorker {
+	ready = Promise.resolve();
+	state: SessionState = "idle";
+	error?: string;
+	busy = false;
+	stopped = false;
+	readonly sent: KernelCommand[] = [];
+	readonly requests: KernelCommand[] = [];
+	readonly spec: KernelSpec;
+	readonly onPacket: (packet: KernelPacket) => void;
+	constructor(spec: KernelSpec, onPacket: (packet: KernelPacket) => void) {
+		this.spec = spec;
+		this.onPacket = onPacket;
+	}
+	send(command: KernelCommand): void {
+		this.sent.push(command);
+	}
+	async request(command: KernelCommand): Promise<void> {
+		this.requests.push(command);
+		if (command.type === "abort") this.stopped = true;
+		if (command.type === "input") {
+			if (!command.requestId.startsWith("mission:send:")) this.stopped = false;
+			this.onPacket({
+				type: "accepted",
+				requestId: command.requestId,
+				delivery: this.state === "working" || this.stopped ? "queued" : "delivered",
+			});
+		}
+	}
+	async close(): Promise<void> {}
+}
+
+async function until<T>(check: () => T | undefined | false): Promise<T> {
+	const deadline = Date.now() + 3_000;
+	for (;;) {
+		const value = check();
+		if (value) return value;
+		assert.ok(Date.now() < deadline, "condition did not settle");
+		await delay(2);
+	}
+}
+
+async function codeObserverFixture(t: TestContext) {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Code observation",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Code",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Code", scope: "Exact scope", criteria: ["Checks"] },
+	});
+	return { ...f, lead, worker, mission, task };
+}
+
+test("passive code delivery keeps unavailable producers and unqualified zero-PR inventory Unknown", async (t) => {
+	const f = await codeObserverFixture(t);
+	const result = await f.service.observeCodeDelivery(f.lead.id, f.task.id);
+	assert.equal(result.status, "observed");
+	if (result.status !== "observed") throw new Error("fixture");
+	assert.equal(result.binding.status, "unknown");
+	assert.equal(result.contributions.ledger.status, "unknown");
+	assert.equal(result.contributions.inventory.status, "unknown");
+	assert.equal(result.configuredChecks.status, "unknown");
+	assert.equal(result.ownedPullRequests.discovery, "unknown");
+	assert.deepEqual(result.ownedPullRequests.observations, []);
+	assert.equal(result.integration.status, "unknown");
+	assert.equal(f.store.currentDeliveryEvidence(f.mission.id, f.task.id).length, 0);
+	assert.equal(f.store.completion(f.mission.id, f.task.id), undefined);
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "todo");
+});
+
+test("passive owned URL inventory preserves uncached URLs, exclusions and transfers", async (t) => {
+	const f = await codeObserverFixture(t),
+		meta = f.sessions["require"](f.worker.id);
+	const urls = [1, 2, 3, 4].map((n) => `https://github.com/o/r/pull/${n}`);
+	meta.agentPullRequests = [urls[0]!, urls[1]!];
+	meta.boundPullRequests = [urls[1]!, urls[2]!, urls[3]!];
+	meta.unboundPullRequests = [urls[2]!];
+	f.sessions["boundPullRequestOwners"].set(urls[3]!, f.lead.id);
+	assert.deepEqual(f.sessions.ownedPullRequests(f.worker.id), [], "cached-object API cannot prove no owned URLs");
+	assert.deepEqual(f.sessions.ownedPullRequestUrls(f.worker.id), urls.slice(0, 2));
+	const called: string[] = [];
+	t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string, authorize: () => void) => {
+		authorize();
+		called.push(url);
+		return { url, status: "unknown", reason: "fixture permission/lost response" };
+	});
+	const result = await f.service.observeCodeDelivery(f.lead.id, f.task.id);
+	assert.equal(result.status, "observed");
+	if (result.status !== "observed") throw new Error("fixture");
+	assert.deepEqual(called, urls.slice(0, 2));
+	assert.equal(result.ownedPullRequests.status, "unknown");
+	assert.equal(result.ownedPullRequests.observations.length, 2);
+	assert.equal(f.sessions.ownedPullRequestUrls("missing"), undefined);
+	assert.equal(f.sessions.ownedPullRequestUrls(f.lead.id), undefined);
+});
+
+test("code observation caps PR fanout without inventing complete coverage", async (t) => {
+	const f = await codeObserverFixture(t),
+		meta = f.sessions["require"](f.worker.id);
+	meta.boundPullRequests = Array.from({ length: 21 }, (_, i) => `https://github.com/o/r/pull/${i + 1}`);
+	let calls = 0;
+	t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string) => {
+		calls++;
+		return { url, status: "unknown", reason: "fixture" };
+	});
+	const result = await f.service.observeCodeDelivery(f.lead.id, f.task.id);
+	assert.equal(result.status, "observed");
+	if (result.status !== "observed") throw new Error("fixture");
+	assert.equal(calls, 20);
+	assert.equal(result.ownedPullRequests.status, "unknown");
+	assert.equal(result.ownedPullRequests.unobservedUrls.length, 1);
+	assert.ok(meta.boundPullRequests.includes(result.ownedPullRequests.unobservedUrls[0]!));
+	assert.match(result.ownedPullRequests.reason, /limit/);
+});
+
+test("code observation freezes definition/context/configuration/source/URL fences across asynchronous reads", async (t) => {
+	for (const kind of [
+		"definition",
+		"owner-aba",
+		"context",
+		"configuration",
+		"source",
+		"urls",
+		"leave",
+		"project",
+		"caller-project",
+	] as const)
+		await t.test(kind, async (t) => {
+			const f = await codeObserverFixture(t),
+				meta = f.sessions["require"](f.worker.id);
+			meta.boundPullRequests = ["https://github.com/o/r/pull/1"];
+			let mutated = false;
+			t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string) => {
+				if (kind === "definition") f.store.updateTask(f.mission.id, f.task.id, { title: "Changed" });
+				if (kind === "owner-aba") {
+					f.store.releaseTask(f.mission.id, f.task.id);
+					f.store.claimTask(f.mission.id, f.task.id, f.worker.id, {});
+				}
+				if (kind === "context")
+					f.store.writeBrief(f.mission.id, "Changed context", f.store.require(f.mission.id).briefRevision);
+				if (kind === "configuration") await f.projects.update(f.project.id, { model: "fixture/changed" });
+				if (kind === "source") meta.cwd += "/replacement";
+				if (kind === "urls") meta.boundPullRequests!.push("https://github.com/o/r/pull/2");
+				if (kind === "leave") f.store.leave(f.worker.id);
+				if (kind === "project") meta.projectId = f.other.id;
+				if (kind === "caller-project") f.sessions["require"](f.lead.id).projectId = f.other.id;
+				mutated = true;
+				return { url, status: "unknown", reason: "lost observation" };
+			});
+			if (["leave", "project", "caller-project"].includes(kind))
+				await assert.rejects(f.service.observeCodeDelivery(f.lead.id, f.task.id), /membership|project/i);
+			else assert.equal((await f.service.observeCodeDelivery(f.lead.id, f.task.id)).status, "stale", kind);
+			assert.equal(mutated, true, "the intended race actually occurred");
+		});
+});
+
+async function fixture(
+	t: TestContext,
+	pullRequests: PullRequestOptions = {
+		runner: async () => {
+			throw new Error("GitHub unavailable in fixture");
+		},
+	},
+	usageSource?: SubscriptionUsageSource,
+	deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
+	reviewProducerObserver?: (sessionId: string, request: ReviewResultWrite) => Promise<ReviewProducer>,
+	options: { realCodingCapacity?: true; disk?: true } = {},
+) {
+	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
+	const projectDir = join(home, "project");
+	const otherDir = join(home, "other");
+	await mkdir(projectDir);
+	await mkdir(otherDir);
+	const projects = new ProjectStore(join(home, "data"));
+	await projects.load();
+	const project = await projects.create({ path: projectDir, workspace: "direct" });
+	const other = await projects.create({ path: otherDir, workspace: "direct" });
+	const workers = new Map<string, FakeWorker>();
+	const sessions = new SessionManager(
+		join(home, "data"),
+		projects,
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec, onPacket) => {
+				const worker = new FakeWorker(spec, onPacket);
+				workers.set(spec.sessionId, worker);
+				queueMicrotask(() => onPacket({ type: "ready", model: "test/model", working: false, usage: {} }));
+				return worker;
+			},
+		},
+		{ ...pullRequests, ...(pullRequests.runner ? { runner: legacyGitHub(pullRequests.runner) } : {}) },
+		offlineSessionOptions({ ...(usageSource ? { subscriptionUsage: () => usageSource } : {}) }),
+	);
+	// No repository or subprocesses in this service fixture. Real source-role coverage lives in coordinator-role.test.ts.
+	const roleHost = sessions as unknown as {
+		refreshMainViews(): Promise<void>;
+		prepareCoordinatorRole(id: string): Promise<void>;
+	};
+	t.mock.method(roleHost, "refreshMainViews", async () => {});
+	t.mock.method(roleHost, "prepareCoordinatorRole", async (id: string) => {
+		const meta = sessions["require"](id);
+		if (sessions["isMissionCoordinator"](id))
+			meta.coordinatorView ??= {
+				originalCwd: meta.cwd,
+				path: meta.cwd,
+				scratch: join(home, "scratch", id),
+				head: "a".repeat(40),
+				repository: projectDir,
+			};
+		else delete meta.coordinatorView;
+	});
+	const store = new MissionStore(options.disk ? join(home, "data", "missions.sqlite") : ":memory:");
+	// Fake workers have no durable transcript to read.
+	t.mock.method(sessions, "pendingQuestion", async () => null);
+	t.mock.method(sessions, "selectTaskModel", async (_cwd: string, model?: string, thinking?: string) => ({
+		model: model ?? "test/model",
+		thinking: thinking ?? "medium",
+	}));
+	const service = new MissionService(store, sessions, projects, deliverySnapshots, reviewProducerObserver);
+	// These legacy metadata fixtures create arbitrary never-finished fake chats, not coding allocations.
+	// Real coding admission is covered in sessions.test.ts and planning-execution.test.ts.
+	if (!options.realCodingCapacity) t.mock.method(sessions, "codingCapacityReason", () => undefined);
+	service.setContinuationPolicySource({
+		current: (record) => ({
+			version: 1,
+			state: "allowed",
+			dispatch: { authorizationId: "faux-dispatch", revision: 1 },
+			model: {
+				sourceId: "faux-model",
+				revision: "1",
+				model: record.request.model ?? "test/model",
+				thinking: record.request.thinking ?? "medium",
+			},
+			budget: { authorityId: "faux-budget", revision: 1 },
+		}),
+		onChange: () => () => {},
+	});
+	await sessions.load();
+	let stopped: Promise<void> | undefined;
+	const stop = () =>
+		(stopped ??= (async () => {
+			await service.continuations.stop();
+			await service.notices.stop();
+			await sessions.shutdown();
+			await Promise.allSettled(sessions["saving"].values());
+		})());
+	t.after(async () => {
+		await stop();
+		store.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	const spawn = async (projectId = project.id) => {
+		const session = await sessions.spawn({ projectId, message: "hello", title: "Chat" });
+		await until(() => workers.get(session.id));
+		await until(() => !sessions["starting"].has(session.id));
+		return session;
+	};
+	return { home, projects, project, other, sessions, store, service, workers, spawn, stop };
+}
+
+test("real mission admission counts owned work and uncertain starts, not the coordinator or read-only review", async (t) => {
+	const f = await fixture(t, undefined, undefined, undefined, undefined, { realCodingCapacity: true });
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Take turns", startCoordinator: true });
+	const review = await f.sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Read-only review" });
+	f.store.join(review.id, mission.id);
+	f.store.addTask(mission.id, { title: "Read-only review", sessionId: review.id });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined);
+	const task = f.store.addTask(mission.id, { title: "First writer" });
+	const writer = await f.service.startTask(mission.id, task.id);
+	const next = f.store.addTask(mission.id, { title: "Second writer" });
+	await assert.rejects(f.service.startTask(mission.id, next.id), /one writer|1 of 1/);
+	assert.equal(f.store.task(mission.id, next.id).sessionId, undefined);
+	assert.ok(f.sessions.get(review.id));
+	await f.sessions.stop(writer.id);
+	assert.match(f.sessions.codingCapacityReason(f.project.id)!, /1 of 1/, "stopping does not release open owned work");
+	f.store.updateTask(mission.id, task.id, { status: "done" });
+	assert.equal(f.sessions.codingCapacityReason(f.project.id), undefined);
+	const unknown = {
+		operationId: randomUUID(),
+		missionId: mission.id,
+		targetId: randomUUID(),
+		version: 1 as const,
+		source: "fixture",
+		hostFence: "fixture",
+		stopGeneration: 0,
+		coordinatorId: mission.coordinatorSessionId!,
+		taskIds: [next.id],
+		request: {},
+		coordinatorFence: "fixture",
+		requestDigest: "fixture",
+		scopeDigest: "fixture",
+		pauseGeneration: 0,
+		state: "unknown" as const,
+		reason: "Lost acknowledgement",
+	};
+	f.store.controls.saveContinuation(unknown);
+	assert.match(
+		f.sessions.codingCapacityReason(f.project.id)!,
+		/1 of 1/,
+		"missing target metadata never frees uncertain continuation",
+	);
+	f.store.controls.saveContinuation({ ...unknown, request: { mode: "ask" } });
+	assert.equal(
+		f.sessions.codingCapacityReason(f.project.id),
+		undefined,
+		"an uncertain Ask start is not a coding allocation",
+	);
+});
+
+test("host-owned spawn fences are rechecked after durable mission admission before a worker starts", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Fenced discussion",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const before = f.sessions.list().length;
+	let current = true;
+	f.sessions["missions"]!.whenDurable = async () => {
+		current = false;
+	};
+	await assert.rejects(
+		f.sessions.spawn({ missionId: mission.id, mode: "ask", message: "Read-only discussion" }, false, undefined, {
+			actorSessionId: lead.id,
+			guard: () => {
+				if (!current) throw new Conflict("Permission changed during admission");
+			},
+		}),
+		/Permission changed/,
+	);
+	assert.equal(f.sessions.list().length, before);
+	assert.deepEqual(f.store.members(mission.id), [lead.id]);
+});
+
+test("new mission starts a coordinator with the draft request and user context before its first turn", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Plan",
+		goal: "Ship a small feature",
+		startCoordinator: true,
+		model: "test/chosen",
+		thinking: "high",
+		message: "Use https://example.com/spec. Keep it small.",
+	});
+	assert.ok(mission.coordinatorSessionId);
+	const session = f.sessions.get(mission.coordinatorSessionId)!;
+	assert.equal(session.title, "Plan");
+	assert.equal(session.missionId, mission.id);
+	assert.equal(session.projectId, f.project.id);
+	assert.equal(session.thinking, "high");
+	assert.deepEqual(f.store.members(mission.id), [session.id]);
+	const worker = await until(() => f.workers.get(session.id));
+	assert.equal(worker.spec.model, "test/chosen");
+	assert.equal(worker.spec.mission?.coordinator, "self");
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(
+		input.type === "input" ? input.content : "",
+		`${draftMessage("Plan")}\n\nShip a small feature\n\nUse https://example.com/spec. Keep it small.`,
+	);
+});
+
+for (const creating of [true, false]) {
+	test(`${creating ? "new" : "existing"} mission delivers a long coordinator prompt without truncation`, async (t) => {
+		const f = await fixture(t);
+		const goal = "g".repeat(4000);
+		const message = "Requirements: preserve all context. 🦜\n".repeat(500);
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "Long plan",
+			goal,
+			...(creating ? { startCoordinator: true, message } : {}),
+		});
+		const session = creating
+			? f.sessions.get(mission.coordinatorSessionId!)!
+			: await f.service.startCoordinator(mission.id, { message });
+		assert.equal(f.store.require(mission.id).coordinatorSessionId, session.id);
+		assert.deepEqual(f.store.members(mission.id), [session.id]);
+		const worker = await until(() => f.workers.get(session.id));
+		assert.equal(worker.spec.mission?.coordinator, "self");
+		const input = await until(() => worker.requests.find((command) => command.type === "input"));
+		assert.equal(input.type, "input");
+		assert.equal(input.content, `${draftMessage("Long plan")}\n\n${goal}\n\n${message.trim()}`);
+	});
+}
+
+test("new mission with start disabled or omitted creates no chat", async (t) => {
+	const f = await fixture(t);
+	for (const startCoordinator of [false, undefined]) {
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "Plan",
+			goal: "Goal",
+			startCoordinator,
+		});
+		assert.equal(mission.coordinatorSessionId, undefined);
+		assert.deepEqual(f.store.members(mission.id), []);
+	}
+	assert.equal(f.sessions.list().length, 0);
+});
+
+test("PR handoff actions check coordinator role and membership and share task-link behavior with user binds", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Handoff",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.store.join(member.id, mission.id);
+	const url = "https://github.com/octo/repo/pull/12";
+	for (const action of ["bindPr", "unbindPr"] as const) {
+		await assert.rejects(
+			f.service.call(member.id, action, { targetSessionId: member.id, url }),
+			/Only the mission coordinator/,
+		);
+		await assert.rejects(
+			f.service.call(coordinator.id, action, { targetSessionId: outsider.id, url }),
+			/not in this mission/,
+		);
+		await assert.rejects(f.service.call(coordinator.id, action, { url }), /requires targetSessionId and url/);
+	}
+	const meta = f.sessions["metas"].get(member.id)!;
+	meta.workspace = {
+		source: f.project.path,
+		upstream: "git@github.com:octo/repo.git",
+		branch: "feat/other",
+		base: "origin/main",
+		jj: false,
+	};
+	const first = f.store.addTask(mission.id, { title: "First" });
+	f.store.claimTask(mission.id, first.id, member.id);
+	await f.service.call(coordinator.id, "bindPr", { targetSessionId: member.id, url });
+	assert.ok(f.store.detail(mission.id).resources.some((r) => r.url === url && r.taskId === first.id));
+	f.store.updatePullRequest({
+		number: 12,
+		url,
+		title: "Hand-built",
+		state: "open",
+		branch: "feat/other",
+		checkedAt: 1,
+	});
+	assert.equal(f.store.task(mission.id, first.id).status, "in_progress");
+	await f.sessions.unbindPullRequest(member.id, url);
+	assert.equal(f.store.detail(mission.id).resources.filter((r) => r.url === url).length, 0);
+	assert.equal(f.store.task(mission.id, first.id).status, "in_progress");
+	const second = f.store.addTask(mission.id, { title: "Second" });
+	f.store.claimTask(mission.id, second.id, member.id);
+	await assert.rejects(f.sessions.bindPullRequest(member.id, url), /Ambiguous.*taskId/);
+	await f.sessions.bindPullRequest(member.id, url, {}, second.id);
+	assert.deepEqual(
+		f.store
+			.detail(mission.id)
+			.resources.filter((r) => r.url === url)
+			.map((r) => r.taskId),
+		[second.id],
+	);
+	const events = f.store.detail(mission.id).events.filter((e) => /Pull request (bound|unbound)/.test(e.text));
+	assert.ok(events.some((e) => e.text.includes("bound") && e.sessionId === coordinator.id));
+	assert.ok(events.some((e) => e.text.includes("unbound") && e.sessionId === undefined));
+});
+
+test("PR tools report actual ownership and link changes, and get/status expose cached owners", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const first = await f.spawn();
+	const second = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Handoff",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	for (const member of [first, second]) {
+		f.store.join(member.id, mission.id);
+		f.sessions["metas"].get(member.id)!.workspace = {
+			source: f.project.path,
+			upstream: "git@github.com:octo/repo.git",
+			branch: "feat/work",
+			base: "origin/main",
+			jj: false,
+		};
+	}
+	const a = f.store.addTask(mission.id, { title: "First" });
+	const b = f.store.addTask(mission.id, { title: "Second" });
+	f.store.claimTask(mission.id, a.id, first.id);
+	f.store.claimTask(mission.id, b.id, second.id);
+	const url = "https://github.com/octo/repo/pull/12";
+	const reference = await f.service.call(first.id, "link", { url, taskId: a.id, relationship: "reference" });
+	f.store.addResource(mission.id, { url });
+	const bind = (id: string, taskId?: string) =>
+		f.service.call(coordinator.id, "bindPr", { targetSessionId: id, url, ...(taskId ? { taskId } : {}) });
+	const unbind = (id: string) => f.service.call(coordinator.id, "unbindPr", { targetSessionId: id, url });
+	assert.deepEqual(await bind(first.id), { changed: true, previousOwner: null, taskLinkRemoved: false });
+	assert.deepEqual(await bind(first.id), {
+		changed: false,
+		previousOwner: { id: first.id, title: first.title },
+		taskLinkRemoved: false,
+	});
+	const get = (await f.service.call(first.id, "get", {})) as {
+		resources: { owner: unknown }[];
+		tasks: { resources: { owner: unknown }[] }[];
+	};
+	for (const r of get.tasks.flatMap((task) => task.resources)) assert.equal(r.owner, first.title);
+	const status = (await f.service.call(coordinator.id, "status", {})) as {
+		members: { id: string; boundPullRequests: string[] }[];
+	};
+	assert.deepEqual(status.members.find((m) => m.id === first.id)?.boundPullRequests, [url]);
+	assert.deepEqual(status.members.find((m) => m.id === second.id)?.boundPullRequests, []);
+	assert.deepEqual(await bind(second.id), {
+		changed: true,
+		previousOwner: { id: first.id, title: first.title },
+		taskLinkRemoved: true,
+	});
+	assert.deepEqual(await unbind(first.id), {
+		changed: false,
+		previousOwner: { id: second.id, title: second.title },
+		taskLinkRemoved: false,
+	});
+	assert.ok(f.store.detail(mission.id).resources.some((r) => r.taskId === b.id && r.relationship === "ownership"));
+	assert.deepEqual(await unbind(second.id), {
+		changed: true,
+		previousOwner: { id: second.id, title: second.title },
+		taskLinkRemoved: true,
+	});
+	const events = f.store.events(mission.id).length;
+	assert.deepEqual(await unbind(second.id), { changed: false, previousOwner: null, taskLinkRemoved: false });
+	assert.equal(f.store.events(mission.id).length, events);
+	const remaining = f.store.detail(mission.id).resources;
+	assert.equal(remaining.length, 2);
+	assert.ok(remaining.some((r) => r.id === (reference as { id: string }).id));
+	const unbound = (await f.service.call(first.id, "links", {})) as { links: { owner: unknown }[] };
+	assert.ok(unbound.links.every((r) => r.owner === null));
+	// Relinking the same owner to another task is still a change, even without a metadata change.
+	await bind(first.id, a.id);
+	assert.deepEqual(await bind(first.id, b.id), {
+		changed: true,
+		previousOwner: { id: first.id, title: first.title },
+		taskLinkRemoved: true,
+	});
+});
+
+test("unlink is scoped and idempotent, permits authors and coordinator, and never unbinds a PR", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const author = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Links",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.store.join(author.id, mission.id);
+	f.store.join(member.id, mission.id);
+	const task = f.store.addTask(mission.id, { title: "Work" });
+	const url = "https://github.com/octo/repo/pull/12";
+	for (const taskId of [undefined, task.id])
+		await f.service.call(author.id, "link", { url, ...(taskId ? { taskId } : {}) });
+	await assert.rejects(f.service.call(member.id, "unlink", { url }), /only remove links they added/);
+	assert.equal(f.store.detail(mission.id).resources.length, 2);
+	assert.equal(
+		((await f.service.call(author.id, "unlink", { url: `${url}/files?x=1` })) as { removed: boolean }).removed,
+		true,
+	);
+	assert.deepEqual(await f.service.call(author.id, "unlink", { url }), { removed: false });
+	assert.equal(f.store.detail(mission.id).resources[0]?.taskId, task.id);
+	assert.equal(
+		((await f.service.call(coordinator.id, "unlink", { url, taskId: "#1" })) as { removed: boolean }).removed,
+		true,
+	);
+	f.store.addResource(mission.id, { url }); // User-added link.
+	await assert.rejects(f.service.call(author.id, "unlink", { url }), /only remove links they added/);
+	assert.equal(((await f.service.call(coordinator.id, "unlink", { url })) as { removed: boolean }).removed, true);
+	await assert.rejects(f.service.call(author.id, "unlink", {}), /requires url/);
+	await assert.rejects(f.service.call(author.id, "unlink", { url, taskId: 1 }), /taskId/);
+	await assert.rejects(f.service.call(author.id, "unlink", { url, taskId: "unknown" }), /Unknown task/);
+	f.sessions["metas"].get(author.id)!.workspace = {
+		source: f.project.path,
+		upstream: "git@github.com:octo/repo.git",
+		branch: "feat/work",
+		base: "origin/main",
+		jj: false,
+	};
+	await f.sessions.bindPullRequest(author.id, url, { sessionId: author.id }, task.id);
+	await f.service.call(author.id, "link", { url, taskId: task.id, relationship: "reference" });
+	const removed = (await f.service.call(author.id, "unlink", { url, taskId: task.id })) as {
+		resource: { relationship: string };
+	};
+	assert.equal(removed.resource.relationship, "reference");
+	await f.service.call(author.id, "unlink", { url, taskId: task.id });
+	assert.deepEqual(f.sessions.get(author.id)?.boundPullRequests, [url]);
+	// A member can still remove their ownership link when someone else's reference shares the scope.
+	await f.service.call(author.id, "link", { url, taskId: task.id });
+	const otherReference = (await f.service.call(member.id, "link", {
+		url,
+		taskId: task.id,
+		relationship: "reference",
+	})) as { id: string };
+	const own = (await f.service.call(author.id, "unlink", { url, taskId: task.id })) as {
+		resource: { relationship: string };
+	};
+	assert.equal(own.resource.relationship, "ownership");
+	assert.equal(f.store.detail(mission.id).resources[0]?.id, otherReference.id);
+});
+
+test("failed coordinator model admission leaves the created mission without a coordinator or chat", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.sessions, "selectTaskModel", async () => {
+		throw new Error("Model exceeds price cap");
+	});
+	await assert.rejects(
+		f.service.create({ projectId: f.project.id, title: "Plan", startCoordinator: true }),
+		/price cap/,
+	);
+	const mission = f.store.list()[0]!;
+	assert.equal(mission.coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
+test("start coordinator on an existing mission uses project defaults and rejects replacing a coordinator", async (t) => {
+	const f = await fixture(t);
+	await f.projects.update(f.project.id, { model: "test/project-default" });
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Existing", goal: "Goal" });
+	const session = await f.service.startCoordinator(mission.id, { message: "Review the existing brief." });
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, session.id);
+	assert.equal(session.model, "test/project-default");
+	const worker = await until(() => f.workers.get(session.id));
+	assert.equal(worker.spec.mission?.coordinator, "self");
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.match(input.type === "input" ? input.content : "", /Review the existing brief/);
+	await assert.rejects(f.service.startCoordinator(mission.id), /already has a coordinator/);
+	assert.equal(f.sessions.list().length, 1);
+});
+
+test("coordinator final admission failures remove saved metadata and leave no coordinator", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	const spawnProject = f.sessions["missions"]!.spawnProject;
+	t.mock.method(f.sessions["missions"]!, "spawnProject", (id: string) => {
+		const project = spawnProject(id);
+		f.store.update(id, { status: "done" });
+		return project;
+	});
+	await assert.rejects(f.service.startCoordinator(mission.id), /Reopen/);
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
+test("concurrent coordinator starts admit only one chat and clean up the loser", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	const results = await Promise.allSettled([
+		f.service.startCoordinator(mission.id),
+		f.service.startCoordinator(mission.id),
+	]);
+	assert.equal(results.filter((item) => item.status === "fulfilled").length, 1);
+	assert.equal(f.sessions.list().length, 1);
+	assert.equal(f.store.members(mission.id).length, 1);
+	assert.equal((await readdir(join(f.home, "data", "sessions"))).length, 1);
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, f.store.members(mission.id)[0]);
+});
+
+test("coordinator admission rolls back membership and promotion if the bridge fails after joining", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	const joinSpawn = f.sessions["missions"]!.joinSpawn;
+	t.mock.method(f.sessions["missions"]!, "joinSpawn", (...args: Parameters<typeof joinSpawn>) => {
+		joinSpawn(...args);
+		throw new Error("admission failed");
+	});
+	await assert.rejects(f.service.startCoordinator(mission.id), /admission failed/);
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
+test("failed promoted admission drains queued metadata before removing the session", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let joined!: () => void;
+	const joining = new Promise<void>((resolve) => {
+		joined = resolve;
+	});
+	let id!: string;
+	const joinSpawn = f.sessions["missions"]!.joinSpawn;
+	t.mock.method(f.sessions["missions"]!, "joinSpawn", (...args: Parameters<typeof joinSpawn>) => {
+		id = args[0];
+		f.sessions["saving"].set(id, blocked);
+		joinSpawn(...args); // Promotion queues its write behind an earlier save.
+		joined();
+		throw new Error("admission failed");
+	});
+	const rejection = assert.rejects(f.service.startCoordinator(mission.id), /admission failed/);
+	try {
+		await joining;
+		assert.ok(f.sessions["metas"].has(id), "removal must wait for queued promotion and rollback writes");
+	} finally {
+		release();
+	}
+	await rejection;
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
+test("activity keeps recent user notes visible beyond the event window for every member", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	type Note = { kind: string; text: string; by: string; at: string; health?: string };
+	const get = async (id: string) =>
+		(await f.service.call(id, "activity", {})) as { recentUserNotes: Note[]; recentActivity: Note[] };
+	assert.deepEqual((await get(lead.id)).recentUserNotes, []);
+	const update = f.store.log(mission.id, { text: "Keep the composer", health: "on_track" });
+	const handoff = f.store.log(mission.id, { kind: "handoff", text: "Next: verify agent context" });
+	const other = f.store.create({ projectId: f.project.id, title: "Other" });
+	f.store.log(other.id, { text: "Not for this group" });
+	for (let i = 0; i < 60; i++) f.store.update(mission.id, { goal: `Goal ${i}` });
+	await f.service.call(member.id, "log", { text: "Agent update" });
+	await f.service.call(lead.id, "log", { kind: "handoff", text: "Agent handoff" });
+	const expected = [
+		{ kind: "handoff", text: handoff.text, by: "user", at: new Date(handoff.at).toISOString() },
+		{ kind: "update", text: update.text, by: "user", at: new Date(update.at).toISOString(), health: "on_track" },
+	];
+	for (const id of [lead.id, member.id]) {
+		const result = await get(id);
+		assert.deepEqual(result.recentUserNotes, expected);
+		assert.equal(result.recentActivity.length, 15);
+		assert.ok(result.recentActivity.every((event) => !expected.some((note) => note.text === event.text)));
+	}
+	for (let i = 0; i < 20; i++) f.store.log(mission.id, { text: `User note ${i}` });
+	assert.deepEqual(
+		(await get(member.id)).recentUserNotes.map((note) => note.text),
+		Array.from({ length: 15 }, (_, i) => `User note ${19 - i}`),
+	);
+	await assert.rejects(get(outsider.id), /not part of a mission/);
+});
+
+for (const scenario of [
+	"idle",
+	"working",
+	"jobs",
+	"follow-up",
+	"dirty",
+	"open",
+	"unverified",
+	"binding",
+	"selected-base",
+] as const) {
+	test(`member workspaces refresh only at safe input admission: ${scenario}`, async (t) => {
+		const f = await fixture(t);
+		const member = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+		f.service.join(member.id, { missionId: mission.id });
+		const meta = f.sessions["require"](member.id);
+		meta.workspace = {
+			source: f.project.path,
+			base: "a".repeat(40),
+			jj: true,
+			branch: "fix/change",
+			shared: { repository: "/owned", name: "member" },
+		};
+		const fetch = t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+		const worker = f.workers.get(member.id)!;
+		let jobs = scenario === "jobs";
+		Object.assign(worker, { hasChildren: async () => jobs, awaitingJobFollowUp: scenario === "follow-up" });
+		const refresh = t.mock.method(
+			f.sessions["sharedWorkspaces"],
+			"refreshBase",
+			async (...args: Parameters<(typeof f.sessions)["sharedWorkspaces"]["refreshBase"]>) => {
+				if (scenario === "binding") meta.prBindingOperation = "new-binding";
+				const behind = scenario === "dirty" ? "The working copy has unpublished changes." : args[5]?.allowed?.();
+				return behind ? { base: meta.workspace!.base, target: "b".repeat(40), behind } : { base: "b".repeat(40) };
+			},
+		);
+		if (scenario === "open")
+			meta.pullRequest = {
+				number: 1,
+				url: "https://github.com/o/r/pull/1",
+				title: "Open",
+				state: "open",
+				branch: "fix/change",
+				checkedAt: Date.now(),
+			};
+		if (scenario === "unverified") meta.boundPullRequests = ["https://github.com/o/r/pull/2"];
+		if (scenario === "selected-base") meta.workspace.baseBranch = "release";
+		if (scenario === "working") {
+			worker.busy = true;
+			worker.state = "working";
+			worker.onPacket({ type: "working", working: true });
+		}
+		const activities = () => worker.requests.filter((cmd) => cmd.type === "activity").length;
+		const before = activities();
+		await f.sessions.refreshProjectMain(f.project.id);
+		await f.sessions.commands(member.id);
+		assert.equal(refresh.mock.calls.length, 0, "polling and opening a chat never move its workspace");
+		await f.sessions.send(member.id, "next task");
+		const unsafe = ["working", "jobs", "follow-up", "open", "unverified", "selected-base"].includes(scenario);
+		assert.equal(refresh.mock.calls.length, unsafe ? 0 : 1);
+		assert.equal(fetch.mock.calls.length, unsafe ? 1 : 2, "unsafe input does not fetch main");
+		assert.equal(activities(), before, "routine workspace maintenance adds no timeline activity");
+		assert.equal(meta.workspace.base, (unsafe || ["dirty", "binding"].includes(scenario) ? "a" : "b").repeat(40));
+		if (scenario === "dirty") assert.match(meta.workspaceBehind!, /unpublished/);
+		if (scenario === "binding") assert.match(meta.workspaceBehind!, /ownership/);
+		if (["working", "jobs", "follow-up"].includes(scenario)) {
+			jobs = false;
+			worker.busy = false;
+			worker.state = "idle";
+			worker.onPacket({ type: "jobs.changed", jobs: [] });
+			worker.onPacket({
+				type: "working",
+				working: false,
+				completion: { outcome: "done", outcomeAt: Date.now() + 1 },
+			});
+			await until(() => !f.sessions["starting"].size);
+			assert.equal(refresh.mock.calls.length, 0, "finishing work does not move files");
+			await f.sessions.send(member.id, "another task");
+			assert.equal(refresh.mock.calls.length, 1, "only the next idle input refreshes");
+			assert.equal(meta.workspace.base, "b".repeat(40));
+		}
+	});
+}
+
+test("main bursts leave idle members alone; only the next working chat moves to latest main", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const first = await f.spawn();
+	const second = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	for (const member of [first, second]) f.service.join(member.id, { missionId: mission.id });
+	for (const chat of [lead, first, second])
+		f.sessions["require"](chat.id).workspace = {
+			source: f.project.path,
+			base: "a".repeat(40),
+			jj: true,
+			shared: { repository: "/owned", name: chat.id },
+		};
+	let target = "b".repeat(40);
+	const mainEvents: string[] = [];
+	t.after(f.sessions.onMainMoved((event) => mainEvents.push(event.head)));
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => target);
+	const refresh = t.mock.method(
+		f.sessions["sharedWorkspaces"],
+		"refreshBase",
+		async (...args: Parameters<(typeof f.sessions)["sharedWorkspaces"]["refreshBase"]>) => ({
+			base: args[5]!.target!,
+		}),
+	);
+	await f.sessions.refreshProjectMain(f.project.id);
+	target = "c".repeat(40);
+	await f.sessions.refreshProjectMain(f.project.id);
+	assert.equal(refresh.mock.calls.length, 0);
+	for (const chat of [first, second]) {
+		assert.equal(f.sessions["require"](chat.id).workspace!.base, "a".repeat(40));
+		assert.equal(f.workers.get(chat.id)!.requests.filter((cmd) => cmd.type === "activity").length, 0);
+	}
+	// Main can advance again before the scheduled watcher runs. Admission fetches current main.
+	target = "d".repeat(40);
+	await f.sessions.send(first.id, "next task");
+	assert.equal(refresh.mock.calls.length, 1);
+	assert.equal(refresh.mock.calls[0]!.arguments[5]!.target, target);
+	assert.equal(f.sessions["require"](first.id).workspace!.base, target);
+	assert.equal(f.sessions["require"](second.id).workspace!.base, "a".repeat(40));
+	assert.equal(f.sessions["require"](lead.id).workspace!.base, "a".repeat(40));
+	await f.sessions.send(first.id, "continue");
+	assert.equal(refresh.mock.calls.length, 1, "unchanged main creates no additional jj change");
+	assert.deepEqual(mainEvents, ["b".repeat(40), "c".repeat(40), "d".repeat(40)]);
+});
+
+test("sleep and wake do not refresh idle workspaces", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	f.service.join(member.id, { missionId: mission.id });
+	const meta = f.sessions["require"](member.id);
+	meta.workspace = {
+		source: f.project.path,
+		base: "a".repeat(40),
+		jj: true,
+		shared: { repository: "/owned", name: member.id },
+	};
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => ({ base: "b".repeat(40) }));
+	const worker = f.workers.get(member.id)!;
+	worker.onPacket({
+		type: "jobs.changed",
+		jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
+	});
+	worker.onPacket({ type: "jobs.changed", jobs: [] });
+	await f.sessions.pauseForSleep("100:1");
+	assert.equal(meta.sleepPaused, true);
+	await f.sessions.refreshProjectMain(f.project.id);
+	assert.equal(refresh.mock.calls.length, 0);
+	await f.sessions.resumeAfterSleep();
+	await until(() => !f.sessions["starting"].size);
+	assert.equal(refresh.mock.calls.length, 0, "wake retains the old workspace, including pending job results");
+	assert.equal(meta.workspace.base, "a".repeat(40));
+});
+
+for (const race of ["work", "PR", "main", "offline", "update"] as const) {
+	test(`input refresh fails closed without losing input when ${race} changes`, async (t) => {
+		const f = await fixture(t);
+		const member = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+		f.service.join(member.id, { missionId: mission.id });
+		const meta = f.sessions["require"](member.id);
+		meta.workspace = {
+			source: f.project.path,
+			base: "a".repeat(40),
+			jj: true,
+			shared: { repository: "/owned", name: member.id },
+		};
+		const worker = f.workers.get(member.id)!;
+		t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => {
+			if (race === "work") worker.busy = true;
+			if (race === "update") f.sessions["updateGate"].pause();
+			if (race === "offline") throw new Error("fetch unavailable");
+			return "b".repeat(40);
+		});
+		t.after(() => f.sessions["updateGate"].release());
+		const refresh = t.mock.method(
+			f.sessions["sharedWorkspaces"],
+			"refreshBase",
+			async (...args: Parameters<(typeof f.sessions)["sharedWorkspaces"]["refreshBase"]>) => {
+				if (race === "PR") meta.boundPullRequests = ["https://github.com/o/r/pull/2"];
+				if (race === "main") f.sessions["mainHeads"].set(f.project.id, "c".repeat(40));
+				const behind = args[5]!.allowed!();
+				assert.ok(behind, "the transaction rechecks late changes before touching files");
+				return { base: meta.workspace!.base, target: "b".repeat(40), behind };
+			},
+		);
+		const before = worker.requests.filter((cmd) => cmd.type === "input").length;
+		await f.sessions.send(member.id, "continue safely");
+		assert.equal(meta.workspace.base, "a".repeat(40));
+		assert.equal(refresh.mock.calls.length, ["PR", "main"].includes(race) ? 1 : 0);
+		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before + 1);
+		assert.equal(meta.failure, undefined);
+		if (race === "offline") assert.match(meta.workspaceBehind!, /fetch unavailable/);
+	});
+}
+
+test("main refresh has no per-member write or workspace fan-out with 10000 chats", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const meta = f.sessions["require"](member.id);
+	const ids: string[] = [];
+	t.mock.method(f.sessions["missions"]!, "membership", () => ({ missionId: "m", active: true }));
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () =>
+		assert.fail("no idle moves"),
+	);
+	const save = t.mock.method(f.sessions as unknown as { save(): Promise<void> }, "save", async () => {});
+	try {
+		for (let i = 0; i < 10000; i++) {
+			const id = `idle-${i}`;
+			ids.push(id);
+			f.sessions["metas"].set(id, {
+				...meta,
+				id,
+				workspace: {
+					source: f.project.path,
+					base: "a".repeat(40),
+					jj: true,
+					shared: { repository: "/owned", name: id },
+				},
+			});
+		}
+		const start = performance.now();
+		await f.sessions.refreshProjectMain(f.project.id);
+		t.diagnostic(`10000 idle chats: main refresh ${(performance.now() - start).toFixed(1)}ms, no per-chat I/O`);
+		assert.equal(save.mock.calls.length, 0);
+		assert.equal(refresh.mock.calls.length, 0);
+	} finally {
+		for (const id of ids) f.sessions["metas"].delete(id);
+		save.mock.restore();
+	}
+});
+
+test("repository refresh bursts share a two-slot project fetch pool", async (t) => {
+	const f = await fixture(t);
+	const releases: (() => void)[] = [];
+	let calls = 0;
+	t.mock.method(f.sessions, "refreshProjectMain", async () => {
+		calls++;
+		await new Promise<void>((resolve) => releases.push(resolve));
+	});
+	for (let i = 0; i < 10; i++) f.sessions.requestMainRefresh("same");
+	f.sessions.requestMainRefresh("second");
+	f.sessions.requestMainRefresh("third");
+	f.sessions["pumpMainRefreshes"]();
+	assert.equal(calls, 2);
+	assert.equal(f.sessions["mainRefreshes"].size, 2);
+	releases[0]!();
+	releases[1]!();
+	await until(() => calls === 3);
+	releases[2]!();
+	await Promise.all(f.sessions["mainRefreshes"].values());
+});
+
+test("project watcher discovery deduplicates membership I/O on large projects", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const meta = f.sessions["require"](member.id);
+	const membership = t.mock.method(f.sessions["missions"]!, "membership", () => ({ missionId: "m", active: true }));
+	const ids: string[] = [];
+	try {
+		for (let i = 0; i < 10000; i++) {
+			const id = `large-${i}`;
+			ids.push(id);
+			f.sessions["metas"].set(id, {
+				...meta,
+				id,
+				workspace: {
+					source: f.project.path,
+					base: "a".repeat(40),
+					jj: true,
+					shared: { repository: "/owned", name: id },
+				},
+			});
+		}
+		const start = performance.now();
+		assert.deepEqual(f.sessions["mainProjects"](), [{ id: f.project.id }]);
+		t.diagnostic(`10000 chats: project watcher discovery ${(performance.now() - start).toFixed(1)}ms`);
+		assert.equal(membership.mock.calls.length, 1, "one membership read, not one per chat");
+	} finally {
+		for (const id of ids) f.sessions["metas"].delete(id);
+	}
+});
+
+test("restart discards eager refresh hints and queued maintenance; next input fetches current main", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	f.service.join(member.id, { missionId: mission.id });
+	await f.sessions["pullRequests"].stop();
+	await until(() => !f.sessions["starting"].size);
+	await Promise.all(f.sessions["saving"].values());
+	f.sessions["workers"].delete(member.id);
+	const meta = f.sessions["require"](member.id);
+	meta.workspace = {
+		source: f.project.path,
+		base: "a".repeat(40),
+		jj: true,
+		shared: { repository: "/owned", name: member.id },
+	};
+	meta.workspaceMainDue = "b".repeat(40);
+	meta.workspaceMainAttempted = "a".repeat(40);
+	meta.workspaceMainDeferred = "b".repeat(40);
+	meta.prActivities = [
+		{ type: "activity", requestId: "main-workspace:old", text: "Old maintenance" },
+		{ type: "activity", requestId: "other", text: "Keep this activity" },
+	];
+	await f.sessions["save"](meta);
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "c".repeat(40));
+	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => ({ base: "c".repeat(40) }));
+	await f.sessions.load();
+	await f.sessions.refreshProjectMain(f.project.id);
+	const loaded = f.sessions["require"](member.id);
+	assert.equal(refresh.mock.calls.length, 0, "restart and polling do not resume old eager maintenance");
+	assert.equal(loaded.workspaceMainDue, undefined);
+	assert.equal(loaded.workspaceMainAttempted, undefined);
+	assert.equal(loaded.workspaceMainDeferred, undefined);
+	assert.deepEqual(
+		loaded.prActivities?.map((activity) => activity.requestId),
+		["other"],
+	);
+	const persisted = JSON.parse(await readFile(join(f.home, "data", "sessions", member.id, "meta.json"), "utf8"));
+	assert.equal(persisted.workspaceMainDue, undefined);
+	await f.sessions.send(member.id, "next task");
+	assert.equal(refresh.mock.calls.length, 1);
+	assert.equal(refresh.mock.calls[0]!.arguments[5]!.target, "c".repeat(40));
+	assert.equal(loaded.workspace!.base, "c".repeat(40));
+	const activityIds = f.workers
+		.get(member.id)!
+		.requests.filter((cmd) => cmd.type === "activity")
+		.map((cmd) => cmd.requestId);
+	assert.deepEqual(activityIds, ["other"]);
+});
+
+for (const stop of [false, true]) {
+	test(`next input waits for its main refresh; stop racing maintenance: ${stop}`, async (t) => {
+		const f = await fixture(t);
+		const member = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+		f.service.join(member.id, { missionId: mission.id });
+		const meta = f.sessions["require"](member.id);
+		meta.workspace = {
+			source: f.project.path,
+			base: "a".repeat(40),
+			jj: true,
+			shared: { repository: "/owned", name: "member" },
+		};
+		t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.after(release);
+		const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => {
+			await gate;
+			return { base: "b".repeat(40) };
+		});
+		const worker = f.workers.get(member.id)!;
+		const before = worker.requests.filter((cmd) => cmd.type === "input").length;
+		const send = f.sessions.send(member.id, "next task");
+		await until(() => refresh.mock.calls.length === 1);
+		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before);
+		const stopped = stop ? f.sessions.stop(member.id) : Promise.resolve();
+		if (stop) await until(() => meta.pending?.some((cmd) => cmd.type === "abort"));
+		release();
+		await Promise.all([send, stopped]);
+		assert.equal(meta.workspace.base, "b".repeat(40));
+		assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before + (stop ? 0 : 1));
+	});
+}
+
+test("hand-linked PRs poll without a worker but leave canonical status unchanged", async (t) => {
+	const states = new Map([
+		[1, "OPEN"],
+		[2, "OPEN"],
+		[3, "OPEN"],
+	]);
+	const f = await fixture(t, {
+		runner: async (_file, args) => {
+			const number = Number(args[2]);
+			return JSON.stringify({
+				number,
+				url: `https://github.com/octo/repo/pull/${number}`,
+				title: "PR",
+				state: states.get(number),
+				isDraft: false,
+				headRefName: "external",
+				isCrossRepository: true,
+				createdAt: "2026-01-01T00:00:00Z",
+				mergedAt: states.get(number) === "MERGED" ? "2026-01-02T00:00:00Z" : null,
+			});
+		},
+	});
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	for (const number of [1, 2])
+		f.store.addResource(id, { taskId: "1", url: `https://github.com/octo/repo/pull/${number}` });
+	f.store.addResource(id, { taskId: "2", url: "https://github.com/octo/repo/pull/3" });
+	await until(() => f.store.detail(id).resources.every((r) => r.pullRequest?.state === "open"));
+	assert.equal(f.workers.size, 0, "tracking never starts a worker");
+	states.set(1, "MERGED");
+	const refresh = async () => {
+		for (const target of f.sessions["missions"]!.linkedPullRequests!())
+			await f.sessions["pullRequests"].refreshLinked(target);
+	};
+	await refresh();
+	assert.equal(f.store.resolveTask(id, "1").status, "todo");
+	f.store.updateTask(id, f.store.resolveTask(id, "2").id, { status: "in_progress" });
+	states.set(2, "CLOSED");
+	states.set(3, "MERGED");
+	await refresh();
+	assert.equal(f.store.resolveTask(id, "1").status, "todo");
+	assert.equal(f.store.resolveTask(id, "2").status, "in_progress");
+	assert.equal(
+		f.store.detail(id).resources.find((resource) => resource.url.endsWith("/3"))?.pullRequest?.state,
+		"merged",
+	);
+});
+
+test("member settlements wake only an idle lead with a guarded follow-up and no user-activity reset", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const mission = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.addTask(mission.mission.id, { title: "Pagination" });
+	f.service.join(member.id, { missionId: mission.mission.id, taskId: "1" });
+	f.service.notices.start();
+	const worker = f.workers.get(lead.id)!;
+	const memberWorker = f.workers.get(member.id)!;
+	const meta = f.sessions["require"](lead.id);
+	const before = {
+		updatedAt: meta.updatedAt,
+		lastUserMessageAt: meta.lastUserMessageAt,
+		prFollowUp: { ...meta.prFollowUp },
+	};
+	worker.busy = true;
+	memberWorker.onPacket({ type: "working", working: true });
+	memberWorker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: 1 } });
+	const now = Date.now() + 120_000;
+	t.mock.method(Date, "now", () => now);
+	await f.service.notices.flush(now);
+	assert.equal(f.store.pendingNotice(mission.mission.id), undefined);
+	assert.equal(meta.pending?.length ?? 0, 0);
+	worker.busy = false;
+	await f.service.notices.flush(now);
+	const inputs = worker.requests.filter(
+		(command) => command.type === "input" && command.requestId.startsWith("mission-notice:"),
+	);
+	assert.equal(inputs.length, 1);
+	assert.equal(inputs[0]!.type, "input");
+	if (inputs[0]!.type !== "input") throw new Error("expected input");
+	assert.equal(inputs[0]!.onlyIfIdle, true);
+	assert.equal(inputs[0]!.mode, "followUp");
+	assert.match(inputs[0]!.content, /#1 Pagination: chat finished/);
+	assert.deepEqual(
+		{ updatedAt: meta.updatedAt, lastUserMessageAt: meta.lastUserMessageAt, prFollowUp: { ...meta.prFollowUp } },
+		before,
+	);
+	memberWorker.onPacket({
+		type: "ready",
+		model: "test/model",
+		usage: {},
+		working: false,
+		completion: { outcome: "done", outcomeAt: 1 },
+	});
+	await f.service.notices.flush(now);
+	assert.equal(
+		worker.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+			.length,
+		1,
+	);
+});
+
+test("kernel idle rejection leaves the frozen notice pending, without failing the chat", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "review this" });
+	const worker = f.workers.get(lead.id)!;
+	const request = worker.request.bind(worker);
+	let reject = true;
+	worker.request = async (command) => {
+		await request(command);
+		if (reject && command.type === "input") throw new CommandRejected("busy", "busy");
+	};
+	const now = Date.now() + 30_000;
+	await f.service.notices.flush(now);
+	const notice = f.store.pendingNotice(detail.mission.id)!;
+	assert.ok(notice);
+	assert.equal(f.sessions["require"](lead.id).inputError, undefined);
+	assert.deepEqual(f.sessions["require"](lead.id).pending, []);
+	reject = false;
+	await f.service.notices.flush(now);
+	assert.equal(f.store.pendingNotice(detail.mission.id), undefined);
+	assert.equal((worker.requests.at(-1) as Extract<KernelCommand, { requestId: string }>).requestId, notice.requestId);
+});
+
+test("uncertain notice admission retries the original payload and ID before delivering newer events", async (t) => {
+	t.mock.method(console, "warn", () => {});
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "first event" });
+	const worker = f.workers.get(lead.id)!;
+	const accepted = new Set<string>();
+	const request = worker.request.bind(worker);
+	let loseAck = true;
+	worker.request = async (command) => {
+		await request(command);
+		if ("requestId" in command) accepted.add(command.requestId);
+		if (loseAck) throw new Error("ack lost");
+	};
+	const now = Date.now() + 120_000;
+	await f.service.notices.flush(now);
+	const notice = f.store.pendingNotice(detail.mission.id)!;
+	const pending = [...f.sessions["require"](lead.id).pending!];
+	assert.equal(pending[0]!.requestId, notice.requestId);
+	f.store.addComment(detail.mission.id, { text: "later event" });
+	loseAck = false;
+	await f.service.notices.flush(now);
+	assert.equal(accepted.size, 1);
+	assert.deepEqual(worker.requests.at(-1), pending[0]);
+	await f.service.notices.flush(now);
+	assert.equal(accepted.size, 2);
+	const last = worker.requests.at(-1)!;
+	if (last.type !== "input") throw new Error("expected input");
+	assert.match(last.content, /later event/);
+	assert.doesNotMatch(last.content, /first event/);
+});
+
+test("daemon restart replays a durable notice once with the same request ID", async (t) => {
+	t.mock.method(console, "warn", () => {});
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "restart-safe update" });
+	const accepted = new Set<string>();
+	const attempts: KernelCommand[] = [];
+	f.workers.get(lead.id)!.request = async (command) => {
+		attempts.push(command);
+		if ("requestId" in command) accepted.add(command.requestId);
+		throw new Error("acknowledgement lost");
+	};
+	const now = Date.now() + 30_000;
+	await f.service.notices.flush(now);
+	assert.equal(accepted.size, 1);
+	const notice = f.store.pendingNotice(detail.mission.id)!;
+	await f.service.notices.stop();
+	await f.sessions.shutdown();
+	const workerFactory = f.sessions["factories"].worker!;
+	const reopened = new SessionManager(
+		join(f.home, "data"),
+		f.projects,
+		undefined,
+		{
+			...f.sessions["factories"],
+			worker: async (spec, onPacket, onExit) => {
+				const worker = await workerFactory(spec, onPacket, onExit);
+				worker.request = async (command) => {
+					attempts.push(command);
+					accepted.add(command.requestId);
+				};
+				return worker;
+			},
+		},
+		{
+			runner: async () => {
+				throw new Error("GitHub unavailable");
+			},
+		},
+		offlineSessionOptions(),
+	);
+	const service = new MissionService(f.store, reopened, f.projects);
+	try {
+		await reopened.load();
+		await until(() => !reopened["starting"].has(lead.id));
+		assert.equal(reopened["require"](lead.id).pending?.length ?? 0, 0);
+		service.notices.start();
+		await service.notices.flush(now);
+		assert.equal(accepted.size, 1, "all delivery paths retry the same durable submission");
+		assert.equal(attempts.length, 3, "initial delivery, session-outbox replay, then notice acknowledgement recovery");
+		assert.ok(
+			attempts.every(
+				(attempt) => attempt.type === "input" && attempt.requestId === notice.requestId && attempt.onlyIfIdle,
+			),
+		);
+		assert.deepEqual(f.store.noticeDeadlines(now), []);
+	} finally {
+		await service.notices.stop();
+		await reopened.shutdown();
+	}
+});
+
+test("role and active-state changes during persistence revoke notice delivery", async (t) => {
+	for (const change of ["role", "inactive"] as const) {
+		const f = await fixture(t);
+		const lead = await f.spawn();
+		const member = await f.spawn();
+		const detail = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: lead.id,
+			draft: false,
+		});
+		f.service.join(member.id, { missionId: detail.mission.id });
+		f.service.notices.start();
+		f.store.addComment(detail.mission.id, { text: "pending event" });
+		const save = f.sessions["save"].bind(f.sessions);
+		let once = true;
+		t.mock.method(f.sessions, "save" as never, async (meta: Parameters<typeof save>[0]) => {
+			await save(meta);
+			if (once && meta.pending?.some((command) => command.requestId.startsWith("mission-notice:"))) {
+				once = false;
+				f.store.update(
+					detail.mission.id,
+					change === "role" ? { coordinatorSessionId: member.id } : { status: "done" },
+				);
+			}
+		});
+		await f.service.notices.flush(Date.now() + 30_000);
+		assert.equal(
+			f.workers
+				.get(lead.id)!
+				.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+				.length,
+			0,
+		);
+		assert.equal(f.store.noticeDeadlines(Date.now()).length, 1, `${change} retains the events`);
+		assert.deepEqual(f.sessions["require"](lead.id).pending, []);
+		const saved = JSON.parse(await readFile(join(f.home, "data", "sessions", lead.id, "meta.json"), "utf8"));
+		assert.deepEqual(saved.pending, [], "revoked reservation is removed from persisted metadata too");
+	}
+});
+
+test("user input wins while notice persistence is in flight, without acknowledging an undelivered batch", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "pending event" });
+	const save = f.sessions["save"].bind(f.sessions);
+	let release!: () => void;
+	let blocked!: () => void;
+	const waiting = new Promise<void>((resolve) => {
+		blocked = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let once = true;
+	t.mock.method(f.sessions, "save" as never, async (meta: Parameters<typeof save>[0]) => {
+		await save(meta);
+		if (once && meta.pending?.some((command) => command.requestId.startsWith("mission-notice:"))) {
+			once = false;
+			blocked();
+			await gate;
+		}
+	});
+	const flushing = f.service.notices.flush(Date.now() + 30_000);
+	try {
+		await waiting;
+		await f.sessions.send(lead.id, "new work", "followUp", "user-work");
+		release();
+		await flushing;
+		const requests = f.workers.get(lead.id)!.requests;
+		assert.equal(
+			requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+				.length,
+			0,
+		);
+		assert.equal((requests.at(-1) as Extract<KernelCommand, { requestId: string }>).requestId, "user-work");
+		assert.ok(f.store.pendingNotice(detail.mission.id));
+		await f.service.notices.flush(Date.now() + 30_000);
+		assert.equal(
+			requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+				.length,
+			1,
+		);
+		assert.equal(f.store.pendingNotice(detail.mission.id), undefined);
+	} finally {
+		release();
+		await flushing;
+	}
+});
+
+test("a member resuming during notice persistence revokes admission until all members are idle again", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.join(member.id, { missionId: detail.mission.id });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "pending event" });
+	const save = f.sessions["save"].bind(f.sessions);
+	let once = true;
+	t.mock.method(f.sessions, "save" as never, async (meta: Parameters<typeof save>[0]) => {
+		await save(meta);
+		if (once && meta.pending?.some((command) => command.requestId.startsWith("mission-notice:"))) {
+			once = false;
+			f.workers.get(member.id)!.state = "working";
+			f.workers.get(member.id)!.onPacket({ type: "working", working: true });
+		}
+	});
+	let now = Date.now() + 30_000;
+	t.mock.method(Date, "now", () => now);
+	await f.service.notices.flush(now);
+	const requests = f.workers.get(lead.id)!.requests;
+	assert.equal(
+		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
+		0,
+	);
+	assert.ok(f.store.pendingNotice(detail.mission.id));
+	assert.deepEqual(f.sessions["require"](lead.id).pending, [], "member activity revokes the session reservation");
+	f.workers.get(member.id)!.state = "idle";
+	f.workers.get(member.id)!.onPacket({ type: "working", working: false });
+	now += 30_000;
+	await f.service.notices.flush(now);
+	assert.equal(
+		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
+		1,
+	);
+});
+
+test("a user reset during an in-flight linked PR lookup wins over its merge result", async (t) => {
+	let release!: () => void;
+	const waiting = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let started = false;
+	const f = await fixture(t, {
+		runner: async () => {
+			started = true;
+			await waiting;
+			return JSON.stringify({
+				number: 1,
+				url: "https://github.com/octo/repo/pull/1",
+				title: "PR",
+				state: "MERGED",
+				isDraft: false,
+				headRefName: "external",
+				isCrossRepository: false,
+				createdAt: "2026-01-01T00:00:00Z",
+				mergedAt: "2026-01-02T00:00:00Z",
+			});
+		},
+	});
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }] });
+	f.store.addResource(id, { taskId: "1", url: "https://github.com/octo/repo/pull/1" });
+	f.store.updatePullRequest({
+		number: 1,
+		url: "https://github.com/octo/repo/pull/1",
+		title: "PR",
+		state: "open",
+		checkedAt: 1,
+	});
+	await until(() => started);
+	f.store.updateTask(id, f.store.resolveTask(id, "1").id, { status: "todo" });
+	release();
+	await until(() => f.store.detail(id).resources[0]?.pullRequest?.state === "merged");
+	assert.equal(f.store.resolveTask(id, "1").status, "todo");
+});
+
+test("fresh owning-chat discovery keeps PR facts separate from canonical status", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }] });
+	f.service.join(chat.id, { missionId: id, taskId: "1" });
+	const meta = f.sessions["require"](chat.id);
+	const pullRequest = {
+		number: 42,
+		url: "https://github.com/octo/repo/pull/42",
+		title: "PR",
+		state: "open" as const,
+		checkedAt: 1,
+	};
+	// The member's agent created it.
+	meta.agentPullRequests = [pullRequest.url];
+	await f.sessions["applyPullRequest"](meta, { pullRequest });
+	assert.equal(f.store.resolveTask(id, "1").status, "in_progress");
+	assert.equal(f.store.detail(id).resources[0]?.pullRequest?.state, "open");
+	await f.sessions["applyPullRequest"](meta, {
+		pullRequest: { ...pullRequest, state: "merged", mergedAt: Date.now() },
+		mergedAt: Date.now(),
+	});
+	assert.equal(f.store.resolveTask(id, "1").status, "in_progress");
+});
+
+test("a task-linked PR merge after the member finishes queues one grouped notice", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	await f.sessions.rename(member.id, "Implementation");
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Foundation" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	f.service.notices.start();
+	const open = {
+		number: 42,
+		url: "https://github.com/octo/repo/pull/42",
+		title: "Foundation",
+		state: "open" as const,
+		checkedAt: Date.now(),
+	};
+	f.sessions["require"](member.id).agentPullRequests = [open.url];
+	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), { pullRequest: open });
+	const settledAt = Date.now();
+	f.workers
+		.get(member.id)!
+		.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: settledAt } });
+	const merged = { ...open, state: "merged" as const, mergedAt: Date.now(), checkedAt: Date.now() };
+	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), {
+		pullRequest: merged,
+		mergedAt: merged.mergedAt,
+	});
+	assert.equal(f.sessions.get(member.id)!.outcomeAt, settledAt);
+	assert.equal(f.store.resolveTask(mission.id, "1").status, "in_progress");
+	assert.equal(f.store.events(mission.id).filter((event) => /PR #42 .*merged/.test(event.text)).length, 1);
+	assert.equal(
+		f.workers
+			.get(lead.id)!
+			.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+			.length,
+		0,
+	);
+	const now = Date.now() + 30_000;
+	await until(() => !f.sessions["workspaceRefreshes"].size && !f.sessions["starting"].size);
+	t.mock.method(Date, "now", () => now);
+	await f.service.notices.flush(now);
+	const notices = f.workers
+		.get(lead.id)!
+		.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"));
+	assert.equal(notices.length, 1);
+	assert.match(
+		(notices[0] as Extract<KernelCommand, { type: "input" }>).content,
+		/PR #42 Foundation merged \(chat Implementation, task #1\)/,
+	);
+	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), {
+		pullRequest: { ...merged, checkedAt: now },
+		mergedAt: merged.mergedAt,
+	});
+	assert.deepEqual(f.store.noticeDeadlines(now), []);
+});
+
+test("bound chat-only PRs are polled even while archived; references neither poll nor wake", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const meta = f.sessions["require"](member.id);
+	meta.workspace = {
+		source: f.project.path,
+		upstream: "git@github.com:octo/repo.git",
+		branch: "feat/owned",
+		base: "origin/main",
+		jj: false,
+	};
+	const url = "https://github.com/octo/repo/pull/42";
+	await f.sessions.bindPullRequest(member.id, url);
+	assert.ok(
+		[...f.sessions["missions"]!.linkedPullRequests!()].some((target) => target.url === url),
+		"unknown bindings are linked polling targets",
+	);
+	const open = { number: 42, url, title: "Chat-only", state: "open" as const, checkedAt: Date.now() };
+	await f.sessions["applyPullRequest"](meta, { pullRequest: open });
+	const referenceUrl = "https://github.com/octo/repo/pull/43";
+	f.store.addResource(mission.id, { url: referenceUrl });
+	f.sessions["missions"]!.pullRequestUpdated!({
+		...open,
+		number: 43,
+		url: referenceUrl,
+		state: "merged",
+		mergedAt: Date.now(),
+	});
+	assert.deepEqual(f.store.noticeDeadlines(Date.now()), []);
+	await f.sessions.archive(member.id);
+	assert.equal(f.store.detail(mission.id).resources.filter((r) => r.relationship === "ownership").length, 0);
+	const targets = [...f.sessions["missions"]!.linkedPullRequests!()];
+	assert.ok(targets.some((target) => target.url === url));
+	assert.ok(!targets.some((target) => target.url === referenceUrl));
+	const merged = { ...open, state: "merged" as const, checkedAt: Date.now() + 1, mergedAt: Date.now() };
+	f.sessions["missions"]!.pullRequestUpdated!(merged);
+	assert.match(f.store.prepareNotice(mission.id, lead.id, Date.now() + 30_000)!.content, /PR #42 Chat-only merged/);
+	assert.equal(
+		[...f.sessions["missions"]!.linkedPullRequests!()].find((target) => target.url === url)!.pullRequest!.state,
+		"merged",
+		"durable cache settles linked polling without mutating archived metadata",
+	);
+});
+
+test("discovery of several heads links every PR without completing a task", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }] });
+	f.service.join(chat.id, { missionId: id, taskId: "1" });
+	const pullRequest = {
+		number: 42,
+		url: "https://github.com/octo/repo/pull/42",
+		title: "PR",
+		state: "merged" as const,
+		checkedAt: 1,
+		mergedAt: Date.now(),
+	};
+	const other = { ...pullRequest, number: 43, url: "https://github.com/octo/repo/pull/43", state: "open" as const };
+	// Even a terminal cache copied from a mission-level resource cannot hide the other open head.
+	f.store.addResource(id, { url: pullRequest.url });
+	f.store.updatePullRequest(pullRequest);
+	f.sessions["require"](chat.id).agentPullRequests = [pullRequest.url, other.url];
+	await f.sessions["applyPullRequest"](f.sessions["require"](chat.id), {
+		pullRequest,
+		mergedAt: pullRequest.mergedAt,
+		others: [other],
+	});
+	assert.equal(f.store.resolveTask(id, "1").status, "in_progress");
+	assert.equal(f.store.detail(id).resources.filter((resource) => resource.taskId).length, 2);
+});
+
+test("tool task links resolve numbers and never fan out to other owned tasks", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	f.service.join(chat.id, { missionId: id, taskId: "1" });
+	f.store.claimTask(id, "2", chat.id);
+	const url = "https://github.com/octo/repo/pull/42";
+	const linked = (await f.service.call(chat.id, "link", { url, taskId: "#1" })) as { taskId: string };
+	assert.equal(linked.taskId, f.store.resolveTask(id, "1").id);
+	const view = (await f.service.call(chat.id, "tasks", {})) as { tasks: { resources: unknown[] }[] };
+	assert.equal(view.tasks[0]!.resources.length, 1);
+	const get = (await f.service.call(chat.id, "get", {})) as { tasks: { resources: unknown[] }[] };
+	assert.equal(get.tasks[0]!.resources.length, 1);
+	f.sessions["missions"]?.pullRequestCreated?.(chat.id, url);
+	assert.equal(f.store.detail(id).resources.length, 1);
+	assert.equal(f.store.detail(id).resources[0]!.taskId, linked.taskId);
+	await assert.rejects(f.service.call(chat.id, "link", { url, taskId: "missing" }), /Unknown task/);
+});
+
+test("multi-task creation and discovery require explicit attribution across service reopen", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	f.service.join(chat.id, { missionId: id });
+	f.store.update(id, { coordinatorSessionId: chat.id });
+	await f.service.call(chat.id, "claim", { ids: ["1-2"] });
+	const first = "https://github.com/octo/repo/pull/109";
+	const second = "https://github.com/octo/repo/pull/110";
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, first);
+	assert.equal(f.store.detail(id).resources.length, 0, "multiple claims are ambiguous");
+	await f.service.call(chat.id, "link", { url: first, taskId: "1" });
+	await f.service.call(chat.id, "complete", {
+		id: "1",
+		completion: { commit: "a".repeat(40), checks: "Scoped unit tests, covers changed behavior.", issues: "" },
+	});
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, second);
+	assert.equal(f.store.detail(id).resources.length, 1, "a completed claim does not imply the next PR's task");
+	await f.service.call(chat.id, "link", { url: second, taskId: "2" });
+	// Reproduce legacy cross-links, then the user's resource-API cleanup.
+	const wrongFirst = f.store.addResource(id, { url: first, taskId: "2" });
+	const wrongSecond = f.store.addResource(id, { url: second, taskId: "1" });
+	f.store.removeResource(id, wrongFirst.id);
+	f.store.removeResource(id, wrongSecond.id);
+	const expected = f.store.detail(id).resources;
+	await f.service.notices.stop();
+	const reopened = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => reopened.notices.stop());
+	f.sessions["missions"]!.pullRequestsDiscovered!(chat.id, [first, second]);
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, first);
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, second);
+	assert.deepEqual(f.store.detail(id).resources, expected);
+	assert.deepEqual(
+		expected.map((resource) => [resource.url, resource.taskId]).sort(),
+		[
+			[first, f.store.resolveTask(id, "1").id],
+			[second, f.store.resolveTask(id, "2").id],
+		].sort(),
+	);
+});
+
+test("worker facts notify without closing scope; coordinator completion preserves assistance holds", async (t) => {
+	const f = await organizationFixture(t);
+	f.store.updateTask(f.mission.id, f.task.id, { status: "in_progress" });
+	const source = (await f.service.call(f.member.id, "report", { taskId: f.task.id })) as {
+		source: string;
+		expectedPreviousId: string | null;
+	};
+	const report = {
+		version: 1,
+		reportId: "scoped-delivery",
+		taskId: f.task.id,
+		source: source.source,
+		expectedPreviousId: source.expectedPreviousId,
+		movement: "not_moving",
+		summary: "One increment shipped; remaining scope blocked",
+		nextStep: "Reconcile criteria",
+		evidence: ["Focused tests"],
+		delivery: { commit: "b".repeat(40), checks: "Focused tests", issues: "Remaining scope" },
+	};
+	await f.service.call(f.member.id, "report", { report });
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "in_progress");
+	for (const action of ["complete", "claim", "release"] as const)
+		await assert.rejects(
+			f.service.call(f.member.id, action, { id: f.task.id, completion: report.delivery }),
+			/coordinator/i,
+		);
+	const read = (await f.service.call(f.lead.id, "get", { id: f.task.id })) as {
+		report: { currentness: string };
+		recentReports: unknown[];
+	};
+	assert.equal(read.report.currentness, "current");
+	assert.equal(read.recentReports.length, 1);
+	const receipt = (await f.service.call(f.lead.id, "report", { reportId: report.reportId })) as {
+		report: { write: unknown };
+	};
+	assert.deepEqual(receipt.report.write, report);
+	const question = f.store.addComment(
+		f.mission.id,
+		{ text: "Please resolve remaining assistance" },
+		{ sessionId: f.member.id },
+	);
+	await f.service.call(f.lead.id, "task", { id: f.task.id, status: "done" });
+	await assert.rejects(f.organize(), /assistance/);
+	f.store.resolveComment(f.mission.id, question.id, { sessionId: f.lead.id });
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "done");
+});
+
+test("multi-task claims handle ranges, partial success and context updates while preserving single claims", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const owner = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: chat.id,
+		draft: false,
+		tasks: Array.from({ length: 7 }, (_, i) => ({ title: `Task ${i + 1}` })),
+	});
+	f.service.join(owner.id, { missionId: mission.id, taskId: "2" });
+	const batch = (await f.service.call(chat.id, "claim", { ids: ["1-5", 7, "#1", "99"] })) as {
+		claimed: Array<{ id: string; number: number; sessionId: string }>;
+		skipped: Array<{ ref: string; reason: string }>;
+	};
+	assert.deepEqual(
+		batch.claimed.map((task) => task.number),
+		[1, 3, 4, 5, 7],
+	);
+	assert.ok(batch.claimed.every((task) => task.sessionId === chat.id));
+	assert.deepEqual(
+		batch.skipped.map((item) => item.ref),
+		["2", "99"],
+	);
+	assert.match(batch.skipped[0]!.reason, /already claimed/);
+	assert.match(batch.skipped[1]!.reason, /Unknown task/);
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, owner.id);
+	assert.deepEqual(
+		f.service.context(chat.id)?.tasks.map((task) => task.number),
+		[1, 3, 4, 5, 7],
+	);
+	const last = f.workers.get(chat.id)!.sent.findLast((command) => command.type === "mission.context");
+	assert.ok(last?.type === "mission.context");
+	assert.equal(last.context?.tasks.length, 5);
+	const range = (await f.service.call(chat.id, "claim", { id: "5-6" })) as typeof batch;
+	assert.deepEqual(
+		range.claimed.map((task) => task.number),
+		[5, 6],
+	);
+	const single = (await f.service.call(chat.id, "claim", { id: batch.claimed[0]!.id })) as { number: number };
+	assert.equal(single.number, 1, "single ID retains the task result");
+	await assert.rejects(f.service.call(chat.id, "claim", { id: "2" }), /already claimed/);
+	await assert.rejects(f.service.call(outsider.id, "claim", { ids: ["1-5"] }), /not part of a mission/);
+	const before = f.store.tasks(mission.id);
+	const events = f.store.events(mission.id);
+	for (const args of [
+		{},
+		{ ids: [] },
+		{ ids: "1-5" },
+		{ id: "1", ids: ["2"] },
+		{ id: [] },
+		{ ids: ["1", "5-2"] },
+		{ ids: ["1", null] },
+		{ ids: ["1-1001"] },
+	])
+		await assert.rejects(f.service.call(chat.id, "claim", args));
+	assert.deepEqual(f.store.tasks(mission.id), before);
+	assert.deepEqual(f.store.events(mission.id), events);
+});
+
+test("Make a mission joins the chat as coordinator and asks it to draft", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const detail = await f.service.create({
+		projectId: f.project.id,
+		title: "API v2",
+		goal: "",
+		fromSessionId: chat.id,
+	});
+	assert.equal(detail.mission.coordinatorSessionId, chat.id);
+	assert.equal(f.sessions.get(chat.id)?.missionId, detail.mission.id);
+	const worker = f.workers.get(chat.id)!;
+	const draft = await until(() =>
+		worker.requests.find(
+			(command) => command.type === "input" && command.content.includes("draft the shared mission"),
+		),
+	);
+	assert.ok(draft);
+	const context = await until(() =>
+		worker.sent.findLast((command) => command.type === "mission.context" && command.context?.coordinator === "self"),
+	);
+	assert.equal(context.type === "mission.context" && context.context?.title, "API v2");
+	assert.deepEqual(
+		f.sessions.list({ missionId: detail.mission.id }).map((session) => session.id),
+		[chat.id],
+	);
+	const other = await f.spawn(f.other.id);
+	await assert.rejects(
+		f.service.create({ projectId: f.project.id, title: "X", fromSessionId: other.id }),
+		/another project/,
+	);
+	assert.throws(() => f.service.join(other.id, { missionId: detail.mission.id }), /its own project/);
+});
+
+test("conversion rejects already linked sources without changing old work, while explicit move still works", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const original = await f.service.create({
+		projectId: f.project.id,
+		title: "Original",
+		fromSessionId: chat.id,
+		draft: false,
+	});
+	const task = f.store.addTask(original.mission.id, {
+		title: "Owned work",
+		sessionId: chat.id,
+		status: "in_progress",
+	});
+	const before = f.store.detail(original.mission.id);
+	const count = f.store.list().length;
+	await assert.rejects(
+		f.service.create({
+			projectId: f.project.id,
+			title: "Stale conversion",
+			fromSessionId: chat.id,
+			coordinator: true,
+			draft: true,
+		}),
+		/already belongs/,
+	);
+	assert.equal(f.store.list().length, count);
+	assert.deepEqual(f.store.detail(original.mission.id), before);
+	assert.equal(f.store.task(original.mission.id, task.id).sessionId, chat.id);
+	const next = f.store.create({ projectId: f.project.id, title: "Explicit move" });
+	f.service.join(chat.id, { missionId: next.id });
+	assert.equal(f.store.missionOf(chat.id), next.id, "ordinary explicit move is unchanged");
+});
+
+test("conversion is a single atomic admission across concurrent requests and rollback publishes nothing", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const request = {
+		projectId: f.project.id,
+		title: "Same source",
+		fromSessionId: chat.id,
+		coordinator: true,
+		draft: false,
+	};
+	const outcomes = await Promise.allSettled([f.service.create(request), f.service.create(request)]);
+	assert.equal(outcomes.filter((r) => r.status === "fulfilled").length, 1);
+	assert.equal(outcomes.filter((r) => r.status === "rejected").length, 1);
+	assert.equal(f.store.list().length, 1);
+	const other = await f.spawn();
+	const count = f.store.list().length;
+	const changes: string[] = [];
+	const unsubscribe = f.store.onChange((id) => changes.push(id));
+	const join = f.store.join;
+	f.store.join = (id, missionId, actor) => {
+		join.call(f.store, id, missionId, actor);
+		throw new Error("Injected after attach");
+	};
+	try {
+		await assert.rejects(f.service.create({ ...request, fromSessionId: other.id }), /Injected after attach/);
+	} finally {
+		f.store.join = join;
+		unsubscribe();
+	}
+	assert.equal(f.store.list().length, count, "no orphan mission after attachment failure");
+	assert.equal(f.store.missionOf(other.id), undefined);
+	assert.deepEqual(changes, [], "rolled-back changes never reach subscribers");
+});
+
+test("conversion rejects ineligible sources and validates explicit flags before creating", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const originalGet = f.sessions.get.bind(f.sessions);
+	for (const patch of [
+		{ control: true },
+		{ role: "diagnostics" as const },
+		{ archivedAt: 1 },
+		{ continuedTo: "replacement" },
+	]) {
+		const get = t.mock.method(f.sessions, "get", (id: string) => {
+			const value = originalGet(id);
+			return value && id === chat.id ? { ...value, ...patch } : value;
+		});
+		await assert.rejects(
+			f.service.create({ projectId: f.project.id, title: "Refused", fromSessionId: chat.id, draft: false }),
+		);
+		get.mock.restore();
+		assert.equal(f.store.list().length, 0);
+	}
+	for (const flags of [{ coordinator: "yes" }, { draft: "yes" }]) {
+		await assert.rejects(
+			f.service.create({ projectId: f.project.id, title: "Invalid", fromSessionId: chat.id, ...flags } as never),
+			/must be a boolean/,
+		);
+	}
+	assert.equal(f.store.list().length, 0);
+	assert.equal(f.store.missionOf(chat.id), undefined);
+});
+
+test("conversion keeps explicit coordinator and drafting choices independent", async (t) => {
+	const f = await fixture(t);
+	for (const coordinator of [false, true])
+		for (const draft of [false, true]) {
+			const chat = await f.spawn();
+			const send = t.mock.method(f.sessions, "send", async () => {});
+			const detail = await f.service.create({
+				projectId: f.project.id,
+				title: "Explicit choices",
+				fromSessionId: chat.id,
+				coordinator,
+				draft,
+			});
+			assert.equal(f.store.missionOf(chat.id), detail.mission.id);
+			assert.equal(detail.mission.coordinatorSessionId, coordinator ? chat.id : undefined);
+			assert.equal(send.mock.callCount(), draft ? 1 : 0);
+			if (draft) assert.equal(send.mock.calls[0]!.arguments[2], "followUp");
+			send.mock.restore();
+		}
+});
+
+test("conversion HTTP advertises guarded admission and rejects a stale second request without mutation", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+		hello: {
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "test",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	try {
+		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+		const hello = (await fetch(`${base}/hello`).then((response) => response.json())) as {
+			capabilities: { guardedMissionConversion?: boolean };
+		};
+		assert.equal(hello.capabilities.guardedMissionConversion, true);
+		const create = () =>
+			fetch(`${base}/missions`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					projectId: f.project.id,
+					title: "HTTP conversion",
+					fromSessionId: chat.id,
+					coordinator: false,
+					draft: false,
+				}),
+			});
+		const accepted = await create();
+		assert.equal(accepted.status, 201);
+		const detail = (await accepted.json()) as MissionDetail;
+		const before = f.store.detail(detail.mission.id);
+		const refused = await create();
+		assert.equal(refused.status, 409);
+		await refused.arrayBuffer();
+		assert.equal(f.store.list().length, 1);
+		assert.deepEqual(f.store.detail(detail.mission.id), before);
+		assert.deepEqual(
+			f.sessions.list().map((session) => session.id),
+			[chat.id],
+		);
+	} finally {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
+});
+
+test("agent calls run against the chat's mission and update its context", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "API v2",
+		goal: "Redesign",
+		fromSessionId: chat.id,
+		draft: false,
+	});
+	const worker = f.workers.get(chat.id)!;
+	const call = async (action: string, args: Record<string, unknown>, target = worker) => {
+		const callId = `call-${Math.random()}`;
+		target.onPacket({
+			type: "host.call",
+			method: "mission",
+			callId,
+			args: { action: action as never, args: args as never },
+		});
+		const reply = await until(() =>
+			target.sent.find((command) => command.type === "host.result" && command.callId === callId),
+		);
+		return reply as HostResult<"mission">;
+	};
+	const created = await call("task", { title: "Auth endpoints" });
+	assert.equal((created.result as { number: number }).number, 1);
+	const claimed = await call("claim", { id: "1" });
+	assert.equal((claimed.result as { status: string }).status, "in_progress");
+	const context = await until(() =>
+		worker.sent.findLast(
+			(command) => command.type === "mission.context" && command.context?.tasks.some((task) => task.number === 1),
+		),
+	);
+	assert.ok(context);
+	const brief = await call("brief", { markdown: "# Spec", expectedRevision: 0 });
+	assert.deepEqual(brief.result, { revision: 1 });
+	const stale = await call("brief", { markdown: "# Other", expectedRevision: 0 });
+	assert.match(stale.error ?? "", /revision conflict/);
+	const decision = await call("decide", { text: "IDs are opaque" });
+	assert.equal((decision.result as { authorSessionId: string }).authorSessionId, chat.id);
+	const got = (await call("get", {})).result as {
+		mission: { title: string };
+		tasks: Array<{ owner: string }>;
+		briefRevision: number;
+		counts: { decisions: number };
+	};
+	assert.equal(got.mission.title, "API v2");
+	assert.equal(got.tasks[0]!.owner, "you");
+	assert.equal(got.briefRevision, 1);
+	assert.equal(got.counts.decisions, 1);
+	const denied = await call("get", {}, f.workers.get(outsider.id)!);
+	assert.match(denied.error ?? "", /not part of a mission/);
+	await call("task", { title: "Docs" });
+	const started = (await call("start", { id: "2" })).result as unknown as SessionSummary;
+	assert.equal(started.missionId, mission.id);
+	const memberWorker = await until(() => f.workers.get(started.id));
+	const sent = await call("send", { targetSessionId: started.id, message: "Cover error cases" });
+	assert.deepEqual(sent.result, { sessionId: started.id, sent: true, delivery: "delivered", mode: "followUp" });
+	await until(() =>
+		memberWorker.requests.find((command) => command.type === "input" && command.content === "Cover error cases"),
+	);
+	const status = await call("status", {});
+	assert.ok((status.result as { members: Array<{ id: string }> }).members.some((member) => member.id === started.id));
+	const refused = await call("status", {}, memberWorker);
+	assert.match(refused.error ?? "", /Only the mission coordinator/);
+	assert.equal(
+		f.store.detail(mission.id).events.some((event) => event.sessionId === chat.id),
+		true,
+	);
+});
+
+test("spawn joins a mission before the first input, uses its project and leaves tasks unclaimed", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "API v2",
+		goal: "Redesign",
+		tasks: [{ title: "Auth" }],
+	});
+	f.store.addDecision(mission.id, "IDs are opaque");
+	for (const mode of ["build", "ask"] as const) {
+		const session = await f.sessions.spawn({ missionId: mission.id, message: "Tackle tasks 1 to 5", mode });
+		assert.equal(session.projectId, f.project.id);
+		assert.equal(session.missionId, mission.id);
+		assert.equal(session.cwd, f.project.path);
+		const worker = await until(() => f.workers.get(session.id));
+		await until(() => worker.requests.find((command) => command.type === "input"));
+		assert.equal(worker.spec.mission?.id, mission.id);
+		assert.equal(worker.spec.mission?.goal, "Redesign");
+		assert.deepEqual(worker.spec.mission?.decisions, []);
+		assert.equal(worker.spec.mission?.remainingDecisions, 1);
+		assert.deepEqual(worker.spec.mission?.tasks, []);
+		assert.equal(f.store.tasks(mission.id)[0]?.sessionId, undefined);
+	}
+});
+
+test("spawn rejects unknown, inactive and incompatible missions without creating a chat", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	await assert.rejects(f.sessions.spawn({ missionId: "unknown", message: "hello" }), /Unknown mission/);
+	await assert.rejects(f.sessions.spawn({ missionId: "", message: "hello" }), /non-empty string/);
+	await assert.rejects(
+		f.sessions.spawn({ missionId: mission.id, projectId: f.other.id, message: "hello" }),
+		/own project/,
+	);
+	await assert.rejects(
+		f.sessions.spawn({ missionId: mission.id, cwd: f.project.path, message: "hello" }),
+		/cwd override/,
+	);
+	for (const status of ["archived", "done"] as const) {
+		f.store.update(mission.id, { status });
+		await assert.rejects(f.sessions.spawn({ missionId: mission.id, message: "hello" }), /Reopen the mission/);
+	}
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(f.store.members(mission.id), []);
+});
+
+test("spawn rechecks mission admission after async preparation and never starts a rejected chat", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	const spawn = f.sessions.spawn({ missionId: mission.id, message: "hello" });
+	f.store.update(mission.id, { status: "done" });
+	await assert.rejects(spawn, /Reopen the mission/);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(f.store.members(mission.id), []);
+});
+
+test("start saves member and already-linked artifacts and parsed links before spawn; later chats inherit them", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const author = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Auth" }],
+	});
+	f.service.join(author.id, { missionId: mission.id });
+	const first = await testArtifacts(f, lead.id).create({
+		title: "Design",
+		kind: "nsh",
+		source: "<p>PRIVATE DESIGN CONTENT</p>",
+	});
+	const second = await testArtifacts(f, author.id).create({
+		title: "Diagram",
+		kind: "nsh",
+		source: "<p>PRIVATE DIAGRAM CONTENT</p>",
+	});
+	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: second.id });
+	f.service.leave(author.id); // An existing mission link remains a valid reference.
+	const task = f.store.resolveTask(mission.id, "1");
+	const spawn = f.sessions.spawn.bind(f.sessions);
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof spawn>) => {
+		const detail = f.store.detail(mission.id);
+		assert.equal(detail.artifacts.filter((ref) => ref.taskId === task.id).length, 2);
+		assert.equal(detail.resources.filter((ref) => ref.taskId === task.id).length, 2);
+		return spawn(...args);
+	});
+	const session = (await f.service.call(lead.id, "start", {
+		id: "#1",
+		artifacts: [{ artifactId: first.id, revision: 1 }, { artifactId: second.id }],
+		links: [
+			{ url: "https://linear.app/acme/issue/ENG-12/design" },
+			{ url: "https://github.com/octo/repo/issues/42?x=1#fragment", title: "Issue" },
+		],
+	})) as SessionSummary;
+	const content = async (id: string) => {
+		const worker = await until(() => f.workers.get(id));
+		const input = await until(() => worker.requests.find((command) => command.type === "input"));
+		return input.type === "input" ? input.content : "";
+	};
+	const message = await content(session.id);
+	assert.match(message, /Read them as needed/);
+	assert.ok(message.includes(`Design (nsh): ${first.id}, revision 1`));
+	assert.ok(message.includes(`Diagram (nsh): ${second.id}`));
+	assert.match(message, /Issue \(github.issue\): https:\/\/github.com\/octo\/repo\/issues\/42/);
+	assert.match(message, /ENG-12 \(linear\.issue\): https:\/\/linear\.app\/acme\/issue\/ENG-12/);
+	assert.doesNotMatch(message, /PRIVATE.*CONTENT/);
+	const detail = f.store.detail(mission.id);
+	assert.deepEqual(detail.resources.map((ref) => [ref.kind, ref.externalId]).sort(), [
+		["github.issue", "octo/repo#42"],
+		["linear.issue", "ENG-12"],
+	]);
+	assert.equal(
+		detail.artifacts.filter((ref) => ref.artifactId === second.id).length,
+		2,
+		"mission-level link is preserved",
+	);
+	for (const action of ["get", "tasks"] as const) {
+		const result = (await f.service.call(session.id, action, {})) as {
+			tasks: Array<{ artifacts: unknown[]; resources: unknown[] }>;
+		};
+		assert.equal(result.tasks[0]!.artifacts.length, 2);
+		assert.equal(result.tasks[0]!.resources.length, 2);
+	}
+	f.service.leave(session.id);
+	const later = await f.service.startTask(mission.id, task.id);
+	const laterMessage = await content(later.id);
+	for (const reference of [
+		first.id,
+		second.id,
+		"https://github.com/octo/repo/issues/42",
+		"https://linear.app/acme/issue/ENG-12/design",
+	]) {
+		assert.ok(laterMessage.includes(reference), `later chat inherits ${reference}`);
+	}
+});
+
+test("artifact reference IPC reads pinned and latest sources for later members without waking the author", async (t) => {
+	const f = await fixture(t);
+	const author = await f.spawn();
+	const reader = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: author.id,
+		draft: false,
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	f.service.join(reader.id, { missionId: mission.id });
+	const store = testArtifacts(f, author.id);
+	const first = await store.create({ title: "Pinned", kind: "nsh", source: "PINNED SOURCE" });
+	const latest = await store.create({ title: "Latest", kind: "nsh", source: "OLD SOURCE" });
+	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: first.id, revision: 1, taskId: "1" });
+	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: latest.id });
+	await store.update(first.id, { title: "Pinned", kind: "nsh", source: "NEW SOURCE" });
+	await store.update(latest.id, { title: "Latest", kind: "nsh", source: "LATEST SOURCE" });
+	f.service.leave(author.id); // A persisted reference survives its author leaving the group.
+	const worker = f.workers.get(reader.id)!;
+	const sent = f.workers.get(author.id)!.sent.length;
+	const requests = f.workers.get(author.id)!.requests.length;
+	const read = async (id: string, revision?: number) => {
+		const callId = `read:${worker.sent.length}`;
+		worker.onPacket({ type: "host.call", method: "artifact.reference", callId, args: { id, revision } });
+		return await until(() =>
+			worker.sent.find(
+				(command): command is HostResult<"artifact.reference"> =>
+					command.type === "host.result" && command.callId === callId,
+			),
+		);
+	};
+	const pin = await read(first.id);
+	assert.equal(pin.result?.source, "PINNED SOURCE");
+	assert.equal(pin.result?.revision, 1);
+	assert.equal(pin.result?.sessionId, author.id);
+	assert.ok(!("html" in pin.result!));
+	assert.equal((await read(latest.id)).result?.source, "LATEST SOURCE");
+	assert.equal((await read(latest.id, 1)).result?.source, "OLD SOURCE");
+	assert.match((await read(latest.id, 99)).error!, /revision/);
+	assert.match((await read(first.id, 2)).error!, /not linked/);
+	assert.equal(f.workers.get(author.id)!.sent.length, sent);
+	assert.equal(f.workers.get(author.id)!.requests.length, requests);
+	assert.deepEqual(await f.sessions.artifacts(reader.id), []);
+	// Several task references can pin different revisions. Never silently select one.
+	f.store.attachTaskReferences(
+		mission.id,
+		f.store.resolveTask(mission.id, "2").id,
+		[{ ...f.store.detail(mission.id).artifacts.find((ref) => ref.artifactId === first.id)!, revision: 2 }],
+		[],
+	);
+	assert.match((await read(first.id)).error!, /conflicting revisions/);
+	assert.equal((await read(first.id, 2)).result?.source, "NEW SOURCE");
+	f.store.unlinkArtifact(mission.id, first.id, undefined, "1");
+	assert.equal((await read(first.id)).result?.revision, 2);
+	f.store.unlinkArtifact(mission.id, first.id, undefined, "2");
+	assert.match((await read(first.id)).error!, /not authorized/);
+	f.store.attachTaskReferences(
+		mission.id,
+		f.store.resolveTask(mission.id, "2").id,
+		[{ ...f.store.detail(mission.id).artifacts.find((ref) => ref.artifactId === latest.id)!, revision: 1 }],
+		[],
+	);
+	assert.match((await read(latest.id)).error!, /conflicting revisions/);
+	assert.equal((await read(latest.id, 2)).result?.source, "LATEST SOURCE");
+	f.service.leave(reader.id);
+	assert.match((await read(latest.id)).error!, /not authorized/);
+});
+
+test("artifact reference reads reject foreign sources, forged links and revoked access", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const other = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: member.id,
+		draft: false,
+	});
+	const foreignMission = await f.service.create({
+		projectId: f.other.id,
+		title: "Other",
+		fromSessionId: other.id,
+		draft: false,
+	});
+	const make = (id: string) => testArtifacts(f, id).create({ title: "Private", kind: "nsh", source: "PRIVATE" });
+	const own = await make(member.id);
+	const foreign = await make(outsider.id);
+	const crossProject = await make(other.id);
+	await f.service.linkArtifact(foreignMission.mission.id, { sessionId: other.id, artifactId: crossProject.id });
+	const read = (caller: string, id: string, revision?: number) =>
+		f.service.readArtifactReference(caller, id, revision);
+	const diskRead = t.mock.method(f.sessions, "artifact");
+	for (const id of [own.id, foreign.id, crossProject.id, "missing", "../../foreign"]) {
+		await assert.rejects(read(member.id, id), /not authorized/);
+	}
+	assert.equal(diskRead.mock.callCount(), 0, "denied IDs never reach a foreign store");
+	await f.service.linkArtifact(mission.id, { sessionId: member.id, artifactId: own.id, revision: 1 });
+	await assert.rejects(read(outsider.id, own.id), /not authorized/);
+	await assert.rejects(read(other.id, own.id), /not authorized/);
+	for (const revision of [0, -1, 1.5, NaN, Infinity])
+		await assert.rejects(read(member.id, own.id, revision), /positive integer/);
+	// Even a corrupted persisted link cannot cross project boundaries.
+	f.store.join(other.id, mission.id);
+	f.store.linkArtifact(mission.id, {
+		artifactId: crossProject.id,
+		sessionId: other.id,
+		title: "Forged",
+		kind: "nsh",
+	});
+	f.store.leave(other.id);
+	await assert.rejects(read(member.id, crossProject.id), /own project/);
+	const original = f.sessions.artifact.bind(f.sessions);
+	t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+		const result = await original(...args);
+		f.store.unlinkArtifact(mission.id, own.id);
+		return result;
+	});
+	await assert.rejects(read(member.id, own.id), /not authorized/);
+	t.mock.method(f.sessions, "artifact", original);
+	await f.service.linkArtifact(mission.id, { sessionId: member.id, artifactId: own.id });
+	t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+		const result = await original(...args);
+		f.service.leave(member.id);
+		return result;
+	});
+	await assert.rejects(read(member.id, own.id), /not authorized/);
+});
+
+test("start rejects foreign artifacts, invalid revisions and malformed links without writes or spawn", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const outsider = await f.spawn();
+	const other = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "A" }],
+	});
+	const valid = await testArtifacts(f, lead.id).create({ title: "Valid", kind: "nsh", source: "ok" });
+	const foreign = await testArtifacts(f, outsider.id).create({
+		title: "Foreign",
+		kind: "nsh",
+		source: "no",
+	});
+	const otherArtifact = await testArtifacts(f, other.id).create({
+		title: "Other",
+		kind: "nsh",
+		source: "no",
+	});
+	const cases = [
+		{ artifacts: [{ artifactId: foreign.id }] },
+		{ artifacts: [{ artifactId: otherArtifact.id }] },
+		{ artifacts: [{ artifactId: "missing" }] },
+		{ artifacts: [{ artifactId: valid.id, revision: 2 }] },
+		{ artifacts: [{ artifactId: valid.id, revision: 0 }] },
+		{ artifacts: [{ artifactId: valid.id, revision: 1.5 }] },
+		{ artifacts: [null] },
+		{ artifacts: {} },
+		{ links: {} },
+		{ links: [null] },
+		{ links: [{ url: "relative" }] },
+		{ links: [{ url: "file:///tmp/read" }] },
+		{ links: [{ url: "https://example.com", title: 4 }] },
+		{ links: [{ url: "https://example.com", title: "x".repeat(201) }] },
+		{ links: Array.from({ length: 41 }, () => ({ url: "https://example.com" })) },
+	];
+	const before = f.store.detail(mission.id);
+	for (const args of cases) {
+		await assert.rejects(f.service.call(lead.id, "start", { id: "1", ...args }));
+		assert.deepEqual(f.store.detail(mission.id), before);
+		assert.equal(f.sessions.list().length, 3);
+	}
+	await assert.rejects(
+		f.service.call(lead.id, "start", {
+			id: "1",
+			artifacts: [{ artifactId: valid.id }, { artifactId: foreign.id }],
+			links: [{ url: "https://example.com" }],
+		}),
+		/must already be linked/,
+	);
+	assert.deepEqual(f.store.detail(mission.id), before);
+});
+
+test("opening message cap includes task body, extra instructions and inherited references", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B", body: "x".repeat(4000) }],
+	});
+	const before = f.store.detail(mission.id);
+	for (const args of [
+		{ message: "x".repeat(4000) },
+		{ links: Array.from({ length: 20 }, (_, i) => ({ url: `https://example.com/${i}`, title: "x".repeat(200) })) },
+	]) {
+		await assert.rejects(f.service.startTask(mission.id, "1", args), /Opening message is too long.*max 4000/);
+		assert.deepEqual(f.store.detail(mission.id), before);
+	}
+	await assert.rejects(f.service.startTask(mission.id, "2"), /Opening message is too long/);
+	for (let i = 0; i < 20; i++)
+		f.store.addResource(mission.id, { taskId: "1", url: `https://example.com/${i}`, title: "x".repeat(200) });
+	await assert.rejects(f.service.startTask(mission.id, "1"), /Opening message is too long/);
+	assert.equal(f.sessions.list().length, 0);
+	// A message exactly at the cap is accepted; one character above is rejected.
+	const plain = f.store.addTask(mission.id, { title: "C" });
+	const base = `Work on mission task #${plain.number}: C\n\nThis task is already claimed for this chat. Start by reading the mission with the mission tool.`;
+	const extra = "x".repeat(4000 - base.length - 2);
+	await assert.rejects(f.service.startTask(mission.id, plain.id, { message: `${extra}x` }), /max 4000/);
+	const session = await f.service.startTask(mission.id, plain.id, { message: extra });
+	const worker = await until(() => f.workers.get(session.id));
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(input.type === "input" ? input.content.length : 0, 4000);
+});
+
+for (const status of ["done", "archived"] as const) {
+	test(`Start chat rejects ${status} missions before spawning and requires reopening`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.tasks(mission.id)[0]!;
+		const spawn = t.mock.method(f.sessions, "spawn");
+		f.store.update(mission.id, { status });
+		await assert.rejects(f.service.startTask(mission.id, task.id), /Reopen the mission/);
+		assert.equal(spawn.mock.callCount(), 0);
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+		f.store.update(mission.id, { status: "active" });
+		const session = await f.service.startTask(mission.id, task.id);
+		assert.equal(session.missionId, mission.id);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, session.id);
+	});
+
+	test(`Start chat rejects a mission that becomes ${status} during model selection`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.tasks(mission.id)[0]!;
+		const selectTaskModel = f.sessions.selectTaskModel.bind(f.sessions);
+		t.mock.method(f.sessions, "selectTaskModel", async (...args: Parameters<typeof selectTaskModel>) => {
+			const selection = await selectTaskModel(...args);
+			f.store.update(mission.id, { status });
+			return selection;
+		});
+		await assert.rejects(f.service.startTask(mission.id, task.id), /Reopen the mission/);
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+	});
+
+	test(`Start chat cleans up when the mission becomes ${status} during async spawn preparation`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.tasks(mission.id)[0]!;
+		const joinSpawn = t.mock.method(f.sessions["missions"]!, "joinSpawn");
+		let prepared!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			prepared = resolve;
+		});
+		const spawnProject = f.sessions["missions"]!.spawnProject;
+		t.mock.method(f.sessions["missions"]!, "spawnProject", (missionId: string) => {
+			const projectId = spawnProject(missionId);
+			prepared();
+			return projectId;
+		});
+		const pending = f.service.startTask(mission.id, task.id);
+		await preparing;
+		// spawn has checked the active status, then yielded to async directory/metadata preparation.
+		f.store.update(mission.id, { status });
+		await assert.rejects(pending, /Reopen the mission/);
+		assert.equal(joinSpawn.mock.callCount(), 1, "the final admission guard ran after metadata was saved");
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), [], "no orphan survives restart");
+	});
+}
+
+for (const [firstVia, secondVia] of [
+	["HTTP", "HTTP"],
+	["HTTP", "tool"],
+	["tool", "HTTP"],
+	["tool", "tool"],
+] as const) {
+	test(`concurrent ${firstVia}/${secondVia} task starts reserve canonical task IDs before async selection`, async (t) => {
+		const f = await fixture(t);
+		const lead = await f.spawn();
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: lead.id,
+			draft: false,
+			tasks: [{ title: "Auth" }],
+		});
+		const task = f.store.resolveTask(mission.id, "1");
+		const terminals = new TerminalManager();
+		const server = createDaemonServer({
+			config: { home: f.home, host: "127.0.0.1", port: 0 },
+			sessions: f.sessions,
+			projects: f.projects,
+			models: new ModelCatalog(f.home),
+			terminals,
+			missions: { service: f.service, store: f.store },
+		});
+		t.after(async () => {
+			terminals.shutdown();
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		});
+		server.listen(0, "127.0.0.1");
+		await once(server, "listening");
+		const port = (server.address() as AddressInfo).port;
+		const start = async (via: "HTTP" | "tool", id: string) => {
+			if (via === "HTTP") {
+				const response = await fetch(
+					`http://127.0.0.1:${port}/api/missions/${mission.id}/tasks/${encodeURIComponent(id)}/start`,
+					{
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: "{}",
+					},
+				);
+				return { status: response.status, body: (await response.json()) as { id?: string; error?: string } };
+			}
+			try {
+				return { status: 201, body: (await f.service.call(lead.id, "start", { id })) as SessionSummary };
+			} catch (error) {
+				assert.ok(error instanceof Conflict);
+				return { status: 409, body: { error: error.message } };
+			}
+		};
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let selecting!: () => void;
+		const selectionStarted = new Promise<void>((resolve) => {
+			selecting = resolve;
+		});
+		t.mock.method(f.sessions, "selectTaskModel", async () => {
+			selecting();
+			await blocked;
+			return { model: "test/model", thinking: "medium" };
+		});
+		const spawn = t.mock.method(f.sessions, "spawn");
+		const first = start(firstVia, task.id);
+		try {
+			await selectionStarted;
+			// HTTP numbers and tool #number aliases share the UUID reservation.
+			for (const alias of secondVia === "HTTP" ? ["1", task.id] : ["1", "#1"]) {
+				const second = await start(secondVia, alias);
+				assert.equal(second.status, 409);
+				assert.match("error" in second.body ? (second.body.error ?? "") : "", /already starting/);
+			}
+			assert.equal(spawn.mock.callCount(), 0);
+		} finally {
+			release();
+		}
+		const winner = await first;
+		assert.equal(winner.status, 201);
+		assert.ok("id" in winner.body && winner.body.id);
+		const id = winner.body.id;
+		assert.equal(f.store.task(mission.id, task.id).sessionId, id);
+		assert.equal(spawn.mock.callCount(), 1);
+		assert.equal(f.sessions.list().length, 2);
+		assert.deepEqual(new Set(f.store.members(mission.id)), new Set([lead.id, id]));
+		assert.deepEqual(new Set(await readdir(join(f.home, "data", "sessions"))), new Set([lead.id, id]));
+		const worker = await until(() => f.workers.get(id));
+		assert.equal(worker.spec.mission?.tasks[0]?.number, task.number, "the claim precedes worker startup");
+		assert.equal(f.workers.size, 2);
+		assert.equal(f.store.events(mission.id).filter((event) => event.text.startsWith("Started #")).length, 1);
+		const retry = await start(secondVia, "1");
+		assert.equal(retry.status, 409);
+		assert.match("error" in retry.body ? (retry.body.error ?? "") : "", /already claimed/);
+	});
+}
+
+test("task start reservations remain held through spawn and do not block other tasks or missions", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "Auth" }, { title: "Other" }],
+	});
+	const other = f.store.create({ projectId: f.project.id, title: "Other", tasks: [{ title: "Auth" }] });
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let spawning!: () => void;
+	const spawnStarted = new Promise<void>((resolve) => {
+		spawning = resolve;
+	});
+	const original = f.sessions.spawn.bind(f.sessions);
+	let calls = 0;
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof original>) => {
+		if (++calls === 1) {
+			spawning();
+			await blocked;
+		}
+		return original(...args);
+	});
+	const first = f.service.startTask(mission.id, "1");
+	try {
+		await spawnStarted;
+		await assert.rejects(f.service.startTask(mission.id, "#1"), /already starting/);
+		const [sameMission, otherMission] = await Promise.all([
+			f.service.startTask(mission.id, "2"),
+			f.service.startTask(other.id, "1"),
+		]);
+		assert.equal(f.store.resolveTask(mission.id, "2").sessionId, sameMission.id);
+		assert.equal(f.store.resolveTask(other.id, "1").sessionId, otherMission.id);
+	} finally {
+		release();
+	}
+	const winner = await first;
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, winner.id);
+	assert.equal(calls, 3);
+});
+
+for (const failure of ["selection", "references", "admission"] as const) {
+	test(`failed task ${failure} releases its start reservation and rejected admission leaves no orphan`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.resolveTask(mission.id, "1");
+		let restore = () => {};
+		if (failure === "selection") {
+			const mock = t.mock.method(f.sessions, "selectTaskModel", async () => {
+				throw new Error("selection failed");
+			});
+			restore = () => mock.mock.restore();
+		} else if (failure === "admission") {
+			const original = f.sessions["missions"]!.joinSpawn;
+			const mock = t.mock.method(f.sessions["missions"]!, "joinSpawn", (...args: Parameters<typeof original>) => {
+				original(...args);
+				throw new Error("admission failed");
+			});
+			restore = () => mock.mock.restore();
+		}
+		await assert.rejects(
+			f.service.startTask(mission.id, task.id, failure === "references" ? { message: "x".repeat(4000) } : {}),
+			failure === "references" ? /Opening message is too long/ : /failed/,
+		);
+		restore();
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+		assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+		const retry = await f.service.startTask(mission.id, "#1");
+		assert.equal(f.store.task(mission.id, task.id).sessionId, retry.id);
+	});
+}
+
+for (const change of ["claimed", "deleted"] as const) {
+	test(`task ${change} during spawn preparation rejects before worker startup and cleans persisted metadata`, async (t) => {
+		const f = await fixture(t);
+		const owner = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.resolveTask(mission.id, "1");
+		const lifecycle = f.sessions["lifecycle"];
+		const flush = t.mock.method(lifecycle, "flush", lifecycle.flush.bind(lifecycle));
+		let prepared!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			prepared = resolve;
+		});
+		const original = f.sessions["missions"]!.spawnProject;
+		const mock = t.mock.method(f.sessions["missions"]!, "spawnProject", (id: string) => {
+			const project = original(id);
+			prepared();
+			return project;
+		});
+		const pending = assert.rejects(
+			f.service.startTask(mission.id, task.id),
+			change === "claimed" ? /already claimed/ : /Unknown task/,
+		);
+		await preparing;
+		if (change === "claimed") f.service.join(owner.id, { missionId: mission.id, taskId: task.id });
+		else f.store.removeTask(mission.id, task.id);
+		await pending;
+		assert.equal(
+			flush.mock.calls.length,
+			1,
+			"rejected admission drains lifecycle writes before removing its directory",
+		);
+		mock.mock.restore();
+		assert.deepEqual(
+			f.sessions.list({ archived: "all" }).map((session) => session.id),
+			[owner.id],
+		);
+		assert.deepEqual([...f.workers.keys()], [owner.id]);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), [owner.id]);
+		assert.deepEqual(f.store.members(mission.id), change === "claimed" ? [owner.id] : []);
+		assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+		if (change === "claimed") {
+			assert.equal(f.store.task(mission.id, task.id).sessionId, owner.id);
+			f.store.releaseTask(mission.id, task.id);
+			const retry = await f.service.startTask(mission.id, "1");
+			assert.equal(f.store.task(mission.id, task.id).sessionId, retry.id);
+		}
+	});
+}
+
+test("multi-start orders a single chat's tasks and attaches supplied references to every task", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [
+			{ title: "Base", body: "Build base" },
+			{ title: "Feature", body: "Build feature" },
+			{ title: "Docs", body: "Write docs" },
+		],
+	});
+	const [a, b, c] = f.store.tasks(mission.id);
+	f.store.updateTask(mission.id, b!.id, { dependsOn: [a!.id] });
+	const artifact = await testArtifacts(f, lead.id).create({ title: "Spec", kind: "nsh", source: "ok" });
+	const session = (await f.service.call(lead.id, "start", {
+		ids: [b!.id, "1-3", "#1"],
+		message: "Ship carefully",
+		artifacts: [{ artifactId: artifact.id, revision: 1 }],
+		links: [{ url: "https://example.com/spec", title: "Context" }],
+	})) as SessionSummary;
+	assert.equal(session.title, "Base");
+	assert.equal(f.sessions.list().length, 2);
+	for (const task of [a!, b!, c!]) {
+		assert.equal(f.store.task(mission.id, task.id).sessionId, session.id);
+		assert.equal(f.store.task(mission.id, task.id).status, "in_progress");
+		const detail = f.store.detail(mission.id);
+		assert.equal(
+			detail.artifacts.filter((ref) => ref.taskId === task.id && ref.artifactId === artifact.id).length,
+			1,
+		);
+		assert.equal(
+			detail.resources.filter((ref) => ref.taskId === task.id && ref.url === "https://example.com/spec").length,
+			1,
+		);
+	}
+	const worker = await until(() => f.workers.get(session.id));
+	assert.deepEqual(
+		worker.spec.mission?.tasks.map((task) => task.number),
+		[1, 2, 3],
+	);
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(input.type, "input");
+	if (input.type !== "input") return;
+	assert.match(input.content, /#1: Base\nBuild base[\s\S]*#2: Feature\nBuild feature[\s\S]*#3: Docs\nWrite docs/);
+	assert.match(input.content, /one PR per task/);
+	assert.match(input.content, /--base <previous-head>/);
+	assert.match(input.content, /gh stack link/);
+	assert.match(input.content, /link \+ taskId/);
+	assert.match(input.content, /Ship carefully/);
+	assert.ok(input.content.length <= 4000);
+	assert.equal(f.store.events(mission.id).filter((event) => event.text.startsWith("Started #")).length, 3);
+});
+
+test("multi-start uses dependency order then given order, not display or task-number order", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }],
+	});
+	f.store.updateTask(mission.id, "2", { dependsOn: ["1"] });
+	f.store.updateTask(mission.id, "1", { order: 100 });
+	f.store.updateTask(mission.id, "4", { order: -100 });
+	const spawn = t.mock.method(f.sessions, "spawn");
+	await f.service.startTasks(mission.id, ["2", "3", "1", "4"]);
+	const args = spawn.mock.calls[0]!.arguments;
+	assert.deepEqual(
+		args[2],
+		["3", "1", "2", "4"].map((ref) => f.store.resolveTask(mission.id, ref).id),
+	);
+	assert.match(args[0].message, /#3: C[\s\S]*#1: A[\s\S]*#2: B[\s\S]*#4: D/);
+});
+
+test("multi-start rejects outside unfinished dependencies and cycles without writes", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+	});
+	f.store.updateTask(mission.id, "2", { dependsOn: ["1"] });
+	for (const status of ["todo", "dropped"] as const) {
+		f.store.updateTask(mission.id, "1", { status });
+		const before = f.store.detail(mission.id);
+		await assert.rejects(
+			f.service.startTasks(mission.id, ["2", "3"]),
+			/#2 depends on task #1 outside the start list, which is not done/,
+		);
+		assert.deepEqual(f.store.detail(mission.id), before);
+	}
+	f.store.updateTask(mission.id, "1", { status: "done" });
+	await f.service.startTasks(mission.id, ["2", "3"]);
+	// Cycles can exist in task metadata; start must reject them before creating a chat.
+	f.store.updateTask(mission.id, "1", { status: "todo", dependsOn: ["2"] });
+	f.store.releaseTask(mission.id, "2");
+	const before = f.store.detail(mission.id);
+	await assert.rejects(f.service.startTasks(mission.id, ["2", "1"]), /Dependency cycle among tasks #2, #1/);
+	assert.deepEqual(f.store.detail(mission.id), before);
+	assert.equal(f.sessions.list().length, 1);
+});
+
+test("multi-start reports every claim/terminal conflict and rolls back the entire selection", async (t) => {
+	const f = await fixture(t);
+	const owner = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }],
+	});
+	f.service.join(owner.id, { missionId: mission.id, taskId: "2" });
+	f.store.updateTask(mission.id, "3", { status: "done" });
+	f.store.updateTask(mission.id, "4", { status: "dropped" });
+	const before = f.store.detail(mission.id);
+	await assert.rejects(
+		f.service.startTasks(mission.id, ["1", "2", "3", "4"]),
+		/#2 is already claimed[\s\S]*#3 is done[\s\S]*#4 is dropped/,
+	);
+	assert.deepEqual(f.store.detail(mission.id), before);
+	assert.equal(f.sessions.list().length, 1);
+	// No leaked reservation on the otherwise eligible task.
+	await f.service.startTask(mission.id, "1");
+});
+
+for (const first of ["single", "batch"] as const) {
+	test(`multi-start shares all reservations with single starts (${first} first)`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+		});
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let entered!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const original = f.sessions.spawn.bind(f.sessions);
+		let calls = 0;
+		t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof original>) => {
+			if (++calls === 1) {
+				entered();
+				await blocked;
+			}
+			return original(...args);
+		});
+		const pending =
+			first === "single" ? f.service.startTask(mission.id, "2") : f.service.startTasks(mission.id, ["1", "2"]);
+		try {
+			await preparing;
+			await assert.rejects(
+				first === "single" ? f.service.startTasks(mission.id, ["1", "2"]) : f.service.startTask(mission.id, "#2"),
+				/already starting/,
+			);
+			if (first === "batch") await assert.rejects(f.service.startTask(mission.id, "1"), /already starting/);
+			else await f.service.startTask(mission.id, "1"); // failed batch never reserved its free task
+			await f.service.startTask(mission.id, "3");
+		} finally {
+			release();
+		}
+		const winner = await pending;
+		assert.equal(f.store.resolveTask(mission.id, "2").sessionId, winner.id);
+	});
+}
+
+test("multi-start admission rechecks every claim after spawn I/O with no partial claim", async (t) => {
+	const f = await fixture(t);
+	const owner = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	let prepared!: () => void;
+	const preparing = new Promise<void>((resolve) => {
+		prepared = resolve;
+	});
+	const original = f.sessions["missions"]!.spawnProject;
+	t.mock.method(f.sessions["missions"]!, "spawnProject", (id: string) => {
+		const project = original(id);
+		prepared();
+		return project;
+	});
+	const pending = assert.rejects(f.service.startTasks(mission.id, ["1", "2"]), /#2 is already claimed/);
+	await preparing;
+	f.service.join(owner.id, { missionId: mission.id, taskId: "2" });
+	await pending;
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, owner.id);
+	assert.deepEqual(f.store.members(mission.id), [owner.id]);
+	assert.deepEqual(
+		f.sessions.list().map((session) => session.id),
+		[owner.id],
+	);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), [owner.id]);
+	assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+	f.store.releaseTask(mission.id, "2");
+	await f.service.startTasks(mission.id, ["1", "2"]);
+});
+
+test("multi-start caps the whole prompt including bodies, instructions and references", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [
+			{ title: "A", body: "a".repeat(2000) },
+			{ title: "B", body: "b".repeat(2000) },
+		],
+	});
+	const before = f.store.detail(mission.id);
+	await assert.rejects(
+		f.service.call(lead.id, "start", { ids: ["1-2"] }),
+		/Opening message is too long \(\d+ characters; max 4000\)/,
+	);
+	assert.deepEqual(f.store.detail(mission.id), before);
+	f.store.updateTask(mission.id, "1", { body: "" });
+	f.store.updateTask(mission.id, "2", { body: "" });
+	const basePrompt = f.sessions.spawn;
+	const probe = t.mock.method(f.sessions, "spawn", async (..._args: Parameters<SessionManager["spawn"]>) => {
+		throw new Error("probe");
+	});
+	await assert.rejects(f.service.startTasks(mission.id, ["1", "2"]), /probe/);
+	const base = probe.mock.calls[0]!.arguments[0].message;
+	probe.mock.restore();
+	assert.equal(f.sessions.spawn, basePrompt);
+	const extra = "x".repeat(4000 - base.length - 2);
+	const clean = f.store.detail(mission.id);
+	await assert.rejects(
+		f.service.startTasks(mission.id, ["1", "2"], { message: extra + "x", links: [{ url: "https://example.com" }] }),
+		/max 4000/,
+	);
+	await assert.rejects(f.service.startTasks(mission.id, ["1", "2"], { message: extra + "x" }), /4001 characters/);
+	assert.deepEqual(f.store.detail(mission.id), clean);
+	const session = await f.service.startTasks(mission.id, ["1", "2"], { message: extra });
+	const worker = await until(() => f.workers.get(session.id));
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(input.type === "input" ? input.content.length : 0, 4000);
+});
+
+test("coordinator start validates ids selectors without changing single-id admission", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	for (const args of [
+		{ ids: [] },
+		{ ids: "1-2" },
+		{ ids: [false] },
+		{ ids: ["2-1"] },
+		{ id: "1", ids: [2] },
+		{ ids: [3] },
+	])
+		await assert.rejects(f.service.call(lead.id, "start", args));
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	const session = (await f.service.call(lead.id, "start", { ids: [2, "1"] })) as SessionSummary;
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, session.id);
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, session.id);
+});
+
+test("Start chat spawns a member chat that owns the task; leaving releases it", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+	const task = f.store.tasks(mission.id)[0]!;
+	const session = await f.service.startTask(mission.id, task.id, { message: "Focus on login" });
+	assert.equal(session.missionId, mission.id);
+	assert.equal(session.title, "Auth");
+	assert.equal(f.store.task(mission.id, task.id).sessionId, session.id);
+	await assert.rejects(f.service.startTask(mission.id, task.id), /already claimed/);
+	const worker = await until(() => f.workers.get(session.id));
+	assert.equal(worker.spec.mission?.id, mission.id);
+	assert.equal(worker.spec.mission?.tasks[0]?.number, task.number, "the first context already includes the claim");
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Focus on login/);
+	const left = f.service.leave(session.id);
+	assert.equal(left.missionId, undefined);
+	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+});
+
+test("task starts reject invalid model/thinking before spawning, and record explicit and default choices", async (t) => {
+	const f = await fixture(t);
+	// Install the process-wide wrapper before mocking its factory, so it cannot capture a catalog-only fake.
+	await installCredentialBrokerHooks();
+	const models = [
+		["claude-opus-5-5", 4, 20, true],
+		["small", 0.1, 0.4, false],
+		["frontier", 10, 50, true],
+		["outside", 0, 0, true],
+	].map(([id, input, output, reasoning]) => ({
+		id,
+		name: id,
+		provider: "test",
+		api: "openai-completions",
+		baseUrl: "http://unused",
+		input: ["text"],
+		reasoning,
+		contextWindow: 32000,
+		maxTokens: 4096,
+		cost: { input, output, cacheRead: 0, cacheWrite: 0 },
+	}));
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => models,
+				getModel: (_provider: string, id: string) => models.find((model) => model.id === id),
+			}) as unknown as ModelRuntime,
+	);
+	await mkdir(join(f.project.path, ".pi"));
+	await writeFile(
+		join(f.project.path, ".pi", "settings.json"),
+		JSON.stringify({
+			defaultProvider: "test",
+			defaultModel: "small",
+			defaultThinkingLevel: "low",
+			enabledModels: ["test/claude-opus-5-5", "test/small", "test/frontier"],
+		}),
+	);
+	const catalog = new ModelCatalog(f.home);
+	const select = t.mock.method(f.sessions, "selectTaskModel", catalog.selectTaskModel.bind(catalog));
+	const coordinator = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Explicit" }, { title: "Default" }],
+	});
+	for (const [args, error] of [
+		[{ model: "test/outside" }, /not available.*Allowed models:/],
+		[{ model: "test/frontier" }, /price cap.*Allowed models:/],
+		[{ model: "test/small", thinking: "high" }, /not supported.*Allowed models:/],
+		[{ model: 42 }, /model must be a non-empty/],
+	] as const) {
+		await assert.rejects(f.service.call(coordinator.id, "start", { id: "1", ...args }), error);
+		assert.equal(f.sessions.list().length, 1);
+		assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+		assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+	}
+	const explicit = (await f.service.call(coordinator.id, "start", {
+		id: "1",
+		model: "test/claude-opus-5-5",
+		thinking: "high",
+	})) as SessionSummary;
+	assert.deepEqual(select.mock.calls.at(-1)?.arguments, [f.project.path, "test/claude-opus-5-5", "high"]);
+	const worker = await until(() => f.workers.get(explicit.id));
+	assert.equal(worker.spec.model, "test/claude-opus-5-5");
+	assert.equal(worker.spec.thinking, "high");
+	// The HTTP start path shares the same validated default selection.
+	const defaultSession = await f.service.startTask(mission.id, "2");
+	const defaultWorker = await until(() => f.workers.get(defaultSession.id));
+	assert.equal(defaultWorker.spec.model, "test/small");
+	assert.equal(defaultWorker.spec.thinking, "off");
+	const startEvent = f.store.events(mission.id).find((event) => event.text.startsWith("Started #2"))!;
+	assert.equal(startEvent.kind, "task");
+	assert.equal(startEvent.taskId, f.store.resolveTask(mission.id, "2").id);
+	assert.deepEqual(f.store.userNotes(mission.id, 15), [], "automatic start activity is not an authored user note");
+	assert.deepEqual(
+		f.store
+			.events(mission.id)
+			.filter((event) => event.text.startsWith("Started #"))
+			.map((event) => event.text)
+			.sort(),
+		["Started #1 on test/claude-opus-5-5, thinking high", "Started #2 on test/small, thinking off"],
+	);
+});
+
+test("preferred task models are validated, kept from the coordinator and used by starts unless overridden", async (t) => {
+	const f = await fixture(t);
+	const select = t.mock.method(
+		f.sessions,
+		"selectTaskModel",
+		async (_cwd: string, model?: string, thinking?: string) => {
+			if (model === "test/outside")
+				throw new Error("Model test/outside is not available in the project's scope. Allowed models: test/model");
+			return { model: model?.trim() ?? "test/default", thinking: thinking ?? "medium" };
+		},
+	);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "User pick" }, { title: "Lead pick" }, { title: "Override" }, { title: "Stale" }],
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	// App writes pass the same scope and price-cap validation as starts, and save the canonical ID.
+	await assert.rejects(f.service.updateTask(mission.id, "1", { preferredModel: "test/outside" }), /not available/);
+	assert.equal(f.store.resolveTask(mission.id, "1").preferredModel, undefined);
+	await f.service.updateTask(mission.id, "1", { preferredModel: " test/user ", preferredThinking: "high" });
+	assert.deepEqual(select.mock.calls.at(-1)?.arguments, [f.project.path, " test/user ", "high"]);
+	assert.equal(f.store.resolveTask(mission.id, "1").preferredModel, "test/user");
+	// Only the coordinator sets preferences through the tool, and never over the user's.
+	await assert.rejects(
+		f.service.call(member.id, "task", { id: "2", model: "test/lead" }),
+		/Only the mission coordinator can use task model or thinking/,
+	);
+	await assert.rejects(
+		f.service.call(coordinator.id, "task", { id: "1", model: "test/lead" }),
+		/user-set preferred model \(test\/user\)/,
+	);
+	await f.service.call(coordinator.id, "task", { id: "2", model: "test/lead", thinking: "low" });
+	const lead = f.store.resolveTask(mission.id, "2");
+	assert.deepEqual(
+		[lead.preferredModel, lead.preferredThinking, lead.preferredModelSetBy],
+		["test/lead", "low", "coordinator"],
+	);
+	const shown = (await f.service.call(coordinator.id, "get", { id: "2" })) as Record<string, unknown>;
+	assert.deepEqual([shown.preferredModel, shown.preferredThinking], ["test/lead", "low"]);
+	// The coordinator's start cannot override a user-set preference, but omitting the choice uses it.
+	for (const args of [{ model: "test/other" }, { thinking: "low" }])
+		await assert.rejects(f.service.call(coordinator.id, "start", { id: "1", ...args }), /Omit model and thinking/);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	const user = (await f.service.call(coordinator.id, "start", { id: "1" })) as SessionSummary;
+	let worker = await until(() => f.workers.get(user.id));
+	assert.deepEqual([worker.spec.model, worker.spec.thinking], ["test/user", "high"]);
+	// A coordinator-set preference can be overridden by the coordinator.
+	const leadStart = (await f.service.call(coordinator.id, "start", {
+		id: "2",
+		model: "test/model",
+	})) as SessionSummary;
+	worker = await until(() => f.workers.get(leadStart.id));
+	assert.deepEqual([worker.spec.model, worker.spec.thinking], ["test/model", "medium"]);
+	// The app's explicit choice overrides a user-set preference.
+	await f.service.updateTask(mission.id, "3", { preferredModel: "test/user", preferredThinking: "high" });
+	const override = await f.service.startTask(mission.id, "3", { model: "test/model", thinking: "low" });
+	worker = await until(() => f.workers.get(override.id));
+	assert.deepEqual([worker.spec.model, worker.spec.thinking], ["test/model", "low"]);
+	// A preference that left the scope fails with the task named, before claiming or spawning.
+	f.store.updateTask(mission.id, "4", { preferredModel: "test/outside" });
+	const sessions = f.sessions.list().length;
+	await assert.rejects(f.service.startTask(mission.id, "4"), /Preferred model of task #4: Model test\/outside/);
+	assert.equal(f.sessions.list().length, sessions);
+	assert.equal(f.store.resolveTask(mission.id, "4").sessionId, undefined);
+});
+
+test("app task starts validate mode and base branch before saving references", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Task" }] });
+	const links = [{ url: "https://example.com/spec" }];
+	for (const [request, error] of [
+		[{ mode: "plan" }, /mode must be build or ask/],
+		[{ baseBranch: "main" }, /baseBranch requires a private-clone project/],
+		[{ mode: "ask", baseBranch: "HEAD" }, /baseBranch must be a valid exact origin branch name/],
+	] as const) {
+		await assert.rejects(f.service.startTask(mission.id, "1", { ...request, links } as never), error);
+		assert.equal(f.sessions.list().length, 0);
+		assert.deepEqual(f.store.detail(mission.id).resources, [], "a rejected start saves no references");
+	}
+	const ask = await f.service.startTask(mission.id, "1", { mode: "ask", message: "Only investigate", links });
+	assert.equal(ask.mode, "ask");
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, ask.id);
+	assert.deepEqual(
+		f.store.detail(mission.id).resources.map((item) => item.url),
+		["https://example.com/spec"],
+	);
+});
+
+test("coordinator actions check the current role on every call before causing side effects", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Auth" }],
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const actions = [
+		["delete", { id: "1" }],
+		["group", { ids: ["1"], milestone: "Next" }],
+		["task", { id: "1", order: 0 }],
+		["task", { title: "Not admitted", order: 0 }],
+		["start", { id: "1" }],
+		["send", { targetSessionId: coordinator.id, message: "Continue" }],
+		["status", {}],
+	] as const;
+	const before = f.workers.get(coordinator.id)!.requests.length;
+	const tasks = f.store.tasks(mission.id);
+	for (const [action, args] of actions) {
+		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
+		await assert.rejects(f.service.call(outsider.id, action, args), /not part of a mission/);
+	}
+	assert.equal(f.sessions.list().length, 3);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	assert.equal(f.workers.get(coordinator.id)!.requests.length, before);
+	assert.deepEqual(f.store.tasks(mission.id), tasks);
+	f.store.update(mission.id, { coordinatorSessionId: member.id });
+	for (const [action, args] of actions)
+		await assert.rejects(f.service.call(coordinator.id, action, args), /Only the mission coordinator/);
+	await f.service.call(member.id, "status", {});
+	f.store.update(mission.id, { coordinatorSessionId: null });
+	for (const [action, args] of actions)
+		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
+	assert.deepEqual(f.store.tasks(mission.id), tasks);
+});
+
+test("only the current lead gets allowlisted subscription readings in status and start", async (t) => {
+	// Match the readings as numbers, not digits inside activity timestamps such as "13:54:12.420Z".
+	const subscriptionLeak = /subscription|(?<!\d:|\d)(?:67\.3|12\.4)(?!\d)|private-account/;
+	const fetchedAt = Date.now();
+	const source: SubscriptionUsageSource = {
+		get: (provider) => ({
+			provider,
+			fetchedAt,
+			windows: [
+				{ label: "5-hour", usedPercent: 67.3, resetsAt: "2026-10-15T12:00:00Z" },
+				{ label: "Weekly", usedPercent: 12.4, resetsAt: "2026-10-20T12:00:00Z" },
+			],
+			account: "private-account",
+			cost: 100,
+		}),
+		start: async () => {},
+		close() {},
+	};
+	const f = await fixture(t, undefined, source);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const status = (await f.service.call(lead.id, "status", {})) as { subscriptionUsage: unknown };
+	const reading = { status: "current", fetchedAt, windows: source.get("anthropic")!.windows };
+	assert.deepEqual(status.subscriptionUsage, {
+		anthropic: reading,
+		openai: reading,
+	});
+	assert.doesNotMatch(JSON.stringify(status), /private-account|cost|account/);
+	const started = (await f.service.call(lead.id, "start", { id: "1" })) as {
+		id: string;
+		subscriptionUsage: unknown;
+		usage?: unknown;
+	};
+	assert.deepEqual(started.subscriptionUsage, status.subscriptionUsage);
+	assert.equal(started.usage, undefined);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, started.id);
+	for (const id of [worker.id, started.id]) {
+		await assert.rejects(f.service.call(id, "status", {}), /Only the mission coordinator/);
+		await assert.rejects(f.service.call(id, "start", { id: "1" }), /Only the mission coordinator/);
+		for (const action of [
+			"get",
+			"tasks",
+			"decisions",
+			"links",
+			"artifacts",
+			"comments",
+			"activity",
+			"brief",
+		] as const) {
+			assert.doesNotMatch(JSON.stringify(await f.service.call(id, action, {})), subscriptionLeak);
+		}
+		assert.doesNotMatch(JSON.stringify(await f.service.call(id, "task", { id: "1" })), subscriptionLeak);
+	}
+	// The raw start summary used to forward subscription errors and all session usage.
+	t.mock.method(f.service, "startTask", async () => ({
+		...worker,
+		usage: { subscription: { fetchedAt, windows: [], error: "private-account" } },
+	}));
+	const filtered = await f.service.call(lead.id, "start", { id: "1" });
+	assert.doesNotMatch(JSON.stringify(filtered), /private-account|"usage"/);
+	f.store.update(mission.id, { coordinatorSessionId: worker.id });
+	await assert.rejects(f.service.call(lead.id, "status", {}), /Only the mission coordinator/);
+	assert.deepEqual(
+		((await f.service.call(worker.id, "status", {})) as { subscriptionUsage: unknown }).subscriptionUsage,
+		status.subscriptionUsage,
+	);
+	// Recheck authority after asynchronous spawn, not just before it.
+	t.mock.method(f.service, "startTask", async () => {
+		f.store.update(mission.id, { coordinatorSessionId: lead.id });
+		return worker;
+	});
+	await assert.rejects(f.service.call(worker.id, "start", { id: "1" }), /Only the mission coordinator/);
+});
+
+test("status returns stale or unknown cache data while a provider refresh is stalled", async (t) => {
+	const fetchedAt = Date.now() - SUBSCRIPTION_USAGE_MAX_AGE_MS;
+	let release!: () => void;
+	const stalled = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(release);
+	let starts = 0;
+	const source: SubscriptionUsageSource = {
+		get: (provider) =>
+			provider === "anthropic"
+				? { fetchedAt, windows: [{ label: "5h", usedPercent: 70 }] }
+				: { fetchedAt, windows: [], error: "private provider failure" },
+		start: async () => {
+			if (++starts > 1) await stalled;
+		},
+		close() {},
+	};
+	const f = await fixture(t, undefined, source);
+	const lead = await f.spawn();
+	await f.service.create({ projectId: f.project.id, title: "Shared", fromSessionId: lead.id, draft: false });
+	const refreshing = source.start();
+	const workerCount = f.workers.size;
+	const before = performance.now();
+	const result = await Promise.race([
+		f.service.call(lead.id, "status", {}),
+		delay(250).then(() => {
+			throw new Error("status blocked on a provider");
+		}),
+	]);
+	assert.ok(performance.now() - before < 250);
+	assert.deepEqual((result as { subscriptionUsage: unknown }).subscriptionUsage, {
+		anthropic: { status: "stale", fetchedAt, windows: [{ label: "5h", usedPercent: 70, resetsAt: null }] },
+		openai: { status: "unknown", windows: [] },
+	});
+	assert.equal(starts, 2, "status never requests another refresh");
+	assert.equal(f.workers.size, workerCount);
+	release();
+	await refreshing;
+});
+
+test("task deletion, ordering and grouping validate inputs and preserve unrelated state", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "A", body: "Keep" }, { title: "B" }, { title: "C" }],
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const [a, b, c] = f.store.tasks(mission.id);
+	f.store.updateTask(mission.id, a!.id, { milestone: "Old" });
+	f.store.updateTask(mission.id, b!.id, { dependsOn: [a!.id] });
+	f.store.claimTask(mission.id, "1", member.id);
+	const link = f.store.addResource(mission.id, { taskId: a!.id, url: "https://example.com/work" });
+	await f.service.call(coordinator.id, "task", { id: "#3", status: "dropped" });
+	assert.equal(f.store.task(mission.id, c!.id).status, "dropped");
+
+	for (const order of ["0", null, Number.NaN, Number.POSITIVE_INFINITY])
+		await assert.rejects(f.service.call(coordinator.id, "task", { id: "1", order }), /order must be a number/);
+	await f.service.call(coordinator.id, "task", { id: b!.id, order: a!.order - 0.5 });
+	assert.deepEqual(
+		f.store.tasks(mission.id).map((task) => task.number),
+		[2, 1, 3],
+	);
+	assert.deepEqual(f.store.task(mission.id, b!.id).dependsOn, [a!.id]);
+	await f.service.call(coordinator.id, "task", { id: "#2", order: a!.order });
+	assert.deepEqual(
+		f.store.tasks(mission.id).map((task) => task.number),
+		[1, 2, 3],
+		"ties use task number",
+	);
+	const created = await f.service.call(coordinator.id, "task", { title: "First", order: -1 });
+	assert.equal((created as { order: number }).order, -1);
+	assert.equal(f.store.tasks(mission.id)[0]!.title, "First");
+	assert.ok(
+		f.store
+			.detail(mission.id)
+			.events.some((event) => event.text.includes("reordered") && event.sessionId === coordinator.id),
+	);
+
+	const before = f.store.tasks(mission.id);
+	const invalid = [
+		{},
+		{ ids: "1-2", milestone: "New" },
+		{ ids: [], milestone: "New" },
+		{ id: "1", ids: ["2"], milestone: "New" },
+		{ ids: ["1"] },
+		{ ids: ["1"], milestone: null },
+		{ ids: ["1"], milestone: "x".repeat(201) },
+		{ ids: ["1-1001"], milestone: "New" },
+		{ ids: ["1", "unknown"], milestone: "New" },
+	];
+	for (const args of invalid) {
+		await assert.rejects(f.service.call(coordinator.id, "group", args));
+		assert.deepEqual(f.store.tasks(mission.id), before, "invalid grouping never partly writes");
+	}
+	const grouped = await f.service.call(coordinator.id, "group", { ids: ["#1-2", a!.id, 3], milestone: " Next " });
+	assert.deepEqual(
+		grouped,
+		{
+			tasks: [a, b, c].map((task) => ({ id: task!.id, number: task!.number, milestone: "Next" })),
+		},
+		"duplicates are deduplicated and batch results do not repeat task bodies",
+	);
+	assert.deepEqual(
+		f.store
+			.tasks(mission.id)
+			.filter((task) => task.milestone === "Next")
+			.map((task) => task.number),
+		[1, 2, 3],
+	);
+	assert.equal(f.store.task(mission.id, a!.id).body, "Keep");
+	assert.equal(f.store.task(mission.id, a!.id).sessionId, member.id);
+	assert.equal(f.store.task(mission.id, c!.id).status, "dropped");
+	await f.service.call(coordinator.id, "group", { ids: ["1-2"], milestone: "" });
+	assert.equal(f.store.task(mission.id, a!.id).milestone, undefined);
+	assert.equal(f.store.task(mission.id, b!.id).milestone, undefined);
+	assert.equal(f.store.task(mission.id, c!.id).milestone, "Next");
+
+	for (const args of [{}, { id: "" }, { id: 1 }, { id: "unknown" }])
+		await assert.rejects(f.service.call(coordinator.id, "delete", args));
+	const deleted = await f.service.call(coordinator.id, "delete", { id: "#1" });
+	assert.deepEqual(deleted, { id: a!.id, number: 1, deleted: true });
+	assert.throws(() => f.store.task(mission.id, a!.id), /Unknown task/);
+	assert.equal(f.store.task(mission.id, b!.id).dependsOn, undefined);
+	assert.equal(f.store.detail(mission.id).resources.find((resource) => resource.id === link.id)?.taskId, undefined);
+	assert.deepEqual(f.service.context(member.id)?.tasks, []);
+	assert.ok(
+		f.store
+			.detail(mission.id)
+			.events.some((event) => event.text.includes("removed") && event.sessionId === coordinator.id),
+	);
+	const other = f.store.create({ projectId: f.project.id, title: "Other", tasks: [{ title: "Outside" }] });
+	const foreign = f.store.tasks(other.id)[0]!;
+	await assert.rejects(f.service.call(coordinator.id, "delete", { id: foreign.id }), /Unknown task/);
+	await assert.rejects(
+		f.service.call(coordinator.id, "group", { ids: [b!.id, foreign.id], milestone: "Wrong" }),
+		/Unknown task/,
+	);
+	assert.equal(f.store.task(mission.id, b!.id).milestone, undefined);
+	await f.service.call(coordinator.id, "delete", { id: c!.id });
+	assert.throws(() => f.store.task(mission.id, c!.id), /Unknown task/);
+});
+
+test("coordinator start reuses Start chat with task IDs or numbers and validates admission", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Auth", body: "Add login" }, { title: "Docs" }],
+	});
+	const startTask = t.mock.method(f.service, "startTask");
+	for (const args of [{}, { id: 1 }, { id: " " }])
+		await assert.rejects(f.service.call(coordinator.id, "start", args), /requires the task id or number/);
+	await assert.rejects(f.service.call(coordinator.id, "start", { id: "unknown" }), /Unknown task/);
+	await assert.rejects(f.service.call(coordinator.id, "start", { id: "1", message: 42 }), /message must be a string/);
+	const first = (await f.service.call(coordinator.id, "start", {
+		id: "#1",
+		message: "Focus on login",
+		model: "test/model",
+		thinking: "high",
+	})) as SessionSummary;
+	assert.deepEqual(startTask.mock.calls.at(-1)?.arguments, [
+		mission.id,
+		"#1",
+		{ message: "Focus on login", model: "test/model", thinking: "high" },
+		"coordinator",
+		coordinator.id,
+	]);
+	assert.ok(f.store.events(mission.id).some((event) => event.text === "Started #1 on test/model, thinking high"));
+	assert.equal(first.missionId, mission.id);
+	assert.equal(first.projectId, f.project.id);
+	assert.equal(first.title, "Auth");
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, first.id);
+	assert.equal(f.store.resolveTask(mission.id, "1").status, "in_progress");
+	const worker = await until(() => f.workers.get(first.id));
+	assert.equal(worker.spec.model, "test/model");
+	assert.equal(worker.spec.thinking, "high");
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Add login[\s\S]*Focus on login/);
+	assert.equal(f.service.context(first.id)?.tasks[0]?.number, 1);
+	await assert.rejects(f.service.call(coordinator.id, "start", { id: "1" }), /already claimed/);
+	const taskId = f.store.resolveTask(mission.id, "2").id;
+	for (const status of ["done", "archived"] as const) {
+		f.store.update(mission.id, { status });
+		await assert.rejects(f.service.call(coordinator.id, "start", { id: taskId }), /Reopen the mission/);
+	}
+	assert.equal(f.sessions.list().length, 2);
+	f.store.update(mission.id, { status: "active" });
+	await f.sessions.restore(coordinator.id);
+	const second = (await f.service.call(coordinator.id, "start", { id: taskId })) as SessionSummary;
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, second.id);
+});
+
+test("worker event wakes idle coordinator, fresh status reconciliation releases one authorized durable start", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Continue",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "First" }, { title: "Second" }, { title: "Next authorized slice" }, { title: "Unrequested" }],
+	});
+	const first = await f.service.startTask(mission.id, "1");
+	const second = await f.service.startTask(mission.id, "2");
+	await until(() => f.workers.get(first.id) && f.workers.get(second.id));
+	await until(
+		() =>
+			!f.sessions["starting"].has(first.id) &&
+			!f.sessions["starting"].has(second.id) &&
+			f.sessions.canSendNotice(lead.id),
+	);
+	f.workers.get(second.id)!.onPacket({ type: "working", working: true });
+	f.service.notices.start();
+	f.service.continuations.start();
+	const queued = (await f.service.call(lead.id, "start", {
+		id: "3",
+		operationId: "next-slice",
+		model: "test/model",
+	})) as { targetId: string };
+	await f.service.continuations.flush();
+	assert.equal(f.sessions.get(queued.targetId), undefined);
+	assert.match(f.store.controls.continuation("next-slice")!.reason, /worker slot/);
+	await assert.rejects(f.service.call(lead.id, "start", { id: "4" }), /worker slot/);
+	f.workers
+		.get(first.id)!
+		.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	await f.service.notices.flush(Date.now() + 60_000);
+	const notice = f.workers
+		.get(lead.id)!
+		.requests.find((r) => r.type === "input" && r.requestId.startsWith("mission-notice:"));
+	assert.ok(notice, "another working member cannot suppress coordinator reconciliation");
+	assert.equal(f.store.resolveTask(mission.id, "1").status, "in_progress", "a partial delivery is not completion");
+	assert.equal(f.sessions.get(queued.targetId), undefined);
+	// Scripted fake coordinator reads current scope/owner, then reconciles canonical status separately.
+	const detail = (await f.service.call(lead.id, "get", { id: "1" })) as {
+		id: string;
+		assignee: { id: string };
+		definitionRevision: number;
+	};
+	assert.equal(detail.assignee.id, first.id);
+	assert.ok(detail.definitionRevision > 0);
+	f.store.addComment(
+		mission.id,
+		{ text: "Separate assistance remains unresolved", notification: "informational" },
+		{ sessionId: first.id },
+	);
+	const originalWorkerRequests = f.workers.get(first.id)!.requests.length;
+	await f.service.call(lead.id, "task", { id: detail.id, status: "done" });
+	await assert.rejects(f.service.call(lead.id, "archiveWorker", { targetSessionId: first.id }), /assistance/);
+	const admitted = await until(() => f.store.controls.continuation("next-slice")?.state === "started");
+	assert.equal(admitted, true);
+	const worker = await until(() => f.workers.get(queued.targetId));
+	const input = await until(() => worker.requests.find((r) => r.type === "input"));
+	assert.equal(input.requestId, "next-slice");
+	assert.equal(await f.sessions.lookupMissionStart(queued.targetId, "next-slice"), true);
+	assert.equal(f.store.resolveTask(mission.id, "3").sessionId, queued.targetId);
+	assert.equal(f.store.resolveTask(mission.id, "4").sessionId, undefined);
+	assert.equal(
+		f.workers.get(first.id)!.requests.length,
+		originalWorkerRequests,
+		"continuation needs neither worker ACK nor assistance dismissal",
+	);
+	const count = f.sessions.list().length;
+	await f.service.call(lead.id, "start", { id: "3", operationId: "next-slice", model: "test/model" });
+	await f.service.notices.flush(Date.now() + 120_000);
+	await f.service.continuations.flush();
+	assert.equal(f.sessions.list().length, count, "duplicate notification/ACK cannot create another worker");
+});
+
+test("queued start rechecks Stop after model preparation without a worker or replay", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Race",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "One" }],
+	});
+	const selection = f.sessions.selectTaskModel.bind(f.sessions);
+	t.mock.method(f.sessions, "selectTaskModel", async (...args: Parameters<typeof selection>) => {
+		const chosen = await selection(...args);
+		await f.sessions.stop(lead.id);
+		return chosen;
+	});
+	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "stop-race" })) as {
+		targetId: string;
+	};
+	f.service.continuations.start();
+	await f.service.continuations.flush();
+	assert.equal(f.store.controls.continuation("stop-race")!.state, "unknown");
+	assert.equal(f.workers.has(queued.targetId), false);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	await f.service.continuations.flush();
+	assert.equal(f.workers.has(queued.targetId), false);
+});
+
+test("a released user-stopped task cannot be revived by a fresh coordinator start identity", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Held",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Keep stopped" }],
+	});
+	const member = await f.service.startTask(mission.id, "1");
+	await until(() => f.workers.get(member.id) && !f.sessions["starting"].has(member.id));
+	await f.sessions.stop(member.id);
+	assert.ok(f.sessions.get(member.id)?.workHolds?.includes("User Stop hold"));
+	f.store.releaseTask(mission.id, "1");
+	await f.store.durable();
+	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "not-a-stop-override" })) as {
+		targetId: string;
+	};
+	f.service.continuations.start();
+	await f.service.continuations.flush();
+	assert.equal(f.store.controls.continuation("not-a-stop-override")!.state, "waiting");
+	assert.match(f.store.controls.continuation("not-a-stop-override")!.reason, /user holds/);
+	assert.equal(f.workers.has(queued.targetId), false);
+	await assert.rejects(f.service.call(lead.id, "start", { id: "1" }), /user holds|queued or uncertain/);
+});
+
+test("cold reopen never repairs or starts an interrupted pre-admission continuation", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Recovery",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "One" }],
+	});
+	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "cold-start" })) as {
+		targetId: string;
+	};
+	f.service.continuations.start();
+	await until(() => f.store.controls.continuation("cold-start")?.state === "started");
+	await until(() => f.workers.get(queued.targetId) && !f.sessions["starting"].has(queued.targetId));
+	await f.service.continuations.stop();
+	const meta = f.sessions["require"](queued.targetId);
+	meta.missionContinuationStart!.admitted = false;
+	meta.pending = [{ type: "input", requestId: "cold-start", content: "Do not replay", mode: "followUp" }];
+	await f.sessions["save"](meta, undefined, undefined, true);
+	assert.equal(await f.sessions.lookupMissionStart(queued.targetId, "cold-start"), false);
+	await f.sessions.shutdown();
+	const newStarts: string[] = [];
+	const reopened = new SessionManager(
+		join(f.home, "data"),
+		f.projects,
+		undefined,
+		{
+			...f.sessions["factories"],
+			worker: (spec, onPacket) => {
+				newStarts.push(spec.sessionId);
+				return new FakeWorker(spec, onPacket);
+			},
+		},
+		{
+			runner: async () => {
+				throw new Error("No GitHub in fixture");
+			},
+		},
+		offlineSessionOptions(),
+	);
+	t.mock.method(reopened as unknown as { refreshMainViews(): Promise<void> }, "refreshMainViews", async () => {});
+	const service = new MissionService(f.store, reopened, f.projects);
+	try {
+		await reopened.load();
+		assert.match(reopened["require"](queued.targetId).failure!, /uncertain; lookup only/);
+		assert.equal(newStarts.includes(queued.targetId), false);
+		assert.equal(
+			f.store.resolveTask(mission.id, "1").sessionId,
+			queued.targetId,
+			"recovery does not repair or reassign ownership",
+		);
+	} finally {
+		await service.continuations.stop();
+		await service.notices.stop();
+		await reopened.shutdown();
+	}
+});
+
+test("coordinator answers expose pending questions and use member-scoped attributed delivery", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Questions",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const pending = {
+		id: 42,
+		kind: "pilot.question",
+		data: { question: "Which database?", options: [{ label: "SQLite" }] },
+	};
+	t.mock.method(f.sessions, "pendingQuestion", async () => pending as never);
+	t.mock.method(f.sessions, "lastAssistantReply", async () => "Asking.");
+	const status = (await f.service.call(coordinator.id, "status", { targetSessionId: member.id })) as {
+		member: { pendingQuestion: unknown };
+	};
+	assert.deepEqual(status.member.pendingQuestion, { questionId: 42, ...pending.data });
+	for (const questionId of [undefined, 0, -1, "42", 1.5])
+		await assert.rejects(
+			f.service.call(coordinator.id, "answer", { targetSessionId: member.id, questionId, message: "SQLite" }),
+			/requires questionId/,
+		);
+	await assert.rejects(
+		f.service.call(member.id, "answer", { targetSessionId: member.id, questionId: 42, message: "SQLite" }),
+		/Only the mission coordinator/,
+	);
+	await assert.rejects(
+		f.service.call(coordinator.id, "answer", { targetSessionId: outsider.id, questionId: 42, message: "SQLite" }),
+		/not in this mission/,
+	);
+	await assert.rejects(
+		f.service.call(coordinator.id, "answer", { targetSessionId: coordinator.id, questionId: 42, message: "SQLite" }),
+		/own question/,
+	);
+	const result = await f.service.call(coordinator.id, "answer", {
+		targetSessionId: member.id,
+		questionId: 42,
+		message: "SQLite",
+	});
+	assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "delivered", mode: "followUp" });
+	const command = f.workers
+		.get(member.id)!
+		.requests.find((command) => command.type === "input" && command.content === "SQLite");
+	assert.ok(command?.type === "input");
+	assert.equal(command.answerQuestionId, 42);
+	assert.ok(command.requestId.startsWith(`mission:send:from:${coordinator.id}:${mission.id}:`));
+	// Recheck authority after persistence, not only at the service entry point.
+	const save = f.sessions["save"].bind(f.sessions);
+	let revoked = false;
+	t.mock.method(
+		f.sessions,
+		"save" as never,
+		(async (...args: Parameters<typeof save>) => {
+			await save(...args);
+			if (!revoked && args[0].id === member.id) {
+				revoked = true;
+				f.service.leave(member.id);
+			}
+		}) as never,
+	);
+	const rejected = (await f.service.call(coordinator.id, "answer", {
+		targetSessionId: member.id,
+		questionId: 42,
+		message: "Must not deliver",
+	})) as { delivery: string };
+	assert.equal(rejected.delivery, "rejected");
+	assert.ok(
+		!f.workers
+			.get(member.id)!
+			.requests.some((command) => command.type === "input" && command.content === "Must not deliver"),
+	);
+});
+
+test("coordinator send admits follow-ups only to member chats and propagates delivery errors", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const foreign = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	for (const targetSessionId of [outsider.id, foreign.id, "unknown"])
+		await assert.rejects(
+			f.service.call(coordinator.id, "send", { targetSessionId, message: "Continue" }),
+			/not in this mission/,
+		);
+	for (const targetSessionId of [undefined, 1, " "])
+		await assert.rejects(
+			f.service.call(coordinator.id, "send", { targetSessionId, message: "Continue" }),
+			/requires targetSessionId/,
+		);
+	for (const message of [undefined, 1, " "])
+		await assert.rejects(
+			f.service.call(coordinator.id, "send", { targetSessionId: member.id, message }),
+			/requires message/,
+		);
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Text", mode: "bad" }),
+		/mode must be/,
+	);
+	const worker = f.workers.get(member.id)!;
+	await until(() => worker.requests.find((command) => command.type === "input"));
+	for (const [state, mode] of [
+		["idle", "steer"],
+		["working", "steer"],
+		["working", "followUp"],
+	] as const) {
+		worker.state = state;
+		worker.onPacket({ type: "working", working: state === "working" });
+		const message = `Continue while ${state} ${mode}`;
+		const result = await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message, mode });
+		assert.deepEqual(result, {
+			sessionId: member.id,
+			sent: true,
+			delivery: state === "working" ? "queued" : "delivered",
+			mode,
+		});
+		const input = await until(() =>
+			worker.requests.find((command) => command.type === "input" && command.content === message),
+		);
+		assert.ok(input?.type === "input");
+		assert.equal(input.content, message);
+		assert.equal(input.mode, mode);
+		assert.ok(input.requestId.startsWith(`mission:send:from:${coordinator.id}:${mission.id}:`));
+	}
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false });
+	await until(() => !f.sessions["starting"].has(member.id));
+	await f.sessions.archive(member.id);
+	assert.deepEqual(await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }), {
+		sessionId: member.id,
+		sent: false,
+		delivery: "rejected",
+		mode: "followUp",
+		reason: "archived",
+		error: "Restore the archived session before sending a message",
+	});
+	f.service.leave(member.id);
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }),
+		/not in this mission/,
+	);
+	t.mock.method(f.sessions, "sendReported", async () => {
+		throw new Error("Delivery failed");
+	});
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: coordinator.id, message: "Continue" }),
+		/Delivery failed/,
+	);
+});
+
+for (const acknowledgement of ["queued", "missing"] as const) {
+	test(`coordinator send uses the kernel's ${acknowledgement} acknowledgement rather than an idle state guess`, async (t) => {
+		const f = await fixture(t);
+		const coordinator = await f.spawn();
+		const member = await f.spawn();
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: coordinator.id,
+			draft: false,
+		});
+		f.service.join(member.id, { missionId: mission.id });
+		const worker = f.workers.get(member.id)!;
+		assert.equal(worker.state, "idle");
+		t.mock.method(worker, "request", async (command: KernelCommand) => {
+			assert.equal(command.type, "input");
+			if (command.type !== "input") return;
+			assert.equal(command.reportDelivery, true);
+			if (acknowledgement === "queued")
+				worker.onPacket({ type: "accepted", requestId: command.requestId, delivery: "queued" });
+		});
+		const sent = f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" });
+		if (acknowledgement === "queued")
+			assert.deepEqual(await sent, { sessionId: member.id, sent: true, delivery: "queued", mode: "followUp" });
+		else await assert.rejects(sent, /acknowledgement is uncertain/);
+		assert.equal(f.sessions["deliveryReports"].size, 0);
+	});
+}
+
+for (const outcome of ["failed", "archived", "stopped", "parked"] as const) {
+	test(`coordinator send reports ${outcome} admission without claiming a dropped message was delivered`, async (t) => {
+		const f = await fixture(t);
+		const coordinator = await f.spawn();
+		const member = await f.spawn();
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: coordinator.id,
+			draft: false,
+		});
+		f.service.join(member.id, { missionId: mission.id });
+		const worker = f.workers.get(member.id)!;
+		const before = worker.requests.length;
+		if (outcome === "failed") {
+			worker.state = "failed";
+			worker.error = "Model unavailable";
+		}
+		if (outcome === "archived") await f.sessions.archive(member.id);
+		if (outcome === "parked") {
+			await f.sessions["unparked"](member.id);
+			f.sessions["workers"].delete(member.id);
+		}
+		let release!: () => void;
+		let saved!: () => void;
+		const saving = new Promise<void>((resolve) => {
+			saved = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.after(() => release());
+		if (outcome === "stopped") {
+			const save = f.sessions["save"].bind(f.sessions);
+			let gated = false;
+			t.mock.method(f.sessions, "save" as never, async (...args: Parameters<typeof save>) => {
+				if (
+					!gated &&
+					args[0].id === member.id &&
+					args[0].pending?.some(
+						(command) => command.type === "input" && command.requestId.startsWith("mission:send:"),
+					)
+				) {
+					gated = true;
+					saved();
+					await gate;
+				}
+				return save(...args);
+			});
+		}
+		const sent = f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" });
+		if (outcome === "stopped") {
+			await saving;
+			await f.sessions.stop(member.id);
+			release();
+		}
+		const result = await sent;
+		if (outcome === "stopped") {
+			assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "queued", mode: "followUp" });
+			assert.ok(
+				worker.requests.slice(before).some((command) => command.type === "input" && command.content === "Continue"),
+			);
+		} else if (outcome === "parked") {
+			assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "delivered", mode: "followUp" });
+			assert.notEqual(f.workers.get(member.id), worker);
+			assert.ok(
+				f.workers
+					.get(member.id)
+					?.requests.some((command) => command.type === "input" && command.content === "Continue"),
+			);
+		} else {
+			assert.deepEqual(result, {
+				sessionId: member.id,
+				sent: false,
+				delivery: "rejected",
+				mode: "followUp",
+				reason: outcome,
+				...(outcome === "failed" ? { error: "Model unavailable" } : {}),
+				...(outcome === "archived" ? { error: "Restore the archived session before sending a message" } : {}),
+			});
+			assert.ok(
+				!worker.requests
+					.slice(before)
+					.some((command) => command.type === "input" && command.content === "Continue"),
+			);
+		}
+		assert.equal(f.sessions["deliveryReports"].size, 0);
+		if (outcome === "archived") {
+			await f.sessions.restore(member.id);
+			assert.deepEqual(
+				await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Restored" }),
+				{ sessionId: member.id, sent: true, delivery: "delivered", mode: "followUp" },
+			);
+		}
+	});
+}
+
+test("status and get report idle chats with live jobs as waiting, not done", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	await f.sessions.rename(member.id, "Background tests");
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	await until(() => f.workers.get(member.id)!.requests.find((command) => command.type === "input"));
+	const worker = f.workers.get(member.id)!;
+	const jobs = [{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" }];
+	const outcomeAt = Date.now();
+	worker.state = "idle";
+	worker.onPacket({ type: "jobs.changed", jobs });
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt } });
+	const status = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	const reported = status.members.find((chat) => chat.id === member.id)!;
+	assert.equal(reported.state, "waiting on background job");
+	assert.equal(reported.outcome, undefined);
+	assert.deepEqual(reported.runningJobs, [{ id: "tests", name: "Tests", startedAt: 1 }]);
+	const get = (await f.service.call(lead.id, "get", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(get.members.find((chat) => chat.title === "Background tests")?.state, "waiting on background job");
+	worker.onPacket({ type: "jobs.changed", jobs: [] });
+	const pending = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(pending.members.find((chat) => chat.id === member.id)?.outcome, undefined);
+	assert.equal(f.sessions.get(member.id)?.working, true);
+	// Finishing the jobs alone is not a result. Only their fresh follow-up turn publishes one.
+	worker.state = "working";
+	worker.onPacket({ type: "working", working: true });
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: outcomeAt + 1 } });
+	const done = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(done.members.find((chat) => chat.id === member.id)?.outcome, "done");
+	assert.equal(f.sessions.get(member.id)?.working, false);
+});
+
+test("a coordinator's idle kernel accepts notices while its own jobs keep the chat working", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	await until(() => !f.sessions["starting"].has(lead.id));
+	f.service.notices.start();
+	const worker = f.workers.get(lead.id)!;
+	worker.state = "idle";
+	worker.onPacket({
+		type: "jobs.changed",
+		jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
+	});
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	assert.equal(f.sessions.get(lead.id)?.working, true);
+	assert.equal(f.sessions.canSendNotice(lead.id), true);
+	f.store.addComment(mission.id, { text: "Update while tests run" });
+	await f.service.notices.flush(Date.now() + 30_000);
+	const notices = worker.requests.filter(
+		(command) => command.type === "input" && command.requestId.startsWith("mission-notice:"),
+	);
+	assert.equal(notices.length, 1);
+	assert.deepEqual(f.store.noticeDeadlines(Date.now()), []);
+});
+
+test("coordinator status includes archived and parked members, outcomes and tasks without waking workers", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const working = await f.spawn();
+	const failed = await f.spawn();
+	const archived = await f.spawn();
+	const parked = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Auth" }, { title: "Docs" }],
+	});
+	for (const member of [working, failed, archived, parked]) {
+		f.service.join(member.id, { missionId: mission.id });
+		await until(() => f.workers.get(member.id)!.requests.find((command) => command.type === "input"));
+	}
+	f.service.join(working.id, { missionId: mission.id, taskId: "1" });
+	f.service.join(failed.id, { missionId: mission.id, taskId: "2" });
+	f.store.updateTask(mission.id, f.store.resolveTask(mission.id, "2").id, { status: "blocked" });
+	f.workers.get(working.id)!.state = "working";
+	f.workers.get(working.id)!.onPacket({ type: "working", working: true });
+	f.workers.get(failed.id)!.state = "failed";
+	f.workers.get(failed.id)!.error = "Model unavailable";
+	f.workers.get(failed.id)!.onPacket({
+		type: "working",
+		working: false,
+		completion: { outcome: "failed", outcomeAt: 42, outcomeReason: "Model unavailable" },
+	});
+	f.workers.get(archived.id)!.onPacket({
+		type: "working",
+		working: false,
+		completion: { outcome: "done", outcomeAt: 43 },
+	});
+	await f.sessions.archive(archived.id);
+	f.workers.get(parked.id)!.onPacket({
+		type: "working",
+		working: false,
+		completion: { outcome: "stopped", outcomeAt: 44 },
+	});
+	await f.sessions["unparked"](parked.id);
+	f.sessions["workers"].delete(parked.id);
+	const before = f.sessions["workers"].size;
+	const requests = [...f.workers.values()].map((worker) => worker.requests.length);
+	const events = f.store.events(mission.id);
+	const result = (await f.service.call(coordinator.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(result.members.length, 5);
+	assert.ok(!result.members.some((member) => member.id === outsider.id));
+	const members = new Map(result.members.map((member) => [member.id, member]));
+	assert.equal(members.get(coordinator.id)?.coordinator, true);
+	assert.equal(members.get(working.id)?.coordinator, false);
+	assert.equal(members.get(working.id)?.state, "working");
+	assert.deepEqual(members.get(working.id)?.tasks, [{ number: 1, title: "Auth", status: "in_progress" }]);
+	assert.equal(members.get(failed.id)?.state, "failed");
+	assert.equal(members.get(failed.id)?.outcome, "failed");
+	assert.equal(members.get(failed.id)?.outcomeAt, 42);
+	assert.equal(members.get(failed.id)?.outcomeReason, "Model unavailable");
+	assert.equal(members.get(failed.id)?.error, "Model unavailable");
+	assert.deepEqual(members.get(failed.id)?.tasks, [{ number: 2, title: "Docs", status: "blocked" }]);
+	assert.equal(members.get(archived.id)?.state, "idle");
+	assert.equal(members.get(archived.id)?.outcome, "done");
+	assert.equal(typeof members.get(archived.id)?.archivedAt, "number");
+	assert.equal(members.get(parked.id)?.state, "parked");
+	assert.equal(members.get(parked.id)?.outcome, "stopped");
+	assert.deepEqual(members.get(parked.id)?.tasks, []);
+	assert.equal(f.sessions["workers"].size, before);
+	assert.deepEqual(
+		[...f.workers.values()].map((worker) => worker.requests.length),
+		requests,
+	);
+	assert.deepEqual(f.store.events(mission.id), events);
+});
+
+test("a rejected task claim does not move a chat or release its previous work", async (t) => {
+	const f = await fixture(t);
+	const owner = await f.spawn();
+	const candidate = await f.spawn();
+	const previous = await f.service.create({
+		projectId: f.project.id,
+		title: "Previous",
+		fromSessionId: candidate.id,
+		draft: false,
+		tasks: [{ title: "Existing work" }],
+	});
+	f.service.join(candidate.id, { missionId: previous.mission.id, taskId: "1" });
+	const target = await f.service.create({
+		projectId: f.project.id,
+		title: "Target",
+		tasks: [{ title: "Claimed work" }],
+	});
+	f.service.join(owner.id, { missionId: target.mission.id, taskId: "1" });
+	const events = f.store.events(previous.mission.id);
+	assert.throws(() => f.service.join(candidate.id, { missionId: target.mission.id, taskId: "1" }), /already claimed/);
+	assert.equal(f.store.missionOf(candidate.id), previous.mission.id);
+	assert.equal(f.store.require(previous.mission.id).coordinatorSessionId, candidate.id);
+	assert.equal(f.store.tasks(previous.mission.id)[0]?.sessionId, candidate.id);
+	assert.deepEqual(f.store.events(previous.mission.id), events);
+	assert.deepEqual(f.store.members(target.mission.id), [owner.id]);
+	// Repeating an existing owner's join remains idempotent.
+	f.service.join(owner.id, { missionId: target.mission.id, taskId: "1" });
+});
+
+test("passive task model HTTP validates scope and ACK after durability without role work", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const m = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Keep", body: "Body" }] });
+	f.store.join(member.id, m.id);
+	const task = f.store.tasks(m.id)[0]!;
+	f.store.updateTask(m.id, task.id, { sessionId: member.id });
+	const changed = t.mock.method(f.sessions, "missionChanged");
+	const start = t.mock.method(f.sessions as unknown as { start(id: string): Promise<void> }, "start", async () => {
+		throw new Error("must not start");
+	});
+	const select = t.mock.method(
+		f.sessions,
+		"selectTaskModel",
+		async (cwd: string, model?: string, thinking?: string) => {
+			assert.equal(cwd, f.project.path);
+			if (model !== "test/allowed" || (thinking !== undefined && thinking !== "high"))
+				throw new Error("unsupported scope/thinking");
+			return { model, thinking: thinking ?? "high" };
+		},
+	);
+	const noticeSchedule = t.mock.method(f.service.notices as unknown as { schedule(): void }, "schedule", () => {});
+	const phases = t.mock.method(f.store as unknown as { reconcilePhases(id: string): void }, "reconcilePhases", () =>
+		assert.fail("no phase reconciliation"),
+	);
+	const linear = t.mock.method(f.store as unknown as { reconcileLinearSync(): void }, "reconcileLinearSync", () =>
+		assert.fail("no Linear reconciliation"),
+	);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+		hello: {
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "test",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const hello = await fetch(`${base}/hello`).then((r) => r.json());
+	assert.equal(hello.capabilities.passiveTaskModel, true);
+	const payload = {
+		operationId: randomUUID(),
+		home: { daemonId: hello.daemonId, lineageId: hello.lineageId },
+		projectId: f.project.id,
+		preferredModel: "test/allowed",
+		preferredThinking: null,
+	};
+	const post = (value: unknown, id = task.id) =>
+		fetch(`${base}/missions/${m.id}/tasks/${id}/model`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+	for (const bad of [
+		{ ...payload, preferredModel: "test/outside" },
+		{ ...payload, preferredThinking: "unsupported" },
+		{ ...payload, projectId: f.other.id },
+		{ ...payload, home: { ...payload.home, lineageId: "foreign" } },
+		{ ...payload, status: "done" },
+	]) {
+		const r = await post(bad);
+		assert.notEqual(r.status, 200);
+		await r.arrayBuffer();
+	}
+	const numeric = await post(payload, String(task.number));
+	assert.notEqual(numeric.status, 200);
+	await numeric.arrayBuffer();
+	assert.equal(f.store.task(m.id, task.id).preferredModel, undefined);
+	let release!: () => void;
+	const hold = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const durable = f.store.durable.bind(f.store);
+	const wait = t.mock.method(f.store, "durable", async () => {
+		await hold;
+		await durable();
+	});
+	let received = false;
+	const response = post(payload).then(async (r) => {
+		const body = await r.json();
+		received = true;
+		return { status: r.status, body };
+	});
+	await until(() => wait.mock.calls.length > 0);
+	assert.equal(received, false);
+	assert.equal(f.store.task(m.id, task.id).preferredModel, "test/allowed");
+	release();
+	const ack = await response;
+	assert.equal(ack.status, 200);
+	assert.deepEqual(
+		{
+			operationId: ack.body.operationId,
+			home: ack.body.home,
+			projectId: ack.body.projectId,
+			missionId: ack.body.missionId,
+		},
+		{ operationId: payload.operationId, home: payload.home, projectId: f.project.id, missionId: m.id },
+	);
+	assert.equal(ack.body.task.id, task.id);
+	assert.equal(ack.body.task.preferredThinking, undefined);
+	assert.equal(ack.body.task.preferredModelSetBy, "user");
+	assert.equal(changed.mock.calls.length, 0);
+	assert.equal(start.mock.calls.length, 0);
+	assert.ok(select.mock.calls.length > 0);
+	assert.equal(noticeSchedule.mock.calls.length, 0);
+	assert.equal(phases.mock.calls.length, 0);
+	assert.equal(linear.mock.calls.length, 0);
+	phases.mock.restore();
+	linear.mock.restore();
+	// Legacy updates keep their member callbacks and semantics.
+	f.store.updateTask(m.id, task.id, { body: "Legacy" });
+	assert.ok(changed.mock.calls.length > 0);
+});
+
+test("HTTP routes and WebSocket mission subscriptions", async (t) => {
+	const f = await fixture(t);
+	const terminals = new TerminalManager();
+	const catalog = new ModelCatalog(f.home);
+	const cappedModels = { models: [{ id: "test/small", provider: "test", name: "Small" }] };
+	const modelList = t.mock.method(catalog, "listTaskModels", async () => cappedModels);
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: catalog,
+		terminals,
+		missions: { service: f.service, store: f.store },
+	});
+	let ws: WebSocket | undefined;
+	// After hooks run in registration order: close the socket before the server waits for it.
+	t.after(async () => {
+		if (ws && ws.readyState !== ws.CLOSED) {
+			const closed = once(ws, "close");
+			ws.close();
+			await closed;
+		}
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const port = (server.address() as AddressInfo).port;
+	const api = (path: string, init?: RequestInit) =>
+		fetch(`http://127.0.0.1:${port}/api${path}`, {
+			...init,
+			headers: init?.body ? { "content-type": "application/json" } : {},
+		});
+	const choices = await api(`/models?projectId=${f.project.id}&purpose=task-start`);
+	assert.equal(choices.status, 200);
+	assert.deepEqual(await choices.json(), cappedModels);
+	assert.deepEqual(modelList.mock.calls[0]?.arguments, [f.project.path]);
+	const created = await api("/missions", {
+		method: "POST",
+		body: JSON.stringify({ projectId: f.project.id, title: "API v2", goal: "Redesign" }),
+	});
+	assert.equal(created.status, 201);
+	const detail = (await created.json()) as MissionDetail;
+	const id = detail.mission.id;
+
+	ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`);
+	const messages: ServerMessage[] = [];
+	ws.on("message", (raw) => messages.push(JSON.parse(String(raw)) as ServerMessage));
+	await once(ws, "open");
+	await until(() => messages.find((message) => message.type === "missions"));
+	assert.equal(detail.mission.needsYouCount, 0);
+	// Sidebar clients receive count updates without subscribing to full detail.
+	const summaryTask = f.store.addTask(id, { title: "Summary-only blocked task", status: "blocked" });
+	const summaryComment = f.store.addComment(id, { text: "Needs user" }, { sessionId: "agent" });
+	await until(() =>
+		messages.findLast(
+			(message) => message.type === "missions" && message.missions.some((m) => m.id === id && m.needsYouCount === 2),
+		),
+	);
+	assert.equal((await api(`/missions?projectId=${f.project.id}`).then((r) => r.json()))[0].needsYouCount, 2);
+	assert.equal((await api(`/missions/${id}`).then((r) => r.json())).mission.needsYouCount, 2);
+	assert.ok(!messages.some((message) => message.type === "mission"));
+	messages.length = 0;
+	f.store.resolveComment(id, summaryComment.id);
+	f.store.removeTask(id, summaryTask.id);
+	await until(() =>
+		messages.findLast(
+			(message) => message.type === "missions" && message.missions.some((m) => m.id === id && m.needsYouCount === 0),
+		),
+	);
+	assert.ok(!messages.some((message) => message.type === "mission"));
+	ws.send(JSON.stringify({ type: "mission.subscribe", missionId: id }));
+	await until(() => messages.find((message) => message.type === "mission"));
+
+	assert.equal((await api(`/missions?projectId=${f.project.id}`).then((r) => r.json()))[0].id, id);
+	const put = await api(`/missions/${id}/brief`, {
+		method: "PUT",
+		body: JSON.stringify({ markdown: "# Spec", expectedRevision: 0 }),
+	});
+	assert.equal(put.status, 200);
+	const stale = await api(`/missions/${id}/brief`, {
+		method: "PUT",
+		body: JSON.stringify({ markdown: "# Other", expectedRevision: 0 }),
+	});
+	assert.equal(stale.status, 409);
+	await stale.arrayBuffer();
+	const pushed = await until(() =>
+		messages.findLast((message) => message.type === "mission" && message.mission.brief?.revision === 1),
+	);
+	assert.ok(pushed);
+	assert.equal((await api(`/missions/${id}/brief?revision=1`).then((r) => r.json())).markdown, "# Spec");
+	const task = await api(`/missions/${id}/tasks`, { method: "POST", body: JSON.stringify({ title: "Auth" }) });
+	assert.equal(task.status, 201);
+	const taskId = ((await task.json()) as { id: string }).id;
+	const phaseCreate = await api(`/missions/${id}/phases`, {
+		method: "POST",
+		body: JSON.stringify({ name: "Build", goal: "Foundation", order: 1 }),
+	});
+	assert.equal(phaseCreate.status, 201);
+	const buildPhase = (await phaseCreate.json()) as { id: string };
+	const shipPhase = (await api(`/missions/${id}/phases`, {
+		method: "POST",
+		body: JSON.stringify({ name: "Ship", order: 2 }),
+	}).then((response) => response.json())) as { id: string };
+	const renamedPhase = await api(`/missions/${id}/phases/${buildPhase.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ name: "Foundation", order: 0 }),
+	});
+	assert.equal(renamedPhase.status, 200);
+	assert.equal((await renamedPhase.json()).name, "Foundation");
+	assert.deepEqual(
+		(await api(`/missions/${id}/phases`).then((response) => response.json())).map(
+			(phase: { id: string }) => phase.id,
+		),
+		[buildPhase.id, shipPhase.id],
+	);
+	const gateTask = (await api(`/missions/${id}/tasks`, {
+		method: "POST",
+		body: JSON.stringify({ title: "Earlier", phaseId: buildPhase.id }),
+	}).then((response) => response.json())) as { id: string };
+	assert.equal(
+		(
+			await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ phaseGating: true }) }).then(
+				(response) => response.json(),
+			)
+		).phaseGating,
+		true,
+	);
+	const assignedPhase = await api(`/missions/${id}/tasks/${taskId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ phaseId: shipPhase.id }),
+	}).then((response) => response.json());
+	assert.equal(assignedPhase.status, "blocked");
+	assert.equal(assignedPhase.storedStatus, "todo");
+	assert.equal(assignedPhase.milestone, "Ship");
+	const gatedStart = await api(`/missions/${id}/tasks/${taskId}/start`, { method: "POST", body: "{}" });
+	assert.equal(gatedStart.status, 409);
+	await gatedStart.arrayBuffer();
+	const deletedPhase = await api(`/missions/${id}/phases/${shipPhase.id}`, { method: "DELETE" });
+	assert.equal(deletedPhase.status, 200);
+	await deletedPhase.arrayBuffer();
+	const unphased = (await api(`/missions/${id}`).then((response) => response.json())).tasks.find(
+		(value: { id: string }) => value.id === taskId,
+	);
+	assert.equal(unphased.phaseId, undefined);
+	assert.equal(unphased.milestone, undefined);
+	await api(`/missions/${id}/tasks/${gateTask.id}`, { method: "DELETE" }).then((response) => response.arrayBuffer());
+	await api(`/missions/${id}/phases/${buildPhase.id}`, { method: "DELETE" }).then((response) =>
+		response.arrayBuffer(),
+	);
+	await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ phaseGating: false }) }).then((response) =>
+		response.arrayBuffer(),
+	);
+	const patched = await api(`/missions/${id}/tasks/${taskId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ status: "blocked" }),
+	});
+	assert.equal(((await patched.json()) as { status: string }).status, "blocked");
+	const resource = await api(`/missions/${id}/resources`, {
+		method: "POST",
+		body: JSON.stringify({ url: "https://github.com/o/r/pull/3", taskId }),
+	});
+	const resourceBody = (await resource.json()) as { kind: string; taskId: string; id: string };
+	assert.equal(resourceBody.kind, "github.pr");
+	assert.equal(resourceBody.taskId, taskId);
+	const linearUrl = "https://linear.app/acme/issue/ENG-12";
+	const linearReference = await api(`/missions/${id}/resources`, {
+		method: "POST",
+		body: JSON.stringify({ url: linearUrl }),
+	}).then((response) => response.json());
+	assert.equal(linearReference.linearRole, "reference");
+	const upgrade = await api(`/missions/${id}/resources/${linearReference.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ linearRole: "managed" }),
+	});
+	assert.equal(upgrade.status, 200);
+	assert.equal((await upgrade.json()).linearRole, "managed");
+	const contribution = await api(`/missions/${id}/resources`, {
+		method: "POST",
+		body: JSON.stringify({ url: linearUrl, taskId, linearRole: "contribution" }),
+	}).then((response) => response.json());
+	assert.equal(contribution.linearRole, "contribution");
+	assert.equal(contribution.linearKey, "acme/ENG-12");
+	const syncPath = `/missions/${id}/resources/${linearReference.id}/linear-sync`;
+	const pausedLinear = await api(syncPath, { method: "POST", body: JSON.stringify({ action: "pause" }) });
+	assert.equal(pausedLinear.status, 200);
+	assert.equal((await pausedLinear.json()).linearSync.state, "paused");
+	const resumedLinear = await api(syncPath, { method: "POST", body: JSON.stringify({ action: "resume" }) });
+	assert.equal(resumedLinear.status, 200);
+	assert.equal((await resumedLinear.json()).linearSync.state, "idle");
+	const invalidSync = await api(syncPath, { method: "POST", body: JSON.stringify({ action: "anything" }) });
+	assert.equal(invalidSync.status, 400);
+	await invalidSync.arrayBuffer();
+	const referenceSync = await api(`/missions/${id}/resources/${contribution.id}/linear-sync`, {
+		method: "POST",
+		body: JSON.stringify({ action: "resume" }),
+	});
+	assert.equal(referenceSync.status, 404);
+	await referenceSync.arrayBuffer();
+	const unsafeDetach = await api(`/missions/${id}/resources/${linearReference.id}`, { method: "DELETE" });
+	assert.equal(unsafeDetach.status, 409);
+	await unsafeDetach.arrayBuffer();
+	const invalidRole = await api(`/missions/${id}/resources/${contribution.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ linearRole: "invalid" }),
+	});
+	assert.equal(invalidRole.status, 400);
+	await invalidRole.arrayBuffer();
+	const pushedLinear = await until(() =>
+		messages.findLast(
+			(message) =>
+				message.type === "mission" &&
+				message.mission.resources.some((link) => link.id === contribution.id && link.linearRole === "contribution"),
+		),
+	);
+	assert.ok(pushedLinear);
+	await api(`/missions/${id}/resources/${contribution.id}`, { method: "DELETE" }).then((response) =>
+		response.arrayBuffer(),
+	);
+	await api(`/missions/${id}/resources/${linearReference.id}`, { method: "DELETE" }).then((response) =>
+		response.arrayBuffer(),
+	);
+	const unlinked = await api(`/missions/${id}/resources/${resourceBody.id}`, { method: "DELETE" });
+	assert.equal(unlinked.status, 200);
+	await unlinked.arrayBuffer();
+	const decision = await api(`/missions/${id}/decisions`, { method: "POST", body: JSON.stringify({ text: "D" }) });
+	assert.equal(decision.status, 201);
+	const decisionBody = (await decision.json()) as { id: string; audience: string };
+	assert.equal(decisionBody.audience, "reference");
+	const tagged = await api(`/missions/${id}/decisions/${decisionBody.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ audience: "all" }),
+	});
+	assert.equal(tagged.status, 200);
+	assert.equal(((await tagged.json()) as { audience: string; text: string }).audience, "all");
+	const update = await api(`/missions/${id}/events`, {
+		method: "POST",
+		body: JSON.stringify({ text: "Halfway", health: "at_risk" }),
+	});
+	assert.equal(update.status, 201);
+	await update.arrayBuffer();
+	const chat = await f.spawn();
+	const joined = await api(`/sessions/${chat.id}/mission`, {
+		method: "PUT",
+		body: JSON.stringify({ missionId: id, taskId }),
+	});
+	assert.equal(((await joined.json()) as SessionSummary).missionId, id);
+	assert.equal(f.store.task(id, taskId).sessionId, chat.id);
+	const sessionsInMission = (await api(`/sessions?missionId=${id}`).then((r) => r.json())) as SessionSummary[];
+	assert.deepEqual(
+		sessionsInMission.map((session) => session.id),
+		[chat.id],
+	);
+	const spawned = await api("/sessions", {
+		method: "POST",
+		body: JSON.stringify({ missionId: id, message: "Tackle the open tasks" }),
+	});
+	assert.equal(spawned.status, 201);
+	const dedicated = (await spawned.json()) as SessionSummary;
+	assert.equal(dedicated.projectId, f.project.id);
+	assert.equal(dedicated.missionId, id);
+	const dedicatedWorker = await until(() => f.workers.get(dedicated.id));
+	assert.equal(dedicatedWorker.spec.mission?.id, id);
+	assert.deepEqual(dedicatedWorker.spec.mission?.tasks, []);
+	const unknownSpawn = await api("/sessions", {
+		method: "POST",
+		body: JSON.stringify({ missionId: "nope", message: "hello" }),
+	});
+	assert.equal(unknownSpawn.status, 404);
+	await unknownSpawn.arrayBuffer();
+	const unassigned = f.store.addTask(id, { title: "Reopen before starting" });
+	const beforeSessions = f.sessions.list({ archived: "all" }).map((session) => session.id);
+	const beforeMembers = f.store.members(id);
+	const beforeFiles = (await readdir(join(f.home, "data", "sessions"))).sort();
+	const spawn = t.mock.method(f.sessions, "spawn");
+	for (const status of ["done", "archived"] as const) {
+		const inactive = await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+		assert.equal(inactive.status, 200);
+		await inactive.arrayBuffer();
+		const inactiveSpawn = await api("/sessions", {
+			method: "POST",
+			body: JSON.stringify({ missionId: id, message: "hello" }),
+		});
+		assert.equal(inactiveSpawn.status, 409);
+		await inactiveSpawn.arrayBuffer();
+		const spawnCalls = spawn.mock.callCount();
+		const inactiveStart = await api(`/missions/${id}/tasks/${unassigned.id}/start`, {
+			method: "POST",
+			body: "{}",
+		});
+		assert.equal(inactiveStart.status, 409);
+		assert.match(await inactiveStart.text(), /Reopen the mission/);
+		const inactiveCoordinator = await api(`/missions/${id}/coordinator/start`, { method: "POST", body: "{}" });
+		assert.equal(inactiveCoordinator.status, 409);
+		assert.match(await inactiveCoordinator.text(), /Reopen the mission/);
+		assert.equal(spawn.mock.callCount(), spawnCalls, "REST rejects before spawning");
+		assert.deepEqual(
+			f.sessions.list({ archived: "all" }).map((session) => session.id),
+			beforeSessions,
+		);
+		assert.deepEqual(f.store.members(id), beforeMembers);
+		assert.equal(f.store.task(id, unassigned.id).sessionId, undefined);
+		assert.deepEqual((await readdir(join(f.home, "data", "sessions"))).sort(), beforeFiles);
+	}
+	const reopened = await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+	assert.equal(reopened.status, 200);
+	await reopened.arrayBuffer();
+	const restarted = await api(`/missions/${id}/tasks/${unassigned.id}/start`, { method: "POST", body: "{}" });
+	assert.equal(restarted.status, 201);
+	const restartedChat = (await restarted.json()) as SessionSummary;
+	assert.equal(restartedChat.missionId, id);
+	assert.equal(f.store.task(id, unassigned.id).sessionId, restartedChat.id);
+	const startedCoordinator = await api(`/missions/${id}/coordinator/start`, {
+		method: "POST",
+		body: JSON.stringify({ message: "Review the current plan", thinking: "high" }),
+	});
+	assert.equal(startedCoordinator.status, 201);
+	const lead = (await startedCoordinator.json()) as SessionSummary;
+	assert.equal(lead.missionId, id);
+	assert.equal(f.store.require(id).coordinatorSessionId, lead.id);
+
+	const proposed = (await f.service.call(lead.id, "propose", {
+		decisionId: "D1",
+		text: "Accepted wording",
+		reason: "Clarify",
+	})) as { id: string };
+	const accepted = await api(`/missions/${id}/decision-proposals/${proposed.id}/accept`, {
+		method: "POST",
+		body: JSON.stringify({ text: "Edited wording" }),
+	});
+	assert.equal(accepted.status, 200);
+	assert.equal((await accepted.json()).status, "accepted");
+	assert.equal(f.store.detail(id).decisions[0]!.text, "Edited wording");
+	const removal = (await f.service.call(lead.id, "propose", { decisionId: "D1", remove: true, reason: "Old" })) as {
+		id: string;
+	};
+	const rejected = await api(`/missions/${id}/decision-proposals/${removal.id}/reject`, {
+		method: "POST",
+		body: "{}",
+	});
+	assert.equal(rejected.status, 200);
+	assert.equal((await rejected.json()).status, "rejected");
+	assert.equal(f.store.detail(id).decisions.length, 1);
+	const duplicateCoordinator = await api(`/missions/${id}/coordinator/start`, { method: "POST", body: "{}" });
+	assert.equal(duplicateCoordinator.status, 409);
+	await duplicateCoordinator.arrayBuffer();
+	const missing = await api("/missions/nope");
+	assert.equal(missing.status, 404);
+	await missing.arrayBuffer();
+	const removed = await api(`/missions/${id}`, { method: "DELETE" });
+	assert.equal(removed.status, 200);
+	await removed.arrayBuffer();
+	assert.equal(f.sessions.get(chat.id)?.missionId, undefined);
+});
+test("release accepts claim selectors, enforces ownership and reads claimant titles and IDs", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	f.store.claimTask(mission.id, "2", lead.id);
+	f.store.claimTask(mission.id, "3", member.id);
+	for (const action of ["get", "tasks"] as const) {
+		const read = (await f.service.call(member.id, action, {})) as {
+			tasks: Array<{ owner: string }>;
+		};
+		assert.equal(read.tasks[0]!.owner, "you");
+	}
+	await assert.rejects(f.service.call(member.id, "release", { id: "2" }), /coordinator/i);
+	await assert.rejects(f.service.call(outsider.id, "release", { ids: ["1-3"] }), /not part of a mission/);
+	for (const args of [{}, { id: "1", ids: ["2"] }, { ids: "1" }, { ids: ["3-1"] }, { ids: ["1-1001"] }]) {
+		await assert.rejects(f.service.call(lead.id, "release", args));
+	}
+	const batch = (await f.service.call(lead.id, "release", { id: "1-2, #1,99" })) as {
+		released: Array<{ number: number }>;
+		skipped: unknown[];
+	};
+	assert.deepEqual(
+		batch.released.map((task) => task.number),
+		[1, 2],
+	);
+	assert.equal(batch.skipped.length, 1);
+	const single = (await f.service.call(lead.id, "release", { id: "2" })) as { status: string; sessionId?: string };
+	assert.equal(single.status, "todo");
+	assert.equal(single.sessionId, undefined);
+	const remaining = (await f.service.call(lead.id, "release", { ids: ["3"] })) as typeof batch;
+	assert.deepEqual(
+		remaining.released.map((task) => task.number),
+		[3],
+	);
+});
+
+test("status flags idle claimed work without a viable PR, excluding inactive and busy chats", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	const base = { ...f.sessions.get(member.id)!, state: "idle" as const, branch: "feat/example" };
+	const coordinator = { ...f.sessions.get(lead.id)!, state: "idle" as const, outcome: "done" as const };
+	f.store.addTask(mission.id, { title: "Lead work", sessionId: lead.id, status: "in_progress" });
+	let summary: SessionSummary = base;
+	t.mock.method(f.sessions, "list", () => [coordinator, summary]);
+	t.mock.method(f.sessions, "history", () => {
+		throw new Error("Full status must not read history");
+	});
+	const status = async () => {
+		const result = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+		assert.equal(result.members[0]!.finishedWithoutPR, false);
+		return result.members[1]!;
+	};
+	assert.equal((await status()).finishedWithoutPR, true);
+	assert.equal((await status()).branch, "feat/example");
+	for (const state of ["open", "draft", "merged", "closed"] as const) {
+		const pr = {
+			number: 7,
+			url: "https://github.com/octo/repo/pull/7",
+			title: "Verbose PR title",
+			state,
+			checkedAt: 1,
+		};
+		summary = { ...base, pullRequests: [pr] };
+		const row = await status();
+		assert.equal(row.finishedWithoutPR, state === "closed");
+		assert.deepEqual(row.pullRequests, [{ number: 7, state, draft: state === "draft" }]);
+		// Older summaries only have the primary PR.
+		summary = { ...base, pullRequest: pr };
+		assert.equal((await status()).finishedWithoutPR, state === "closed");
+	}
+	for (const overrides of [
+		{ state: "parked" as const, outcome: "done" as const },
+		{ state: "working" as const },
+		{ state: "starting" as const },
+		{ state: "failed" as const },
+		{ archivedAt: 42 },
+		{
+			runningJobs: [
+				{ id: "j1", name: "Test", startedAt: 1, state: "running" as const, outputPath: "/tmp/test.log" },
+			],
+		},
+	]) {
+		summary = { ...base, ...overrides };
+		assert.equal((await status()).finishedWithoutPR, false);
+	}
+	const task = f.store.resolveTask(mission.id, "1");
+	f.store.updateTask(mission.id, task.id, { status: "done" });
+	summary = base;
+	assert.equal((await status()).finishedWithoutPR, false);
+	summary = { ...base, outcome: "done" };
+	assert.equal((await status()).finishedWithoutPR, true);
+	f.store.updateTask(mission.id, task.id, { status: "dropped" });
+	assert.equal((await status()).finishedWithoutPR, false);
+	f.store.releaseTask(mission.id, task.id, { sessionId: lead.id });
+	assert.equal((await status()).finishedWithoutPR, false);
+});
+
+test("targeted status reads only one member and a truncated last assistant reply without waking workers", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	f.workers
+		.get(member.id)!
+		.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: 42 } });
+	const requests = [...f.workers.values()].map((worker) => worker.requests.length);
+	const events = f.store.events(mission.id);
+	t.mock.method(f.sessions, "list", () => {
+		throw new Error("Targeted status must not list all chats");
+	});
+	const reply = "A".repeat(1800);
+	let reads = 0;
+	t.mock.method(f.sessions, "history", async (id: string, before: number, limit: number) => {
+		assert.equal(id, member.id);
+		assert.equal(limit, 64);
+		reads++;
+		if (before === Number.MAX_SAFE_INTEGER)
+			return { entries: [{ id: 10, kind: "pi.tool-result", model: [] }], more: true };
+		assert.equal(before, 10);
+		return {
+			entries: [
+				{
+					id: 7,
+					kind: "pi.assistant",
+					model: [{ role: "assistant", content: [{ type: "text", text: "Old reply" }] }],
+				},
+				{
+					id: 8,
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [
+								{ type: "thinking", thinking: "Do not expose" },
+								{ type: "text", text: reply },
+							],
+						},
+					],
+				},
+				{ id: 9, kind: "pi.user", model: [{ role: "user", content: "Latest user input" }] },
+			],
+			more: false,
+		};
+	});
+	const result = (await f.service.call(lead.id, "status", { targetSessionId: member.id })) as {
+		subscriptionUsage: unknown;
+		member: Record<string, unknown>;
+	};
+	assert.deepEqual(Object.keys(result), ["subscriptionUsage", "member"]);
+	assert.deepEqual(result.subscriptionUsage, f.sessions.subscriptionUsageSnapshot());
+	assert.equal(result.member.id, member.id);
+	assert.equal(result.member.state, "idle");
+	assert.equal(result.member.outcome, "done");
+	assert.equal(result.member.outcomeAt, 42);
+	assert.equal(result.member.lastAssistantReply, reply.slice(0, 1500));
+	assert.equal(result.member.finishedWithoutPR, true);
+	assert.deepEqual(result.member.tasks, [{ number: 1, title: "Implement", status: "in_progress" }]);
+	assert.equal(reads, 2);
+	for (const targetSessionId of [outsider.id, "unknown"])
+		await assert.rejects(f.service.call(lead.id, "status", { targetSessionId }), /not in this mission/);
+	for (const targetSessionId of ["", " ", 1, null])
+		await assert.rejects(f.service.call(lead.id, "status", { targetSessionId }), /non-empty targetSessionId/);
+	await assert.rejects(f.service.call(member.id, "status", { targetSessionId: member.id }), /coordinator/);
+	assert.equal(reads, 2);
+	t.mock.method(f.sessions, "history", async () => ({ entries: [], more: false }));
+	assert.equal(await f.sessions.lastAssistantReply(member.id, 1500), undefined);
+	assert.deepEqual(
+		[...f.workers.values()].map((worker) => worker.requests.length),
+		requests,
+	);
+	assert.deepEqual(f.store.events(mission.id), events);
+});
+
+test("held and discarded message events wake the lead once, survive outbox replay, and never re-send the message", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const worker = f.workers.get(member.id)!;
+	const initial = worker.requests.length;
+	const held = {
+		id: "1:1",
+		requestId: `mission:send:${mission.id}:example`,
+		state: "held",
+		preview: "Fix the edge case",
+	} as const;
+	const discarded = { ...held, id: "1:2", state: "discarded" } as const;
+	for (const event of [held, held, discarded, discarded]) worker.onPacket({ type: "systemMessageState", event });
+	const updates = f.store.detail(mission.id).events.filter((event) => event.text.includes(":example"));
+	assert.equal(updates.length, 2);
+	assert.ok(updates.some((event) => event.text.includes("held because the user stopped the chat")));
+	assert.ok(updates.some((event) => event.text.includes("discarded by the user")));
+	assert.equal(worker.sent.filter((command) => command.type === "systemMessageState.ack").length, 4);
+	const now = Date.now() + 60_000;
+	f.store.setNoticeActivity(mission.id, false, now - 60_000);
+	const notice = f.store.prepareNotice(mission.id, coordinator.id, now);
+	assert.match(notice!.content, /held because the user stopped the chat/);
+	assert.match(notice!.content, /discarded by the user/);
+	assert.equal(worker.requests.length, initial, "lifecycle events must not auto-requeue input");
+	await f.sessions.heldMessages(member.id, "send");
+	await f.sessions.heldMessages(member.id, "discard");
+	await f.sessions.heldMessages(member.id, "discard", 42);
+	assert.deepEqual(
+		worker.requests.slice(initial).map((command) => command.type),
+		["sendHeldMessages", "discardHeldMessages", "discardHeldMessages"],
+	);
+});
+
+test("proposals expose only coordinator results and never alter member prompt wording until accepted", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	f.store.addDecision(mission.id, "Binding", {}, "all");
+	await assert.rejects(
+		f.service.call(worker.id, "propose", { decisionId: "D1", text: "Change", reason: "Why" }),
+		/Only the mission coordinator/,
+	);
+	const proposal = (await f.service.call(lead.id, "propose", {
+		decisionId: "D1",
+		text: "Replacement",
+		reason: "Superseded",
+	})) as { id: string };
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D1: Binding"]);
+	let result = (await f.service.call(lead.id, "get", {})) as {
+		decisionProposals: { id: string; status: string }[];
+		decisions: string[];
+	};
+	assert.equal(result.decisionProposals[0]!.status, "pending");
+	assert.deepEqual(result.decisions, ["D1"]);
+	assert.equal("decisionProposals" in ((await f.service.call(worker.id, "get", {})) as object), false);
+	f.store.resolveProposal(mission.id, proposal.id, true);
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D1: Replacement"]);
+	result = (await f.service.call(lead.id, "get", {})) as typeof result;
+	assert.equal(result.decisionProposals[0]!.status, "accepted");
+});
+
+test("passive completion HTTP ACK waits for durability and preserves working members", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const m = f.store.create({ projectId: f.project.id, title: "Keep", tasks: [{ title: "Done" }] });
+	f.store.join(member.id, m.id);
+	f.store.updateTask(m.id, "1", { status: "done", sessionId: member.id });
+	const worker = f.workers.get(member.id)!;
+	worker.state = "working";
+	worker.onPacket({ type: "working", working: true });
+	const before = f.sessions.get(member.id)!;
+	const requestsBefore = worker.requests.length;
+	const tasks = f.store.tasks(m.id);
+	const start = t.mock.method(f.sessions as unknown as { start(id: string): Promise<void> }, "start", async () =>
+		assert.fail("no starts"),
+	);
+	const archive = t.mock.method(f.sessions, "archive", async () => assert.fail("no archive"));
+	const phases = t.mock.method(f.store as unknown as { reconcilePhases(id: string): void }, "reconcilePhases", () =>
+		assert.fail("no phase reconciliation"),
+	);
+	const linear = t.mock.method(f.store as unknown as { reconcileLinearSync(): void }, "reconcileLinearSync", () =>
+		assert.fail("no Linear reconciliation"),
+	);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer({
+		config: { home: f.home, host: "127.0.0.1", port: 0 },
+		sessions: f.sessions,
+		projects: f.projects,
+		models: new ModelCatalog(f.home),
+		terminals,
+		missions: { service: f.service, store: f.store },
+		hello: {
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "test",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+	});
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const hello = await fetch(`${base}/hello`).then((r) => r.json());
+	assert.equal(hello.capabilities.passiveMissionCompletion, true);
+
+	const payload = {
+		operationId: randomUUID(),
+		home: { daemonId: hello.daemonId, lineageId: hello.lineageId },
+		projectId: f.project.id,
+		expectedStatus: "active",
+		action: "complete",
+	};
+	const post = (value: unknown) =>
+		fetch(`${base}/missions/${m.id}/lifecycle`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+	let release!: () => void;
+	const hold = new Promise<void>((r) => {
+		release = r;
+	});
+	const durable = f.store.durable.bind(f.store);
+	const wait = t.mock.method(f.store, "durable", async () => {
+		await hold;
+		await durable();
+	});
+	let received = false;
+	const response = post(payload).then(async (r) => {
+		const body = await r.json();
+		received = true;
+		return { status: r.status, body };
+	});
+	await until(() => wait.mock.calls.length > 0);
+	assert.equal(received, false);
+	assert.equal(f.store.require(m.id).status, "done");
+	release();
+	const ack = await response;
+	assert.equal(ack.status, 200);
+	assert.equal(ack.body.operationId, payload.operationId);
+	assert.equal(ack.body.mission.id, m.id);
+	assert.equal(ack.body.mission.passiveLifecycle, true);
+	assert.deepEqual(f.store.tasks(m.id), tasks);
+	assert.equal(f.sessions.get(member.id)!.working, before.working);
+	assert.equal(f.sessions.get(member.id)!.archivedAt, before.archivedAt);
+	assert.equal(start.mock.calls.length, 0);
+	assert.equal(archive.mock.calls.length, 0);
+	assert.equal(worker.stopped, false);
+	assert.equal(worker.requests.length, requestsBefore, "no input, abort or other worker request");
+	assert.equal(phases.mock.calls.length, 0);
+	assert.equal(linear.mock.calls.length, 0);
+});
+
+async function nonCodePolicyFixture(t: TestContext) {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn(),
+		peer = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Inert policy",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	f.store.join(peer.id, mission.id);
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			expectedDefinitionRevision: 0,
+			intent: "Report",
+			scope: "Bounded",
+			criteria: ["Explain"],
+			classification: {
+				version: 1,
+				effort: "small",
+				difficulty: "routine",
+				risk: "low",
+				uncertainty: "known",
+				scope: "bounded",
+				role: "explorer",
+				deliveryKind: "research",
+			},
+		},
+	});
+	const artifacts = testArtifacts(f, worker.id);
+	const artifact = await artifacts.create({ kind: "nsh", title: "Report", source: "<p>PRIVATE RETAINED SOURCE</p>" });
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const profileWrite = {
+		version: 1,
+		operationId: "profile",
+		profileId: "design",
+		expectedRevision: 0,
+		definition: {
+			version: 1,
+			purpose: "Design",
+			rubric: "PRIVATE RUBRIC",
+			applicableIntents: ["research"],
+			modelSelection: { unavailable: "No runner" },
+			reasoningEffort: null,
+			timeLimitMs: null,
+			outputInterpretation: { kind: "pass-fail", pass: "Pass", fail: "Fail" },
+		},
+	};
+	await f.service.saveReviewProfile(lead.id, profileWrite);
+	const request: NonCodePolicyWrite = {
+		version: 1,
+		operationId: "policy",
+		expectedPolicyId: null,
+		kind: "non-code",
+		assignment: task.assignment!,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		destinations: [{ kind: "artifact", artifactId: artifact.id, revision: 1 }],
+		checks: [{ checkId: "diagram-validation", configVersion: "v1" }],
+		reviews: [
+			{
+				kind: "independent-agent",
+				profileId: "design",
+				profileRevision: 1,
+				scrutiny: "targeted",
+				provenance: "host-proven-producer-and-independence",
+			},
+		],
+		authorityClaim: null,
+	};
+	return { ...f, lead, worker, peer, mission, task, artifact, artifacts, request, profileWrite };
+}
+
+test("non-code policy historical recovery never reopens revoked pins, owner or profiles", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	const save = (request = f.request, actor = f.lead.id) =>
+		f.service.saveNonCodeAcceptancePolicy(actor, f.task.id, request);
+	await assert.rejects(save(f.request, f.worker.id), /coordinator/);
+	const saved = await save();
+	assert.equal((await f.service.evaluateNonCodeAcceptance(f.lead.id, f.task.id)).policyApplicability, "current");
+	f.store.unlinkArtifact(f.mission.id, f.artifact.id, {}, f.task.id);
+	f.store.leave(f.worker.id);
+	await f.service.saveReviewProfile(f.lead.id, { ...f.profileWrite, operationId: "profile-new", expectedRevision: 1 });
+	const reads = t.mock.method(f.sessions, "artifact", async () => {
+		throw new Error("Revoked content must never reopen");
+	});
+	assert.deepEqual(await save(), saved);
+	assert.deepEqual(await f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), saved);
+	assert.equal(reads.mock.calls.length, 0);
+	await assert.rejects(save({ ...f.request, operationId: "new", expectedPolicyId: saved.id }), /stale|owner|closed/);
+	reads.mock.restore();
+	f.sessions["require"](f.lead.id).projectId = f.other.id;
+	await assert.rejects(save(), /project/);
+	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
+});
+
+test("non-code policy service checks current actor and actual owner/custodian projects", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	const foreign = await f.spawn(f.other.id);
+	f.store.join(foreign.id, f.mission.id);
+	f.store.update(f.mission.id, { coordinatorSessionId: foreign.id });
+	await assert.rejects(f.service.saveNonCodeAcceptancePolicy(foreign.id, f.task.id, f.request), /project/);
+	f.store.update(f.mission.id, { coordinatorSessionId: f.lead.id });
+	const owner = f.sessions["require"](f.worker.id),
+		original = owner.projectId;
+	owner.projectId = f.other.id;
+	await assert.rejects(
+		f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, {
+			...f.request,
+			expectedContextFence: f.store.allocationContextFence(f.mission.id),
+		}),
+		/project/,
+	);
+	owner.projectId = original;
+	const request = { ...f.request, expectedContextFence: f.store.allocationContextFence(f.mission.id) };
+	const saved = await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, request);
+	f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
+	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, request), /coordinator/);
+	await assert.rejects(f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, request), /coordinator/);
+	assert.equal(f.store.latestNonCodeAcceptancePolicy(f.mission.id, f.task.id)?.id, saved.id);
+});
+
+test("all reported non-code receipts, Pass, judgement and selected allocation still cannot enable acceptance", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	const receipt = await f.service.saveNonCodeDelivery(f.worker.id, f.task.id, {
+		kind: "non-code",
+		references: f.request.destinations,
+		checks: "Reported green",
+		limitations: "Not observed",
+	});
+	const policy = await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request);
+	const submission = await f.service.submitDeliveryEvidence(f.worker.id, f.task.id, {
+		version: 1,
+		operationId: "submission",
+		expectedSubmissionId: null,
+		definitionRevision: f.request.definitionRevision,
+		assignment: f.request.assignment,
+		kind: "research",
+		claim: "Done",
+		limitations: "No actual execution",
+		evidence: f.request.destinations,
+		coverage: [[0]],
+	});
+	const judgement = await f.service.judgeDeliveryEvidence(f.lead.id, f.task.id, {
+		version: 1,
+		operationId: "judge",
+		expectedJudgementId: null,
+		submissionId: submission.id,
+		decision: "approve",
+		reason: "Reported judgement only",
+	});
+	const allocation = await f.service.recordContributionAllocation(f.lead.id, f.task.id, {
+		version: 1,
+		operationId: "allocation",
+		action: "allocate",
+		expectedAllocationId: null,
+		reason: "Selected later scope",
+		assignment: f.request.assignment,
+		ownerSessionId: f.worker.id,
+		definitionRevision: f.request.definitionRevision,
+		expectedContextFence: f.store.allocationContextFence(f.mission.id),
+		submissionId: submission.id,
+		sources: submission.observations,
+	});
+	const review = await f.service.recordReviewResult(f.lead.id, f.task.id, {
+		version: 1,
+		operationId: "review",
+		profileId: "design",
+		profileRevision: 1,
+		expectedResultId: null,
+		assignment: f.request.assignment,
+		definitionRevision: f.request.definitionRevision,
+		expectedContextFence: f.store.reviewContextFence(f.mission.id),
+		intent: "research",
+		content: f.request.destinations,
+		context: [],
+		preferences: { unavailable: "None" },
+		output: { state: "completed", outcome: "pass", reason: "Reported pass" },
+		findings: [],
+		resolutions: [],
+		limitations: "No executor provenance",
+		confidence: "high",
+	});
+	const e = await f.service.evaluateNonCodeAcceptance(f.lead.id, f.task.id);
+	assert.equal(e.eligible, false);
+	assert.equal(e.force, "off");
+	assert.equal(e.policyApplicability, "current");
+	assert.equal(e.inputs.policyId, policy.id);
+	assert.equal(e.inputs.submissionId, submission.id);
+	assert.equal(e.inputs.judgementId, judgement.id);
+	assert.equal(e.inputs.allocationId, allocation.id);
+	assert.equal(e.inputs.reviews[0]!.resultId, review.id);
+	assert.ok(e.requirements.some((r) => r.code === "review-producer-and-independence-unavailable"));
+	assert.ok(e.requirements.some((r) => r.code === "destination-observer"));
+	assert.ok(!JSON.stringify(e).includes("PRIVATE"));
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "todo");
+	assert.equal(f.store.completion(f.mission.id, f.task.id), undefined);
+	assert.equal(f.store.retiredMember(f.worker.id), false);
+	assert.deepEqual(f.store.nonCodeDelivery(f.mission.id, f.task.id), receipt);
+	assert.equal(f.store.reviewHistory(f.mission.id, f.task.id).length, 1);
+	assert.equal(f.store.contributionAllocationHistory(f.mission.id, f.task.id).length, 1);
+});
+
+for (const race of ["owner-aba", "pin", "custodian-membership", "custodian-project"] as const) {
+	test(`non-code policy service refuses ${race} while real retained reads are pending`, async (t) => {
+		const f = await nonCodePolicyFixture(t),
+			read = f.sessions.artifact.bind(f.sessions);
+		t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+			const artifact = await read(...args);
+			if (race === "owner-aba") {
+				f.store.releaseTask(f.mission.id, f.task.id);
+				f.store.claimTask(f.mission.id, f.task.id, f.worker.id, { sessionId: f.lead.id });
+			}
+			if (race === "pin") f.store.unlinkArtifact(f.mission.id, f.artifact.id, {}, f.task.id);
+			if (race === "custodian-membership") f.store.leave(f.worker.id);
+			if (race === "custodian-project") f.sessions["require"](f.worker.id).projectId = f.other.id;
+			return artifact;
+		});
+		await assert.rejects(f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request));
+		assert.deepEqual(f.store.nonCodeAcceptancePolicyHistory(f.mission.id, f.task.id), []);
+	});
+}
+
+test("non-code explain fences owner project change across actual retained I/O, naming before and after", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request);
+	const read = f.sessions.artifact.bind(f.sessions);
+	t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+		const artifact = await read(...args);
+		f.sessions["require"](f.worker.id).projectId = f.other.id;
+		return artifact;
+	});
+	const e = await f.service.evaluateNonCodeAcceptance(f.lead.id, f.task.id);
+	assert.equal(e.policyApplicability, "outdated");
+	assert.equal(e.eligible, false);
+	assert.ok(e.changedInputs);
+	assert.notDeepEqual(e.changedInputs.actorMetadata.before, e.changedInputs.actorMetadata.after);
+});
+
+test("non-code exact recovery checks current actor project again after durability", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request);
+	const durable = f.store.durable.bind(f.store);
+	t.mock.method(f.store, "durable", async () => {
+		await durable();
+		f.sessions["require"](f.lead.id).projectId = f.other.id;
+	});
+	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
+});
+async function retainedBriefFixture(t: TestContext, persisted = "Plan\r\né😀", disk?: true) {
+	const f = await fixture(t, undefined, undefined, undefined, undefined, { disk });
+	const lead = await f.spawn(),
+		worker = await f.spawn(),
+		peer = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Brief capture",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	f.store.join(peer.id, mission.id);
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			expectedDefinitionRevision: 0,
+			intent: "Report",
+			scope: "One brief",
+			criteria: ["Exact plan"],
+			classification: {
+				version: 1,
+				effort: "small",
+				difficulty: "routine",
+				risk: "low",
+				uncertainty: "known",
+				scope: "bounded",
+				role: "explorer",
+				deliveryKind: "research",
+			},
+		},
+	});
+	f.store.writeBrief(mission.id, "seed", 0);
+	// Seed exact persisted history, including bytes ordinary write trimming can discard.
+	// biome-ignore lint/complexity/useLiteralKeys: Raw SQLite fixture, not a production mutation API.
+	f.store["database"]
+		.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=1")
+		.run(persisted, mission.id);
+	await f.service.saveReviewProfile(lead.id, {
+		version: 1,
+		operationId: "profile",
+		profileId: "plan",
+		expectedRevision: 0,
+		definition: {
+			version: 1,
+			purpose: "Exact plan",
+			rubric: "Accuracy",
+			applicableIntents: ["research"],
+			modelSelection: { provider: "fixture", model: "never-called" },
+			reasoningEffort: null,
+			timeLimitMs: 1000,
+			outputInterpretation: { kind: "pass-fail", pass: "Pass", fail: "Fail" },
+		},
+	});
+	const reference = { kind: "brief" as const, revision: 1 };
+	const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+		version: 1,
+		operationId: "submission",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "research",
+		claim: "Plan",
+		limitations: "Not reviewed",
+		evidence: [reference],
+		coverage: [[0]],
+	});
+	await f.service.recordContributionAllocation(lead.id, task.id, {
+		version: 1,
+		operationId: "allocation",
+		expectedAllocationId: null,
+		action: "allocate",
+		reason: "One brief",
+		submissionId: submission.id,
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		sources: submission.observations,
+	});
+	await f.service.saveNonCodeAcceptancePolicy(lead.id, task.id, {
+		version: 1,
+		operationId: "policy",
+		expectedPolicyId: null,
+		kind: "non-code",
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		destinations: [reference],
+		checks: [{ checkId: "plan-check", configVersion: "v1" }],
+		reviews: [
+			{
+				kind: "independent-agent",
+				profileId: "plan",
+				profileRevision: 1,
+				scrutiny: "targeted",
+				provenance: "host-proven-producer-and-independence",
+			},
+		],
+		authorityClaim: null,
+	});
+	const root = await realpath(f.home);
+	let evidence = new CriticalReviewStore(join(root, "evidence.sqlite"));
+	const config: RetainedBriefConfiguration = {
+		vault: new CriticalReviewVault(join(root, "vault"), evidence),
+		knownSecrets: [],
+		profileId: "plan",
+		hostId: "host",
+		daemonLineageId: "lineage",
+		runId: "run",
+		contextPackageSha256: "a".repeat(64),
+		runtime: {
+			buildSha256: "b".repeat(64),
+			configSha256: "c".repeat(64),
+			provider: "fixture",
+			model: "never-called",
+			promptVersion: "v1",
+			toolSchemaVersion: "v1",
+			outputSchemaVersion: 1,
+		},
+	};
+	t.after(() => evidence.close());
+	const capture = (signal?: AbortSignal) => f.service.captureRetainedBrief(lead.id, task.id, 1, config, signal);
+	const captured = async () => {
+		const result = await capture();
+		assert.equal(result.state, "captured");
+		if (result.state !== "captured") throw new Error("Expected captured brief");
+		return result.input;
+	};
+	return {
+		...f,
+		lead,
+		worker,
+		peer,
+		mission,
+		task,
+		config,
+		capture,
+		captured,
+		evidence: () => evidence,
+		restartVault: async () => {
+			await evidence.close();
+			evidence = new CriticalReviewStore(join(root, "evidence.sqlite"));
+			config.vault = new CriticalReviewVault(join(root, "vault"), evidence);
+			await config.vault.recover();
+		},
+	};
+}
+
+for (const source of ["\uFEFFPlan\r\né😀\r\n", "", "\uFEFF", "é😀\r\nPlan"]) {
+	test(`retained brief capture/reopen preserves persisted bytes ${JSON.stringify(source)}`, async (t) => {
+		const f = await retainedBriefFixture(t, source);
+		const input = await f.captured();
+		const descriptor = JSON.parse(JSON.stringify(input.descriptor));
+		const original = Buffer.from(source);
+		assert.equal(descriptor.content[0].originalSha256, createHash("sha256").update(original).digest("hex"));
+		assert.equal(descriptor.content[0].originalBytes, original.length);
+		assert.notEqual(descriptor.content[0].referenceSha256, descriptor.content[0].originalSha256);
+		await f.restartVault();
+		const reopened = await f.service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+		assert.equal(reopened.inputSha256, input.inputSha256);
+		const exact = await f.config.vault.readExact({
+			manifestId: descriptor.manifest.id,
+			manifestSha256: descriptor.manifest.sha256,
+			blobs: [
+				{
+					blobId: descriptor.content[0].blobId,
+					sha256: descriptor.content[0].originalSha256,
+					length: original.length,
+				},
+			],
+		});
+		assert.deepEqual(Buffer.from(exact.blobs[0]!.bytes), original);
+		assert.equal(f.store.task(f.mission.id, f.task.id).status, "todo");
+		assert.deepEqual(f.store.reviewHistory(f.mission.id, f.task.id), []);
+		assert.equal(f.store.completion(f.mission.id, f.task.id), undefined);
+		assert.equal(f.store.retiredMember(f.worker.id), false);
+	});
+}
+
+test("exact brief reader bounds persisted BLOBs, requires revisions, and leaves trimming unchanged", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "brief-exact-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	let store = new MissionStore(path);
+	const { id } = store.create({ title: "Exact", projectId: "p", brief: "\uFEFF  initial\r\n" });
+	assert.equal(store.brief(id, 1)!.markdown, "initial");
+	store.writeBrief(id, " \uFEFFé😀\r\n ", 1);
+	assert.equal(store.brief(id, 2)!.markdown, "é😀");
+	await store.durable();
+	store.close();
+	const db = new DatabaseSync(path);
+	const raw = "\uFEFF\r\né😀\r\n";
+	db.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=1").run(raw, id);
+	db.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=2").run("😀".repeat(300_000), id);
+	db.close();
+	store = new MissionStore(path);
+	t.after(() => store.close());
+	assert.deepEqual(Buffer.from(store.briefExact(id, 1, 1024).bytes), Buffer.from(raw));
+	assert.throws(() => store.briefExact(id, 1, Buffer.byteLength(raw) - 1), /quota/);
+	assert.throws(() => store.briefExact(id, 2, 1024 * 1024), /quota/);
+	for (const revision of [0, -1, NaN, 1.1, 3]) assert.throws(() => store.briefExact(id, revision, 1024));
+	assert.throws(() => store.briefExact(id, 1, 1024 * 1024 + 1), /bound/);
+});
+
+for (const change of [
+	"brief",
+	"missing",
+	"raw-edit",
+	"coordinator-aba",
+	"member-aba",
+	"artifact-relink",
+	"assignment",
+	"project",
+	"allocation",
+	"config",
+	"profile",
+] as const) {
+	test(`retained brief reopen refuses ${change}, never falls back`, async (t) => {
+		const f = await retainedBriefFixture(t);
+		const input = await f.captured();
+		if (change === "brief") f.store.writeBrief(f.mission.id, "New plan", 1);
+		if (change === "missing" || change === "raw-edit") {
+			// biome-ignore lint/complexity/useLiteralKeys: Corrupt/missing immutable source negative control.
+			const db = f.store["database"];
+			if (change === "missing")
+				db.prepare("DELETE FROM brief_revisions WHERE mission_id=? AND revision=1").run(f.mission.id);
+			else
+				db.prepare("UPDATE brief_revisions SET markdown='different' WHERE mission_id=? AND revision=1").run(
+					f.mission.id,
+				);
+		}
+		if (change === "coordinator-aba") {
+			f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
+			f.store.update(f.mission.id, { coordinatorSessionId: f.lead.id });
+		}
+		if (change === "member-aba") {
+			f.store.leave(f.worker.id);
+			f.store.join(f.worker.id, f.mission.id);
+		}
+		if (change === "artifact-relink") {
+			const link = {
+				sessionId: f.worker.id,
+				artifactId: "unrelated-artifact",
+				revision: 1,
+				title: "Context",
+				kind: "nsh" as const,
+			};
+			f.store.linkArtifact(f.mission.id, link);
+			f.store.unlinkArtifact(f.mission.id, link.artifactId);
+			f.store.linkArtifact(f.mission.id, link);
+		}
+		if (change === "assignment")
+			f.store.updateTask(f.mission.id, f.task.id, {
+				assignment: {
+					version: 1,
+					expectedRevision: 1,
+					expectedDefinitionRevision: f.store.sharedDefinitionRevision(f.task.id),
+					intent: "Changed",
+					scope: "One brief",
+					criteria: ["Exact plan"],
+				},
+			});
+		if (change === "project") {
+			// biome-ignore lint/complexity/useLiteralKeys: Host metadata movement negative control.
+			f.sessions["require"](f.worker.id).projectId = f.other.id;
+		}
+		if (change === "allocation") {
+			const prior = f.store.latestContributionAllocation(f.mission.id, f.task.id)!;
+			await f.service.recordContributionAllocation(f.lead.id, f.task.id, {
+				version: 1,
+				operationId: "withdraw",
+				expectedAllocationId: prior.id,
+				action: "withdraw",
+				reason: "Withdraw",
+			});
+		}
+		if (change === "config") f.config.runtime.configSha256 = "d".repeat(64);
+		if (change === "profile")
+			await f.service.saveReviewProfile(f.lead.id, {
+				...f.store.reviewProfile(f.mission.id, "plan")!.request,
+				operationId: "new-profile",
+				expectedRevision: 1,
+			});
+		await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config));
+	});
+}
+
+test("retained brief requires current coordinator/project, not a supplied descriptor or digest", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	await assert.rejects(f.service.captureRetainedBrief(f.worker.id, f.task.id, 1, f.config), /coordinator/);
+	await assert.rejects(f.service.reopenRetainedBrief(f.peer.id, f.task.id, input.descriptor, f.config), /coordinator/);
+	await assert.rejects(f.service.captureRetainedBrief(f.lead.id, f.task.id, 2, f.config), /revision/);
+	const forged = retainedReviewDescriptor(input.descriptor);
+	forged.content[0]!.originalSha256 = "0".repeat(64);
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, forged, f.config));
+	const unsupported = retainedReviewDescriptor(input.descriptor);
+	unsupported.content[0]!.reference = { kind: "artifact", artifactId: "plan", revision: 1 };
+	unsupported.content[0]!.part = "source";
+	unsupported.content[0]!.artifactKind = "nsh";
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, unsupported, f.config));
+	// biome-ignore lint/complexity/useLiteralKeys: Host metadata movement negative control.
+	f.sessions["require"](f.lead.id).projectId = f.other.id;
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config), /project/);
+});
+
+test("retained brief omissions are partial, never a prepared empty replacement", async (t) => {
+	for (const source of ["Plan contains fixture-private", "Plan\0binary"]) {
+		const f = await retainedBriefFixture(t, source);
+		f.config.knownSecrets = ["fixture-private"];
+		const result = await f.capture();
+		assert.equal(result.state, "partial");
+		if (result.state !== "partial") throw new Error("Expected partial");
+		assert.equal(result.manifest.complete, false);
+		assert.equal(result.manifest.entries.length, 0);
+		assert.equal(result.manifest.omissions.length, 1);
+	}
+});
+
+test("retained brief rechecks access and cancellation around queued vault I/O", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	await assert.rejects(f.capture(AbortSignal.abort()), { name: "AbortError" });
+	await assert.rejects(
+		f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config, AbortSignal.abort()),
+		{ name: "AbortError" },
+	);
+	const original = f.config.vault.readExact.bind(f.config.vault);
+	let entered!: () => void, release!: () => void;
+	const arrived = new Promise<void>((done) => {
+		entered = done;
+	});
+	const gate = new Promise<void>((done) => {
+		release = done;
+	});
+	t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+		const result = await original(...args);
+		entered();
+		await gate;
+		return result;
+	});
+	const reading = assert.rejects(
+		f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config),
+		/coordinator/,
+	);
+	await arrived;
+	f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
+	release();
+	await reading;
+});
+
+test("retained brief cancellation after seal returns no input; erase prevents reopen", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	const controller = new AbortController();
+	const original = f.config.vault.capture.bind(f.config.vault);
+	t.mock.method(f.config.vault, "capture", async (...args: Parameters<CriticalReviewVault["capture"]>) => {
+		const result = await original(...args);
+		controller.abort();
+		return result;
+	});
+	await assert.rejects(f.capture(controller.signal), { name: "AbortError" });
+	await f.config.vault.eraseSource(f.mission.id);
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config), /unavailable/);
+});
+
+for (const phase of ["capture", "readExact"] as const) {
+	test(`retained brief ${phase} suppresses input after in-flight context change`, async (t) => {
+		const f = await retainedBriefFixture(t);
+		const input = await f.captured();
+		const change = () => {
+			f.store.leave(f.worker.id);
+			f.store.join(f.worker.id, f.mission.id);
+		};
+		if (phase === "capture") {
+			const capture = f.config.vault.capture.bind(f.config.vault);
+			t.mock.method(f.config.vault, "capture", async (...args: Parameters<CriticalReviewVault["capture"]>) => {
+				const result = await capture(...args);
+				change();
+				return result;
+			});
+			await assert.rejects(f.capture(), /worker membership unavailable/);
+		} else {
+			const read = f.config.vault.readExact.bind(f.config.vault);
+			t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+				const result = await read(...args);
+				change();
+				return result;
+			});
+			await assert.rejects(
+				f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config),
+				/worker membership unavailable/,
+			);
+		}
+	});
+}
+
+test("retained brief reopen snapshots descriptors and suppresses an aborted in-flight result", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	const descriptor = retainedReviewDescriptor(input.descriptor);
+	const controller = new AbortController();
+	const read = f.config.vault.readExact.bind(f.config.vault);
+	t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+		const result = await read(...args);
+		descriptor.runtime.configSha256 = "f".repeat(64);
+		return result;
+	});
+	const result = await f.service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+	assert.equal(result.inputSha256, input.inputSha256);
+	t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+		const result = await read(...args);
+		controller.abort();
+		return result;
+	});
+	await assert.rejects(
+		f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config, controller.signal),
+		{ name: "AbortError" },
+	);
+});
+
+test("retained brief reopens serialized input against restarted source store/service and vault", async (t) => {
+	const f = await retainedBriefFixture(t, "\uFEFFPlan\r\né😀\r\n", true);
+	const input = await f.captured();
+	const descriptor = JSON.parse(JSON.stringify(input.descriptor));
+	const path = join(f.home, "data", "missions.sqlite");
+	await f.store.durable();
+	await f.restartVault();
+	const store = new MissionStore(path);
+	const service = new MissionService(store, f.sessions, f.projects);
+	try {
+		const reopened = await service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+		assert.equal(reopened.inputSha256, input.inputSha256);
+		assert.equal(reopened.runtimeSha256, input.runtimeSha256);
+		assert.equal(reopened.contextSha256, input.contextSha256);
+		assert.equal(reopened.profileSha256, input.profileSha256);
+	} finally {
+		await service.notices.stop();
+		await f.stop();
+		await store.durable();
+		store.close();
+	}
+});

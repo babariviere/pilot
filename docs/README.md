@@ -2,7 +2,7 @@
 
 Guides for Pilot Day on Apple Silicon macOS. Start with [private installation and setup](getting-started.md).
 Linux desktop is deferred. For a development build that does not replace an app, see the
-[connected candidate](technical/day-connected-candidate.md).
+[connected candidate](../apps/day/scripts/day-connected-candidate.md).
 
 In Day, each page is one panel, with tabs on its top edge where the page has parts. The top bar is a path:
 **Pilot** goes to Today, the part before the last goes back one level (as Escape does), and the last part
@@ -219,8 +219,6 @@ sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing t
 | Failures, diagnostics, and updates              | [Troubleshooting](troubleshooting.md)         |
 
 [Insights](insights.md) covers chosen-source reports and findings in Day.
-The [historical index](technical/README.md#historical-desktop-references) points to Pilot Next
-contracts and older guides, including schedules and project hooks.
 
 Pilot runs work locally. Remote devbox execution is retired; saved history and
 drafts are not migrated or submitted elsewhere.
@@ -231,5 +229,5 @@ They must choose a project or a specific directory. Pilot also blocks unsafe
 repository metadata. Scoped build cleanup and ordinary file edits still work.
 These command checks catch mistakes; they are not a filesystem security boundary.
 
-Implementation contracts, proposals, benchmarks, and historical material belong in
-[technical documentation](technical/README.md), not these guides.
+For implementation contracts and runbooks, start with the owning feature or tooling.
+The [development reference](../DEVELOPMENT.md) shows where to find each kind of code.

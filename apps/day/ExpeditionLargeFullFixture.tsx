@@ -1,9 +1,9 @@
 // Test fixture: the large mock map's chart, open full window from the start. Mock data.
 import { computed, mount, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
-import { FullChart } from "./ExpeditionChart";
-import { openPlanning } from "./mockFeeds";
-import { largeMap } from "./mockLargeMap";
+import { openPlanning } from "./app/testing/mockFeeds";
+import { largeMap } from "./app/testing/mockLargeMap";
+import { FullChart } from "./missions/planning/ExpeditionChart";
 import { Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("wayfinder");

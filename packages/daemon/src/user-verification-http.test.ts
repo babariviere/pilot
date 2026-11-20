@@ -4,8 +4,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { DeliveredWork, DeliveredWorkList, DurableOperation, UserVerificationIntent } from "@pilot/protocol";
-import { nativeIntakeFixture } from "./native-intake.fixture.ts";
-import { payloadHash } from "./operation-journal.ts";
+import { nativeIntakeFixture } from "./day/intake/native-intake.fixture.ts";
+import { payloadHash } from "./transport/operations/operation-journal.ts";
 
 test("native delivered-work read exposes canonical outputs, explicit verification and ordinary durable Send back", async (t) => {
 	const f = await nativeIntakeFixture();

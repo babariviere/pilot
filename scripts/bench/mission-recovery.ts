@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MissionNotices } from "../../packages/daemon/src/mission-notices.ts";
-import { MissionService } from "../../packages/daemon/src/mission-service.ts";
-import { MissionStore } from "../../packages/daemon/src/missions.ts";
-import type { ProjectStore } from "../../packages/daemon/src/projects.ts";
-import type { SessionManager } from "../../packages/daemon/src/sessions.ts";
+import { MissionNotices } from "../../packages/daemon/src/missions/threads/mission-notices.ts";
+import { MissionService } from "../../packages/daemon/src/missions/mission-service.ts";
+import { MissionStore } from "../../packages/daemon/src/missions/missions.ts";
+import type { ProjectStore } from "../../packages/daemon/src/projects/projects.ts";
+import type { SessionManager } from "../../packages/daemon/src/sessions/sessions.ts";
 import type { SessionSummary } from "../../packages/protocol/src/index.ts";
 import { loadBaseline } from "./baseline.ts";
 
@@ -20,7 +20,7 @@ let cleanupBaseline: (() => Promise<void>) | undefined;
 try {
 	const loaded = await loadBaseline<{
 		MissionNotices: typeof MissionNotices;
-	}>(baseline, new URL("../../packages/daemon/src/mission-notices.ts", import.meta.url));
+	}>(baseline, new URL("../../packages/daemon/src/missions/threads/mission-notices.ts", import.meta.url));
 	cleanupBaseline = loaded.cleanup;
 	const { MissionNotices: LegacyNotices } = loaded.module;
 	const samples = new Map<string, { wallMs: number; cpuMs: number; notifications: number; details: number }[]>();

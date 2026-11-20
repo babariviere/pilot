@@ -2,9 +2,9 @@
 // channel, showing only where one lost write of each stands. The test
 // scripts every root reply.
 import { mount, signal } from "nsh";
-import { ConnectedDelivery } from "./deliveryFeed";
-import { ConnectedPreferences } from "./preferencesFeed";
-import { ConnectedThreads } from "./threadFeed";
+import { ConnectedDelivery } from "./missions/delivery/deliveryFeed";
+import { ConnectedThreads } from "./sessions/threadFeed";
+import { ConnectedPreferences } from "./settings/preferencesFeed";
 import { Block, Body, Button } from "./ui";
 
 const threads = new ConnectedThreads("fixture");

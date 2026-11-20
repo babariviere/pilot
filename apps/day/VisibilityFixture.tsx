@@ -2,8 +2,8 @@
 // and Dismiss go to a script that counts them and drops the row, as the next
 // read would.
 import { keymap, mount, signal } from "nsh";
-import { MockDayScreen, openDay, openMockChat } from "./mockFeeds";
-import { mirrorSessionChat, type SessionChatSource } from "./sessionChat";
+import { MockDayScreen, openDay, openMockChat } from "./app/testing/mockFeeds";
+import { mirrorSessionChat, type SessionChatSource } from "./sessions/sessionChat";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const sends = signal<string[]>([]);

@@ -1,7 +1,7 @@
 // A Wayfinder map: questions for the user and research on the frontier,
 // prototypes not available, fog of war, and an open topic interview.
 import { mount } from "nsh";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
 
 const day = openDay("quiet");
 const plans = openPlanning("wayfinder");

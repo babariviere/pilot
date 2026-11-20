@@ -4,13 +4,13 @@
 // an update saves it and shows it again in a fresh window state, and
 // "Draft elsewhere" leaves unsaved preferences for another project.
 import { mount, signal, View } from "nsh";
-import { MockDayScreen, openDay } from "./mockFeeds";
-import { type PreferencesDemoNext, ScriptedPreferences } from "./preferencesDemo";
-import { mirrorPreferences } from "./preferencesFeed";
-import { preferencesDraft } from "./preferencesView";
-import { scriptedSchedules } from "./schedulesDemo";
+import { MockDayScreen, openDay } from "./app/testing/mockFeeds";
+import { captureView, restoreView, startFresh } from "./app/windowState";
+import { type PreferencesDemoNext, ScriptedPreferences } from "./settings/preferencesDemo";
+import { mirrorPreferences } from "./settings/preferencesFeed";
+import { preferencesDraft } from "./settings/preferencesView";
+import { scriptedSchedules } from "./settings/schedules/schedulesDemo";
 import { Block, Button, Buttons, Caption } from "./ui";
-import { captureView, restoreView, startFresh } from "./windowState";
 
 const preferences = new ScriptedPreferences();
 const day = { ...openDay(), preferences: mirrorPreferences(preferences), schedules: scriptedSchedules().controls };

@@ -8,12 +8,12 @@ helper. No default points at the Swift application, its feed, credentials or key
 
 ## Ownership and implementation
 
-- `src/manifest.rs`: ring verifies Ed25519 over the exact raw signed manifest bytes.
+- `src/release/manifest.rs`: ring verifies Ed25519 over the exact raw signed manifest bytes.
   Identity/channel/platform/architecture/build/short version/archive asset id/name/
   size/digest/bundle name are all signed. Duplicate/unknown JSON fields, wrong identity,
   malformed versions and invalid signatures fail closed. Numeric build comparison is
   explicit, not lexical. Digests alone never establish publisher authenticity.
-- `src/transport.rs`: ephemeral in-memory access explicitly supplied by an approved
+- `src/release/transport.rs`: ephemeral in-memory access explicitly supplied by an approved
   provider. Own HTTPS client with automatic redirects/proxies disabled, verified TLS,
   10s connect/120s request timeout, at most three redirected hops, bounded bodies and
   incremental cancellation. Authorization is sent only to constructed exact-repository
@@ -21,7 +21,7 @@ helper. No default points at the Swift application, its feed, credentials or key
   userinfo/fragment/nondefault port; no redirected hop can return to a credential origin.
   No token reaches the CDN. No implicit gh/Keychain/environment credential reads,
   token migration/storage, response-body logging or signed URL logging.
-- `src/archive.rs`: signed size/SHA256 checked before ZIP parsing. Private staging,
+- `src/release/archive/mod.rs`: signed size/SHA256 checked before ZIP parsing. Private staging,
   max1GiB archive/2GiB expanded/30,000 raw central records, bounded paths, exact single app root,
   create-new files, no device/setuid extraction. Symlinks appear only after file writes;
   canonical targets must remain inside the bundle. No writes through archive symlinks.
@@ -37,12 +37,12 @@ helper. No default points at the Swift application, its feed, credentials or key
   Canonical archives end at their declared EOCD comment, with contiguous directory
   and footer records and absolute offsets, not split/self-extracting/trailing-junk
   ZIPs. ZIP decoding, compression, ZIP64 entry extras and CRC remain library-owned.
-- `src/installer.rs`, `native/platform.m`: whole-bundle identity/version and Security
+- `src/install/installer.rs`, `native/platform.m`: whole-bundle identity/version and Security
   framework signature/compiled requirement checks, repeated after parent exit. Same-volume
   native `renameatx_np(RENAME_SWAP)`, durable journal and retained old app. No administrator
   authorization/escalation or unrelated file replacement. The exchanged old app is
   removed after verified GUI startup and daemon handoff, not kept as update history.
-- `src/helper.rs`, `src/bin/update-helper.rs`: private socket handshake, inherited
+- `src/install/helper.rs`, `src/bin/update-helper.rs`: private socket handshake, inherited
   permanent per-target lock, explicit durable COMMIT, then kqueue NOTE_EXIT on the actual
   spawning parent. No COMMIT means ordinary quit/EOF cannot install. A timer can abort
   waiting, but never quits/kills the app or permits installation. The helper rechecks
@@ -55,14 +55,14 @@ helper. No default points at the Swift application, its feed, credentials or key
   cancellation acknowledgement, operation generations fence old callbacks, hourly
   checks, bounded exponential failure backoff60s→1h, explicit manual checks. Downloads
   do not install. Staging, helper readiness and exit authorization are distinct states.
-- `src/worker.rs`: one bounded background worker/command/result, plus one blocking
+- `src/app/worker.rs`: one bounded background worker/command/result, plus one blocking
   helper-status watcher only while a helper exists, no idle polling, no
   network/file/signature work in render/UI handlers. Completion callback only schedules
   a foreground wakeup; the host drains results and reschedules one monotonic deadline.
   `Worker::close` fences and joins entered worker work off the UI thread. Nonblocking
   teardown/Drop is not that proof. A committed post-exit helper has separate ownership;
   joining the worker does not prove that helper exited.
-- `src/app_update.rs`, `src/iteration.rs`: separate external app-only pins from
+- `src/app/app_update.rs`, `src/release/iteration.rs`: separate external app-only pins from
   managed runtime reservations, and import explicitly selected source-pinned local
   signed full packages through the same staging/helper/native installer. UI-only
   retained reloads inspect the capsule without pausing agents. See
@@ -86,7 +86,7 @@ downloaded framework, global install, gpui-updater dependency or signing secret.
 ## Pilot Next signed release contract (historical)
 
 This section documents the retired GPUI app's release format, not a Day
-publication procedure. See [Day's update pipeline](../../docs/technical/day-update-pipeline.md)
+publication procedure. See [Day's update controls](../../apps/day/updates/day-global-updates.md)
 for Day's integration.
 
 Latest release must be non-draft/non-prerelease, tagged `v<short_version>`,
@@ -121,7 +121,7 @@ Day's native host uses this crate as a macOS path dependency. Development
 assembly does not configure production trust, feeds, or signing.
 The steps below describe the crate's worker and helper contract and its
 [original Pilot Next GUI integration](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/updates.md).
-For Day packaging, see [Day package inputs](../../docs/technical/day-package-inputs.md).
+For Day packaging, see [Day package inputs](../../apps/day/scripts/day-package-inputs.md).
 
 1. Build GUI and helper with the **same** approved public configuration:
    `PILOT_NEXT_UPDATER_PUBLIC_KEY` (base64 raw32-byte Ed25519 key),

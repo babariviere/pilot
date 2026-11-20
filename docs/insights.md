@@ -20,7 +20,7 @@ budget. Insights does not use the small background-work allowance.
 Only an explicit Start or Plan begins that work. Shipping is not benefit
 verification; mark the benefit verified only after checking it yourself.
 Earlier history is read-only and does not transfer source access or schedules.
-See the [Day service contract](technical/day-insights-wire.md).
+See the [Day service contract](../packages/protocol/src/insights/day-insights-wire.md).
 
 ## Legacy desktop
 
@@ -29,7 +29,7 @@ The following setup and controls are kept for reference. They are not Day setup 
 **Status: weekly Insights can be enabled from Automations. Review settings are editable; Apply uses them.**
 
 The app-owned workspace backend is a separate foundation. It does not yet replace these
-screens or activate a report. See the [v2 contract](technical/insights-workspace.md).
+screens or activate a report. See the [v2 contract](../packages/daemon/src/insights/insights-workspace.md).
 
 To turn it on, open **Automations → Weekly Insights…**. One confirmation shows the findings
 backlog, the schedule (Fridays 18:00, Europe/Paris), the exact model, what it reads and the
@@ -154,10 +154,10 @@ Saving settings does not activate them or change an existing model, access grant
 Apply preserves the report chat and replaces only the exact previewed integration-owned weekly rule.
 Apply starts no report and cannot perform a paid context migration. Interrupted effects stay pending
 without replay; inspecting matching model/rule values is not an acknowledgement.
-See the [settings contract](technical/insights-settings.md) for native integration and limitations.
+See the [settings contract](../packages/daemon/src/insights/insights-settings.md) for native integration and limitations.
 Opening the confirmation, reading status or restarting the
 app grants no access and starts no review or schedule. **Enable** authorizes weekly setup, not an
 immediate review. A daemon restart can reconcile an already confirmed setup without new consent.
 
-See the [permission contract](technical/insights-history.md) and
-[enable verification and limits](technical/insights-enable.md#verification-and-limits) for technical detail.
+See the [permission contract](../packages/daemon/src/insights/insights-history.md) and
+[enable verification and limits](../packages/daemon/src/insights/insights-enable.md#verification-and-limits) for technical detail.

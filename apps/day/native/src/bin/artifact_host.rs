@@ -3,17 +3,17 @@
 #[cfg(unix)]
 use std::io::{Read, Write};
 
-#[path = "../artifact_check.rs"]
+#[path = "../artifacts/artifact_check.rs"]
 #[cfg(unix)]
 mod artifact_check;
-#[path = "../artifact_library.rs"]
+#[path = "../artifacts/artifact_library.rs"]
 #[cfg(unix)]
 mod artifact_library;
-#[path = "../artifact_runtime.rs"]
+#[path = "../artifacts/artifact_runtime.rs"]
 #[cfg(unix)]
 #[allow(dead_code)] // Day's saved-revision entry cache; the helper only checks a fresh capture.
 mod artifact_runtime;
-#[path = "../artifact_source.rs"]
+#[path = "../artifacts/artifact_source.rs"]
 #[cfg(unix)]
 mod artifact_source;
 

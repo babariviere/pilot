@@ -2,8 +2,8 @@
 // mockup, with a scripted artifact source: one press reads it once.
 import { mount, signal } from "nsh";
 import type { DecisionArtifact } from "pilot-day/native";
-import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
-import { QuestionArtifacts } from "./QuestionArtifacts";
+import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifacts/artifactReads";
+import { QuestionArtifacts } from "./missions/interviews/QuestionArtifacts";
 import { Block, Caption, WindowCanvas } from "./ui";
 
 const reads = signal<string[]>([]);

@@ -1,7 +1,7 @@
 // Headless source-reading fixture. Invented records, never daemon data.
 import { mount, signal, View } from "nsh";
-import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
-import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
+import { MockDayScreen, openDay, openPlanning } from "./app/testing/mockFeeds";
+import type { MapSourceRead, MapSourceRequest } from "./sources/map/mapSourceContract";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const day = openDay("quiet");

@@ -3,7 +3,7 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from "nod
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "../../packages/protocol/src/hello.ts";
+import { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "../../packages/protocol/src/runtime/hello.ts";
 
 export const archiveName = "Pilot-linux-x64.tar.gz";
 export const manifestName = "runtime-manifest.json";

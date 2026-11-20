@@ -1,6 +1,6 @@
 import type { UserVerification, UserVerificationReceipt } from "@pilot/protocol";
-import { OperationRejected } from "./operation-journal.ts";
-import type { MissionDbPort } from "./mission-database.ts";
+import { OperationRejected } from "./transport/operations/operation-journal.ts";
+import type { MissionDbPort } from "./missions/mission-database.ts";
 
 export const USER_VERIFICATION_SCHEMA = `
 CREATE TABLE IF NOT EXISTS user_verifications (

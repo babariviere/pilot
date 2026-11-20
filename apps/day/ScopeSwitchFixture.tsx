@@ -4,15 +4,15 @@
 // previous project's read, even when its answer comes late.
 import { mount, Scroll, View } from "nsh";
 import { PlanFeed, type Today, TodayFeed } from "pilot-day/native";
-import { ScriptedChats } from "./chatDemo";
-import { mirrorChats } from "./chatFeed";
-import { mirrorDay } from "./day";
-import type { DayFeed } from "./feeds";
-import { MockDayScreen } from "./mockFeeds";
-import { mirrorPlanning } from "./planning";
-import { todayScope } from "./ScopeRows";
-import { ScriptedScope } from "./scopeDemo";
-import { mirrorScope } from "./todayScope";
+import { mirrorDay } from "./app/day";
+import { MockDayScreen } from "./app/testing/mockFeeds";
+import { mirrorPlanning } from "./missions/planning/planning";
+import { ScriptedChats } from "./sessions/chatDemo";
+import { mirrorChats } from "./sessions/chatFeed";
+import type { DayFeed } from "./sources/feeds";
+import { todayScope } from "./today/ScopeRows";
+import { ScriptedScope } from "./today/scopeDemo";
+import { mirrorScope } from "./today/todayScope";
 import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 // Today's own read: pilot's, from the decisions world.

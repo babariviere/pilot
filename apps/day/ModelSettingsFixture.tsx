@@ -1,11 +1,11 @@
 // Mock data only. No service, credentials, providers or writes outside this window.
 // The AI and Allowances tabs of Settings on one panel, as the behaviour tests need both.
 import { mount, Scroll, signal } from "nsh";
-import { FundingSettings } from "./FundingSettings";
-import { ModelSettingsSection } from "./ModelSettings";
-import type { ModelControls, ModelSettings, SignInView } from "./modelControls";
-import { modelSettingsDemo } from "./modelSettingsDemo";
-import { modelEdit, restoreModelDraft, savedModelDraft } from "./modelSettingsDraft";
+import { FundingSettings } from "./settings/FundingSettings";
+import { ModelSettingsSection } from "./settings/models/ModelSettings";
+import type { ModelControls, ModelSettings, SignInView } from "./settings/models/modelControls";
+import { modelSettingsDemo } from "./settings/models/modelSettingsDemo";
+import { modelEdit, restoreModelDraft, savedModelDraft } from "./settings/models/modelSettingsDraft";
 import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const initial = modelSettingsDemo;

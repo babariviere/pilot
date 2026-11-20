@@ -1,0 +1,254 @@
+import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
+import { callArtifactHost } from "./nsh-host.ts";
+import { compileNshSource } from "./nsh-source.ts";
+
+const host = process.env.NSH_ARTIFACT_TEST_HOST;
+const options = { skip: !host ? "Run apps/day/scripts/test-artifact-source.mjs for the native compiler" : false };
+
+test("NSH installed helper binds exact runtime source and bytes, not a loose executable", async (t) => {
+	const { createHash } = await import("node:crypto");
+	const root = await mkdtemp(join(tmpdir(), "nsh-binding-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const directory = join(root, "packages/artifacts/native");
+	const source = join(root, "packages/artifacts/src/nsh");
+	await mkdir(directory, { recursive: true });
+	await mkdir(source, { recursive: true });
+	const module = join(source, "nsh-host.ts");
+	await copyFile(new URL("./nsh-host.ts", import.meta.url), module);
+	await writeFile(join(root, "package.json"), '{"type":"module"}');
+	const { readArtifactHostBinding } = (await import(pathToFileURL(module).href)) as typeof import("./nsh-host.ts");
+	const executable = join(directory, "pilot-artifact-host");
+	const bytes = Buffer.from("synthetic native bytes, not executed");
+	await writeFile(executable, bytes, { mode: 0o755 });
+	const identity = {
+		schema: 1,
+		kind: "nsh-source-host",
+		runtime: "nsh 0.6.1",
+		source: "a".repeat(40),
+		recipe: "b".repeat(64),
+	};
+	const descriptor = {
+		schema: 1,
+		identity,
+		bytes: bytes.length,
+		sha256: createHash("sha256").update(bytes).digest("hex"),
+	};
+	const stamp = { schema: 1, source: identity.source, platform: "darwin", arch: "arm64" };
+	const write = (value: unknown) => writeFile(join(directory, "artifact-host.json"), JSON.stringify(value));
+	await writeFile(join(root, "runtime-build.json"), JSON.stringify(stamp));
+	await assert.rejects(readArtifactHostBinding());
+	await write(descriptor);
+	assert.deepEqual(await readArtifactHostBinding(), identity);
+	for (const changed of [
+		{ ...descriptor, identity: { ...identity, source: "c".repeat(40) } },
+		{ ...descriptor, sha256: "0".repeat(64) },
+		{ ...descriptor, bytes: 1 },
+	]) {
+		await write(changed);
+		await assert.rejects(readArtifactHostBinding());
+	}
+	await write(descriptor);
+	await writeFile(executable, "tampered");
+	await assert.rejects(readArtifactHostBinding());
+	await rm(executable);
+	await symlink(join(root, "runtime-build.json"), executable);
+	await assert.rejects(readArtifactHostBinding());
+});
+test("NSH prepublication compiler validates exact helper replies without saving or evaluating source", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "nsh-compile-check-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const executable = join(root, "helper");
+	const program = join(root, "program.cjs");
+	const requestFile = join(root, "request.json");
+	const quote = (path: string) => `'${path.replaceAll("'", "'\\''")}'`;
+	await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(program)}\n`, { mode: 0o700 });
+	const helper = (change = "") =>
+		writeFile(
+			program,
+			`
+let input = '';
+process.stdin.on('data', chunk => input += chunk);
+process.stdin.on('end', () => {
+  const request = JSON.parse(input);
+  require('node:fs').writeFileSync(${JSON.stringify(requestFile)}, input);
+  let value = null;
+  ${change}
+  process.stdout.write(JSON.stringify({value}));
+});`,
+		);
+	await helper();
+	const source = '\uFEFFthrow Error("not executed"); export default () => "é😀";\r\n';
+	assert.equal(await compileNshSource(source, "view.tsx", undefined, executable), undefined);
+	const request = JSON.parse(await readFile(requestFile, "utf8"));
+	assert.equal(request.action, "compile");
+	assert.deepEqual(request, { action: "compile", source, entry: "view.tsx" });
+	await helper("value = {code:'unexpected bytecode'};");
+	await assert.rejects(compileNshSource(source, "view.tsx", undefined, executable), /Invalid artifact compilation/);
+	const controller = new AbortController();
+	controller.abort();
+	await assert.rejects(compileNshSource(source, "view.tsx", controller.signal, executable), { name: "AbortError" });
+	await assert.rejects(compileNshSource(source, "../view.tsx", undefined, executable), /basename/);
+});
+
+test(
+	"NSH prepublication compiler reports real syntax and import errors without evaluating source",
+	options,
+	async () => {
+		await compileNshSource("throw Error('not executed'); export default () => null;", "view.tsx", undefined, host);
+		for (const source of ["export default () => <Text>;", "import {host} from 'nsh'; export default () => host;"])
+			await assert.rejects(compileNshSource(source, "view.tsx", undefined, host), /Artifact.tsx/);
+	},
+);
+
+test("NSH production compiler consumes source only and returns no code or rendering permit", options, async () => {
+	const source =
+		"import { Text, signal } from 'nsh'; export default function Artifact() { const n=signal(1); return <Text>{n()}</Text>; }";
+	const request = { action: "compile", source, entry: "demo.tsx" };
+	assert.equal(await callArtifactHost(request, undefined, host), null);
+	for (const change of [{ source: "" }, { entry: "../demo.tsx" }, { captured: { source } }, { bytecode: [0, 1] }])
+		await assert.rejects(callArtifactHost({ ...request, ...change }, undefined, host), /Invalid/);
+});
+
+test("NSH production compiler rejects import/export reach-through without reading outside files", options, async () => {
+	for (const source of [
+		"import './absent.tsx'; export default () => null;",
+		"export {default} from '/etc/passwd';",
+		"export * from 'https://artifact.invalid/a.js'; export default () => null;",
+		"import * as rt from 'nsh'; export default () => rt;",
+		"import {Shader} from 'nsh'; export default () => null;",
+		"import {host} from 'nsh'; export default () => host;",
+		"import {mount} from 'nsh'; export default () => null;",
+		"import {text} from 'nsh:rt'; export default () => text('x');",
+		"import {Bridge} from 'pilot-day/native'; export default () => Bridge;",
+		"export default () => import('process');",
+		"const x = import.meta.url; export default () => x;",
+		"import x = require('fs'); export default () => x;",
+		"type X = import('fs').X; export default () => null;",
+		"export default function() { return <Text>; }",
+		"export const A = 1;",
+	])
+		await assert.rejects(
+			callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host),
+			/Artifact.tsx/,
+		);
+	// Compiler preparation never runs top-level code or historical callbacks.
+	const source = "throw Error('not executed'); export default () => null;";
+	assert.equal(await callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host), null);
+});
+
+test(
+	"NSH supplied examples prepare without filesystem resolution; host reach is refused with its reason",
+	options,
+	async () => {
+		for (const name of ["summary", "charts", "flow", "sequence", "prototype", "mockup", "page"]) {
+			const source = await readFile(
+				new URL(`../../../kernel/skills/pilot-artifacts/nsh/examples/${name}.tsx`, import.meta.url),
+				"utf8",
+			);
+			assert.equal(await callArtifactHost({ action: "compile", source, entry: "demo.tsx" }, undefined, host), null);
+		}
+		const clipboard = "import {Clipboard} from 'nsh'; export default () => null;";
+		await assert.rejects(
+			callArtifactHost({ action: "compile", source: clipboard, entry: "demo.tsx" }, undefined, host),
+			/Clipboard from "nsh" is refused: it reads and writes the computer's clipboard/,
+		);
+	},
+);
+
+test("NSH helper transport joins the owned helper before it releases a slot or settles", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "nsh-host-transport-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const executable = join(root, "helper");
+	const program = join(root, "program.cjs");
+	const pids = join(root, "pids");
+	const quote = (path: string) => `'${path.replaceAll("'", "'\\''")}'`;
+	await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(program)}\n`, { mode: 0o700 });
+	// Each helper records its own PID (exec keeps it), so the test can see that it was reaped.
+	const script = (body: string) =>
+		writeFile(program, `require("node:fs").appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");\n${body}`);
+	const started = async () => (await readFile(pids, "utf8").catch(() => "")).split("\n").filter(Boolean).map(Number);
+	// Settlement must follow the direct helper's exit and reaping. This is not subtree evidence.
+	const joined = async (count: number) => {
+		const list = await started();
+		assert.equal(list.length, count);
+		for (const pid of list) assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+		await rm(pids, { force: true });
+	};
+	const fail = async (body: string, error: RegExp) => {
+		await script(body);
+		await assert.rejects(callArtifactHost({}, undefined, executable), error);
+		await joined(1);
+	};
+	await fail("process.stdin.resume(); process.stdout.write('not json');", /Invalid/);
+	// Oversized output: the helper stays alive, so only the transport's kill can end it.
+	await fail("process.stdout.write('x'.repeat(5*1024*1024)); setInterval(() => {}, 1000);", /output exceeds/);
+	// Packaging uses the same supervisor with a smaller response allowance.
+	await script("process.stdout.write('x'.repeat(9000)); setInterval(() => {}, 1000);");
+	await assert.rejects(callArtifactHost({}, undefined, executable, undefined, 8192), /output exceeds/);
+	await joined(1);
+	for (const limit of [0, 4 * 1024 * 1024 + 1, 1.5, Number.NaN])
+		await assert.rejects(callArtifactHost({}, undefined, executable, undefined, limit), /Invalid.*limit/);
+	await joined(0);
+
+	// Cancellation: a complete reply already written is not accepted, and both slots stay
+	// held until each helper is joined.
+	await script("process.stdout.write(JSON.stringify({value: 1})); setInterval(() => {}, 1000);");
+	const controller = new AbortController();
+	const waiting = callArtifactHost({}, controller.signal, executable);
+	const second = callArtifactHost({}, controller.signal, executable);
+	await assert.rejects(callArtifactHost({}, undefined, executable), /busy/);
+	for (let tries = 0; (await started()).length < 2; tries++) {
+		assert.ok(tries < 500, "helpers did not start");
+		await delay(10);
+	}
+	controller.abort();
+	await assert.rejects(callArtifactHost({}, undefined, executable), /busy/);
+	const stopped = await Promise.allSettled([waiting, second]);
+	assert.ok(stopped.every((result) => result.status === "rejected" && /canceled/.test(String(result.reason))));
+	assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+	await joined(2);
+	// An already-canceled request never starts a helper.
+	await assert.rejects(callArtifactHost({}, controller.signal, executable), { name: "AbortError" });
+	await joined(0);
+
+	await fail("setInterval(() => {}, 1000);", /10 second deadline/);
+	await fail("process.exit(13);", /host failed/);
+	// A helper that closes stdout early settles only after it exits.
+	await script("process.stdout.end(JSON.stringify({value: 2})); setTimeout(() => {}, 300);");
+	assert.equal(await callArtifactHost({}, undefined, executable), 2);
+	await joined(1);
+
+	// Spawn failures settle and release their slots; repeated failures never become busy.
+	const blocked = join(root, "not-executable");
+	await writeFile(blocked, "#!/bin/sh\n");
+	await chmod(blocked, 0o600);
+	for (const path of [join(root, "missing"), blocked, join(root, "missing"), blocked])
+		await assert.rejects(callArtifactHost({}, undefined, path), /unavailable/);
+
+	await script(
+		"process.stdout.write(JSON.stringify({value: [process.env.HOME ?? null, process.env.NSH_ARTIFACT_TEST_HOST ?? null]}));",
+	);
+	assert.deepEqual(await callArtifactHost({}, undefined, executable), [null, null]);
+	const identity = {
+		schema: 1,
+		kind: "nsh-source-host",
+		runtime: "nsh 0.6.1",
+		source: "a".repeat(40),
+		recipe: "b".repeat(64),
+	};
+	await script(`process.stdout.write(JSON.stringify({value:null,identity:${JSON.stringify(identity)}}));`);
+	assert.equal(await callArtifactHost({}, undefined, executable, identity), null);
+	await assert.rejects(
+		callArtifactHost({}, undefined, executable, { ...identity, source: "c".repeat(40) }),
+		/Invalid/,
+	);
+	await script("process.stdout.write(JSON.stringify({value:null,error:'ambiguous'}));");
+	await assert.rejects(callArtifactHost({}, undefined, executable), /Invalid/);
+});

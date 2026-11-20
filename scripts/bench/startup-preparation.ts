@@ -1,6 +1,6 @@
 /** Offline baseline/current comparison. node scripts/bench/startup-preparation.ts <baseline SHA> [pairs] */
-import { SessionManager } from "../../packages/daemon/src/sessions.ts";
-import { startupResponsiveness } from "../../packages/daemon/src/testing/startup-responsiveness.ts";
+import { SessionManager } from "../../packages/daemon/src/sessions/sessions.ts";
+import { startupResponsiveness } from "../../packages/daemon/src/runtime/lifecycle/testing/startup-responsiveness.ts";
 import { loadBaseline } from "./baseline.ts";
 
 const baseline = process.argv[2];
@@ -9,7 +9,7 @@ if (!baseline || !Number.isSafeInteger(pairs) || pairs < 1 || pairs > 10)
 	throw new Error("Pass a baseline SHA and 1-10 sample pairs");
 const loaded = await loadBaseline<{ SessionManager: typeof SessionManager }>(
 	baseline,
-	new URL("../../packages/daemon/src/sessions.ts", import.meta.url),
+	new URL("../../packages/daemon/src/sessions/sessions.ts", import.meta.url),
 );
 try {
 	const { SessionManager: Baseline } = loaded.module;

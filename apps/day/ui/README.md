@@ -441,7 +441,7 @@ Checklist:
    layout parts. Run `nsh build` and look for "unknown classes" in test logs.
 9. Keep behaviour, wording (DESIGN.md "State vocabulary" and "Attention budget"), keyboard access and test IDs.
    Update a test only where the structure changed (a new group label, a moved section), and say why in it.
-10. Capture the screen in light and dark at 1100 and 480 (see `TodayVisual.test.tsx`) and compare it with Today.
+10. Capture the screen in light and dark at 1100 and 480 (see [TodayVisual.test.tsx](../today/TodayVisual.test.tsx)) and compare it with Today.
 
 Older patterns and their parts (the deprecated parts are gone; these shapes can still turn up in old branches):
 

@@ -1,0 +1,151 @@
+# Focused mission discussions
+
+Thread messages now go to each thread's own chat, not the planning agent: see [thread chats](thread-chats.md).
+The planner sections below describe older messages, which Pilot moves to thread chats at startup.
+
+Backend API for the approved focused coordinator threads, and Day's native screen over it.
+There is no pre-mission thread, second transcript, new chat engine or task tracker.
+
+## Records and reads
+
+`MissionStore.threads` saves small mission-owned topic records: stable ID, title, original
+coordinator session, native user operation attribution, revision, references, input intents and
+`open | later | discarded | resolved` disposition (Pilot sets `resolved`). Disposition changes are reversible. They do not archive,
+Stop, pause, decide, accept an agreement, approve or Start anything. Immutable operation results
+keep prior metadata and dispositions. Original history and referenced evidence are never removed.
+
+Authenticated routes (the existing native app capability, `x-pilot-github-capability`):
+
+- `GET /api/projects/:projectId/missions/:missionId/threads` returns `MissionThreadsView`.
+- `GET /api/projects/:projectId/missions/:missionId/threads/:topicId/history?before=N&limit=N`
+  reads original history without opening or subscribing to its worker. Default limit is 32,
+  maximum 100. Entries keep original IDs, roles and payloads. The response also projects the
+  exact topic conversation from original records, not a second saved transcript. Dedicated
+  thread-chat ownership, exact input operation identities and explicit history links establish
+  topic membership. Unlinked coordinator output stays in activity, not whichever topic is open.
+
+Reads require the current active mission, same-project current coordinator and membership, and
+valid project/session access. History also checks the original coordinator's project. Historical
+topics keep their original session when ownership changes; they never retarget a draft or send.
+History rechecks sources after I/O. Holds do not prevent passive reads. Unavailable access refuses
+instead of returning an apparently empty history. SQLite durability precedes responses.
+
+`hello.capabilities.nativeThreads === 1` advertises the API, not permission to send to every
+coordinator. `discussion.available` is a current preview, never a reservation or admission ACK.
+The first version is host-local metadata, not a new cross-host replication protocol.
+
+## Exact human operations
+
+Use the existing authenticated `POST /api/operations` and `/api/operations/receipt` with the full
+original `DurableOperation`. `targetId` is the mission ID. Use the read's opaque `source` for both
+`bindingId` and `payload.source`, with `bindingGeneration: 1`. Payloads are `MissionThreadWrite`
+in `packages/protocol/src/missions/mission-thread.ts`:
+
+| purpose              | Other payload fields                                                             |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `thread-create`      | `topicId` (new caller-chosen stable ID), `title`                                 |
+| `thread-disposition` | `topicId`, `disposition` (`open`, `later`, `discarded`)                          |
+| `thread-reference`   | `topicId`, `reference` (canonical task/decision ID or original session/entry ID) |
+| `thread-send`        | `topicId`, `text` (exact bytes, no trimming or replacement)                      |
+
+Unknown fields refuse. References must exist in this mission or the topic's original history.
+At most 100 topics, 100 references per topic, 2048 metadata events per mission and 32000 UTF-8
+bytes per send are supported. Existing journal, planning-call and kernel receipt capacities also
+apply. A full store refuses; nothing silently pages away or deletes evidence.
+
+Metadata writes and input intents are durable before ACK or dispatch. A write names the read's source and is
+checked again after it is saved; a changed source refuses it, or leaves it Unknown after entry.
+The thread `source` names only the active mission, its project and planning owner, the owner's planning
+identity and the topics. Task progress and mission activity are left out, so they never refuse a thread write.
+
+`thread-send` has a distinct trusted planning/discussion purpose. It reuses qualified Revisit
+admission only for an existing **published, idle, active, unheld, unstopped enrolled planning
+coordinator**, with the topic still open and owned by that exact session. The normal planning
+profile and trusted skills remain in force. Discussion asks for clarification, not implementation.
+There is no generic Build/sendNotice fallback, legacy adoption, automatic wake, task Start,
+agreement acceptance, new approval or permission grant. Held/paused/stopped planners refuse;
+neither the host nor kernel clears a hold for discussion. A fresh input generation after Stop
+cannot use this first-version admission path.
+
+When the user asks for new work or a change in a thread, the planner may save one inert revision
+proposal (new work as `newTasks`). It shows on the planning page for review and applies only on
+the user's confirmation. See [mission-revisions.md](../planning/mission-revisions.md#planned-missions).
+
+## Messages that wait
+
+When the planning agent cannot take a message now (it works, a round waits for answers, planning
+is paused or stopped, or the plan is not published yet), `thread-send` saves it to wait instead of
+refusing it: `discussion.waits` is true in the read, and the accepted result is
+`{ topic, queued: true }` with no admission. The topic input is saved as usual, and
+`PlanningWorkerState.threadQueue` keeps the words in the order sent. The read lists them as `waiting`.
+
+Pilot delivers them with the first planning input that can carry them, at most once:
+
+- the user's submitted answers (`interview-continue`) or Continue planning (`plan-continue`) carry
+  every message waiting when they enter, so a waiting round is never released by a message;
+- once the agent is idle and no round waits, one `plan-thread-messages` turn carries them all.
+
+Each message is marked with the input that carries it (`carriedBy`) before that input is admitted,
+so a restart reads the same content and never sends it twice. A refused Continue puts its messages
+back to waiting. The agent reads them as discussion, never as approval, Start or agreement changes.
+At most 20 messages wait per mission (`WAITING_MESSAGES`); past it, Send is refused with the limit
+named and the words stay. Unstick's checks count waiting messages. Editing or withdrawing a waiting
+message is not built yet.
+
+## Unknown and client drafts
+
+Accepted send results include the saved topic and exact planning admission ID. A saved
+`topic.inputs` item alone is an **intent**, not proof of admission, completion or acceptance.
+After a lost ACK, keep the exact draft, topic, target and full operation envelope. Check only the
+original operation. Recovery reads the original canonical metadata effect and kernel input
+receipt; it never resends, creates a replacement operation or re-enters planning. Missing evidence
+stays Unknown, even if that prevents another discussion until resolved. Terminal duplicates return
+their original result, not the topic's later state. Reads and receipt checks requalify access.
+
+Tests use canonical temporary SQLite/journals and fake sessions, with no provider, native window
+or live profile effects: `mission-threads.test.ts`, the shared `published-planning.fixture.ts`,
+`revisit-planning.test.ts` and selected `planning-boundary.test.ts` cases. UI integration and native
+acceptance are not established by these backend checks.
+
+## Day
+
+A mission's overview lists its threads (open, then Later; discarded on request) and starts a new
+one from its first message: the first sentence becomes the title (`titleOf`, at most 80
+characters), then Day sends the message in the new thread. A thread's page opens its topic
+conversation in chronological order, with original-message access and a reply box. Older pages
+are added without removing messages already shown. Show activity discloses original history below
+the conversation, including unrelated coordinator output and tools. Reading either view has no
+send, Start or approval effect. Drafts and Back context stay attached to the exact mission/topic.
+Unlinked older replies remain uncertain instead of being assigned by position or text matching.
+
+The native root (`apps/day/native/src/missions/host/threads.rs`) adds four exact methods:
+
+- `day.threads.read {missionId}` reads the topics view plus task and decision names from the
+  mission detail. It requires `nativeThreads`. A 404 or 409 is a refused scope, never an empty list.
+- `day.threads.history {missionId, topicId, before|null, sessionId?}` reads one page of 32 original
+  entries from an authorized topic source. Its `conversation` projection keeps complete message text,
+  author, timestamp when known and original entry identity. Activity previews keep their 8000-byte
+  limit and say when shortened. Conversation pagination carries both the session and entry cursor,
+  including earlier dedicated chats after a thread reopens.
+- `day.threads.write {missionId, source, purpose, topicId?, title|disposition|reference|text}`
+  names the exact `source` the window showed. The root reads again and refuses a changed source
+  (Stale). A send to a topic that is not open, or while neither `discussion.available` nor
+  `discussion.waits` is true, is refused before anything is saved. The root chooses the operation ID and a new topic's ID,
+  journals the envelope, then sends it once.
+- `day.threads.check {operationId}` only looks up that saved envelope's receipt.
+
+An accepted receipt counts only when its topic shows the exact effect; a send also needs the
+planning admission of the same operation. Accepted means the coordinator has the message, not
+that it answered. An unsettled write on a mission blocks further thread and planning writes for
+that mission until Check settles it. Unsent words are kept by mission and thread in the saved
+view (`thread`, `threads`) across Back, close and update; only an accepted send clears them.
+
+Reply state comes from durable input submissions, not from the next assistant text. The cold reader
+joins exact request, input-entry and answer-entry identities without opening a kernel or reading
+message bodies. A queued input is pending, a placed input awaits a reply, a completed submission names
+its answer, and an unanswered terminal input stays unanswered. Missing older links stay unknown.
+An explicitly linked coordinator message can cover several topics: show its original words whole
+and label that limit rather than inventing topic-specific excerpts.
+When an old send's placement link is gone, its exact journal text remains available with placement
+and reply status unknown. A known direct or batch placement does not become pending merely because
+the user has not loaded its history page. Saved sends never receive fabricated original entry IDs.

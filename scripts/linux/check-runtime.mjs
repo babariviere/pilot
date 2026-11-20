@@ -29,11 +29,11 @@ globalThis.fetch = () => {
 };
 let adapter;
 try {
-	const { loadSdkMcpEditor } = await import("./packages/kernel/src/sdk-mcp-editors.ts");
+	const { loadSdkMcpEditor } = await import("./packages/kernel/src/tools/mcp/sdk-mcp-editors.ts");
 	const config = await loadSdkMcpEditor("cli");
 	const mcpPath = join(isolated, "mcp.json");
 	config.addMcpServerConfig(mcpPath, "fixture", { url: "https://example.test/mcp" });
-	const { McpSetupStore } = await import("./packages/daemon/src/mcp-setup.ts");
+	const { McpSetupStore } = await import("./packages/daemon/src/setup/mcp/mcp-setup.ts");
 	const setup = new McpSetupStore(isolated),
 		baseline = await setup.read();
 	const saved = await setup.apply({
@@ -80,7 +80,7 @@ try {
 	])
 		assert.ok(adapter.session.getCallableToolNames().includes(name), name);
 	await writeFile(join(isolated, "fixture.tsx"), "export const RuntimeFixture = () => <button />;");
-	const { runExploration } = await import("./packages/kernel/src/exploration-runner.ts");
+	const { runExploration } = await import("./packages/kernel/src/tools/exploration/exploration-runner.ts");
 	const explored = await runExploration(
 		{ source: isolated },
 		{ tool: "code_symbols", path: "fixture.tsx", query: "RuntimeFixture", exact: true },

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DeliveredArtifact, DeliveredArtifactRequest, DeliveredWork, DeliveredWorkList } from "@pilot/protocol";
-import type { ArtifactSelection, CapturedArtifact } from "../../../apps/day/deliveryArtifactContract.ts";
-import type { DeliveryList, DeliveredWork as NativeView } from "../../../apps/day/deliveryContract.ts";
+import type { ArtifactSelection, CapturedArtifact } from "../../../apps/day/missions/delivery/deliveryArtifactContract.ts";
+import type { DeliveryList, DeliveredWork as NativeView } from "../../../apps/day/missions/delivery/deliveryContract.ts";
 
 // These assignments are checked by tsgo without loading NSH or its platform VM.
 // Day's display projection can be narrower than the canonical wire data.

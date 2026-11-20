@@ -1,6 +1,6 @@
 // Test-only native-channel projection. The test supplies all host replies.
 import { mount, signal } from "nsh";
-import { ConnectedSessionChat, mirrorSessionChat, type SessionChat } from "./sessionChat";
+import { ConnectedSessionChat, mirrorSessionChat, type SessionChat } from "./sessions/sessionChat";
 import { Button } from "./ui/button";
 import { WindowCanvas } from "./ui/canvas";
 import { Block } from "./ui/section";
