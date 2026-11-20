@@ -1,10 +1,10 @@
 // Mock data only. No account, daemon or real continuation.
-import { effect, mount, Scroll, signal, Text, View } from "nsh";
+import { effect, type JSX, mount, Scroll, signal, View } from "nsh";
 import type { Decision, DraftIntent, ReplyIntent } from "pilot-day/native";
 import { DecisionCard } from "./DecisionCard";
 import { ScopedInterviewCard } from "./InterviewCard";
 import { openDay } from "./mockFeeds";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, PageHead, Panel, Section } from "./ui";
 
 const day = openDay();
 const base = day.today().decisions[0]!;
@@ -85,83 +85,111 @@ function reopen() {
 	visible.set(true);
 }
 
-mount(() => (
-	<Scroll testID="interview-scroll" class="flex-1 bg-background">
-		<View class="gap-4 p-8">
-			<Text class="text-xs text-muted-foreground">Mock data. Standalone interview</Text>
-			<If when={visible()}>
-				<If
-					when={scoped()}
-					else={<DecisionCard day={day} decision={decision()} index={0} count={1} later={false} />}
-				>
-					<ScopedInterviewCard
-						decision={decision()}
-						identity="other-project/question/round-1"
-						keyboardActive
-						draftText={saved()}
-						onSave={(text) => saved.set(text)}
-						onSubmit={async (text) => {
-							saved.set(text);
-							sends.set(sends() + 1);
-							decision.set({ ...decision(), delivery: "unknown" });
-							return { status: "unknown", message: "Not confirmed. Check again reads only.", revision: 1 };
-						}}
-						onCheck={() => checks.set(checks() + 1)}
-					/>
-				</If>
-			</If>
-			<If when={second()}>
-				<View testID="secondary-round">
-					<DecisionCard
-						day={day}
-						index={1}
-						count={2}
-						later={false}
-						decision={{
-							...original,
-							id: "second-round",
-							interviewRoundId: "second-round",
-							interviewQuestions: original.interviewQuestions.map((q) => ({ ...q, id: `other-${q.id}` })),
-						}}
-					/>
-				</View>
-			</If>
-			<View class="flex-row gap-2">
-				<Action label="Show second round" onPress={() => second.set(true)} />
-				<Action
-					label="Stale global read"
-					onPress={() =>
-						day.today.set({ ...day.today(), attention: { ...day.today().attention, state: "stale" } })
-					}
-				/>
-				<Action
-					label="Large round"
-					onPress={() =>
-						decision.set({
-							...original,
-							interviewRoundId: "round-large",
-							interviewQuestions: Array.from({ length: 40 }, (_, n) =>
-								question(`q${n}`, "constraints", `Question ${n + 1}: What must stay unchanged?`, [
-									{ id: "keep", meaning: "Keep the existing behavior" },
-								]),
-							),
-						})
-					}
-				/>
-				<Action label="Close card" onPress={() => visible.set(false)} />
-				<Action label="Reopen card" onPress={reopen} />
-				<Action
-					label="New round"
-					onPress={() => {
-						saved.set("");
-						decision.set({ ...original, interviewRoundId: "round-2" });
-					}}
-				/>
-			</View>
-			<Action label="Open other project's round" onPress={() => scoped.set(true)} />
-			<Text class="text-xs text-muted-foreground">{`Saved edits: ${saves()}`}</Text>
-			<Text class="text-xs text-muted-foreground">{`Submissions: ${sends()}`}</Text>
-			<Text class="text-xs text-muted-foreground">{`Receipt checks: ${checks()}`}</Text>
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
-	</Scroll>
+	);
+}
+
+mount(() => (
+	<FixtureWindow>
+		<Scroll testID="interview-scroll" class="flex-1">
+			<Page>
+				<PageHead pre={<Caption>Mock data. Standalone interview</Caption>} title="Interview" />
+				<Panel>
+					<Column>
+						<Section title="Needs you">
+							<If when={visible()}>
+								<If
+									when={scoped()}
+									else={<DecisionCard day={day} decision={decision()} index={0} count={1} later={false} />}
+								>
+									<ScopedInterviewCard
+										decision={decision()}
+										identity="other-project/question/round-1"
+										keyboardActive
+										draftText={saved()}
+										onSave={(text) => saved.set(text)}
+										onSubmit={async (text) => {
+											saved.set(text);
+											sends.set(sends() + 1);
+											decision.set({ ...decision(), delivery: "unknown" });
+											return {
+												status: "unknown",
+												message: "Not confirmed. Check again reads only.",
+												revision: 1,
+											};
+										}}
+										onCheck={() => checks.set(checks() + 1)}
+									/>
+								</If>
+							</If>
+						</Section>
+						<If when={second()}>
+							<View testID="secondary-round">
+								<DecisionCard
+									day={day}
+									index={1}
+									count={2}
+									later={false}
+									decision={{
+										...original,
+										id: "second-round",
+										interviewRoundId: "second-round",
+										interviewQuestions: original.interviewQuestions.map((q) => ({
+											...q,
+											id: `other-${q.id}`,
+										})),
+									}}
+								/>
+							</View>
+						</If>
+					</Column>
+				</Panel>
+				<Block>
+					<Buttons>
+						<Button label="Show second round" onPress={() => second.set(true)} />
+						<Button
+							label="Stale global read"
+							onPress={() =>
+								day.today.set({ ...day.today(), attention: { ...day.today().attention, state: "stale" } })
+							}
+						/>
+						<Button
+							label="Large round"
+							onPress={() =>
+								decision.set({
+									...original,
+									interviewRoundId: "round-large",
+									interviewQuestions: Array.from({ length: 40 }, (_, n) =>
+										question(`q${n}`, "constraints", `Question ${n + 1}: What must stay unchanged?`, [
+											{ id: "keep", meaning: "Keep the existing behavior" },
+										]),
+									),
+								})
+							}
+						/>
+						<Button label="Close card" onPress={() => visible.set(false)} />
+						<Button label="Reopen card" onPress={reopen} />
+						<Button
+							label="New round"
+							onPress={() => {
+								saved.set("");
+								decision.set({ ...original, interviewRoundId: "round-2" });
+							}}
+						/>
+						<Button label="Open other project's round" onPress={() => scoped.set(true)} />
+					</Buttons>
+					<Caption>{`Saved edits: ${saves()}`}</Caption>
+					<Caption>{`Submissions: ${sends()}`}</Caption>
+					<Caption>{`Receipt checks: ${checks()}`}</Caption>
+				</Block>
+			</Page>
+		</Scroll>
+	</FixtureWindow>
 ));

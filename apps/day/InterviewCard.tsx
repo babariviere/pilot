@@ -1,11 +1,11 @@
 // Standalone adapter for the same saved-round form missions use. Local JSON
 // keeps drafts only; native code resolves exact options and digests on Submit.
-import { cleanup, computed, effect, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, computed, effect, signal, View, type ViewRef } from "nsh";
 import type { Decision, IntentOutcome, Interview, Question, QuestionSection } from "pilot-day/native";
 import { checkDecision, laterDecision, needsCheck, saveDecisionDraft } from "./commands";
 import type { Day } from "./day";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
-import { Action, ToggleChip } from "./ui";
+import { Button, Chip, Chips, Quote } from "./ui";
 import { anchors, focusFront, holdFront, messages, replies, setFor } from "./view";
 
 const SECTIONS: Record<string, QuestionSection> = {
@@ -302,28 +302,28 @@ function InterviewForm(props: {
 		helpKeys: { context: "m" },
 		questionHelp: (q) => (
 			<If when={q.context}>
-				<View class="flex-row flex-wrap gap-1.5">
-					<ToggleChip
+				<Chips>
+					<Chip
 						label="More context"
 						shortcut="M"
 						pressed={contextOpen()[q.id] === true}
 						onChange={() => toggleContext(q.id)}
 					/>
-				</View>
+				</Chips>
 				<If when={contextOpen()[q.id]}>
-					<Text testID={`context-${q.id}`} class="text-sm text-muted-foreground">
-						{q.context}
-					</Text>
+					<Quote testID={`context-${q.id}`} text={q.context} />
 				</If>
+			</If>
+		),
+		foot: () => (
+			<If when={props.onLater}>
+				<Button label="Later" disabled={!idle()} onPress={() => props.onLater?.()} />
 			</If>
 		),
 	};
 	return (
-		<View testID="interview-card" class="gap-4">
+		<View testID="interview-card">
 			<InterviewRenderer source={source} anchor={(node) => props.anchor?.(node)} />
-			<If when={props.onLater}>
-				<Action label="Later" disabled={!idle()} onPress={() => props.onLater?.()} />
-			</If>
 		</View>
 	);
 }

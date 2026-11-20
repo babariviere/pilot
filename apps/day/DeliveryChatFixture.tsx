@@ -2,14 +2,14 @@
 // A task result page whose chat delivered nothing yet: it shows where the
 // chat is and the one action that moves it. Continue goes to a script that
 // counts it and sets the chat working, as the next read would.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import { chatRoute } from "./chatView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { type DeliveredWork, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
 import { openDay, openMockChat } from "./mockFeeds";
 import { mirrorSessionChat, type SessionChatSource } from "./sessionChat";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const subject: VerificationSubject = { kind: "task", projectId: "p", missionId: "m", taskId: "t" };
 const key = deliveryKey(subject);
@@ -59,32 +59,47 @@ const chat: SessionChatSource = {
 };
 const day = { ...openDay(), delivery: mirrorDelivery(source), chat: mirrorSessionChat(chat) };
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 bg-background">
+	<FixtureWindow>
 		<View class="flex-1">
 			<DeliveryScreen day={day} place={{ key, subject, title: "Export the audit log" }} />
 		</View>
-		<View class="flex-row flex-wrap gap-2 border-t border-border px-6 py-2">
-			<Action label="Working" onPress={() => setChat({ state: "working" })} />
-			<Action
-				label="Queued"
-				onPress={() => setChat({ state: "queued", reason: "Waiting for a Pilot coding slot (4 of 4 occupied)." })}
-			/>
-			<Action label="Asking" onPress={() => setChat({ state: "question" })} />
-			<Action label="Stopped" onPress={() => setChat({ state: "stopped", canContinue: true })} />
-			<Action label="Failed for good" onPress={() => setChat({ state: "failed", reason: "Startup failed" })} />
-			<Action
-				label="Waiting"
-				onPress={() =>
-					setChat({
-						state: "waiting",
-						canContinue: true,
-						says: "Here is the mockup. Does the layout work for you?",
-					})
-				}
-			/>
-			<Text testID="counts">{`Continues: ${continues()} · Chat open: ${chatRoute()?.sessionId ?? "none"}`}</Text>
-			<Text testID="replies">{`Replies: ${replies().join(" | ") || "none"}`}</Text>
-		</View>
-	</View>
+		<Block>
+			<Buttons>
+				<Button label="Working" onPress={() => setChat({ state: "working" })} />
+				<Button
+					label="Queued"
+					onPress={() =>
+						setChat({ state: "queued", reason: "Waiting for a Pilot coding slot (4 of 4 occupied)." })
+					}
+				/>
+				<Button label="Asking" onPress={() => setChat({ state: "question" })} />
+				<Button label="Stopped" onPress={() => setChat({ state: "stopped", canContinue: true })} />
+				<Button label="Failed for good" onPress={() => setChat({ state: "failed", reason: "Startup failed" })} />
+				<Button
+					label="Waiting"
+					onPress={() =>
+						setChat({
+							state: "waiting",
+							canContinue: true,
+							says: "Here is the mockup. Does the layout work for you?",
+						})
+					}
+				/>
+			</Buttons>
+			<Caption testID="counts">{`Continues: ${continues()} · Chat open: ${chatRoute()?.sessionId ?? "none"}`}</Caption>
+			<Caption testID="replies">{`Replies: ${replies().join(" | ") || "none"}`}</Caption>
+		</Block>
+	</FixtureWindow>
 ));

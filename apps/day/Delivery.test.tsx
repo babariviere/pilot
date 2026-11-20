@@ -537,13 +537,15 @@ test("a window that cannot open links shows them as text", async () => {
 test("Inspect source reads one exact pin once, as plain text that never runs, and records nothing", async () => {
 	const app = await ready();
 	await openCsv(app);
+	// Your check now leads the result page, so the outputs sit lower: a press below the fixture's toolbar
+	// scrolls first, as the user would. Each press still happens once.
 	expect(app.texts().includes("HTML, revision 3")).toBe(true);
 	expect(app.texts().includes("Visual, latest revision")).toBe(true);
 	// Opening the page reads no source; a link without a pin has no Inspect source.
 	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1]`);
 	expect(app.shows(`id:output-source-${UNPINNED}`)).toBe(false);
 	expect(app.texts().includes("No pinned revision")).toBe(true);
-	await app.press(`id:output-source-${HTML}`);
+	await pressCheck(app, `id:output-source-${HTML}`);
 	await app.waitFor("id:artifact-source-text");
 	expect(showsSource(app, HTML_SOURCE)).toBe(true);
 	expect(app.texts().includes("Source · HTML · revision 3")).toBe(true);
@@ -555,19 +557,19 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	expect(app.texts().includes("Not checked yet.")).toBe(true);
 	expect(app.shows("id:mark-done")).toBe(true);
 	// An image shows its title and kind only. Each output keeps its own view.
-	await app.press(`id:output-source-${IMAGE}`);
+	await pressCheck(app, `id:output-source-${IMAGE}`);
 	await app.waitFor("This service does not provide this image's saved bytes here. Its title and version are kept.");
 	expect(app.texts().includes("Image · revision 1")).toBe(true);
 	// Unavailable bytes offer nothing to share or enlarge.
 	expect(app.shows(`id:output-${IMAGE}-share`)).toBe(false);
 	expect(app.shows(`id:output-${IMAGE}-full`)).toBe(false);
 	expect(showsSource(app, HTML_SOURCE)).toBe(true);
-	await app.press(`id:output-source-${IMAGE}`);
+	await pressCheck(app, `id:output-source-${IMAGE}`);
 	expect(app.texts().includes("Image · revision 1")).toBe(false);
-	await app.press(`id:output-source-${HTML}`);
+	await pressCheck(app, `id:output-source-${HTML}`);
 	expect(app.shows("id:artifact-source")).toBe(false);
 	// Escape hides a shown source first, then leaves the page.
-	await app.press(`id:output-source-${VISUAL}`);
+	await pressCheck(app, `id:output-source-${VISUAL}`);
 	await app.waitFor("id:artifact-source-text");
 	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
 	await app.keyboard.press("escape");

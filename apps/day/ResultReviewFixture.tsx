@@ -1,6 +1,6 @@
 // Invented service data only. Exercises the production result page and its Review code page over a scripted
 // result (deliveryDemo.ts) and a scripted private review, not a second screen.
-import { keymap, mount, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, signal, View } from "nsh";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
@@ -13,7 +13,7 @@ import {
 	restoreReviewDrafts,
 	reviewDrafts,
 } from "./resultReview";
-import { Action } from "./ui";
+import { Block, Body, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const KEY = "task/mock-project/native/native-4";
 const delivery = new ScriptedDelivery();
@@ -119,6 +119,17 @@ const source: ResultReviewSource = {
 		return { state: receipt ? "saved" : "unknown", operationId: id, receipt };
 	},
 };
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => {
 	// A background read of the same result, as a fresh copy, from a key so the focus stays where it is.
 	keymap.bind(
@@ -131,7 +142,7 @@ mount(() => {
 		{ when: "always" },
 	);
 	return (
-		<View class="flex-1 bg-background">
+		<FixtureWindow>
 			<View class="min-h-0 flex-1">
 				<Each
 					of={deliveryRoute() ? [{ place: deliveryRoute() as DeliveryPlace, at: revision() }] : []}
@@ -140,52 +151,56 @@ mount(() => {
 					{(p) => <DeliveryScreen day={day} place={p().place} reviewSource={source} />}
 				</Each>
 				<If when={!deliveryRoute()}>
-					<Text class="p-6 text-sm text-muted-foreground">Result closed</Text>
+					<Block>
+						<Body tone="muted">Result closed</Body>
+					</Block>
 				</If>
 			</View>
-			<View class="flex-row flex-wrap gap-2 border-t border-border p-3">
-				<Text class="text-xs text-muted-foreground">Mock data · Result review fixture</Text>
-				<Text>{`Saves: ${saves()}`}</Text>
-				<Text>{`Sends: ${delivery.counts().sends}`}</Text>
-				<Text testID="sent-note">{`Note sent: [${delivery.counts().note}]`}</Text>
-				<Text testID="revision-request">{backNotes()[KEY] ?? "No unsent Send back note"}</Text>
-				<Action
-					label="Refuse next save"
-					onPress={() => {
-						refuse = true;
-					}}
-				/>
-				<Action
-					label="Delay next save reply"
-					onPress={() => {
-						hold = true;
-					}}
-				/>
-				<Action
-					label="Release saved reply"
-					onPress={() => {
-						release?.();
-						release = undefined;
-					}}
-				/>
-				<Action
-					label="Lose next save reply"
-					onPress={() => {
-						lose = true;
-					}}
-				/>
-				<Action label="Reopen review" onPress={() => revision.set(revision() + 1)} />
-				<Action label="New result version" onPress={() => delivery.deliverAgain(KEY, "d")} />
-				<Action
-					label="Save and restore drafts"
-					onPress={() => {
-						const saved = captureReviewDrafts();
-						reviewDrafts.set({});
-						restoreReviewDrafts(saved);
-						revision.set(revision() + 1);
-					}}
-				/>
-			</View>
-		</View>
+			<Block>
+				<Buttons>
+					<Caption>Mock data · Result review fixture</Caption>
+					<Caption>{`Saves: ${saves()}`}</Caption>
+					<Caption>{`Sends: ${delivery.counts().sends}`}</Caption>
+					<Caption testID="sent-note">{`Note sent: [${delivery.counts().note}]`}</Caption>
+					<Caption testID="revision-request">{backNotes()[KEY] ?? "No unsent Send back note"}</Caption>
+					<Button
+						label="Refuse next save"
+						onPress={() => {
+							refuse = true;
+						}}
+					/>
+					<Button
+						label="Delay next save reply"
+						onPress={() => {
+							hold = true;
+						}}
+					/>
+					<Button
+						label="Release saved reply"
+						onPress={() => {
+							release?.();
+							release = undefined;
+						}}
+					/>
+					<Button
+						label="Lose next save reply"
+						onPress={() => {
+							lose = true;
+						}}
+					/>
+					<Button label="Reopen review" onPress={() => revision.set(revision() + 1)} />
+					<Button label="New result version" onPress={() => delivery.deliverAgain(KEY, "d")} />
+					<Button
+						label="Save and restore drafts"
+						onPress={() => {
+							const saved = captureReviewDrafts();
+							reviewDrafts.set({});
+							restoreReviewDrafts(saved);
+							revision.set(revision() + 1);
+						}}
+					/>
+				</Buttons>
+			</Block>
+		</FixtureWindow>
 	);
 });

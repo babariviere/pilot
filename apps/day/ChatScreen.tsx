@@ -6,7 +6,7 @@
 // Pilot reads the chat again as it changes.
 // A chat the service says can continue (stopped, or failed with a safe retry)
 // offers Continue: one explicit press sends fixed words once.
-import { cleanup, Keyboard, keymap, Scroll, signal, Text, View } from "nsh";
+import { cleanup, Keyboard, keymap, Scroll, signal, View } from "nsh";
 import { ChatTranscript } from "./ChatRows";
 import { chatRoute, closeChat, openChat } from "./chatView";
 import { queueLine } from "./codingQueue";
@@ -16,7 +16,22 @@ import { LinkedFeedback } from "./LinkedFeedback";
 import { LiveChanges } from "./LiveChanges";
 import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
 import type { ContinueResult, SessionChat, SessionChatMirror, SessionChatSource } from "./sessionChat";
-import { Action, type MarkKind, MarkLine, Page, PageTitle, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	type MarkKind,
+	Notice,
+	Page,
+	PageHead,
+	Panel,
+	Section,
+	State,
+	TextField,
+} from "./ui";
 
 /** The note is editable; scope and evidence remain in the original history. */
 function FixHandoffRow(props: { mirror: SessionChatMirror; sessionId: string }) {
@@ -71,62 +86,64 @@ function FixHandoffRow(props: { mirror: SessionChatMirror; sessionId: string }) 
 	// A reopened uncertain handoff looks up only its saved operation.
 	if (unknown()) void check();
 	return (
-		<View class="gap-3 border-t border-border pt-3">
-			<Text class="text-sm text-foreground">Continue in a linked chat</Text>
-			<Text class="text-xs text-muted-foreground">
-				Pilot pauses the original writer before handing over its working copy. Its history and evidence stay
-				available. This is the same fix, not a new allowance.
-			</Text>
-			<If when={!!chat()?.fixHandoff}>
-				<Text
-					testID="chat-handoff-context"
-					class="text-xs text-muted-foreground"
-				>{`${chat()?.fixHandoff?.projectName || chat()?.fixHandoff?.projectId} · ${chat()?.fixHandoff?.model}${chat()?.fixHandoff?.thinking ? ` (${chat()?.fixHandoff?.thinking})` : ""} · ${!chat()?.fixHandoff?.allowanceEnabled ? "Spending limits off" : chat()?.fixHandoff?.remainingMicros == null ? "Unlimited remaining" : `$${((chat()?.fixHandoff?.remainingMicros ?? 0) / 1_000_000).toFixed(2)} remaining`}`}</Text>
-			</If>
-			<If when={!editing() && !unknown()}>
-				<Action label="Prepare handoff…" testID="chat-handoff-prepare" onPress={() => editing.set(true)} />
-			</If>
-			<If when={editing() && !unknown()}>
-				<View class="gap-2">
-					<Text class="text-xs text-muted-foreground">Original scope (kept unchanged)</Text>
-					<View selectable>
-						<Text testID="chat-handoff-scope" class="text-xs text-muted-foreground">
-							{chat()?.fixHandoff?.originalScope ?? ""}
-						</Text>
+		<Section title="Continue in a linked chat">
+			<Block gap={3}>
+				<Caption>
+					Pilot pauses the original writer before handing over its working copy. Its history and evidence stay
+					available. This is the same fix, not a new allowance.
+				</Caption>
+				<If when={!!chat()?.fixHandoff}>
+					<Caption testID="chat-handoff-context">{`${chat()?.fixHandoff?.projectName || chat()?.fixHandoff?.projectId} · ${chat()?.fixHandoff?.model}${chat()?.fixHandoff?.thinking ? ` (${chat()?.fixHandoff?.thinking})` : ""} · ${!chat()?.fixHandoff?.allowanceEnabled ? "Spending limits off" : chat()?.fixHandoff?.remainingMicros == null ? "Unlimited remaining" : `$${((chat()?.fixHandoff?.remainingMicros ?? 0) / 1_000_000).toFixed(2)} remaining`}`}</Caption>
+				</If>
+				<If when={!editing() && !unknown()}>
+					<Buttons>
+						<Button label="Prepare handoff…" testID="chat-handoff-prepare" onPress={() => editing.set(true)} />
+					</Buttons>
+				</If>
+				<If when={editing() && !unknown()}>
+					<View class="gap-2">
+						<Caption>Original scope (kept unchanged)</Caption>
+						<View selectable>
+							<Caption testID="chat-handoff-scope">{chat()?.fixHandoff?.originalScope ?? ""}</Caption>
+						</View>
+						<TextField
+							testID="chat-handoff-note"
+							accessibilityLabel="Handoff note"
+							multiline
+							rows={3}
+							value={note()}
+							onChange={({ value }) => setRecoveryNote(key, value)}
+							disabled={sending()}
+						/>
+						<Buttons>
+							<Button
+								label={sending() ? "Starting…" : "Start linked chat"}
+								testID="chat-handoff-start"
+								disabled={sending() || recoveryBytes(note()) > RECOVERY_INPUT_BYTES}
+								onPress={() => void start()}
+							/>
+							<Button label="Cancel" disabled={sending()} onPress={() => editing.set(false)} />
+						</Buttons>
+						<If when={recoveryBytes(note()) > RECOVERY_INPUT_BYTES}>
+							<Caption>{`This note is ${recoveryBytes(note())} bytes. The limit is ${RECOVERY_INPUT_BYTES}; shorten it before starting. Your draft is kept.`}</Caption>
+						</If>
 					</View>
-					<TextField
-						testID="chat-handoff-note"
-						accessibilityLabel="Handoff note"
-						multiline
-						rows={3}
-						value={note()}
-						onChange={({ value }) => setRecoveryNote(key, value)}
-						disabled={sending()}
-					/>
-					<Action
-						label={sending() ? "Starting…" : "Start linked chat"}
-						testID="chat-handoff-start"
-						disabled={sending() || recoveryBytes(note()) > RECOVERY_INPUT_BYTES}
-						onPress={() => void start()}
-					/>
-					<Action label="Cancel" disabled={sending()} onPress={() => editing.set(false)} />
-					<If when={recoveryBytes(note()) > RECOVERY_INPUT_BYTES}>
-						<Text class="text-xs text-muted-foreground">{`This note is ${recoveryBytes(note())} bytes. The limit is ${RECOVERY_INPUT_BYTES}; shorten it before starting. Your draft is kept.`}</Text>
-					</If>
-				</View>
-			</If>
-			<If when={unknown()}>
-				<Action
-					label={sending() ? "Checking…" : "Check"}
-					testID="chat-handoff-check"
-					disabled={sending()}
-					onPress={() => void check()}
-				/>
-			</If>
-			<If when={pending()?.message}>
-				<Text class="text-xs text-muted-foreground">{pending()?.message ?? ""}</Text>
-			</If>
-		</View>
+				</If>
+				<If when={unknown()}>
+					<Buttons>
+						<Button
+							label={sending() ? "Checking…" : "Check"}
+							testID="chat-handoff-check"
+							disabled={sending()}
+							onPress={() => void check()}
+						/>
+					</Buttons>
+				</If>
+				<If when={pending()?.message}>
+					<Caption>{pending()?.message ?? ""}</Caption>
+				</If>
+			</Block>
+		</Section>
 	);
 }
 
@@ -168,36 +185,36 @@ function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; rest
 	};
 	return (
 		<View class="gap-3">
-			<Text class="text-sm text-muted-foreground">
-				Retry continues in this chat with its existing access and remaining allowance.
-			</Text>
+			<Body tone="muted">Retry continues in this chat with its existing access and remaining allowance.</Body>
 			<If
 				when={unknown()}
 				else={
-					<View class="flex-row gap-2">
-						<Action
+					<Buttons>
+						<Button
 							label={sending() ? "Sending…" : "Retry"}
 							testID="chat-retry"
 							disabled={sending()}
 							onPress={() => void go("")}
 						/>
 						<If when={!props.restartOnly}>
-							<Action
+							<Button
 								label="Correct follow-up…"
 								testID="chat-correct"
 								disabled={sending()}
 								onPress={() => editing.set(true)}
 							/>
 						</If>
-					</View>
+					</Buttons>
 				}
 			>
-				<Action
-					label={sending() ? "Checking…" : "Check"}
-					testID="chat-recovery-check"
-					disabled={sending() || !(result()?.operationId ?? props.mirror.chat()?.pendingRecovery?.operationId)}
-					onPress={() => void check()}
-				/>
+				<Buttons>
+					<Button
+						label={sending() ? "Checking…" : "Check"}
+						testID="chat-recovery-check"
+						disabled={sending() || !(result()?.operationId ?? props.mirror.chat()?.pendingRecovery?.operationId)}
+						onPress={() => void check()}
+					/>
+				</Buttons>
 			</If>
 			<If when={editing() && !unknown() && !props.restartOnly}>
 				<View class="gap-2">
@@ -210,14 +227,14 @@ function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; rest
 						onChange={({ value }) => setRecoveryNote(props.sessionId, value)}
 						disabled={sending()}
 					/>
-					<View class="flex-row gap-2">
-						<Action
+					<Buttons>
+						<Button
 							label="Send follow-up"
 							testID="chat-recovery-send"
 							disabled={sending() || !text().trim() || tooLarge()}
 							onPress={() => void go(text())}
 						/>
-						<Action
+						<Button
 							label="Cancel"
 							disabled={sending()}
 							onPress={() => {
@@ -225,14 +242,14 @@ function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; rest
 								editing.set(false);
 							}}
 						/>
-					</View>
+					</Buttons>
 					<If when={tooLarge()}>
-						<Text class="text-xs text-muted-foreground">{`This follow-up is ${recoveryBytes(text())} bytes. The limit is ${RECOVERY_INPUT_BYTES}; shorten it before sending. Your draft is kept.`}</Text>
+						<Caption>{`This follow-up is ${recoveryBytes(text())} bytes. The limit is ${RECOVERY_INPUT_BYTES}; shorten it before sending. Your draft is kept.`}</Caption>
 					</If>
 				</View>
 			</If>
 			<If when={result()?.message}>
-				<Text class="text-xs text-muted-foreground">{result()?.message ?? ""}</Text>
+				<Caption>{result()?.message ?? ""}</Caption>
 			</If>
 		</View>
 	);
@@ -240,22 +257,22 @@ function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; rest
 
 /** The chat's state as one quiet line and its mark. */
 function stateLine(chat: SessionChat | null): { mark: MarkKind; text: string } | null {
-	if (chat?.archived) return { mark: "still", text: "Archived. This view is read-only." };
+	if (chat?.archived) return { mark: "paused", text: "Archived. This view is read-only." };
 	switch (chat?.state) {
 		case "working":
-			return { mark: "moving", text: "Working." };
+			return { mark: "working", text: "Working." };
 		case "question":
 			return chat.questionSettled
-				? { mark: "still", text: "This question no longer needs you. The plan settled it." }
+				? { mark: "done", text: "This question no longer needs you. The plan settled it." }
 				: { mark: "needs", text: "It asks a question and waits for an answer." };
 		case "done":
 			return { mark: "done", text: "Done. What it says below is its own report, not a checked result." };
 		case "failed":
 			return { mark: "failed", text: chat?.stateReason ? `Failed: ${chat.stateReason}` : "Failed." };
 		case "stopped":
-			return { mark: "still", text: chat?.stateReason ? `Stopped: ${chat.stateReason}` : "Stopped." };
+			return { mark: "paused", text: chat?.stateReason ? `Stopped: ${chat.stateReason}` : "Stopped." };
 		case "idle":
-			return { mark: "still", text: chat?.queue ? queueLine(chat.queue) : chat?.stateReason || "Not working now." };
+			return { mark: "paused", text: chat?.queue ? queueLine(chat.queue) : chat?.stateReason || "Not working now." };
 		default:
 			return null;
 	}
@@ -287,12 +304,11 @@ export function ContinueRow(props: {
 	};
 	return (
 		<View class="gap-1.5">
-			<View class="flex-row flex-wrap items-center gap-3">
+			<Buttons>
 				<If
 					when={unknown()}
 					else={
-						<Action
-							variant="outline"
+						<Button
 							label={sending() ? "Sending…" : "Continue"}
 							testID="chat-continue"
 							disabled={sending()}
@@ -302,7 +318,7 @@ export function ContinueRow(props: {
 					}
 				>
 					{(id) => (
-						<Action
+						<Button
 							label={sending() ? "Checking…" : "Check"}
 							testID="chat-continue-check"
 							disabled={sending()}
@@ -310,16 +326,14 @@ export function ContinueRow(props: {
 						/>
 					)}
 				</If>
-				<Text class="flex-1 text-xs text-faint">
+				<Caption tone="faint" grow>
 					{props.failed
 						? "Asks it to try again from where it failed. Sent once."
 						: "Asks it to pick up where it stopped, or to ask a lost question again. Sent once."}
-				</Text>
-			</View>
+				</Caption>
+			</Buttons>
 			<If when={result()?.message}>
-				<Text testID="chat-continue-message" class="text-xs text-muted-foreground">
-					{result()?.message ?? ""}
-				</Text>
+				<Caption testID="chat-continue-message">{result()?.message ?? ""}</Caption>
 			</If>
 		</View>
 	);
@@ -342,138 +356,163 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 		return c?.sessionId === props.sessionId ? c : null;
 	};
 	const state = () => stateLine(chat());
+	const canContinue = () =>
+		chat()?.canContinue &&
+		!chat()?.continuedTo &&
+		!chat()?.specialist &&
+		!chat()?.recoveryBlocked &&
+		!chat()?.archived &&
+		// Where Retry shows below, it is the one way to move a failed or stopped chat.
+		!(
+			mirror.source.recoverChat &&
+			(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery)
+		);
+	const canRecover = () =>
+		(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery) &&
+		!chat()?.continuedTo &&
+		chat()?.pendingRecovery?.kind !== "chat-handoff" &&
+		(!chat()?.recoveryBlocked || chat()?.pendingRecovery) &&
+		!chat()?.specialist &&
+		!chat()?.archived &&
+		mirror.source.recoverChat;
 	return (
-		<Scroll class="flex-1 bg-background">
-			<Page testID="chat" gap={8}>
-				<View class="gap-3">
-					<PageTitle title={chat()?.title || "Chat"} />
-					<Text class="text-sm text-muted-foreground">
-						{chat()?.specialist
+		<Scroll class="flex-1">
+			<Page testID="chat">
+				<PageHead
+					title={chat()?.title || "Chat"}
+					text={
+						chat()?.specialist
 							? "Read-only specialist. Its findings are an assessment, not a verified cause. Reading sends nothing."
 							: mirror.source.recoverChat && chat()?.state === "failed" && !chat()?.archived
 								? "Reading sends nothing. Recovery starts only when you choose it."
-								: "Read only. Reading it sends nothing and changes nothing."}
-					</Text>
+								: "Read only. Reading it sends nothing and changes nothing."
+					}
+					actions={
+						<If when={state()}>
+							<If when={chat()?.continuedTo}>
+								<Button
+									label="Open linked chat"
+									testID="chat-successor"
+									onPress={() => openChat(chat()!.continuedTo!, "Chat")}
+								/>
+							</If>
+							<If when={chat()?.continuationOf}>
+								<Button
+									label="Original chat and evidence"
+									testID="chat-predecessor"
+									onPress={() => openChat(chat()!.continuationOf!, "Chat")}
+								/>
+							</If>
+						</If>
+					}
+				>
 					<If when={state()}>
 						<If when={!chat()?.specialist && chat()?.sourcePath}>
-							<View selectable class="gap-1">
-								<Text class="text-xs text-muted-foreground">{chat()?.sourceLabel ?? "Working copy"}</Text>
-								<Text testID="chat-source-path" class="text-xs text-faint">
+							<View selectable>
+								<Caption>{chat()?.sourceLabel ?? "Working copy"}</Caption>
+								<Caption testID="chat-source-path" tone="faint">
 									{chat()?.sourcePath ?? ""}
-								</Text>
-								<Text class="text-xs text-faint">
+								</Caption>
+								<Caption tone="faint">
 									Use this location in your terminal. Local files may change while work runs.
-								</Text>
+								</Caption>
 							</View>
 						</If>
-						<MarkLine testID="chat-state" kind={state()?.mark ?? "still"}>
-							<Text class="text-sm text-foreground">{state()?.text ?? ""}</Text>
-						</MarkLine>
-						<If when={chat()?.continuedTo}>
-							<Action
-								label="Open linked chat"
-								testID="chat-successor"
-								onPress={() => openChat(chat()!.continuedTo!, "Chat")}
-							/>
+						<State testID="chat-state" kind={state()?.mark ?? "paused"} label={state()?.text ?? ""} plain />
+					</If>
+				</PageHead>
+				<Panel
+					testID="chat-panel"
+					notice={
+						<If when={state() && chat()?.state === "failed" && chat()?.recoveryBlocked}>
+							<Notice placement="panel" text={chat()?.recoveryBlocked ?? ""} />
 						</If>
-						<If when={chat()?.continuationOf}>
-							<Action
-								label="Original chat and evidence"
-								testID="chat-predecessor"
-								onPress={() => openChat(chat()!.continuationOf!, "Chat")}
-							/>
+					}
+				>
+					{/* One column at a reading width, as a conversation reads. */}
+					<Column centered>
+						<If when={state() && (canContinue() || canRecover())}>
+							<Block gap={3}>
+								<If when={canContinue()}>
+									<ContinueRow
+										source={mirror.source}
+										sessionId={props.sessionId}
+										failed={chat()?.state === "failed"}
+									/>
+								</If>
+								<If when={canRecover()}>
+									<RecoveryRow
+										mirror={mirror}
+										sessionId={props.sessionId}
+										restartOnly={chat()?.restartOnly === true}
+									/>
+								</If>
+							</Block>
 						</If>
 						<If
 							when={
-								!!mirror.source.handoffChat && !!chat()?.fixHandoff && !chat()?.continuedTo && !chat()?.archived
+								state() &&
+								!!mirror.source.handoffChat &&
+								!!chat()?.fixHandoff &&
+								!chat()?.continuedTo &&
+								!chat()?.archived
 							}
 						>
 							<FixHandoffRow mirror={mirror} sessionId={props.sessionId} />
 						</If>
-						<If when={mirror.source.readLiveChanges && chat()?.liveChangesKey}>
+						<If when={state() && mirror.source.readLiveChanges && chat()?.liveChangesKey}>
 							{(key) => (
-								<LiveChanges
-									workspaceKey={key()}
-									read={(workspaceKey) => mirror.source.readLiveChanges!(props.sessionId, workspaceKey)}
-								/>
+								<Block>
+									<LiveChanges
+										workspaceKey={key()}
+										read={(workspaceKey) => mirror.source.readLiveChanges!(props.sessionId, workspaceKey)}
+									/>
+								</Block>
 							)}
 						</If>
+						<If when={state() && chat()?.workspaceKept}>
+							<Section testID="chat-final-archive-wait" title="Working copy kept">
+								<Block>
+									<Caption>
+										Final archive is unavailable until required review and saved delivery can be verified.
+										Your project folder is never deleted.
+									</Caption>
+								</Block>
+							</Section>
+						</If>
+						<Section title="Chat">
+							<Block gap={4}>
+								<ChatTranscript
+									id="chat"
+									chat={chat()}
+									readingWords="Reading this chat…"
+									emptyWords="This chat has no messages yet."
+									onEarlier={() => void mirror.source.earlier()}
+									read={() => mirror.source.refresh()}
+								/>
+							</Block>
+						</Section>
 						<If
 							when={
-								chat()?.canContinue &&
+								!!props.day.feedback &&
+								!!chat()?.projectId &&
+								chat()?.state === "done" &&
 								!chat()?.continuedTo &&
-								!chat()?.specialist &&
-								!chat()?.recoveryBlocked &&
-								!chat()?.archived &&
-								// Where Retry shows below, it is the one way to move a failed or stopped chat.
-								!(
-									mirror.source.recoverChat &&
-									(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery)
-								)
+								!chat()?.specialist
 							}
 						>
-							<ContinueRow
-								source={mirror.source}
-								sessionId={props.sessionId}
-								failed={chat()?.state === "failed"}
+							<LinkedFeedback
+								mirror={props.day.feedback!}
+								scope={{ kind: "chat", id: props.sessionId, projectId: chat()!.projectId! }}
 							/>
 						</If>
-						<If
-							when={
-								(chat()?.state === "failed" || chat()?.state === "stopped" || chat()?.pendingRecovery) &&
-								!chat()?.continuedTo &&
-								chat()?.pendingRecovery?.kind !== "chat-handoff" &&
-								(!chat()?.recoveryBlocked || chat()?.pendingRecovery) &&
-								!chat()?.specialist &&
-								!chat()?.archived &&
-								mirror.source.recoverChat
-							}
-						>
-							<RecoveryRow
-								mirror={mirror}
-								sessionId={props.sessionId}
-								restartOnly={chat()?.restartOnly === true}
-							/>
+						<If when={chat()?.specialist && props.day.diagnosis}>
+							<Block>
+								<DiagnosisReply controls={props.day.diagnosis!} sessionId={props.sessionId} />
+							</Block>
 						</If>
-						<If when={chat()?.workspaceKept}>
-							<View testID="chat-final-archive-wait" class="gap-1 border-t border-border pt-3">
-								<Text class="text-sm text-foreground">Working copy kept</Text>
-								<Text class="text-xs text-muted-foreground">
-									Final archive is unavailable until required review and saved delivery can be verified. Your
-									project folder is never deleted.
-								</Text>
-							</View>
-						</If>
-						<If when={chat()?.state === "failed" && chat()?.recoveryBlocked}>
-							<Text class="text-sm text-muted-foreground">{chat()?.recoveryBlocked ?? ""}</Text>
-						</If>
-					</If>
-				</View>
-				<ChatTranscript
-					id="chat"
-					chat={chat()}
-					readingWords="Reading this chat…"
-					emptyWords="This chat has no messages yet."
-					onEarlier={() => void mirror.source.earlier()}
-					read={() => mirror.source.refresh()}
-				/>
-				<If
-					when={
-						!!props.day.feedback &&
-						!!chat()?.projectId &&
-						chat()?.state === "done" &&
-						!chat()?.continuedTo &&
-						!chat()?.specialist
-					}
-				>
-					<LinkedFeedback
-						mirror={props.day.feedback!}
-						scope={{ kind: "chat", id: props.sessionId, projectId: chat()!.projectId! }}
-					/>
-				</If>
-				<If when={chat()?.specialist && props.day.diagnosis}>
-					<DiagnosisReply controls={props.day.diagnosis!} sessionId={props.sessionId} />
-				</If>
+					</Column>
+				</Panel>
 			</Page>
 		</Scroll>
 	);

@@ -1,9 +1,10 @@
 // Headless test fixture only, never app runtime. A question's attached
 // mockup, with a scripted artifact source: one press reads it once.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import type { DecisionArtifact } from "pilot-day/native";
 import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
 import { QuestionArtifacts } from "./QuestionArtifacts";
+import { Block, Caption, GridBackdrop } from "./ui";
 
 const reads = signal<string[]>([]);
 const artifacts: DecisionArtifact[] = [
@@ -35,9 +36,22 @@ const source: ArtifactSource = {
 	},
 };
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 gap-4 bg-background p-6">
-		<QuestionArtifacts source={source} artifacts={artifacts} />
-		<Text>{`Reads: [${reads().join(" ")}]`}</Text>
-	</View>
+	<FixtureWindow>
+		<Block gap={4}>
+			<QuestionArtifacts source={source} artifacts={artifacts} />
+			<Caption>{`Reads: [${reads().join(" ")}]`}</Caption>
+		</Block>
+	</FixtureWindow>
 ));

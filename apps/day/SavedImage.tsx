@@ -1,6 +1,6 @@
-import { Image, signal, Text, View } from "nsh";
+import { Image, signal, View } from "nsh";
 import type { Shown } from "./artifactReads";
-import { Action } from "./ui";
+import { Body, Button, Buttons } from "./ui";
 
 /**
  * Only validated inline raster bytes reach Image. No file or network URL. Its viewer's header names and shares it.
@@ -28,16 +28,18 @@ export function SavedImage(props: { inspection: Shown; fill?: boolean }) {
 					)}
 				</Each>
 				<If when={failed()}>
-					<Text role="alert" class="text-sm text-muted-foreground">
+					<Body role="alert" tone="muted">
 						This saved image could not be drawn. Share can still export its original bytes.
-					</Text>
-					<Action
-						label="Retry image"
-						onPress={() => {
-							failed.set(false);
-							attempt.update((n) => n + 1);
-						}}
-					/>
+					</Body>
+					<Buttons>
+						<Button
+							label="Retry image"
+							onPress={() => {
+								failed.set(false);
+								attempt.update((n) => n + 1);
+							}}
+						/>
+					</Buttons>
 				</If>
 			</If>
 		</View>

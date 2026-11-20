@@ -12,16 +12,17 @@
 import {
 	cleanup,
 	effect,
+	type JSX,
 	keymap,
 	Scroll,
 	type ScrollRef,
 	type Signal,
 	signal,
-	Text,
 	untracked,
 	View,
 	type ViewRef,
 } from "nsh";
+// LIBRARY GAP: see ConfirmDialog below; the interrupt confirmation needs the base Dialog.
 import { Dialog } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
@@ -65,23 +66,42 @@ import {
 	threadMessages,
 } from "./threadView";
 import {
-	Action,
+	Block,
+	Body,
+	BodyStrong,
+	Bubble,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	Composer,
+	Disclosure,
+	EmptyLine,
+	Event,
 	glide,
-	InlineAction,
-	Mark,
+	KeyHints,
+	Link,
 	type MarkKind,
-	MarkLine,
+	Notice,
+	Num,
 	Page,
-	PageTitle,
-	QuietPanel,
-	Pressable,
-	RowLink,
-	SectionTitle,
+	PageHead,
+	Panel,
+	Quote,
+	Reply,
+	Row,
+	RowGroup,
+	Rows,
+	Section,
+	Spacer,
+	State,
+	Steps,
 	TextField,
+	Title,
 } from "./ui";
 
 const STATUS: Record<Topic["disposition"], { word: string; mark: MarkKind }> = {
-	open: { word: "Open", mark: "still" },
+	open: { word: "Open", mark: "new" },
 	later: { word: "Later", mark: "paused" },
 	discarded: { word: "Discarded", mark: "done" },
 	resolved: { word: "Resolved", mark: "done" },
@@ -134,22 +154,21 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 	};
 	return (
 		<If when={props.ops.length > 0}>
-			<QuietPanel testID={props.testID} class="gap-2">
+			<View testID={props.testID} class="gap-2">
 				<Each of={props.ops} key={(o) => o.operationId}>
 					{(o) => (
-						<View class="gap-1.5">
-							<MarkLine kind="unknown" selectable>
-								<Text class="text-sm text-foreground">{words(o())}</Text>
-							</MarkLine>
-							<Text class="pl-4 text-xs text-muted-foreground">
-								{o().state === "checking"
+						<Notice
+							text={words(o())}
+							detail={
+								o().state === "checking"
 									? "Checking that it arrived…"
-									: "Pilot could not confirm it yet. It will not send it again. Check only reads."}
-							</Text>
-							{/* Pilot checks by itself first; the button is the fallback after its tries. */}
-							<If when={o().state !== "checking"}>
-								<View class="flex-row pl-3">
-									<Action
+									: "Pilot could not confirm it yet. It will not send it again. Check only reads."
+							}
+							action={
+								/* Pilot checks by itself first; the button is the fallback after its tries. */
+								<If when={o().state !== "checking"}>
+									<Button
+										small
 										label="Check"
 										icon="refresh"
 										testID={`thread-check-${o().operationId}`}
@@ -168,17 +187,15 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 											setMessage(key(), r.message);
 										}}
 									/>
-								</View>
-							</If>
-						</View>
+								</If>
+							}
+						/>
 					)}
 				</Each>
 				<If when={threadMessages()[key()]}>
-					<Text testID={`${props.testID}-message`} class="text-xs text-muted-foreground">
-						{threadMessages()[key()] ?? ""}
-					</Text>
+					<Caption testID={`${props.testID}-message`}>{threadMessages()[key()] ?? ""}</Caption>
 				</If>
-			</QuietPanel>
+			</View>
 		</If>
 	);
 }
@@ -192,24 +209,21 @@ function Unreadable(props: { mirror: ThreadsMirror; missionId: string; m: Missio
 		() => false,
 	);
 	return (
-		<View testID="threads-off" class="gap-2">
-			<MarkLine kind="unknown">
-				<Text class="text-sm text-foreground">
-					{`${props.m.reason} Threads are not shown; this is not the same as having none.`}
-				</Text>
-			</MarkLine>
-			<If when={reads.warn()}>
-				<View class="flex-row pl-3">
-					<Action
+		<Notice
+			testID="threads-off"
+			text={`${props.m.reason} Threads are not shown; this is not the same as having none.`}
+			action={
+				<If when={reads.warn()}>
+					<Link
 						label="Try now"
 						icon="refresh"
 						testID="threads-read"
 						accessibilityLabel="Read this mission's threads again. This sends nothing."
 						onPress={() => void reads.now()}
 					/>
-				</View>
-			</If>
-		</View>
+				</If>
+			}
+		/>
 	);
 }
 
@@ -272,8 +286,8 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 		<If
 			when={open()}
 			else={
-				<View class="flex-row">
-					<Action
+				<Buttons>
+					<Button
 						label="New thread"
 						icon="plus"
 						testID="thread-new"
@@ -284,51 +298,56 @@ function NewThread(props: { mirror: ThreadsMirror; missionId: string; m: Mission
 							naming.update((all) => ({ ...all, [props.missionId]: true }));
 						}}
 					/>
-				</View>
+				</Buttons>
 			}
 		>
 			<View class="gap-2">
-				<TextField
-					variant="composer"
-					testID="thread-title"
-					ref={field.ref}
-					autoFocus
-					multiline
-					value={text()}
-					accessibilityLabel="Your first message. Its first sentence becomes the thread's title."
-					placeholder="What do you want to talk about? The first sentence becomes the thread's title."
-					onChange={({ value }) => setDraft(key(), value)}
-					onFocus={field.focus}
-					onSelectionChange={field.select}
+				<Composer
+					field={
+						<TextField
+							variant="composer"
+							testID="thread-title"
+							ref={field.ref}
+							autoFocus
+							multiline
+							value={text()}
+							accessibilityLabel="Your first message. Its first sentence becomes the thread's title."
+							placeholder="What do you want to talk about? The first sentence becomes the thread's title."
+							onChange={({ value }) => setDraft(key(), value)}
+							onFocus={field.focus}
+							onSelectionChange={field.select}
+						/>
+					}
+					bar={
+						<>
+							<If when={text().trim()}>
+								<Caption testID="thread-new-title" truncate grow>
+									{`Title: ${titleOf(text())}`}
+								</Caption>
+							</If>
+							<Spacer />
+							{/* Send comes first: Tab from the field reaches it before Cancel. */}
+							<Button
+								label={props.m.writing ? "Sending…" : "Send"}
+								testID="thread-start"
+								shortcut="⌘↩"
+								disabled={blocked()}
+								onPress={() => void start()}
+							/>
+							<Button
+								label="Cancel"
+								testID="thread-cancel"
+								accessibilityLabel="Close this without starting a thread. Your words stay."
+								onPress={() => naming.update((all) => ({ ...all, [props.missionId]: false }))}
+							/>
+						</>
+					}
 				/>
 				<If when={tooLong()}>
-					<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
+					<Caption tone="needs">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Caption>
 				</If>
-				<If when={text().trim()}>
-					<Text testID="thread-new-title" class="text-xs text-muted-foreground">
-						{`Title: ${titleOf(text())}`}
-					</Text>
-				</If>
-				<View class="flex-row flex-wrap items-center gap-2">
-					<Action
-						variant="primary"
-						label={props.m.writing ? "Sending…" : "Send"}
-						testID="thread-start"
-						shortcut="⌘↩"
-						disabled={blocked()}
-						onPress={() => void start()}
-					/>
-					<Action
-						label="Cancel"
-						testID="thread-cancel"
-						accessibilityLabel="Close this without starting a thread. Your words stay."
-						onPress={() => naming.update((all) => ({ ...all, [props.missionId]: false }))}
-					/>
-				</View>
 				<If when={threadMessages()[key()]}>
-					<Text testID="thread-new-message" class="text-xs text-muted-foreground">
-						{threadMessages()[key()] ?? ""}
-					</Text>
+					<Caption testID="thread-new-message">{threadMessages()[key()] ?? ""}</Caption>
 				</If>
 			</View>
 		</If>
@@ -351,22 +370,16 @@ function TopicRow(props: { missionId: string; topic: Topic; ops: ThreadOp[] }) {
 		openThread(props.missionId, props.topic.id);
 	};
 	return (
-		<View class="gap-0.5 border-t border-border py-2.5">
-			<RowLink
-				testID={`thread-${props.topic.id}`}
-				title={props.topic.title}
-				accessibilityLabel={`${props.topic.title}, ${pending() ? "not confirmed" : status().word}. Open the thread.`}
-				onPress={open}
-			>
-				<View class="flex-row items-center gap-1.5">
-					<Mark kind={pending() ? "unknown" : status().mark} />
-					<Text class={pending() ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
-						{pending() ? "Not confirmed" : status().word}
-					</Text>
-				</View>
-			</RowLink>
-			<Text class="text-xs text-faint">{meta()}</Text>
-		</View>
+		<Row
+			testID={`thread-${props.topic.id}`}
+			mark={pending() ? "needs" : status().mark}
+			title={props.topic.title}
+			meta={meta()}
+			state={pending() ? "Not confirmed" : status().word}
+			stateTone={pending() ? "needs" : "quiet"}
+			accessibilityLabel={`${props.topic.title}, ${pending() ? "not confirmed" : status().word}. Open the thread.`}
+			onPress={open}
+		/>
 	);
 }
 
@@ -396,50 +409,46 @@ export function MissionThreadsSection(props: { day: Day; missionId: string; head
 		];
 	};
 	const discarded = () => topics().filter((t) => t.disposition === "resolved" || t.disposition === "discarded").length;
-	return (
-		<View testID="mission-threads" class="gap-2">
-			<If when={props.heading !== false}>
-				<SectionTitle title="Threads with the coordinator" count={topics().length} />
-			</If>
-			<Text class="text-sm text-muted-foreground">
+	const body = () => (
+		<View testID="mission-threads" class="gap-3">
+			<Body tone="muted">
 				Talk through one subject at a time. Talking here never starts, approves or stops work.
-			</Text>
+			</Body>
 			<If
 				when={m().snapshot}
 				else={
 					<If
 						when={m().availability === "unavailable"}
-						else={<Text class="text-sm text-muted-foreground">Reading this mission's threads…</Text>}
+						else={<Body tone="muted">Reading this mission's threads…</Body>}
 					>
 						<Unreadable mirror={mirror} missionId={props.missionId} m={m()} />
 					</If>
 				}
 			>
-				<View>
-					<If when={m().reason && reads.stale()}>
-						<Text class="pb-2 text-xs text-muted-foreground">{staleLine(reads.readAt() ?? 0)}</Text>
-					</If>
-					<If when={topics().length === 0}>
-						<Text testID="threads-empty" class="border-t border-border py-3 text-sm text-muted-foreground">
-							No threads yet.
-						</Text>
-					</If>
+				<If when={m().reason && reads.stale()}>
+					<Caption>{staleLine(reads.readAt() ?? 0)}</Caption>
+				</If>
+				<If when={topics().length === 0}>
+					<Body testID="threads-empty" tone="muted">
+						No threads yet.
+					</Body>
+				</If>
+				<Rows>
 					<Each of={shown()} key={(t) => t.id}>
 						{(t) => <TopicRow missionId={props.missionId} topic={t()} ops={m().ops} />}
 					</Each>
-					<If when={discarded() > 0}>
-						<View class="flex-row border-t border-border pt-2">
-							<InlineAction
-								testID="threads-discarded"
-								label={showDiscarded()[props.missionId] ? "Hide closed threads" : `Show ${discarded()} closed`}
-								onPress={() => {
-									glide();
-									showDiscarded.update((all) => ({ ...all, [props.missionId]: !all[props.missionId] }));
-								}}
-							/>
-						</View>
-					</If>
-				</View>
+				</Rows>
+				<If when={discarded() > 0}>
+					<Link
+						testID="threads-discarded"
+						tone="faint"
+						label={showDiscarded()[props.missionId] ? "Hide closed threads" : `Show ${discarded()} closed`}
+						onPress={() => {
+							glide();
+							showDiscarded.update((all) => ({ ...all, [props.missionId]: !all[props.missionId] }));
+						}}
+					/>
+				</If>
 			</If>
 			<Unsettled
 				mirror={mirror}
@@ -449,6 +458,14 @@ export function MissionThreadsSection(props: { day: Day; missionId: string; head
 			/>
 			<NewThread mirror={mirror} missionId={props.missionId} m={m()} />
 		</View>
+	);
+	// Where the row that holds the threads names them, the content stands alone; elsewhere it is its own section.
+	// `heading` does not change for a mounted section.
+	if (props.heading === false) return body();
+	return (
+		<Section title="Threads with the coordinator" count={topics().length}>
+			<Block>{body()}</Block>
+		</Section>
 	);
 }
 
@@ -510,30 +527,13 @@ function Links(props: {
 				.map((d) => ({ ref: { kind: "decision", id: d.id } as ThreadReference, words: `D${d.number}: ${d.text}` })),
 		].filter((c) => !has(c.ref));
 	return (
-		<View testID="thread-links" class="gap-1.5">
-			<SectionTitle title="Linked" count={props.topic.references.length} />
-			<If when={props.topic.references.length === 0}>
-				<Text class="text-sm text-muted-foreground">Nothing linked yet.</Text>
-			</If>
-			<Each of={props.topic.references} key={(r) => JSON.stringify(r)}>
-				{(r) => (
-					<View selectable class="flex-row items-baseline gap-3">
-						<Text testID="thread-link" class="flex-1 text-sm text-foreground">
-							{referenceWords(r(), props.catalog)}
-						</Text>
-						<If when={delivered(r())}>
-							<InlineAction
-								testID={`thread-agent-work-${(r() as { id: string }).id}`}
-								label="Agent work"
-								onPress={() => showWork(r())}
-							/>
-						</If>
-					</View>
-				)}
-			</Each>
-			<If when={props.canWrite && props.catalog.known}>
-				<View class="flex-row">
-					<InlineAction
+		<Section
+			testID="thread-links"
+			title="Linked"
+			count={props.topic.references.length}
+			action={
+				<If when={props.canWrite && props.catalog.known}>
+					<Link
 						testID="thread-link-open"
 						label={open() ? "Close" : "Link a task or decision"}
 						onPress={() => {
@@ -541,16 +541,42 @@ function Links(props: {
 							linkOpen.update((all) => ({ ...all, [key()]: !open() }));
 						}}
 					/>
-				</View>
+				</If>
+			}
+		>
+			<If when={props.topic.references.length === 0}>
+				<EmptyLine text="Nothing linked yet." />
 			</If>
+			<Rows>
+				<Each of={props.topic.references} key={(r) => JSON.stringify(r)}>
+					{(r) => (
+						<Row
+							testID="thread-link"
+							title={referenceWords(r(), props.catalog)}
+							wrap
+							selectable
+							trailing={
+								<If when={delivered(r())}>
+									<Link
+										testID={`thread-agent-work-${(r() as { id: string }).id}`}
+										label="Agent work"
+										onPress={() => showWork(r())}
+									/>
+								</If>
+							}
+						/>
+					)}
+				</Each>
+			</Rows>
 			<If when={open()}>
-				<QuietPanel size="sm" class="gap-0.5">
-					<If when={choices().length === 0}>
-						<Text class="text-xs text-muted-foreground">Every task and decision is linked already.</Text>
-					</If>
+				<RowGroup label="Link to this thread" />
+				<If when={choices().length === 0}>
+					<EmptyLine text="Every task and decision is linked already." />
+				</If>
+				<Rows>
 					<Each of={choices()} key={(c) => JSON.stringify(c.ref)}>
 						{(c) => (
-							<RowLink
+							<Row
 								testID={`thread-link-${(c().ref as { id: string }).id}`}
 								title={c().words}
 								accessibilityLabel={`Link ${c().words} to this thread. This changes nothing about it.`}
@@ -566,9 +592,9 @@ function Links(props: {
 							/>
 						)}
 					</Each>
-				</QuietPanel>
+				</Rows>
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -588,19 +614,17 @@ function HandoffNote(props: { topic: Topic }) {
 	const h = () => props.topic.handoff;
 	return (
 		<If when={props.topic.disposition === "open" && h()}>
-			<QuietPanel testID="thread-handoff" class="gap-2">
-				<Text class="text-sm font-medium text-foreground">
-					{h()?.queued ? "Sent to the planner" : "Waits to go to the planner"}
-				</Text>
-				<Text class="text-sm leading-relaxed text-muted-foreground">{h()?.summary ?? ""}</Text>
+			<Quote testID="thread-handoff">
+				<BodyStrong>{h()?.queued ? "Sent to the planner" : "Waits to go to the planner"}</BodyStrong>
+				<Body tone="muted">{h()?.summary ?? ""}</Body>
 				<Each of={h()?.tasks ?? []} key={(task) => task.key}>
-					{(task) => <Text class="text-sm text-foreground">· {task().title}</Text>}
+					{(task) => <Body>· {task().title}</Body>}
 				</Each>
-				<Text class="text-xs text-muted-foreground">
+				<Caption>
 					The planner proposes a revision with these tasks. Confirm it on the mission's planning page; nothing
 					changes before.
-				</Text>
-			</QuietPanel>
+				</Caption>
+			</Quote>
 		</If>
 	);
 }
@@ -637,23 +661,15 @@ function Entry(props: {
 			? "Pilot sent the coordinator a planning request."
 			: props.entry.text;
 	return (
-		<View
-			testID={`entry-${props.entry.id}`}
-			class="gap-1 rounded-lg px-3 py-2"
-			classList={{
-				"border border-border-strong": props.focused,
-				"bg-muted": own() && !props.focused,
-				"bg-background": !own() || props.focused,
-			}}
-		>
-			<View class="flex-row items-baseline gap-2">
-				<Text class="text-xs font-medium text-muted-foreground">{who(props.entry)}</Text>
+		<View testID={`entry-${props.entry.id}`} class="gap-1">
+			<View class="flex-row items-center gap-2">
+				<Caption>{who(props.entry)}</Caption>
 				<If when={tag()}>
-					<Text class="text-xs text-faint">{tag()}</Text>
+					<Caption tone="faint">{tag()}</Caption>
 				</If>
-				<View class="flex-1" />
+				<Spacer />
 				<If when={props.canLink && !own() && props.entry.role === "coordinator"}>
-					<InlineAction
+					<Link
 						testID={`entry-link-${props.entry.id}`}
 						label="Link to thread"
 						onPress={() =>
@@ -672,19 +688,33 @@ function Entry(props: {
 					/>
 				</If>
 			</View>
-			<View selectable>
-				<Text
-					class={
-						props.entry.role === "planning"
-							? "text-sm text-muted-foreground"
-							: "text-sm leading-relaxed text-foreground"
-					}
-				>
-					{body()}
-				</Text>
-			</View>
+			{/* The message a thread opened the activity at is quoted, so the eye finds it. */}
+			<If
+				when={props.focused}
+				else={
+					<If
+						when={props.entry.role === "you"}
+						else={
+							<If
+								when={props.entry.role === "planning"}
+								else={
+									<Reply>
+										<Body>{body()}</Body>
+									</Reply>
+								}
+							>
+								<Event text={body()} />
+							</If>
+						}
+					>
+						<Bubble text={body()} />
+					</If>
+				}
+			>
+				<Quote text={body()} />
+			</If>
 			<If when={props.entry.shortened}>
-				<Text class="text-xs text-faint">Pilot shows the start of this long message only.</Text>
+				<Caption tone="faint">Pilot shows the start of this long message only.</Caption>
 			</If>
 		</View>
 	);
@@ -706,43 +736,37 @@ function fold(entries: HistoryEntry[]): Shown[] {
 }
 
 /** Folded tool calls and notes. Opening them shows what each one saved, exactly as the history keeps it. */
-function Steps(props: { missionId: string; topicId: string; sessionId: string; id: number; entries: HistoryEntry[] }) {
+function FoldedSteps(props: {
+	missionId: string;
+	topicId: string;
+	sessionId: string;
+	id: number;
+	entries: HistoryEntry[];
+}) {
 	const key = () => `${draftKey(props.missionId, props.topicId)}/${props.sessionId}:${props.id}`;
 	const open = () => stepsOpen()[key()] === true;
 	const words = () =>
 		props.entries.length === 1 ? "One tool step or note" : `${props.entries.length} tool steps and notes`;
+	const steps = () =>
+		props.entries.flatMap((e) => [
+			{ id: String(e.id), text: e.text || "This step saved no details." },
+			...(e.shortened ? [{ id: `${e.id}-start`, text: "Pilot shows the start of this step only." }] : []),
+		]);
 	return (
-		<View class="gap-1.5 px-3">
-			<View class="flex-row">
-				<Pressable
-					testID={`steps-${props.id}`}
-					accessibilityLabel={`${words()}. ${open() ? "Hide them" : "Show what they did"}. This only reads.`}
-					onPress={() => {
-						glide();
-						stepsOpen.update((all) => ({ ...all, [key()]: !open() }));
-					}}
-					class="flex-row items-center gap-1.5 rounded-md py-0.5"
-				>
-					<Text class="text-xs text-faint">{open() ? `Hide ${words().toLowerCase()}` : words()}</Text>
-				</Pressable>
+		<Disclosure
+			testID={`steps-${props.id}`}
+			label={words()}
+			open={open()}
+			accessibilityLabel={`${words()}. ${open() ? "Hide them" : "Show what they did"}. This only reads.`}
+			onToggle={() => {
+				glide();
+				stepsOpen.update((all) => ({ ...all, [key()]: !open() }));
+			}}
+		>
+			<View selectable>
+				<Steps steps={steps()} />
 			</View>
-			<If when={open()}>
-				<View class="gap-1.5 border-l border-border pl-3">
-					<Each of={props.entries} key={(e) => String(e.id)}>
-						{(e) => (
-							<View testID={`step-${e().id}`} selectable class="gap-0.5">
-								<Text class="font-mono text-xs leading-relaxed text-muted-foreground">
-									{e().text || "This step saved no details."}
-								</Text>
-								<If when={e().shortened}>
-									<Text class="text-xs text-faint">Pilot shows the start of this step only.</Text>
-								</If>
-							</View>
-						)}
-					</Each>
-				</View>
-			</If>
-		</View>
+		</Disclosure>
 	);
 }
 
@@ -756,15 +780,14 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 	const read = (which: "older" | "latest", sessionId?: string) =>
 		void props.mirror.source.history(props.missionId, props.topic.id, which, sessionId);
 	return (
-		<QuietPanel testID="thread-history" class="gap-2">
+		<View testID="thread-history" class="gap-3">
 			<View class="flex-row flex-wrap items-center gap-2">
-				<Text class="text-sm font-medium text-foreground">
-					{chat() ? "Thread chat activity" : "Coordinator activity"}
-				</Text>
-				<View class="flex-1" />
+				<BodyStrong>{chat() ? "Thread chat activity" : "Coordinator activity"}</BodyStrong>
+				<Spacer />
 				{/* The other conversation the thread owns, one press away: never only the one Pilot opened first. */}
 				<If when={chat()}>
-					<Action
+					<Button
+						small
 						label="Coordinator activity"
 						testID="thread-activity-coordinator"
 						disabled={h()?.reading === true}
@@ -773,7 +796,8 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					/>
 				</If>
 				<If when={!chat() && props.topic.chatSessionId}>
-					<Action
+					<Button
+						small
 						label="Thread chat activity"
 						testID="thread-activity-chat"
 						disabled={h()?.reading === true}
@@ -782,40 +806,34 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					/>
 				</If>
 			</View>
-			<Text class="text-xs text-muted-foreground">
+			<Caption>
 				{chat()
 					? "The thread chat's original history, with its tool steps."
 					: "The coordinator's original history. It includes work outside this thread; messages this thread sent or linked are marked."}
-			</Text>
+			</Caption>
 			<If when={h()?.more}>
-				<View class="flex-row">
-					<Action
-						label={h()?.reading ? "Reading…" : "Show earlier activity"}
-						testID="thread-earlier"
-						disabled={h()?.reading === true}
-						onPress={() => read("older")}
-					/>
-				</View>
+				<Link
+					label={h()?.reading ? "Reading…" : "Show earlier activity"}
+					testID="thread-earlier"
+					disabled={h()?.reading === true}
+					onPress={() => read("older")}
+				/>
 			</If>
 			<If when={h()?.reason}>
-				<MarkLine kind="unknown">
-					<Text testID="thread-history-off" role="alert" class="text-sm text-foreground">
-						{h()?.reason ?? ""}
-					</Text>
-				</MarkLine>
+				<Notice testID="thread-history-off" role="alert" text={h()?.reason ?? ""} />
 			</If>
 			<If when={!h() || (h()?.reading && h()?.entries.length === 0)}>
-				<Text class="text-sm text-muted-foreground">Reading the activity…</Text>
+				<Body tone="muted">Reading the activity…</Body>
 			</If>
 			<If when={h()?.availability === "live" && h()?.entries.length === 0 && !h()?.reading}>
-				<Text class="text-sm text-muted-foreground">No activity yet.</Text>
+				<Body tone="muted">No activity yet.</Body>
 			</If>
 			<Each of={fold(h()?.entries ?? [])} key={(s) => (s.kind === "entry" ? `e${s.entry.id}` : `q${s.id}`)}>
 				{(s) => (
 					<If
 						when={s().kind === "entry"}
 						else={
-							<Steps
+							<FoldedSteps
 								missionId={props.missionId}
 								topicId={props.topic.id}
 								sessionId={h()?.sessionId ?? ""}
@@ -837,16 +855,14 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 				)}
 			</Each>
 			<If when={h()?.view === "original"}>
-				<View class="flex-row">
-					<Action
-						label={h()?.reading ? "Reading…" : "Show latest activity"}
-						testID="thread-activity-latest"
-						disabled={h()?.reading === true}
-						onPress={() => read("latest")}
-					/>
-				</View>
+				<Link
+					label={h()?.reading ? "Reading…" : "Show latest activity"}
+					testID="thread-activity-latest"
+					disabled={h()?.reading === true}
+					onPress={() => read("latest")}
+				/>
 			</If>
-		</QuietPanel>
+		</View>
 	);
 }
 
@@ -985,9 +1001,11 @@ function ActivityToggle(props: { mirror: ThreadsMirror; missionId: string; topic
 	const open = () => activityOpen()[key()] === true;
 	let button: ViewRef | undefined;
 	return (
-		<View testID="thread-activity" class="gap-3 border-t border-border pt-4">
-			<View class="flex-row">
-				<Action
+		<Section
+			testID="thread-activity"
+			title="Activity"
+			action={
+				<Link
 					label={open() ? "Hide activity" : "Show activity"}
 					testID="thread-activity-toggle"
 					anchor={(node) => {
@@ -1003,15 +1021,23 @@ function ActivityToggle(props: { mirror: ThreadsMirror; missionId: string; topic
 						glide();
 						activityOpen.update((all) => ({ ...all, [key()]: !hiding }));
 						// Hiding a long activity shortens the page, and the scroll view clamps to it: keep the
-						// button that hid it on screen, where the user's eyes are.
+						// link that hid it on screen, where the user's eyes are.
 						if (hiding) button?.reveal({ vertical: "nearest", animated: false });
 					}}
 				/>
-			</View>
+			}
+		>
 			<If when={open()}>
-				<Activity mirror={props.mirror} missionId={props.missionId} topic={props.topic} canLink={props.canLink} />
+				<Block>
+					<Activity
+						mirror={props.mirror}
+						missionId={props.missionId}
+						topic={props.topic}
+						canLink={props.canLink}
+					/>
+				</Block>
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -1082,22 +1108,23 @@ function Message(props: {
 	};
 	cleanup(() => props.anchor(null));
 	return (
-		<View ref={(node) => props.anchor(node)} testID={`message-${m().key}`} class="gap-2">
-			<View class="flex-row items-center gap-3">
-				<Text class="text-sm font-medium text-foreground">{AUTHOR[m().author]}</Text>
-				<Text class="text-xs text-muted-foreground">{time()}</Text>
-				<View class="flex-1" />
+		<View ref={(node) => props.anchor(node)} testID={`message-${m().key}`} class="gap-1.5">
+			<View class="flex-row items-center gap-2">
+				<Caption>{AUTHOR[m().author]}</Caption>
+				<Num>{time()}</Num>
+				<Spacer />
 				<If
 					when={m().original}
 					else={
-						<Text class="text-xs text-faint">
+						<Caption tone="faint">
 							{m().reply === "pending"
 								? "Saved. Not placed in the conversation yet."
 								: "Saved. Where it was placed is unknown."}
-						</Text>
+						</Caption>
 					}
 				>
-					<Action
+					<Link
+						tone="faint"
 						label={open() ? "Hide original" : "Original message"}
 						testID={`message-original-${m().key}`}
 						accessibilityLabel={`${open() ? "Hide where" : "Where"} ${m().author === "you" ? "your" : `the ${AUTHOR[m().author].toLowerCase()}'s`} message from ${time()} is saved. This only reads.`}
@@ -1111,43 +1138,38 @@ function Message(props: {
 			<If
 				when={m().author === "you"}
 				else={
-					<View selectable class="py-1">
-						<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
-					</View>
+					<Reply>
+						<Body>{m().text}</Body>
+					</Reply>
 				}
 			>
-				<QuietPanel selectable>
-					<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
-				</QuietPanel>
+				<Bubble text={m().text} />
 			</If>
-			{/* Only your messages wait for an answer; the agent's do not. */}
+			{/* Only your messages wait for an answer; the agent's do not. They sit under your bubble. */}
 			<If when={m().author === "you" && REPLY[m().reply]}>
-				<View class="flex-row items-center gap-1.5">
-					<Mark kind={m().reply === "unknown" ? "unknown" : "still"} />
-					<Text testID={`message-reply-${m().key}`} class="text-sm text-muted-foreground">
-						{REPLY[m().reply]}
-					</Text>
+				<View class="flex-row">
+					<Spacer />
+					<State
+						testID={`message-reply-${m().key}`}
+						kind={m().reply === "unknown" ? "needs" : "new"}
+						label={REPLY[m().reply]}
+						plain
+					/>
 				</View>
 			</If>
 			<If when={shared()}>
-				<Text testID={`message-shared-${m().key}`} class="text-xs text-muted-foreground">
-					{shared()}
-				</Text>
+				<Caption testID={`message-shared-${m().key}`}>{shared()}</Caption>
 			</If>
 			<If when={open() && m().original}>
-				<View testID={`message-origin-${m().key}`} class="gap-2 rounded-lg border border-border px-3 py-2">
-					<Text class="text-xs text-muted-foreground">
-						{m().original ? savedIn(m().original as Original, props.topic) : ""}
-					</Text>
-					<View class="flex-row">
-						<Action
-							label="Show in activity"
-							testID={`message-activity-${m().key}`}
-							accessibilityLabel="Open the activity below at this exact saved message. This only reads."
-							onPress={showOriginal}
-						/>
-					</View>
-				</View>
+				<Quote testID={`message-origin-${m().key}`}>
+					<Caption>{m().original ? savedIn(m().original as Original, props.topic) : ""}</Caption>
+					<Link
+						label="Show in activity"
+						testID={`message-activity-${m().key}`}
+						accessibilityLabel="Open the activity below at this exact saved message. This only reads."
+						onPress={showOriginal}
+					/>
+				</Quote>
 			</If>
 		</View>
 	);
@@ -1184,75 +1206,70 @@ function Conversation(props: {
 	const gapAt = (key: string) => c()?.gap?.newer === key;
 	function Gap() {
 		return (
-			<View testID="thread-gap" class="gap-2 border-y border-dashed border-border py-3">
-				<Text class="text-sm text-muted-foreground">
-					Pilot has not read the messages between these yet. Some may belong to this thread.
-				</Text>
-				<View class="flex-row">
-					<Action
+			<Notice
+				testID="thread-gap"
+				text="Pilot has not read the messages between these yet. Some may belong to this thread."
+				action={
+					<Link
 						label={c()?.reading ? "Reading…" : "Show the messages between"}
 						testID="thread-gap-read"
 						disabled={c()?.reading === true}
 						accessibilityLabel="Read the messages Pilot has not read between these. This only reads."
 						onPress={earlier}
 					/>
-				</View>
-			</View>
+				}
+			/>
 		);
 	}
 	return (
 		<View testID="thread-conversation" class="gap-6" onLayout={() => void props.place.changed()}>
 			<If when={c()?.reason && ((c()?.messages.length ?? 0) === 0 || conversationReads.stale())}>
-				<View class="gap-2">
-					<MarkLine kind="unknown">
-						<Text testID="thread-conversation-off" role="alert" class="text-sm text-foreground">
-							{(c()?.messages.length ?? 0) === 0
-								? (c()?.reason ?? "")
-								: staleLine(conversationReads.readAt() ?? 0)}
-						</Text>
-					</MarkLine>
-					<If when={conversationReads.warn()}>
-						<View class="flex-row pl-3">
-							<Action
+				<Notice
+					testID="thread-conversation-off"
+					role="alert"
+					text={
+						(c()?.messages.length ?? 0) === 0 ? (c()?.reason ?? "") : staleLine(conversationReads.readAt() ?? 0)
+					}
+					action={
+						<If when={conversationReads.warn()}>
+							<Link
 								label="Try now"
 								icon="refresh"
 								testID="thread-conversation-read"
 								accessibilityLabel="Read this thread's conversation again. This sends nothing."
 								onPress={() => void conversationReads.now()}
 							/>
-						</View>
-					</If>
-				</View>
+						</If>
+					}
+				/>
 			</If>
 			<If when={c()?.availability === "live" && !c()?.complete}>
-				<Text testID="thread-unlinked" class="text-xs text-muted-foreground">
+				<Caption testID="thread-unlinked">
 					Some earlier replies may have no saved link to this thread. They stay in the activity, not in this
 					conversation.
-				</Text>
+				</Caption>
 			</If>
 			<If when={c()?.more && !c()?.gap}>
-				<View class="flex-row">
-					<Action
-						label={c()?.reading ? "Reading…" : "Show earlier messages"}
-						testID="thread-earlier-messages"
-						disabled={c()?.reading === true}
-						accessibilityLabel="Show this thread's earlier messages above. This only reads."
-						onPress={earlier}
-					/>
-				</View>
+				<Link
+					label={c()?.reading ? "Reading…" : "Show earlier messages"}
+					testID="thread-earlier-messages"
+					disabled={c()?.reading === true}
+					accessibilityLabel="Show this thread's earlier messages above. This only reads."
+					onPress={earlier}
+				/>
 			</If>
 			<If when={!c() || (c()?.availability === "reading" && c()?.messages.length === 0)}>
-				<Text class="text-sm text-muted-foreground">Reading the conversation…</Text>
+				<Body tone="muted">Reading the conversation…</Body>
 			</If>
 			{/* Your exact saved words whose place in time Pilot cannot tell: kept apart, never put in an invented order. */}
 			<If when={(c()?.queued ?? []).some((q) => q.reply === "unknown")}>
-				<View testID="thread-unplaced" class="gap-4 rounded-xl border border-dashed border-border px-4 py-3">
-					<View class="gap-1">
-						<Text class="text-sm font-medium text-foreground">Earlier messages with unknown placement</Text>
-						<Text class="text-xs text-muted-foreground">
+				<View testID="thread-unplaced" class="gap-4">
+					<View class="gap-0.5">
+						<BodyStrong>Earlier messages with unknown placement</BodyStrong>
+						<Caption>
 							Pilot saved these words but cannot tell where they sit in this conversation, or whether they were
 							answered.
-						</Text>
+						</Caption>
 					</View>
 					<Each of={(c()?.queued ?? []).filter((q) => q.reply === "unknown")} key={(m) => m.key}>
 						{(m) => (
@@ -1278,9 +1295,9 @@ function Conversation(props: {
 					!c()?.more
 				}
 			>
-				<Text testID="thread-conversation-empty" class="text-sm text-muted-foreground">
+				<Body testID="thread-conversation-empty" tone="muted">
 					No messages in this thread yet.
-				</Text>
+				</Body>
 			</If>
 			<Each of={c()?.messages ?? []} key={(m) => m.key}>
 				{(m) => (
@@ -1324,26 +1341,22 @@ function Conversation(props: {
 function WaitingMessages(props: { messages: WaitingMessage[] }) {
 	return (
 		<If when={props.messages.length > 0}>
-			<QuietPanel testID="thread-waiting" class="gap-2">
-				<Text class="text-xs text-muted-foreground">
+			<View testID="thread-waiting" class="gap-2">
+				<Caption>
 					{props.messages.length === 1
 						? "Waiting for the coordinator. It goes with your next answers, or as soon as the coordinator is free."
 						: `${props.messages.length} messages wait for the coordinator. They go with your next answers, or as soon as the coordinator is free.`}
-				</Text>
+				</Caption>
 				<Each of={props.messages} key={(w) => w.operationId}>
-					{(w) => (
-						<MarkLine kind="still" selectable>
-							<Text class="text-sm text-foreground">{w().text}</Text>
-						</MarkLine>
-					)}
+					{(w) => <Bubble scheduled text={w().text} />}
 				</Each>
-			</QuietPanel>
+			</View>
 		</If>
 	);
 }
 
 /** The reply box. Only Send sends, once; the words stay until the service accepted them. */
-function Composer(props: {
+function ReplyBox(props: {
 	mirror: ThreadsMirror;
 	missionId: string;
 	topic: Topic;
@@ -1399,105 +1412,135 @@ function Composer(props: {
 	return (
 		<View testID="thread-composer" class="gap-2">
 			<If when={why()}>
-				<Text testID="thread-cannot-send" class="text-sm text-muted-foreground">
+				<Body testID="thread-cannot-send" tone="muted">
 					{why()}
-				</Text>
+				</Body>
 			</If>
-			<TextField
-				variant="composer"
-				testID="thread-reply"
-				ref={field.ref}
-				multiline
-				value={text()}
-				accessibilityLabel="Your message in this thread"
-				placeholder="Write about this subject"
-				onChange={({ value }) => setDraft(key(), value)}
-				onFocus={field.focus}
-				onSelectionChange={field.select}
+			<Composer
+				field={
+					<TextField
+						variant="composer"
+						testID="thread-reply"
+						ref={field.ref}
+						multiline
+						value={text()}
+						accessibilityLabel="Your message in this thread"
+						placeholder="Write about this subject"
+						onChange={({ value }) => setDraft(key(), value)}
+						onFocus={field.focus}
+						onSelectionChange={field.select}
+					/>
+				}
+				bar={
+					<>
+						{/* Send comes first: Tab from the field reaches it before the thread's other commands. */}
+						<Button
+							kind="primary"
+							label={props.m.writing ? "Sending…" : "Send"}
+							shortcut="⌘↩"
+							testID="thread-send"
+							disabled={!canSend()}
+							accessibilityLabel="Send this message once. The thread chat answers; it does not start or approve work."
+							onPress={() => void go()}
+						/>
+						<If when={props.topic.chatSessionId}>
+							<Button
+								label="Interrupt…"
+								testID="thread-interrupt"
+								disabled={!canSend()}
+								onPress={() => interrupting.set(true)}
+							/>
+						</If>
+						<Spacer />
+						<KeyHints hints={[["⌘↩", "Send"]]} />
+						<Button
+							kind="quiet"
+							small
+							label="Later"
+							testID="thread-later"
+							disabled={props.m.writing || pending() || props.m.availability !== "live"}
+							accessibilityLabel="Move this thread to Later. Its history and your words stay."
+							onPress={() =>
+								void send(
+									props.mirror,
+									props.missionId,
+									key(),
+									{ purpose: "thread-disposition", topicId: props.topic.id, disposition: "later" },
+									null,
+								)
+							}
+						/>
+						<Button
+							kind="quiet"
+							small
+							label="Discard"
+							testID="thread-discard"
+							disabled={props.m.writing || pending() || props.m.availability !== "live"}
+							accessibilityLabel="Discard this thread. Its history stays and you can reopen it."
+							onPress={() =>
+								void send(
+									props.mirror,
+									props.missionId,
+									key(),
+									{ purpose: "thread-disposition", topicId: props.topic.id, disposition: "discarded" },
+									null,
+								)
+							}
+						/>
+					</>
+				}
 			/>
 			<If when={tooLong()}>
-				<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
+				<Caption tone="needs">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Caption>
 			</If>
 			{/* Said once: the waiting list says it when a message already waits. */}
 			<If when={waits() && !why() && !(props.m.snapshot?.waiting ?? []).some((w) => w.topicId === props.topic.id)}>
-				<Text testID="thread-will-wait" class="text-xs text-muted-foreground">
+				<Caption testID="thread-will-wait">
 					The coordinator cannot take a message right now. Send saves it: it goes with your next answers, or as
 					soon as the coordinator is free.
-				</Text>
+				</Caption>
 			</If>
-			<View class="flex-row flex-wrap items-center gap-2">
-				<Action
-					variant="primary"
-					label={props.m.writing ? "Sending…" : "Send"}
-					shortcut="⌘↩"
-					testID="thread-send"
-					disabled={!canSend()}
-					accessibilityLabel="Send this message once. The thread chat answers; it does not start or approve work."
-					onPress={() => void go()}
-				/>
-				<If when={props.topic.chatSessionId}>
-					<Action
-						label="Interrupt…"
-						testID="thread-interrupt"
-						disabled={!canSend()}
-						onPress={() => interrupting.set(true)}
-					/>
-				</If>
-				<View class="flex-1" />
-				<Action
-					label="Later"
-					testID="thread-later"
-					disabled={props.m.writing || pending() || props.m.availability !== "live"}
-					accessibilityLabel="Move this thread to Later. Its history and your words stay."
-					onPress={() =>
-						void send(
-							props.mirror,
-							props.missionId,
-							key(),
-							{ purpose: "thread-disposition", topicId: props.topic.id, disposition: "later" },
-							null,
-						)
-					}
-				/>
-				<Action
-					label="Discard"
-					testID="thread-discard"
-					disabled={props.m.writing || pending() || props.m.availability !== "live"}
-					accessibilityLabel="Discard this thread. Its history stays and you can reopen it."
-					onPress={() =>
-						void send(
-							props.mirror,
-							props.missionId,
-							key(),
-							{ purpose: "thread-disposition", topicId: props.topic.id, disposition: "discarded" },
-							null,
-						)
-					}
-				/>
-			</View>
 			<If when={interrupting()}>
-				<Dialog
-					accessibilityLabel="Interrupt this discussion?"
-					closeOnEscape={false}
-					onOpenChange={(e) => {
-						if (!e.open) interrupting.set(false);
-					}}
-					class="absolute inset-0 items-center justify-center bg-background/90 p-6"
+				<ConfirmDialog
+					testID="thread-interrupt-confirm"
+					title="Interrupt this discussion?"
+					onClose={() => interrupting.set(false)}
 				>
-					<View testID="thread-interrupt-confirm" class="gap-3 rounded-lg border border-border p-4">
-						<Text class="text-sm font-medium text-foreground">Interrupt this discussion?</Text>
-						<Text class="text-sm text-muted-foreground">
-							Save and stop its current response, then send your message now. This does not pause coding agents
-							or clear the mission's other holds.
-						</Text>
-						<View class="flex-row gap-2">
-							<Action label="Cancel" onPress={() => interrupting.set(false)} />
-							<Action label="Interrupt" disabled={!canSend()} onPress={() => void go(true)} />
-						</View>
-					</View>
-				</Dialog>
+					<Body tone="muted">
+						Save and stop its current response, then send your message now. This does not pause coding agents or
+						clear the mission's other holds.
+					</Body>
+					<Buttons>
+						<Button label="Cancel" onPress={() => interrupting.set(false)} />
+						<Button label="Interrupt" disabled={!canSend()} onPress={() => void go(true)} />
+					</Buttons>
+				</ConfirmDialog>
 			</If>
 		</View>
+	);
+}
+
+// LIBRARY GAP: the library has no confirmation dialog: a modal over the page that asks before a strong action
+// (here, interrupting a discussion). This keeps the base Dialog this screen used and frames it with the panel's look;
+// the library should offer a `Confirm` part with a title, a sentence and its buttons.
+function ConfirmDialog(props: { testID: string; title: string; onClose: () => void; children?: JSX.Element }) {
+	return (
+		<Dialog
+			accessibilityLabel={props.title}
+			closeOnEscape={false}
+			onOpenChange={(e) => {
+				if (!e.open) props.onClose();
+			}}
+			class="absolute inset-0 items-center justify-center bg-background/90 p-6"
+		>
+			<View
+				testID={props.testID}
+				class="max-w-md gap-3 rounded-(--radius-panel) border border-border bg-popover px-4 py-3.5"
+			>
+				<Title role="header">{props.title}</Title>
+				{props.children}
+			</View>
+		</Dialog>
 	);
 }
 
@@ -1520,30 +1563,31 @@ function Absent(props: { mirror: ThreadsMirror; missionId: string; m: MissionThr
 			return `${props.m.failed} This thread is not in Pilot's last read, so Pilot cannot show it now. Your words for it stay.`;
 		return "This thread is not in the latest read. Your words for it stay.";
 	};
+	const tryNow = () => (
+		<If when={reads.warn()}>
+			<Link
+				label="Try now"
+				icon="refresh"
+				testID="threads-read"
+				accessibilityLabel="Read this mission's threads again. This sends nothing."
+				onPress={() => void reads.now()}
+			/>
+		</If>
+	);
 	return (
-		<View testID="thread-absent" class="gap-3">
-			<If when={failed()} else={<Text class="text-base text-muted-foreground">{words()}</Text>}>
-				<View class="flex-row items-start gap-2.5">
-					<View class="pt-2">
-						<Mark kind="unknown" />
-					</View>
-					<Text testID="thread-absent-failed" role="alert" class="flex-1 text-base text-foreground">
-						{words()}
-					</Text>
-				</View>
+		<Panel testID="thread-absent">
+			<If
+				when={failed()}
+				else={
+					<Block>
+						<Body tone="muted">{words()}</Body>
+						{tryNow()}
+					</Block>
+				}
+			>
+				<Notice testID="thread-absent-failed" role="alert" placement="panel" text={words()} action={tryNow()} />
 			</If>
-			<If when={reads.warn()}>
-				<View class="flex-row">
-					<Action
-						label="Try now"
-						icon="refresh"
-						testID="threads-read"
-						accessibilityLabel="Read this mission's threads again. This sends nothing."
-						onPress={() => void reads.now()}
-					/>
-				</View>
-			</If>
-		</View>
+		</Panel>
 	);
 }
 
@@ -1624,7 +1668,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	return (
 		<Scroll
 			ref={(node) => scroller.set(node)}
-			class="flex-1 bg-background"
+			class="flex-1"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
 			onScroll={(e) => {
@@ -1633,110 +1677,143 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 				reading.scrolled(e.offset.y);
 			}}
 		>
-			<Page testID="thread" gap={8}>
-				<If when={topic()} else={<Absent mirror={mirror} missionId={props.missionId} m={m()} />}>
+			<Page testID="thread">
+				<If
+					when={topic()}
+					else={
+						<>
+							<PageHead
+								pre={
+									<Caption>
+										{title() ? `${title()} · Thread with the coordinator` : "Thread with the coordinator"}
+									</Caption>
+								}
+								title="Thread"
+							/>
+							<Absent mirror={mirror} missionId={props.missionId} m={m()} />
+						</>
+					}
+				>
 					<Each of={topic() ? [topic() as Topic] : []} key={(t) => t.id}>
 						{(t) => (
-							<View class="gap-8">
-								<View class="gap-2">
-									<Text class="text-xs text-faint">
-										{title() ? `${title()} · Thread with the coordinator` : "Thread with the coordinator"}
-									</Text>
-									<PageTitle title={t().title} />
-									<View class="flex-row flex-wrap items-center gap-1.5">
-										<Mark kind={STATUS[t().disposition].mark} />
-										<Text testID="thread-status" class="text-xs text-muted-foreground">
-											{STATUS[t().disposition].word}
-										</Text>
-										<Text class="text-xs text-faint">
-											· Started by you. Talking here never starts, approves or stops work.
-										</Text>
-										<View class="flex-1" />
-									</View>
-								</View>
-								<If when={m().reason && threadReads.stale()}>
-									<MarkLine testID="thread-stale" kind="unknown">
-										<Text role="alert" class="text-sm text-muted-foreground">
-											{staleLine(threadReads.readAt() ?? 0)}
-										</Text>
-									</MarkLine>
-								</If>
-								<If when={t().disposition !== "open"}>
-									<QuietPanel testID="thread-closed" class="gap-2">
-										<Text class="text-sm text-foreground">
-											{t().disposition === "later"
-												? "This thread is in Later. Its history stays."
-												: t().disposition === "resolved"
-													? resolvedLine(t(), m().snapshot?.catalog.tasks ?? [])
-													: "This thread is discarded. Its history stays."}
-										</Text>
-										<View class="flex-row">
-											<Action
-												label="Reopen"
-												testID="thread-reopen"
-												disabled={!canWrite()}
-												accessibilityLabel="Reopen this thread. This sends nothing to the coordinator."
-												onPress={() =>
-													void send(
-														mirror,
-														props.missionId,
-														key(),
-														{ purpose: "thread-disposition", topicId: t().id, disposition: "open" },
-														null,
-													)
-												}
+							<>
+								<PageHead
+									pre={
+										<Caption>
+											{title() ? `${title()} · Thread with the coordinator` : "Thread with the coordinator"}
+										</Caption>
+									}
+									title={t().title}
+									state={
+										<State
+											testID="thread-status"
+											kind={STATUS[t().disposition].mark}
+											label={STATUS[t().disposition].word}
+										/>
+									}
+									text="Started by you. Talking here never starts, approves or stops work."
+								/>
+								<Panel
+									testID="thread-panel"
+									notice={
+										<If when={m().reason && threadReads.stale()}>
+											<Notice
+												testID="thread-stale"
+												role="alert"
+												placement="panel"
+												text={staleLine(threadReads.readAt() ?? 0)}
 											/>
-										</View>
-									</QuietPanel>
-								</If>
-								<Links
-									mirror={mirror}
-									missionId={props.missionId}
-									topic={t()}
-									catalog={m().snapshot?.catalog ?? { known: false, tasks: [], decisions: [] }}
-									canWrite={canWrite()}
-									projectId={props.day.delivery?.view().projectId ?? ""}
-								/>
-								<Conversation
-									mirror={mirror}
-									missionId={props.missionId}
-									topic={t()}
-									topics={m().snapshot?.topics ?? []}
-									place={reading}
-								/>
-								<HandoffNote topic={t()} />
-								<Unsettled
-									mirror={mirror}
-									missionId={props.missionId}
-									ops={m().ops.filter(unsettled)}
-									testID="thread-unknown"
-								/>
-								{/* A send the conversation already shows as waiting to be placed shows once, there. */}
-								<WaitingMessages
-									messages={(m().snapshot?.waiting ?? []).filter(
-										(w) =>
-											w.topicId === t().id &&
-											!(
-												mirror.state().conversations[historyKey(props.missionId, t().id)]?.queued ?? []
-											).some((q) => q.operationId === w.operationId),
-									)}
-								/>
-								<ActivityToggle mirror={mirror} missionId={props.missionId} topic={t()} canLink={canWrite()} />
-								<If when={t().disposition === "open"}>
-									<Composer
-										mirror={mirror}
-										missionId={props.missionId}
-										topic={t()}
-										m={m()}
-										interrupting={interrupting}
-									/>
-								</If>
-								<If when={threadMessages()[key()]}>
-									<Text testID="thread-message" class="text-xs text-muted-foreground">
-										{threadMessages()[key()] ?? ""}
-									</Text>
-								</If>
-							</View>
+										</If>
+									}
+								>
+									{/* One column at a reading width, as a conversation reads. */}
+									<Column centered>
+										<If when={t().disposition !== "open"}>
+											<Block testID="thread-closed">
+												<Body>
+													{t().disposition === "later"
+														? "This thread is in Later. Its history stays."
+														: t().disposition === "resolved"
+															? resolvedLine(t(), m().snapshot?.catalog.tasks ?? [])
+															: "This thread is discarded. Its history stays."}
+												</Body>
+												<Buttons>
+													<Button
+														label="Reopen"
+														testID="thread-reopen"
+														disabled={!canWrite()}
+														accessibilityLabel="Reopen this thread. This sends nothing to the coordinator."
+														onPress={() =>
+															void send(
+																mirror,
+																props.missionId,
+																key(),
+																{ purpose: "thread-disposition", topicId: t().id, disposition: "open" },
+																null,
+															)
+														}
+													/>
+												</Buttons>
+											</Block>
+										</If>
+										<Links
+											mirror={mirror}
+											missionId={props.missionId}
+											topic={t()}
+											catalog={m().snapshot?.catalog ?? { known: false, tasks: [], decisions: [] }}
+											canWrite={canWrite()}
+											projectId={props.day.delivery?.view().projectId ?? ""}
+										/>
+										<Section title="Conversation">
+											<Block gap={4}>
+												<Conversation
+													mirror={mirror}
+													missionId={props.missionId}
+													topic={t()}
+													topics={m().snapshot?.topics ?? []}
+													place={reading}
+												/>
+												<HandoffNote topic={t()} />
+												<Unsettled
+													mirror={mirror}
+													missionId={props.missionId}
+													ops={m().ops.filter(unsettled)}
+													testID="thread-unknown"
+												/>
+												{/* A send the conversation already shows as waiting to be placed shows once, there. */}
+												<WaitingMessages
+													messages={(m().snapshot?.waiting ?? []).filter(
+														(w) =>
+															w.topicId === t().id &&
+															!(
+																mirror.state().conversations[historyKey(props.missionId, t().id)]
+																	?.queued ?? []
+															).some((q) => q.operationId === w.operationId),
+													)}
+												/>
+												<If when={t().disposition === "open"}>
+													<ReplyBox
+														mirror={mirror}
+														missionId={props.missionId}
+														topic={t()}
+														m={m()}
+														interrupting={interrupting}
+													/>
+												</If>
+												<If when={threadMessages()[key()]}>
+													<Caption testID="thread-message">{threadMessages()[key()] ?? ""}</Caption>
+												</If>
+											</Block>
+										</Section>
+										<ActivityToggle
+											mirror={mirror}
+											missionId={props.missionId}
+											topic={t()}
+											canLink={canWrite()}
+										/>
+									</Column>
+								</Panel>
+							</>
 						)}
 					</Each>
 				</If>

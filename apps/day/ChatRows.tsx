@@ -2,10 +2,10 @@
 // quiet line per tool step or request. The planning chat and the chats
 // Pilot started (ChatScreen.tsx) show the same way. Show earlier reads the
 // rows before what shows; it sends nothing.
-import { Text, View } from "nsh";
+import { View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
 import { keepRead, staleLine } from "./freshness";
-import { Action, Mark, MarkLine } from "./ui";
+import { Body, Bubble, Caption, Event, Link, Notice, Reply, Steps } from "./ui";
 
 /** What the transcript needs of a chat as read. */
 export type ChatRead = { rows: ChatRow[]; more: boolean; reading: boolean; reason: string };
@@ -41,27 +41,21 @@ export function ChatTranscript(props: {
 	return (
 		<View class="gap-3">
 			<If when={chat()?.more}>
-				<View class="flex-row">
-					<Action
-						label={chat()?.reading ? "Reading…" : "Show earlier"}
-						testID={`${props.id}-earlier`}
-						disabled={chat()?.reading === true}
-						onPress={props.onEarlier}
-					/>
-				</View>
+				<Link
+					label={chat()?.reading ? "Reading…" : "Show earlier"}
+					testID={`${props.id}-earlier`}
+					disabled={chat()?.reading === true}
+					onPress={props.onEarlier}
+				/>
 			</If>
 			<If when={reason()}>
-				<MarkLine kind="unknown">
-					<Text testID={`${props.id}-off`} class="text-sm text-muted-foreground">
-						{reason()}
-					</Text>
-				</MarkLine>
+				<Notice testID={`${props.id}-off`} text={reason()} />
 			</If>
 			<If when={!chat() || (chat()?.reading && chat()?.rows.length === 0)}>
-				<Text class="text-sm text-muted-foreground">{props.readingWords}</Text>
+				<Body tone="muted">{props.readingWords}</Body>
 			</If>
 			<If when={chat() && !chat()?.reading && !chat()?.reason && chat()?.rows.length === 0}>
-				<Text class="text-sm text-muted-foreground">{props.emptyWords}</Text>
+				<Body tone="muted">{props.emptyWords}</Body>
 			</If>
 			<Each of={chat()?.rows ?? []} key={(r) => r.key}>
 				{(r) => <ChatLine row={r()} testID={`${props.id}-${r().key}`} />}
@@ -70,35 +64,39 @@ export function ChatTranscript(props: {
 	);
 }
 
-/** One row: the user's words on the right, Pilot's text, or a quiet step. */
+/**
+ * One row: the user's words in a bubble, Pilot's reply, or one quiet line for a request or a tool step. A step that
+ * runs now is darker; a failed one gets the red mark.
+ */
 export function ChatLine(props: { row: ChatRow; testID: string }) {
 	return (
 		<View testID={props.testID}>
 			<If when={props.row.role === "you"}>
-				<View selectable class="self-end rounded-xl bg-muted px-3 py-2">
-					<Text class="text-sm leading-relaxed text-foreground">{props.row.text}</Text>
-				</View>
+				<Bubble text={props.row.text} />
 			</If>
 			<If when={props.row.role === "pilot"}>
-				<View selectable>
-					<Text class="text-sm leading-relaxed text-foreground">{props.row.text}</Text>
-				</View>
+				<Reply>
+					<Body>{props.row.text}</Body>
+				</Reply>
 			</If>
 			<If when={props.row.role === "request"}>
-				<Text class="text-xs text-faint">{props.row.text}</Text>
+				<Event text={props.row.text} />
 			</If>
 			<If when={props.row.role === "step"}>
-				<View class="flex-row items-center gap-2">
-					<If when={props.row.running || props.row.failed}>
-						<Mark kind={props.row.failed ? "failed" : "moving"} />
-					</If>
-					<Text class="text-xs text-muted-foreground">
-						{props.row.failed ? `${props.row.text} · Failed` : props.row.text}
-					</Text>
-				</View>
+				<If
+					when={props.row.running && !props.row.failed}
+					else={
+						<Event
+							text={props.row.failed ? `${props.row.text} · Failed` : props.row.text}
+							failed={props.row.failed}
+						/>
+					}
+				>
+					<Steps steps={[{ id: props.row.key, text: props.row.text, running: true }]} />
+				</If>
 			</If>
 			<If when={props.row.shortened}>
-				<Text class="text-xs text-faint">Pilot shows the start of this long message only.</Text>
+				<Caption tone="faint">Pilot shows the start of this long message only.</Caption>
 			</If>
 		</View>
 	);

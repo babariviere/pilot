@@ -1,9 +1,9 @@
-import { cleanup, effect, signal, Text, untracked, View } from "nsh";
+import { cleanup, effect, signal, untracked } from "nsh";
 import type { FeedbackItem, FeedbackMirror, FeedbackResultScope } from "./feedbackFeed";
 import { clip, stepsOf } from "./feedbackSteps";
 import { openFeedback } from "./feedbackView";
 import { keepRead } from "./freshness";
-import { Action, SectionTitle } from "./ui";
+import { Button, Buttons, Caption, EmptyLine, Link, Row, RowDetail, Rows, Section } from "./ui";
 
 /** Feedback marks are independent of verifying a result. This shows only saved links. */
 export function LinkedFeedback(props: { mirror: FeedbackMirror; scope: FeedbackResultScope; disabled?: boolean }) {
@@ -75,60 +75,79 @@ export function LinkedFeedback(props: { mirror: FeedbackMirror; scope: FeedbackR
 	};
 	return (
 		<If when={rows().length > 0 || cursor() !== undefined || reads.warn()}>
-			<View testID="result-feedback" class="gap-2">
-				<SectionTitle title="Linked feedback" />
+			<Section
+				testID="result-feedback"
+				title="Linked feedback"
+				count={rows().length}
+				action={
+					<If when={cursor() !== undefined}>
+						<Link label="Show newest feedback" disabled={saving()} onPress={() => void read(undefined)} />
+					</If>
+				}
+				more={
+					before() !== null
+						? { label: "Show earlier feedback", onPress: () => void read(before() ?? undefined) }
+						: undefined
+				}
+			>
 				<If when={reads.warn()}>
-					<Text class="text-sm text-muted-foreground">Pilot could not read current feedback links.</Text>
+					<EmptyLine text="Pilot could not read current feedback links." />
 				</If>
-				<Each of={rows()} key={(item) => item.id}>
-					{(item) => {
-						const resolved = () => stepsOf(item()).resolved;
-						return (
-							<View class="gap-2 border-t border-border pt-3">
-								<Text class="text-sm font-medium text-foreground">{clip(item().text, 160)}</Text>
-								<Text testID={`result-feedback-state-${item().id}`} class="text-xs text-muted-foreground">
-									{resolved()
-										? "Resolved by you."
-										: "Still open. Checking the result does not resolve feedback."}
-								</Text>
-								<View class="flex-row flex-wrap gap-2">
-									<If
-										when={pending(item().id)}
-										else={
-											<Action
-												testID={`result-feedback-mark-${item().id}`}
-												label={resolved() ? "Reopen" : "Mark resolved"}
-												disabled={saving() || view().stepping !== null || failed() || props.disabled}
-												onPress={() => void write(item().id, resolved() ? "reopen" : "resolve")}
-											/>
-										}
-									>
-										<Action
-											label="Check feedback status"
-											disabled={saving() || pending(item().id)?.state === "checking" || props.disabled}
-											onPress={() => void write(item().id, undefined, pending(item().id)?.operationId)}
-										/>
-									</If>
-									<Action label="Open Feedback" onPress={() => openFeedback(item().origin)} />
-								</View>
-								<If when={messages()[item().id]}>
-									<Text class="text-xs text-muted-foreground">{messages()[item().id]}</Text>
-								</If>
-							</View>
-						);
-					}}
-				</Each>
-				<If when={before() !== null}>
-					<Action
-						label="Show earlier feedback"
-						disabled={saving()}
-						onPress={() => void read(before() ?? undefined)}
-					/>
-				</If>
-				<If when={cursor() !== undefined}>
-					<Action label="Show newest feedback" disabled={saving()} onPress={() => void read(undefined)} />
-				</If>
-			</View>
+				<Rows>
+					<Each of={rows()} key={(item) => item.id}>
+						{(item) => {
+							const resolved = () => stepsOf(item()).resolved;
+							return (
+								<Row
+									mark={resolved() ? "done" : "new"}
+									title={clip(item().text, 160)}
+									wrap
+									detail={
+										<RowDetail>
+											<Caption testID={`result-feedback-state-${item().id}`}>
+												{resolved()
+													? "Resolved by you."
+													: "Still open. Checking the result does not resolve feedback."}
+											</Caption>
+											<Buttons>
+												<If
+													when={pending(item().id)}
+													else={
+														<Button
+															small
+															testID={`result-feedback-mark-${item().id}`}
+															label={resolved() ? "Reopen" : "Mark resolved"}
+															disabled={
+																saving() || view().stepping !== null || failed() || props.disabled
+															}
+															onPress={() => void write(item().id, resolved() ? "reopen" : "resolve")}
+														/>
+													}
+												>
+													<Button
+														small
+														label="Check feedback status"
+														disabled={
+															saving() || pending(item().id)?.state === "checking" || props.disabled
+														}
+														onPress={() =>
+															void write(item().id, undefined, pending(item().id)?.operationId)
+														}
+													/>
+												</If>
+												<Link label="Open Feedback" onPress={() => openFeedback(item().origin)} />
+											</Buttons>
+											<If when={messages()[item().id]}>
+												<Caption>{messages()[item().id]}</Caption>
+											</If>
+										</RowDetail>
+									}
+								/>
+							);
+						}}
+					</Each>
+				</Rows>
+			</Section>
 		</If>
 	);
 }

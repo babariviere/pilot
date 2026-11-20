@@ -5,7 +5,7 @@
 // Check reads it; Check never sends again; a save and reopen keeps unsent
 // notes and sends nothing. Inspect source reads one exact pin's saved
 // source once and shows it as plain text; nothing runs it.
-import { keymap, mount, Scroll, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
 import { FullArtifact } from "./ArtifactViewer";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
@@ -15,7 +15,7 @@ import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { openDay } from "./mockFeeds";
 import { resultReviewDemo } from "./resultReviewDemo";
 import { ToCheck } from "./ToCheck";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, Panel } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const source = new ScriptedDelivery();
@@ -32,22 +32,37 @@ const loseService = () => {
 };
 const newResult = () => source.deliverAgain("task/mock-project/native/native-4", "4");
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => {
 	// The full window is a dialog over every control here, so tests reach the result by key.
 	keymap.bind("mod+shift+l", loseService, { when: "always" });
 	keymap.bind("mod+shift+n", newResult, { when: "always" });
 	return (
-		<View class="flex-1 bg-background">
+		<FixtureWindow>
 			<View class="flex-1">
 				<If
 					when={deliveryRoute()}
 					else={
 						<Scroll class="flex-1">
-							<View class="w-full max-w-2xl self-center gap-6 px-6 py-6">
-								<If when={missionOnly()} else={<ToCheck day={day} nested />}>
-									<ToCheck day={day} missionId="native" />
-								</If>
-							</View>
+							<Page width="form">
+								<Panel>
+									<Column>
+										<If when={missionOnly()} else={<ToCheck day={day} nested />}>
+											<ToCheck day={day} missionId="native" />
+										</If>
+									</Column>
+								</Panel>
+							</Page>
 						</Scroll>
 					}
 				>
@@ -64,16 +79,16 @@ mount(() => {
 				{/* As in the app: one artifact in the whole window, over the page, until closed. */}
 				<FullArtifact />
 			</View>
-			<Scroll class="max-h-48 border-t border-border">
-				<View class="gap-1 px-6 py-3">
-					<Text testID="counts">{`Sends: ${source.counts().sends} · Checks: ${source.counts().checks}`}</Text>
-					<Text testID="last-note">{`Note sent: [${source.counts().note}]`}</Text>
-					<Text testID="opened">{`Opened: [${source.opened().join(" ")}]`}</Text>
-					<Text testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Text>
-					<Text testID="work-reads">{`Work reads: ${source.workReads().length}`}</Text>
-					<View class="flex-row flex-wrap gap-1">
-						<Action label="Show linked feedback fixture" onPress={() => showFeedback.set(true)} />
-						<Action
+			<Scroll class="max-h-48">
+				<Block gap={1}>
+					<Caption testID="counts">{`Sends: ${source.counts().sends} · Checks: ${source.counts().checks}`}</Caption>
+					<Caption testID="last-note">{`Note sent: [${source.counts().note}]`}</Caption>
+					<Caption testID="opened">{`Opened: [${source.opened().join(" ")}]`}</Caption>
+					<Caption testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Caption>
+					<Caption testID="work-reads">{`Work reads: ${source.workReads().length}`}</Caption>
+					<Buttons>
+						<Button label="Show linked feedback fixture" onPress={() => showFeedback.set(true)} />
+						<Button
 							label="Show private review fixture"
 							onPress={() => {
 								showReview.set(true);
@@ -82,30 +97,30 @@ mount(() => {
 								source.publish();
 							}}
 						/>
-						<Action label="Mission native" onPress={() => missionOnly.set(!missionOnly())} />
-						<Action label="Refuse work" onPress={() => (source.refuseWork = "unavailable")} />
-						<Action label="Lose next answer" onPress={() => (source.script.loseNext = true)} />
-						<Action label="Lose next open" onPress={() => (source.script.loseOpen = true)} />
-						<Action
+						<Button label="Mission native" onPress={() => missionOnly.set(!missionOnly())} />
+						<Button label="Refuse work" onPress={() => (source.refuseWork = "unavailable")} />
+						<Button label="Lose next answer" onPress={() => (source.script.loseNext = true)} />
+						<Button label="Lose next open" onPress={() => (source.script.loseOpen = true)} />
+						<Button
 							label="Move link"
 							onPress={() =>
 								source.moveLink("task/mock-project/native/native-4", "https://github.com/mock/pilot/pull/432")
 							}
 						/>
-						<Action
+						<Button
 							label="No browser"
 							onPress={() => {
 								source.webLinks = false;
 								source.publish();
 							}}
 						/>
-						<Action label="Hold answers" onPress={() => (source.script.hold = true)} />
-						<Action label="Release answer" onPress={() => source.release()} />
-						<Action label="Hold reads" onPress={() => (source.script.holdReads = true)} />
-						<Action label="Release reads" onPress={() => source.releaseReads()} />
-						<Action label="Leave mission" onPress={() => (source.script.refuseReads = "stale")} />
-						<Action label="Close channel" onPress={() => (source.script.refuseReads = "closed")} />
-						<Action
+						<Button label="Hold answers" onPress={() => (source.script.hold = true)} />
+						<Button label="Release answer" onPress={() => source.release()} />
+						<Button label="Hold reads" onPress={() => (source.script.holdReads = true)} />
+						<Button label="Release reads" onPress={() => source.releaseReads()} />
+						<Button label="Leave mission" onPress={() => (source.script.refuseReads = "stale")} />
+						<Button label="Close channel" onPress={() => (source.script.refuseReads = "closed")} />
+						<Button
 							label="Unsaved copies"
 							onPress={() => {
 								source.unavailable = {
@@ -114,7 +129,7 @@ mount(() => {
 								};
 							}}
 						/>
-						<Action
+						<Button
 							label="Held back"
 							onPress={() => {
 								source.unavailable = {
@@ -123,9 +138,9 @@ mount(() => {
 								};
 							}}
 						/>
-						<Action label="Lose service" onPress={loseService} />
-						<Action label="New result" onPress={newResult} />
-						<Action
+						<Button label="Lose service" onPress={loseService} />
+						<Button label="New result" onPress={newResult} />
+						<Button
 							label="Save and reopen"
 							onPress={() => {
 								const v = captureView(day.today());
@@ -133,9 +148,9 @@ mount(() => {
 								restoreView(v);
 							}}
 						/>
-					</View>
-				</View>
+					</Buttons>
+				</Block>
 			</Scroll>
-		</View>
+		</FixtureWindow>
 	);
 });

@@ -13,7 +13,7 @@
 // Each output keeps its own view; previews pause out of view. Its row offers
 // Share and the full window for what it shows. A newer result or lost read
 // hides them and closes a full window opened from them; looking records nothing.
-import { cleanup, effect, keymap, Scroll, signal, Text, untracked, View, type ViewRef } from "nsh";
+import { cleanup, effect, keymap, Scroll, signal, untracked, View, type ViewRef } from "nsh";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import { artifactPreviewsAvailable } from "./bridge";
 import { ContinueRow } from "./ChatScreen";
@@ -98,18 +98,36 @@ import {
 import { type ReviewSession, reviewSession } from "./reviewSession";
 import type { SessionChatMirror } from "./sessionChat";
 import {
-	Action,
-	CheckboxRow,
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	Columns,
+	Composer,
+	EmptyLine,
 	ExpandableRow,
 	glide,
-	Mark,
-	MarkLine,
+	Icon,
+	Link,
 	Notice,
+	Num,
+	Option,
+	Options,
 	Page,
-	PageTitle,
-	QuietPanel,
-	RowLink,
-	SectionTitle,
+	PageHead,
+	Panel,
+	Question,
+	Quote,
+	Row,
+	RowDetail,
+	RowGroup,
+	Rows,
+	Section,
+	Spacer,
+	State,
 	TextField,
 } from "./ui";
 import { setFor } from "./view";
@@ -117,15 +135,13 @@ import { setFor } from "./view";
 /** One line of "Where this stands": what, then its state. */
 function Stand(props: { label: string; value: string; testID: string; tone?: "needs" }) {
 	return (
-		<View class="flex-row gap-4 border-t border-border py-2.5">
-			<Text class="w-28 text-sm text-muted-foreground">{props.label}</Text>
-			<Text
-				testID={props.testID}
-				class="flex-1 text-sm"
-				classList={{ "text-foreground": props.tone !== "needs", "text-needs-ink": props.tone === "needs" }}
-			>
+		<View class="flex-row gap-4">
+			<View class="w-28">
+				<Caption tone="faint">{props.label}</Caption>
+			</View>
+			<Body testID={props.testID} tone={props.tone ?? "default"} grow>
 				{props.value}
-			</Text>
+			</Body>
 		</View>
 	);
 }
@@ -135,8 +151,8 @@ function Said(props: { label: string; text: string }) {
 	return (
 		<If when={props.text.trim()}>
 			<View class="gap-0.5">
-				<Text class="text-xs text-faint">{props.label}</Text>
-				<Text class="text-sm leading-relaxed text-foreground">{props.text}</Text>
+				<Caption tone="faint">{props.label}</Caption>
+				<Body measure>{props.text}</Body>
 			</View>
 		</If>
 	);
@@ -152,96 +168,98 @@ function Report(props: { work: DeliveredWork }) {
 	const nothing = () =>
 		!w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome && !w().workerDelivery;
 	return (
-		<QuietPanel testID="delivery-report" size="lg" selectable class="gap-3">
-			<Said
-				label="Outcome"
-				text={
-					w().workerDelivery?.summary ??
-					w().submission?.claim ??
-					w().chatReport?.answer ??
-					w().outcome?.reason ??
-					""
-				}
-			/>
-			<Said label="Goal and scope" text={w().scope ?? ""} />
-			<Said label="Task state (not acceptance)" text={w().taskState ?? ""} />
-			<Said
-				label="Risks and limits"
-				text={
-					w().submission?.limitations ||
-					w().nonCodeDelivery?.limitations ||
-					w().chatReport?.limits ||
-					"No separate risk statement was provided."
-				}
-			/>
-			<Text class="text-xs text-faint">The agent reports</Text>
-			<If when={w().completion}>
-				<Text class="text-xs text-faint">
-					The commit and checks below are agent-reported. Publication is not independently verified here.
-				</Text>
-				<Said label="Checks it ran" text={w().completion?.checks ?? ""} />
-				<Said label="Open issues" text={w().completion?.issues ?? ""} />
-			</If>
-			<If when={w().nonCodeDelivery}>
-				<Said label="Checks it ran" text={w().nonCodeDelivery?.checks ?? ""} />
-				<Said label="It points to" text={refs()} />
-			</If>
-			<If when={w().workerDelivery}>
-				<View testID="delivery-worker-report" class="gap-3">
-					<Text class="text-xs text-faint">
-						The worker's delivery report. No coordinator runs this mission: marking it done finishes the task, and
-						Pilot starts the next ready tasks.
-					</Text>
-					<Said label="Checks it ran" text={w().workerDelivery?.checks ?? ""} />
-					<Said label="Open issues" text={w().workerDelivery?.issues ?? ""} />
-					<Said label="Next step" text={w().workerDelivery?.nextStep ?? ""} />
-					<Said label="Evidence" text={(w().workerDelivery?.evidence ?? []).join("\n")} />
-				</View>
-			</If>
-			<If when={(w().coordinatorRequests?.length ?? 0) > 0}>
-				<View testID="delivery-coordinator-requests" class="gap-1">
-					<Text class="text-xs text-faint">It asks the coordinator. No coordinator runs this mission yet:</Text>
-					<Each of={w().coordinatorRequests ?? []} key={(r) => r.id}>
-						{(r) => <Text class="text-sm leading-relaxed text-foreground">{r().text}</Text>}
-					</Each>
-					<Text class="text-xs text-faint">Answer with Send back, or in a thread with the mission.</Text>
-				</View>
-			</If>
-			<If when={w().outcome && (!w().chatReport || w().outcome?.reason)}>
-				<Said label="It says" text={w().outcome?.reason || "The chat says it is done."} />
-			</If>
-			<If when={w().outcome && w().chatReport}>
-				<View testID="delivery-chat-report" class="gap-3">
-					<Said label="How it knows" text={w().chatReport?.howItKnows ?? ""} />
-					<Said label="Next step for you" text={w().chatReport?.nextStep ?? ""} />
-					<Said
-						label="Links"
-						text={(w().chatReport?.links ?? [])
-							.map((l) => (l.title ? `${l.title} · ${l.url}` : l.url))
-							.join("\n")}
-					/>
-				</View>
-			</If>
-			<If when={w().outcome && !w().chatReport && w().finalReply}>
-				<View testID="delivery-final-reply" class="gap-0.5">
-					<Text class="text-xs text-faint">Its last message</Text>
-					<Text class="text-sm leading-relaxed text-foreground">{w().finalReply?.text ?? ""}</Text>
-					<If when={w().finalReply?.shortened}>
-						<Text class="text-xs text-faint">Shortened here. The chat keeps the whole message.</Text>
-					</If>
-				</View>
-			</If>
-			<If when={nothing()}>
-				<Text class="text-sm text-muted-foreground">No report with this result.</Text>
-			</If>
-			<Text class="text-xs text-faint">The agent's account is evidence, not your acceptance.</Text>
-			<If when={w().revisionRecipientSessionId}>
-				<Text class="text-xs text-muted-foreground">
-					Send back routes revisions through this mission's coordinator, with your saved context. Independent work
-					continues.
-				</Text>
-			</If>
-		</QuietPanel>
+		<Section testID="delivery-report" title="Report">
+			<Block gap={3} selectable>
+				<Said
+					label="Outcome"
+					text={
+						w().workerDelivery?.summary ??
+						w().submission?.claim ??
+						w().chatReport?.answer ??
+						w().outcome?.reason ??
+						""
+					}
+				/>
+				<Said label="Goal and scope" text={w().scope ?? ""} />
+				<Said label="Task state (not acceptance)" text={w().taskState ?? ""} />
+				<Said
+					label="Risks and limits"
+					text={
+						w().submission?.limitations ||
+						w().nonCodeDelivery?.limitations ||
+						w().chatReport?.limits ||
+						"No separate risk statement was provided."
+					}
+				/>
+				<Caption tone="faint">The agent reports</Caption>
+				<If when={w().completion}>
+					<Caption tone="faint">
+						The commit and checks below are agent-reported. Publication is not independently verified here.
+					</Caption>
+					<Said label="Checks it ran" text={w().completion?.checks ?? ""} />
+					<Said label="Open issues" text={w().completion?.issues ?? ""} />
+				</If>
+				<If when={w().nonCodeDelivery}>
+					<Said label="Checks it ran" text={w().nonCodeDelivery?.checks ?? ""} />
+					<Said label="It points to" text={refs()} />
+				</If>
+				<If when={w().workerDelivery}>
+					<View testID="delivery-worker-report" class="gap-3">
+						<Caption tone="faint">
+							The worker's delivery report. No coordinator runs this mission: marking it done finishes the task,
+							and Pilot starts the next ready tasks.
+						</Caption>
+						<Said label="Checks it ran" text={w().workerDelivery?.checks ?? ""} />
+						<Said label="Open issues" text={w().workerDelivery?.issues ?? ""} />
+						<Said label="Next step" text={w().workerDelivery?.nextStep ?? ""} />
+						<Said label="Evidence" text={(w().workerDelivery?.evidence ?? []).join("\n")} />
+					</View>
+				</If>
+				<If when={(w().coordinatorRequests?.length ?? 0) > 0}>
+					<View testID="delivery-coordinator-requests" class="gap-1">
+						<Caption tone="faint">It asks the coordinator. No coordinator runs this mission yet:</Caption>
+						<Each of={w().coordinatorRequests ?? []} key={(r) => r.id}>
+							{(r) => <Body measure>{r().text}</Body>}
+						</Each>
+						<Caption tone="faint">Answer with Send back, or in a thread with the mission.</Caption>
+					</View>
+				</If>
+				<If when={w().outcome && (!w().chatReport || w().outcome?.reason)}>
+					<Said label="It says" text={w().outcome?.reason || "The chat says it is done."} />
+				</If>
+				<If when={w().outcome && w().chatReport}>
+					<View testID="delivery-chat-report" class="gap-3">
+						<Said label="How it knows" text={w().chatReport?.howItKnows ?? ""} />
+						<Said label="Next step for you" text={w().chatReport?.nextStep ?? ""} />
+						<Said
+							label="Links"
+							text={(w().chatReport?.links ?? [])
+								.map((l) => (l.title ? `${l.title} · ${l.url}` : l.url))
+								.join("\n")}
+						/>
+					</View>
+				</If>
+				<If when={w().outcome && !w().chatReport && w().finalReply}>
+					<View testID="delivery-final-reply" class="gap-0.5">
+						<Caption tone="faint">Its last message</Caption>
+						<Body measure>{w().finalReply?.text ?? ""}</Body>
+						<If when={w().finalReply?.shortened}>
+							<Caption tone="faint">Shortened here. The chat keeps the whole message.</Caption>
+						</If>
+					</View>
+				</If>
+				<If when={nothing()}>
+					<Body tone="muted">No report with this result.</Body>
+				</If>
+				<Caption tone="faint">The agent's account is evidence, not your acceptance.</Caption>
+				<If when={w().revisionRecipientSessionId}>
+					<Caption>
+						Send back routes revisions through this mission's coordinator, with your saved context. Independent
+						work continues.
+					</Caption>
+				</If>
+			</Block>
+		</Section>
 	);
 }
 
@@ -259,11 +277,12 @@ function Screens(props: { mirror: DeliveryMirror; work: DeliveredWork; fresh: bo
 	};
 	return (
 		<If when={props.work.screens}>
-			<View testID="delivery-screens" class="gap-1">
-				<View class="pb-1">
-					<SectionTitle title="Screens" count={pairs().length} />
-				</View>
-				<Said label="It has no captures" text={noScreens(props.work)} />
+			<Section testID="delivery-screens" title="Screens" count={pairs().length}>
+				<If when={noScreens(props.work)}>
+					<Block>
+						<Said label="It has no captures" text={noScreens(props.work)} />
+					</Block>
+				</If>
 				<Each of={pairs()} key={(p) => p.key}>
 					{(p) => (
 						<ExpandableRow
@@ -272,11 +291,10 @@ function Screens(props: { mirror: DeliveryMirror; work: DeliveredWork; fresh: bo
 							accessibilityLabel={`${p().title}: ${screenLine(p())}`}
 							anchor={(node) => rows.set(p().key, node)}
 							onToggle={() => open.set(open() === p().key ? null : p().key)}
-							class="py-2.5"
-							summaryClass="flex-row items-baseline gap-3"
+							summaryClass="flex-row items-center gap-2.5 px-4 py-1.5"
 							content={
 								<If when={open() === p().key}>
-									<View class="pt-2">
+									<Block>
 										<OutputComparison
 											work={props.work}
 											source={props.mirror.source}
@@ -286,16 +304,17 @@ function Screens(props: { mirror: DeliveryMirror; work: DeliveredWork; fresh: bo
 											testID="screens"
 											onClose={() => close(p().key)}
 										/>
-									</View>
+									</Block>
 								</If>
 							}
 						>
-							<Text class="flex-1 text-sm font-medium text-foreground group-hover:underline">{p().title}</Text>
-							<Text class="text-xs text-muted-foreground">{screenLine(p())}</Text>
+							<Icon name={open() === p().key ? "chevron" : "right"} tint="tint-muted-foreground" />
+							<BodyStrong grow>{p().title}</BodyStrong>
+							<Caption>{screenLine(p())}</Caption>
 						</ExpandableRow>
 					)}
 				</Each>
-			</View>
+			</Section>
 		</If>
 	);
 }
@@ -340,19 +359,20 @@ function ArtifactOutput(props: {
 	let sourceAnchor: ViewRef | undefined;
 	let previewAnchor: ViewRef | undefined;
 	return (
-		<View class="gap-2 border-t border-border py-2.5">
-			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
-				<Text class="min-w-0 flex-1 text-sm text-foreground">{props.link.title || "Artifact"}</Text>
-				<Text class="text-xs text-muted-foreground">{artifactLine(props.link)}</Text>
+		<Row
+			title={props.link.title || "Artifact"}
+			meta={artifactLine(props.link)}
+			trailing={
 				<If
 					when={pinned()}
 					else={
-						<Text class="text-xs text-faint">
+						<Caption tone="faint">
 							{props.work.subject.kind === "task" ? "No pinned revision" : "No source here"}
-						</Text>
+						</Caption>
 					}
 				>
-					<Action
+					<Button
+						small
 						label={reading() ? "Reading…" : mine() && !mine()?.preview ? "Hide source" : "Inspect source"}
 						testID={`output-source-${props.link.artifactId}`}
 						accessibilityLabel={
@@ -374,7 +394,8 @@ function ArtifactOutput(props: {
 						}}
 					/>
 					<If when={props.link.kind === "image" || (props.link.kind === "nsh" && artifactPreviewsAvailable())}>
-						<Action
+						<Button
+							small
 							label={mine()?.preview ? "Hide preview" : "Preview"}
 							testID={`output-preview-${props.link.artifactId}`}
 							disabled={reading() || !props.fresh}
@@ -398,14 +419,18 @@ function ArtifactOutput(props: {
 						/>
 					</If>
 				</If>
-			</View>
-			<If when={mine()}>
-				<Text class="text-xs text-faint">{paneLine(mine() as Inspection)}</Text>
-				<If when={!inFull(fullId)} else={<InFullNote />}>
-					<ArtifactBody shown={mine() as Inspection} />
+			}
+			detail={
+				<If when={mine()}>
+					<RowDetail>
+						<Caption tone="faint">{paneLine(mine() as Inspection)}</Caption>
+						<If when={!inFull(fullId)} else={<InFullNote />}>
+							<ArtifactBody shown={mine() as Inspection} />
+						</If>
+					</RowDetail>
 				</If>
-			</If>
-		</View>
+			}
+		/>
 	);
 }
 
@@ -440,111 +465,108 @@ function Outputs(props: {
 		});
 	};
 	return (
-		<View testID="delivery-outputs" class="gap-1">
-			<View class="pb-1">
-				<SectionTitle title="Outputs" count={count()}>
-					<If when={comparable()}>
-						<Action
-							label={comparing() ? "Close comparison" : "Compare outputs"}
-							testID="outputs-compare"
-							anchor={(node) => {
-								compareButton = node;
-							}}
-							onPress={() => comparing.set(!comparing())}
-						/>
-					</If>
-				</SectionTitle>
-			</View>
+		<Section
+			testID="delivery-outputs"
+			title="Outputs"
+			count={count()}
+			action={
+				<If when={comparable()}>
+					<Link
+						label={comparing() ? "Close comparison" : "Compare outputs"}
+						testID="outputs-compare"
+						anchor={(node) => {
+							compareButton = node;
+						}}
+						onPress={() => comparing.set(!comparing())}
+					/>
+				</If>
+			}
+		>
 			<If when={comparing() && comparable()}>
-				<OutputComparison
-					work={w()}
-					source={props.mirror.source}
-					fresh={props.fresh}
-					resultKey={key()}
-					onClose={() => {
-						comparing.set(false);
-						compareButton?.focus();
-					}}
-				/>
+				<Block>
+					<OutputComparison
+						work={w()}
+						source={props.mirror.source}
+						fresh={props.fresh}
+						resultKey={key()}
+						onClose={() => {
+							comparing.set(false);
+							compareButton?.focus();
+						}}
+					/>
+				</Block>
 			</If>
 			<If when={count() === 0}>
-				<Text class="text-sm text-muted-foreground">The agent linked no outputs to this result.</Text>
+				<EmptyLine text="The agent linked no outputs to this result." />
 			</If>
-			{/* Keep text selection outside the button so native repeated clicks still open it. */}
-			<Each of={w().pullRequests} key={(r) => r.id}>
-				{(r) => (
-					<View class="gap-0.5 border-t border-border py-2.5">
-						<If
-							when={web() && webLink(r())}
-							else={
-								<View class="flex-row items-baseline gap-3">
-									<Text class="flex-1 text-sm text-foreground">{prName(r())}</Text>
-									<Text class="text-xs text-muted-foreground">{prState(r())}</Text>
-								</View>
+			<Rows>
+				{/* Keep text selection outside the press target (in the row's detail) so native repeated clicks still open it. */}
+				<Each of={w().pullRequests} key={(r) => r.id}>
+					{(r) => (
+						<Row
+							testID={web() && webLink(r()) ? `output-open-${r().id}` : undefined}
+							title={prName(r())}
+							state={prState(r())}
+							trailing={
+								<If when={web() && webLink(r())}>
+									<Num>{opening(r()) ? "Opening…" : "Open ↗"}</Num>
+								</If>
 							}
-						>
-							<RowLink
-								testID={`output-open-${r().id}`}
-								title={prName(r())}
-								accessibilityLabel={`Open ${shortName(r())} in your browser. Opening it records nothing.`}
-								onPress={() => open(r())}
-							>
-								<Text class="text-xs text-muted-foreground">{prState(r())}</Text>
-								<Text class="w-16 text-right text-xs text-faint">{opening(r()) ? "Opening…" : "Open ↗"}</Text>
-							</RowLink>
-						</If>
-						<View selectable>
-							<Text class="text-xs text-faint">{linkUrl(r())}</Text>
-						</View>
-						<If when={r().kind === "github.pr"}>
-							<Text class="text-xs text-faint">{prObservation(r())}</Text>
-						</If>
-					</View>
-				)}
-			</Each>
-			<Each of={w().artifacts} key={(a) => `${a.sessionId}/${a.artifactId}`}>
-				{(a) => (
-					<ArtifactOutput
-						mirror={props.mirror}
-						place={props.place}
-						work={w()}
-						link={a()}
-						fresh={props.fresh}
-						anchors={props.anchors}
-					/>
-				)}
-			</Each>
-			<If when={commit()}>
-				<View class="flex-row items-baseline gap-3 border-t border-border py-2.5">
-					<Text class="flex-1 text-sm text-foreground">{`Commit ${commit()?.slice(0, 12) ?? ""}`}</Text>
-					<Text class="text-xs text-muted-foreground">Source, as the agent recorded it</Text>
-				</View>
+							accessibilityLabel={`Open ${shortName(r())} in your browser. Opening it records nothing.`}
+							onPress={web() && webLink(r()) ? () => open(r()) : undefined}
+							detail={
+								<RowDetail>
+									<View selectable>
+										<Caption tone="faint">{linkUrl(r())}</Caption>
+										<If when={r().kind === "github.pr"}>
+											<Caption tone="faint">{prObservation(r())}</Caption>
+										</If>
+									</View>
+								</RowDetail>
+							}
+						/>
+					)}
+				</Each>
+				<Each of={w().artifacts} key={(a) => `${a.sessionId}/${a.artifactId}`}>
+					{(a) => (
+						<ArtifactOutput
+							mirror={props.mirror}
+							place={props.place}
+							work={w()}
+							link={a()}
+							fresh={props.fresh}
+							anchors={props.anchors}
+						/>
+					)}
+				</Each>
+				<If when={commit()}>
+					<Row title={`Commit ${commit()?.slice(0, 12) ?? ""}`} meta="Source, as the agent recorded it" />
+				</If>
+			</Rows>
+			<If when={outputMessages()[key()] || w().pullRequests.length > 0 || w().artifacts.length > 0}>
+				<Block>
+					<If when={outputMessages()[key()]}>
+						<Body role="alert" testID="output-message" tone="muted">
+							{outputMessages()[key()] ?? ""}
+						</Body>
+					</If>
+					<If when={w().pullRequests.length > 0}>
+						<Caption tone="faint">
+							{web()
+								? "Opening a link shows it in your browser. It records nothing; only Mark done is your check."
+								: "Pilot cannot open links in this window. Copy one; opening it records nothing."}
+						</Caption>
+					</If>
+					<If when={w().artifacts.length > 0}>
+						<Caption tone="faint">
+							Inspect source shows the saved text of a pinned revision. NSH previews run apart from Pilot and
+							change only their own state. Looking records nothing.
+						</Caption>
+					</If>
+				</Block>
 			</If>
-			<If when={outputMessages()[key()]}>
-				<Text role="alert" testID="output-message" class="pt-1 text-sm text-muted-foreground">
-					{outputMessages()[key()] ?? ""}
-				</Text>
-			</If>
-			<If when={w().pullRequests.length > 0}>
-				<Text class="pt-1 text-xs text-faint">
-					{web()
-						? "Opening a link shows it in your browser. It records nothing; only Mark done is your check."
-						: "Pilot cannot open links in this window. Copy one; opening it records nothing."}
-				</Text>
-			</If>
-			<If when={w().artifacts.length > 0}>
-				<Text class="text-xs text-faint">
-					Inspect source shows the saved text of a pinned revision. NSH previews run apart from Pilot and change
-					only their own state. Looking records nothing.
-				</Text>
-			</If>
-		</View>
+		</Section>
 	);
-}
-
-/** A small heading inside Agent work. */
-function Part(props: { title: string }) {
-	return <Text class="pt-3 text-xs text-faint">{props.title}</Text>;
 }
 
 /** One owned change from a retained comparison, and how it changed. */
@@ -559,44 +581,50 @@ function Change(props: { change: OwnedChange }) {
 			: "Read from its first revision only. Later history may be missing.";
 	};
 	return (
-		<View selectable class="gap-0.5 border-t border-border py-2.5">
-			<If
-				when={shown()}
-				else={
-					<Text class="text-sm text-muted-foreground">
-						Pilot cannot show this change here. It may be older than change tracking, or its history moved on.
-					</Text>
-				}
-			>
-				<View class="flex-row items-baseline gap-3">
-					<Text class="flex-1 text-sm text-foreground">{`Change ${shortId(shown()?.changeId ?? "")}`}</Text>
-					<Text class="text-xs text-muted-foreground">
-						{shown()?.current === "present" ? "In the repository" : "No longer in the repository"}
-					</Text>
-				</View>
-				<Text class="text-xs text-muted-foreground">
-					{shown()?.baselineCommitId
+		<If
+			when={shown()}
+			else={
+				<Row
+					title="Pilot cannot show this change here. It may be older than change tracking, or its history moved on."
+					wrap
+					selectable
+				/>
+			}
+		>
+			<Row
+				title={`Change ${shortId(shown()?.changeId ?? "")}`}
+				state={shown()?.current === "present" ? "In the repository" : "No longer in the repository"}
+				meta={
+					shown()?.baselineCommitId
 						? `Started on ${shortId(shown()?.baselineCommitId ?? "")}. Created as ${shortId(shown()?.creationCommitId ?? "")}.`
-						: `Starting point not recorded. Created as ${shortId(shown()?.creationCommitId ?? "")}.`}
-				</Text>
-				<Each of={shown()?.revisions ?? []} key={(r) => r.commitId}>
-					{(r) => (
-						<Text testID={`agent-work-revision-${r().commitId}`} class="text-xs text-muted-foreground">
-							{`${shortId(r().commitId)} on ${r().parents.map(shortId).join(", ") || "no parent"}${r().ownedChange ? "" : " · a related change"}`}
-						</Text>
-					)}
-				</Each>
-				<If when={shown()?.more}>
-					<Text class="text-xs text-faint">Older revisions are not shown.</Text>
-				</If>
-				<If when={seedLine()}>
-					<Text class="text-xs text-faint">{seedLine()}</Text>
-				</If>
-				<Text class="text-xs text-faint">
-					{`Read at repository operation ${shortId(shown()?.operationId ?? "")}. Another chat may have made that operation.`}
-				</Text>
-			</If>
-		</View>
+						: `Starting point not recorded. Created as ${shortId(shown()?.creationCommitId ?? "")}.`
+				}
+				wrap
+				selectable
+				detail={
+					<RowDetail>
+						<View selectable class="gap-0.5">
+							<Each of={shown()?.revisions ?? []} key={(r) => r.commitId}>
+								{(r) => (
+									<Caption testID={`agent-work-revision-${r().commitId}`}>
+										{`${shortId(r().commitId)} on ${r().parents.map(shortId).join(", ") || "no parent"}${r().ownedChange ? "" : " · a related change"}`}
+									</Caption>
+								)}
+							</Each>
+							<If when={shown()?.more}>
+								<Caption tone="faint">Older revisions are not shown.</Caption>
+							</If>
+							<If when={seedLine()}>
+								<Caption tone="faint">{seedLine()}</Caption>
+							</If>
+							<Caption tone="faint">
+								{`Read at repository operation ${shortId(shown()?.operationId ?? "")}. Another chat may have made that operation.`}
+							</Caption>
+						</View>
+					</RowDetail>
+				}
+			/>
+		</If>
 	);
 }
 
@@ -606,23 +634,21 @@ function AttemptRow(props: { attempt: Attempt }) {
 	const outcome = () => attemptOutcome(t());
 	const at = () => (t().result ?? t().dispatch ?? t().legacy)?.at ?? 0;
 	return (
-		<View selectable class="gap-0.5 border-t border-border py-2.5">
-			<View class="flex-row items-center gap-3">
-				<Text class="flex-1 text-sm text-foreground">{attemptName(t())}</Text>
-				<If when={!outcome().known}>
-					<Mark kind="unknown" />
+		<Row
+			mark={outcome().known ? undefined : "needs"}
+			title={attemptName(t())}
+			meta={t().legacy ? `${whenOf(at())}. An older record: Pilot kept no separate attempt.` : whenOf(at())}
+			wrap
+			selectable
+			trailing={<Caption testID={`agent-work-outcome-${t().id}`}>{outcome().word}</Caption>}
+			detail={
+				<If when={selectionLine(t())}>
+					<RowDetail>
+						<Caption tone="faint">{selectionLine(t())}</Caption>
+					</RowDetail>
 				</If>
-				<Text testID={`agent-work-outcome-${t().id}`} class="text-xs text-muted-foreground">
-					{outcome().word}
-				</Text>
-			</View>
-			<Text class="text-xs text-faint">
-				{t().legacy ? `${whenOf(at())}. An older record: Pilot kept no separate attempt.` : whenOf(at())}
-			</Text>
-			<If when={selectionLine(t())}>
-				<Text class="text-xs text-faint">{selectionLine(t())}</Text>
-			</If>
-		</View>
+			}
+		/>
 	);
 }
 
@@ -637,66 +663,64 @@ function WorkRecord(props: { work: DeliveredWork; record: AgentWork }) {
 	const attempts = () => attemptsOf(shownPub()?.actions ?? []);
 	const prs = () => ownPullRequests(props.work).filter((p) => p.kind === "github.pr");
 	return (
-		<View class="gap-0">
-			<Part title="Changes it owns" />
+		<View>
+			<RowGroup label="Changes it owns" />
 			<If when={r().changes.length === 0}>
-				<Text class="py-1 text-sm text-muted-foreground">
-					This result names no retained change. Pilot does not guess one from authors or the workspace.
-				</Text>
+				<EmptyLine text="This result names no retained change. Pilot does not guess one from authors or the workspace." />
 			</If>
-			<Each of={r().changes} key={(c) => c.snapshotId}>
-				{(c) => <Change change={c()} />}
-			</Each>
+			<Rows>
+				<Each of={r().changes} key={(c) => c.snapshotId}>
+					{(c) => <Change change={c()} />}
+				</Each>
+			</Rows>
 			<If when={r().moreChanges}>
-				<Text class="text-xs text-faint">More retained changes are not shown.</Text>
+				<EmptyLine text="More retained changes are not shown." />
 			</If>
 
-			<Part title="Pushes and pull requests" />
+			<RowGroup label="Pushes and pull requests" />
 			<If
 				when={shownPub()}
-				else={
-					<Text class="py-1 text-sm text-muted-foreground">
-						Pilot cannot read this chat's saved pushes and pull requests here.
-					</Text>
-				}
+				else={<EmptyLine text="Pilot cannot read this chat's saved pushes and pull requests here." />}
 			>
-				<Text class="pb-1 text-xs text-faint">
-					{shownPub()?.scope === "mission"
-						? "Saved by the chat that did this, while in this mission. They may cover more than this task."
-						: "Saved by this chat."}
-				</Text>
+				<EmptyLine
+					text={
+						shownPub()?.scope === "mission"
+							? "Saved by the chat that did this, while in this mission. They may cover more than this task."
+							: "Saved by this chat."
+					}
+				/>
 				<If when={attempts().length === 0}>
-					<Text class="py-1 text-sm text-muted-foreground">
-						None saved. Pushes Pilot did not see are not shown.
-					</Text>
+					<EmptyLine text="None saved. Pushes Pilot did not see are not shown." />
 				</If>
-				<Each of={attempts()} key={(a) => a.id}>
-					{(a) => <AttemptRow attempt={a()} />}
-				</Each>
+				<Rows>
+					<Each of={attempts()} key={(a) => a.id}>
+						{(a) => <AttemptRow attempt={a()} />}
+					</Each>
+				</Rows>
 				<If when={shownPub()?.more}>
-					<Text class="text-xs text-faint">Older records are not shown.</Text>
+					<EmptyLine text="Older records are not shown." />
 				</If>
 			</If>
 
-			<Part title="Seen on GitHub" />
+			<RowGroup label="Seen on GitHub" />
 			<If when={prs().length === 0}>
-				<Text class="py-1 text-sm text-muted-foreground">No pull request is linked to this result.</Text>
+				<EmptyLine text="No pull request is linked to this result." />
 			</If>
-			<Each of={prs()} key={(p) => p.id}>
-				{(p) => (
-					<View selectable class="gap-0.5 border-t border-border py-2.5">
-						<View class="flex-row items-baseline gap-3">
-							<Text class="flex-1 text-sm text-foreground">{prName(p()).split(" · ")[0]}</Text>
-							<Text class="text-xs text-muted-foreground">{prState(p())}</Text>
-						</View>
-						<Text class="text-xs text-faint">{prObservation(p())}</Text>
-					</View>
-				)}
-			</Each>
+			<Rows>
+				<Each of={prs()} key={(p) => p.id}>
+					{(p) => (
+						<Row
+							title={prName(p()).split(" · ")[0]}
+							state={prState(p())}
+							meta={prObservation(p())}
+							wrap
+							selectable
+						/>
+					)}
+				</Each>
+			</Rows>
 			<If when={prs().length > 0}>
-				<Text class="text-xs text-faint">
-					Pilot did not read the pull request's head revision here, so it cannot say which revision GitHub has.
-				</Text>
+				<EmptyLine text="Pilot did not read the pull request's head revision here, so it cannot say which revision GitHub has." />
 			</If>
 		</View>
 	);
@@ -721,10 +745,12 @@ function AgentWorkPanel(props: { mirror: DeliveryMirror; place: DeliveryPlace; w
 		} else void showWork(props.mirror.source, key(), props.work);
 	};
 	return (
-		<View testID="agent-work" class="gap-1">
-			<SectionTitle title="Agent work">
+		<Section
+			testID="agent-work"
+			title="Agent work"
+			action={
 				<If when={owned()}>
-					<Action
+					<Link
 						label={read() ? "Hide" : "Show"}
 						testID="agent-work-toggle"
 						accessibilityLabel={
@@ -736,34 +762,36 @@ function AgentWorkPanel(props: { mirror: DeliveryMirror; place: DeliveryPlace; w
 						onPress={toggle}
 					/>
 				</If>
-			</SectionTitle>
+			}
+			footnote={
+				read()
+					? "This is Pilot's record. It is separate from the agent's report, a merge, a release and your check."
+					: undefined
+			}
+		>
 			<If
 				when={read()}
 				else={
-					<Text class="text-sm text-muted-foreground">
-						{owned()
-							? "The changes this agent owns and its pushes and pull requests, as Pilot recorded them."
-							: "No agent chat is named for this result, so Pilot has no work record to show."}
-					</Text>
+					<EmptyLine
+						text={
+							owned()
+								? "The changes this agent owns and its pushes and pull requests, as Pilot recorded them."
+								: "No agent chat is named for this result, so Pilot has no work record to show."
+						}
+					/>
 				}
 			>
 				<If when={read()?.state === "reading"}>
-					<Text class="text-sm text-muted-foreground">Reading the agent's work…</Text>
+					<EmptyLine text="Reading the agent's work…" />
 				</If>
 				<If when={read()?.state === "refused"}>
-					<View testID="agent-work-off" class="flex-row items-center gap-2.5">
-						<Mark kind="unknown" />
-						<Text class="flex-1 text-sm text-muted-foreground">{read()?.message ?? ""}</Text>
-					</View>
+					<Notice testID="agent-work-off" placement="section" text={read()?.message ?? ""} />
 				</If>
 				<If when={read()?.state === "shown" && read()?.work}>
 					<WorkRecord work={props.work} record={read()?.work as AgentWork} />
 				</If>
-				<Text class="pt-2 text-xs text-faint">
-					This is Pilot's record. It is separate from the agent's report, a merge, a release and your check.
-				</Text>
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -778,50 +806,62 @@ function ChatNow(props: { day: Day; work: DeliveredWork; placeKey: string; rerea
 	return (
 		<If when={now()}>
 			{(n) => (
-				<QuietPanel testID="delivery-chat-now" class="gap-2">
-					<MarkLine
-						kind={n().move === "open" && props.work.chat?.state === "working" ? "moving" : "needs"}
-						testID="delivery-chat-line"
-					>
-						<Text class="text-sm text-foreground">{n().line}</Text>
-					</MarkLine>
-					<If when={n().move === "continue" && props.day.chat}>
-						<ContinueRow
-							source={(props.day.chat as SessionChatMirror).source}
-							sessionId={id()}
-							failed={props.work.chat?.state === "failed"}
-							onSent={props.reread}
+				<Section testID="delivery-chat-now" title="Chat">
+					<Block gap={3}>
+						<State
+							testID="delivery-chat-line"
+							kind={n().move === "open" && props.work.chat?.state === "working" ? "working" : "needs"}
+							label={n().line}
+							plain
 						/>
-					</If>
-					<If when={n().move === "reply" && props.day.chat}>
-						<ChatWaits
-							chat={(props.day.chat as SessionChatMirror).source}
-							sessionId={id()}
-							says={props.work.chat?.says}
-							canContinue={props.work.chat?.canContinue === true}
-							place={`delivery/${props.placeKey}`}
-							onSent={props.reread}
-						/>
-					</If>
-					<View class="-ml-3 flex-row gap-2">
-						<If when={n().move === "answer"}>
-							<Action
-								variant="outline"
-								testID="delivery-chat-answer"
-								label="Answer"
-								accessibilityLabel="Answer its question on Today, where Pilot shows what needs you."
-								onPress={goHome}
+						<If when={n().move === "continue" && props.day.chat}>
+							<ContinueRow
+								source={(props.day.chat as SessionChatMirror).source}
+								sessionId={id()}
+								failed={props.work.chat?.state === "failed"}
+								onSent={props.reread}
 							/>
 						</If>
-						<Action
-							variant={n().move === "open" ? "outline" : "plain"}
-							testID="delivery-chat-open"
-							label="Open chat"
-							accessibilityLabel="Open its chat, read only. Opening it sends nothing."
-							onPress={() => openChat(id(), "Result")}
-						/>
-					</View>
-				</QuietPanel>
+						<If when={n().move === "reply" && props.day.chat}>
+							<ChatWaits
+								chat={(props.day.chat as SessionChatMirror).source}
+								sessionId={id()}
+								says={props.work.chat?.says}
+								canContinue={props.work.chat?.canContinue === true}
+								place={`delivery/${props.placeKey}`}
+								onSent={props.reread}
+							/>
+						</If>
+						<Buttons>
+							<If when={n().move === "answer"}>
+								<Button
+									testID="delivery-chat-answer"
+									label="Answer"
+									accessibilityLabel="Answer its question on Today, where Pilot shows what needs you."
+									onPress={goHome}
+								/>
+							</If>
+							<If
+								when={n().move === "open"}
+								else={
+									<Link
+										testID="delivery-chat-open"
+										label="Open chat"
+										accessibilityLabel="Open its chat, read only. Opening it sends nothing."
+										onPress={() => openChat(id(), "Result")}
+									/>
+								}
+							>
+								<Button
+									testID="delivery-chat-open"
+									label="Open chat"
+									accessibilityLabel="Open its chat, read only. Opening it sends nothing."
+									onPress={() => openChat(id(), "Result")}
+								/>
+							</If>
+						</Buttons>
+					</Block>
+				</Section>
 			)}
 		</If>
 	);
@@ -831,20 +871,19 @@ function ChatNow(props: { day: Day; work: DeliveredWork; placeKey: string; rerea
 function Stands(props: { work: DeliveredWork; unsettled: DeliveryOp | undefined }) {
 	const merged = () => ownPullRequests(props.work).some((r) => r.pullRequest?.state === "merged");
 	return (
-		<View testID="delivery-stands" class="gap-0">
-			<View class="pb-2">
-				<SectionTitle title="Where this stands" />
-			</View>
-			<Stand label="Agent" testID="stand-agent" value={agentLine(props.work)} />
-			<Stand label="Pull request" testID="stand-pr" value={pullRequestLine(props.work)} />
-			<Stand
-				label="Production"
-				testID="stand-production"
-				value={productionLine(props.work)}
-				tone={merged() ? "needs" : undefined}
-			/>
-			<Stand label="Your check" testID="stand-check" value={checkLine(props.work, props.unsettled)} />
-		</View>
+		<Section testID="delivery-stands" title="Where this stands">
+			<Block gap={3} selectable>
+				<Stand label="Agent" testID="stand-agent" value={agentLine(props.work)} />
+				<Stand label="Pull request" testID="stand-pr" value={pullRequestLine(props.work)} />
+				<Stand
+					label="Production"
+					testID="stand-production"
+					value={productionLine(props.work)}
+					tone={merged() ? "needs" : undefined}
+				/>
+				<Stand label="Your check" testID="stand-check" value={checkLine(props.work, props.unsettled)} />
+			</Block>
+		</Section>
 	);
 }
 
@@ -862,12 +901,14 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 	};
 	const ticked = () => reminders()[id()] ?? [];
 	return (
-		<View class="gap-0.5">
+		<Options multiple>
 			<Each of={items()} key={(i) => i.id}>
 				{(i) => (
-					<CheckboxRow
+					<Option
+						multiple
+						compact
 						testID={`reminder-${i().id}`}
-						label={i().label}
+						title={i().label}
 						tickTestID={`reminder-ticked-${i().id}`}
 						checked={ticked().includes(i().id)}
 						onChange={() =>
@@ -879,7 +920,7 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 					/>
 				)}
 			</Each>
-		</View>
+		</Options>
 	);
 }
 
@@ -894,60 +935,72 @@ function NoteEditor(props: { review: ReviewSession; placeKey: string }) {
 	const field = keepField(`review:${r.key}`, () => `delivery/${props.placeKey}`, body);
 	return (
 		<View class="gap-1.5">
-			<TextField
-				variant="composer"
-				testID="review-body"
-				ref={field.ref}
-				onFocus={field.focus}
-				onSelectionChange={field.select}
-				accessibilityLabel={
-					mine() ? "My notes. Only for you; Send back never includes them." : "Your note on this result."
+			<Composer
+				field={
+					<TextField
+						variant="composer"
+						testID="review-body"
+						ref={field.ref}
+						onFocus={field.focus}
+						onSelectionChange={field.select}
+						accessibilityLabel={
+							mine() ? "My notes. Only for you; Send back never includes them." : "Your note on this result."
+						}
+						placeholder={mine() ? "Notes only for you" : "A note on this result. Send back includes it."}
+						multiline
+						autoFocus
+						value={body()}
+						disabled={r.busy() || r.pending().length > 0}
+						onChange={({ value }) =>
+							keepReviewDraft(r.key, { kind: r.draft().kind, anchor: { kind: "general" }, body: value })
+						}
+					/>
 				}
-				placeholder={mine() ? "Notes only for you" : "A note on this result. Send back includes it."}
-				multiline
-				autoFocus
-				value={body()}
-				disabled={r.busy() || r.pending().length > 0}
-				onChange={({ value }) =>
-					keepReviewDraft(r.key, { kind: r.draft().kind, anchor: { kind: "general" }, body: value })
+				bar={
+					<>
+						{/* Save comes first in Tab order, as before; the bar keeps it at the right. */}
+						<Spacer />
+						<Button
+							kind="primary"
+							label={r.busy() ? "Saving…" : mine() ? "Save my notes" : "Save note"}
+							testID="note-save"
+							disabled={r.disabled() || utf8(body()) > NOTE_LIMIT || (!mine() && !body().trim())}
+							onPress={() => void r.save()}
+						/>
+						<Button
+							kind="quiet"
+							small
+							label="Cancel"
+							testID="note-cancel"
+							disabled={r.busy()}
+							onPress={() => {
+								glide();
+								r.editorOpen.set(false);
+							}}
+						/>
+						<Button
+							kind="quiet"
+							small
+							label="Discard"
+							testID="note-discard"
+							disabled={r.busy() || r.pending().length > 0}
+							onPress={() => {
+								glide();
+								forgetReviewDraft(r.key);
+								r.editorOpen.set(false);
+							}}
+						/>
+					</>
 				}
 			/>
 			<If when={utf8(body()) > NOTE_LIMIT}>
-				<Text class="text-xs text-needs-ink">This note is too long to save. Shorten it first.</Text>
+				<Caption tone="needs">This note is too long to save. Shorten it first.</Caption>
 			</If>
-			<Text class="text-xs text-faint">
+			<Caption tone="faint">
 				{mine()
 					? "Only for you. Send back never includes them, and nothing goes to GitHub."
 					: "Kept with this result and counted with your comments. Send back includes it; nothing goes to GitHub."}
-			</Text>
-			<View class="flex-row gap-2">
-				<Action
-					variant="primary"
-					label={r.busy() ? "Saving…" : mine() ? "Save my notes" : "Save note"}
-					testID="note-save"
-					disabled={r.disabled() || utf8(body()) > NOTE_LIMIT || (!mine() && !body().trim())}
-					onPress={() => void r.save()}
-				/>
-				<Action
-					label="Cancel"
-					testID="note-cancel"
-					disabled={r.busy()}
-					onPress={() => {
-						glide();
-						r.editorOpen.set(false);
-					}}
-				/>
-				<Action
-					label="Discard"
-					testID="note-discard"
-					disabled={r.busy() || r.pending().length > 0}
-					onPress={() => {
-						glide();
-						forgetReviewDraft(r.key);
-						r.editorOpen.set(false);
-					}}
-				/>
-			</View>
+			</Caption>
 		</View>
 	);
 }
@@ -1014,11 +1067,57 @@ function YourCheck(props: {
 		ownPullRequests(w())
 			.filter((r) => r.pullRequest?.state !== "merged")
 			.map((r) => prName(r).split(" · ")[0]);
+	const checkable = () =>
+		!unsettled() &&
+		!w().pendingOperationId &&
+		!!w().deliveryId &&
+		shownState() !== "done" &&
+		shownState() !== "sent_back";
 	return (
-		<View testID="your-check" class="gap-3 rounded-xl border border-border px-4 py-4">
-			<Text role="header" class="text-base font-semibold text-foreground">
-				Your check
-			</Text>
+		<Question
+			testID="your-check"
+			title="Is this result done?"
+			foot={
+				<If when={checkable() && !open() && !asked() && !noting()}>
+					<Button
+						kind={props.reviewFirst ? "secondary" : "primary"}
+						label={sending() ? "Sending…" : "Mark done"}
+						testID="mark-done"
+						disabled={sending()}
+						onPress={markDone}
+					/>
+					<Button
+						label="Send back…"
+						testID="send-back-open"
+						disabled={sending()}
+						onPress={() => {
+							glide();
+							setFor(backOpen, key(), true);
+						}}
+					/>
+					<If when={props.review}>
+						<Button
+							label="Add a note"
+							testID="add-note"
+							disabled={props.review?.disabled() ?? true}
+							onPress={() => {
+								glide();
+								props.review?.startEditor("comment");
+							}}
+						/>
+						<Button
+							label="My notes…"
+							testID="my-notes"
+							disabled={props.review?.disabled() ?? true}
+							onPress={() => {
+								glide();
+								props.review?.startEditor("note");
+							}}
+						/>
+					</If>
+				</If>
+			}
+		>
 			<If when={unsettled()}>
 				<Notice
 					testID="delivery-unknown"
@@ -1029,10 +1128,12 @@ function YourCheck(props: {
 								? unsettledLine(unsettled() as DeliveryOp, props.title)
 								: ""
 					}
+					detail={`${unsettled()?.note ? `Your note: ${unsettled()?.note ?? ""} ` : ""}Pilot will not send it again. Check only reads its saved answer.`}
 					action={
 						// Pilot checks by itself first; the button is the fallback after its tries.
 						<If when={!unsettled()?.checking}>
-							<Action
+							<Button
+								small
 								label="Check"
 								testID="delivery-check"
 								accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
@@ -1047,195 +1148,150 @@ function YourCheck(props: {
 							/>
 						</If>
 					}
-				>
-					<If when={unsettled()?.note}>
-						<Text class="text-sm text-muted-foreground">{`Your note: ${unsettled()?.note ?? ""}`}</Text>
-					</If>
-					<Text class="text-xs text-faint">Pilot will not send it again. Check only reads its saved answer.</Text>
-				</Notice>
+				/>
 			</If>
 			<If when={!unsettled() && !!w().pendingOperationId}>
-				<Text class="text-sm text-muted-foreground">
+				<Body tone="muted">
 					An earlier check of this result is waiting for Pilot to confirm it. Nothing can be sent until then.
-				</Text>
+				</Body>
 			</If>
 			<If when={!unsettled() && !w().pendingOperationId && !w().deliveryId}>
-				<Text class="text-sm text-muted-foreground">
+				<Body tone="muted">
 					There is nothing to check yet. The agent has not delivered a result Pilot can show.
-				</Text>
+				</Body>
 			</If>
 			<If when={!unsettled() && !w().pendingOperationId && shownState() === "done"}>
 				<View testID="delivery-done" class="gap-2">
-					<Text class="text-sm text-foreground">
+					<Body measure>
 						You marked this done. That means you accept the result. It does not merge, release or reply to anyone.
-					</Text>
-					<View class="flex-row">
-						<Action
+					</Body>
+					<Buttons>
+						<Button
 							label="Reopen"
 							testID="delivery-reopen"
 							disabled={sending()}
 							onPress={() => void send("reopen")}
 						/>
-					</View>
+					</Buttons>
 				</View>
 			</If>
 			<If when={!unsettled() && !w().pendingOperationId && shownState() === "sent_back"}>
 				<View testID="delivery-sent-back" class="gap-2">
-					<Text class="text-sm text-foreground">
+					<Body measure>
 						You sent this back. The agent has your note; its next result shows on Today to check.
-					</Text>
-					<Text class="text-sm text-muted-foreground">{w().verification?.note ?? ""}</Text>
-					<View class="flex-row">
-						<Action
+					</Body>
+					<Body tone="muted">{w().verification?.note ?? ""}</Body>
+					<Buttons>
+						<Button
 							label="Reopen"
 							testID="delivery-reopen"
 							disabled={sending()}
 							onPress={() => void send("reopen")}
 						/>
-					</View>
+					</Buttons>
 				</View>
 			</If>
-			<If
-				when={
-					!unsettled() &&
-					!w().pendingOperationId &&
-					!!w().deliveryId &&
-					shownState() !== "done" &&
-					shownState() !== "sent_back"
-				}
-			>
+			<If when={checkable()}>
 				<View class="gap-3">
-					<Text class="text-xs text-faint">
+					<Caption tone="faint">
 						Reminders only. Ticks send nothing and stay with this window; you decide when it is done.
-					</Text>
+					</Caption>
 					<Reminders place={props.place} work={w()} />
 					<If when={open()}>
 						<View class="gap-1.5">
-							<TextField
-								variant="composer"
-								testID="send-back-note"
-								ref={field.ref}
-								accessibilityLabel="What should change. The agent gets this note."
-								multiline
-								autoFocus
-								value={note()}
-								onChange={({ value }) => setNote(key(), value)}
-								onFocus={field.focus}
-								onSelectionChange={field.select}
-								placeholder="What should change? The agent gets this note."
+							<Composer
+								field={
+									<TextField
+										variant="composer"
+										testID="send-back-note"
+										ref={field.ref}
+										accessibilityLabel="What should change. The agent gets this note."
+										multiline
+										autoFocus
+										value={note()}
+										onChange={({ value }) => setNote(key(), value)}
+										onFocus={field.focus}
+										onSelectionChange={field.select}
+										placeholder="What should change? The agent gets this note."
+									/>
+								}
+								bar={
+									<>
+										{/* Send back comes first in Tab order, as before; the bar keeps it at the right. */}
+										<Spacer />
+										<Button
+											kind="primary"
+											label={sending() ? "Sending…" : "Send back"}
+											testID="send-back"
+											disabled={sending() || note().trim() === "" || tooLong()}
+											onPress={() => void send("send_back")}
+										/>
+										<Button
+											kind="quiet"
+											small
+											label="Cancel"
+											testID="send-back-cancel"
+											disabled={sending()}
+											onPress={() => {
+												glide();
+												setFor(backOpen, key(), false);
+											}}
+										/>
+									</>
+								}
 							/>
 							<If when={tooLong()}>
-								<Text class="text-xs text-needs-ink">This note is too long to send. Shorten it first.</Text>
+								<Caption tone="needs">This note is too long to send. Shorten it first.</Caption>
 							</If>
-							<Text class="text-xs text-faint">
+							<Caption tone="faint">
 								Pilot sends it once, as a message to the agent that did the work. Nothing else starts.
-							</Text>
-							<View class="flex-row gap-2">
-								<Action
-									variant="primary"
-									label={sending() ? "Sending…" : "Send back"}
-									testID="send-back"
-									disabled={sending() || note().trim() === "" || tooLong()}
-									onPress={() => void send("send_back")}
-								/>
-								<Action
-									label="Cancel"
-									testID="send-back-cancel"
-									disabled={sending()}
-									onPress={() => {
-										glide();
-										setFor(backOpen, key(), false);
-									}}
-								/>
-							</View>
+							</Caption>
 						</View>
 					</If>
 					<If when={asked()}>
-						<QuietPanel testID="done-confirm" class="gap-2">
-							<Text class="text-sm text-foreground">
+						<Quote testID="done-confirm">
+							<Body>
 								{`${openPrs().join(", ") || "Its pull request"} ${openPrs().length > 1 ? "are" : "is"} not merged. Done means you accept the result now. Pilot won't merge it, and it won't count as released.`}
-							</Text>
+							</Body>
 							<If when={!askedCurrent()}>
-								<Text class="text-xs text-needs-ink">
-									This result changed since you asked. Cancel and look again.
-								</Text>
+								<Caption tone="needs">This result changed since you asked. Cancel and look again.</Caption>
 							</If>
-							<View class="flex-row gap-2">
-								<Action
-									variant="primary"
+							<Buttons>
+								<Button
+									kind="primary"
 									label={sending() ? "Sending…" : "Mark done anyway"}
 									testID="done-anyway"
 									disabled={sending() || !askedCurrent()}
 									onPress={() => void send("done")}
 								/>
-								<Action
+								<Button
 									label="Cancel"
 									testID="done-cancel"
 									disabled={sending()}
 									onPress={() => doneAsk.set(null)}
 								/>
-							</View>
-						</QuietPanel>
+							</Buttons>
+						</Quote>
 					</If>
 					<If when={noting() && !open() && !asked()}>
 						<NoteEditor review={props.review as ReviewSession} placeKey={key()} />
 					</If>
-					<If when={!open() && !asked() && !noting()}>
-						<View class="flex-row flex-wrap gap-2">
-							<Action
-								variant={props.reviewFirst ? "outline" : "primary"}
-								label={sending() ? "Sending…" : "Mark done"}
-								testID="mark-done"
-								disabled={sending()}
-								onPress={markDone}
-							/>
-							<Action
-								label="Send back…"
-								testID="send-back-open"
-								disabled={sending()}
-								onPress={() => {
-									glide();
-									setFor(backOpen, key(), true);
-								}}
-							/>
-							<If when={props.review}>
-								<Action
-									label="Add a note"
-									testID="add-note"
-									disabled={props.review?.disabled() ?? true}
-									onPress={() => {
-										glide();
-										props.review?.startEditor("comment");
-									}}
-								/>
-								<Action
-									label="My notes…"
-									testID="my-notes"
-									disabled={props.review?.disabled() ?? true}
-									onPress={() => {
-										glide();
-										props.review?.startEditor("note");
-									}}
-								/>
-							</If>
-						</View>
-					</If>
 					<If when={!open() && note()}>
-						<Text class="text-xs text-faint">Your unsent note is kept. Send back… shows it again.</Text>
+						<Caption tone="faint">Your unsent note is kept. Send back… shows it again.</Caption>
 					</If>
 					<Each of={props.review?.general() ?? []} key={(e) => e.operationId}>
 						{(e) => (
-							<QuietPanel testID="saved-general" size="sm" selectable class="gap-1">
-								<Text class="text-xs text-muted-foreground">Your note · goes with Send back</Text>
-								<Text class="text-sm text-foreground">{e().body}</Text>
-							</QuietPanel>
+							<Quote testID="saved-general">
+								<Caption>Your note · goes with Send back</Caption>
+								<Body>{e().body}</Body>
+							</Quote>
 						)}
 					</Each>
 					<If when={props.review?.note() && !noting()}>
-						<QuietPanel testID="saved-note" size="sm" selectable class="gap-1">
-							<Text class="text-xs text-muted-foreground">My notes · only for you</Text>
-							<Text class="text-sm text-foreground">{props.review?.note() ?? ""}</Text>
-						</QuietPanel>
+						<Quote testID="saved-note">
+							<Caption>My notes · only for you</Caption>
+							<Body>{props.review?.note() ?? ""}</Body>
+						</Quote>
 					</If>
 				</View>
 			</If>
@@ -1243,11 +1299,11 @@ function YourCheck(props: {
 				<ReviewStatus review={props.review as ReviewSession} />
 			</If>
 			<If when={deliveryMessages()[key()]}>
-				<Text role="alert" testID="delivery-message" class="text-sm text-needs-ink">
+				<Body role="alert" testID="delivery-message" tone="needs">
 					{deliveryMessages()[key()] ?? ""}
-				</Text>
+				</Body>
 			</If>
-		</View>
+		</Question>
 	);
 }
 
@@ -1367,7 +1423,7 @@ export function DeliveryScreen(props: {
 		const scroll = keepScroll(`delivery/${key}`);
 		return (
 			<Scroll
-				class="flex-1 bg-background"
+				class="flex-1"
 				contentOffset={scroll.contentOffset}
 				scrollEventThrottle={100}
 				ref={pageScroll}
@@ -1376,10 +1432,8 @@ export function DeliveryScreen(props: {
 					scrolled();
 				}}
 			>
-				<Page testID="delivery" gap={8}>
-					<View class="gap-2">
-						<PageTitle title={title()} />
-						<Text class="text-sm text-muted-foreground">{origin()}</Text>
+				<Page testID="delivery">
+					<PageHead title={title()} text={origin()}>
 						<If when={props.day.search && fresh() && work()?.deliveryId}>
 							<InspectInWindow
 								title={title()}
@@ -1395,78 +1449,116 @@ export function DeliveryScreen(props: {
 									.join("\n\n")}
 							/>
 						</If>
-					</View>
-					<If when={entry()?.reason}>
-						<Notice testID="delivery-off" text={entry()?.reason ?? ""} />
-					</If>
-					<If
-						when={work()}
-						else={
-							<Text class="text-base text-muted-foreground">
-								{reading() && !entry()?.reason ? "Reading this result…" : "Pilot cannot show this result now."}
-							</Text>
+					</PageHead>
+					<Panel
+						testID="delivery-panel"
+						notice={
+							<If when={entry()?.reason}>
+								<Notice testID="delivery-off" placement="panel" text={entry()?.reason ?? ""} />
+							</If>
 						}
 					>
-						<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
-							{(w) => {
-								const review =
-									reviewSource && w().deliveryId ? reviewSession(w, fresh, reviewSource, onLater) : undefined;
-								const reviewFirst = () => !!review && review.hasCode() && !codeReviewed()[reviewKey(w())];
-								return (
-									<View class="gap-10">
-										<ChatNow
-											day={props.day}
-											work={w()}
-											placeKey={props.place.key}
-											reread={() => void mirror.source.read(props.place.subject)}
+						<If
+							when={work()}
+							else={
+								<Column>
+									<Block>
+										<Body tone="muted">
+											{reading() && !entry()?.reason
+												? "Reading this result…"
+												: "Pilot cannot show this result now."}
+										</Body>
+									</Block>
+								</Column>
+							}
+						>
+							<Each of={work() ? [work() as DeliveredWork] : []} key={(w) => w.deliveryId ?? "none"}>
+								{(w) => {
+									const review =
+										reviewSource && w().deliveryId
+											? reviewSession(w, fresh, reviewSource, onLater)
+											: undefined;
+									const reviewFirst = () => !!review && review.hasCode() && !codeReviewed()[reviewKey(w())];
+									// The user's check is the Question and leads the main column, then the chat's next step and
+									// the report; where the result stands sits beside them.
+									return (
+										<Columns
+											main={
+												<>
+													<Section title="Your check">
+														<YourCheck
+															mirror={mirror}
+															place={props.place}
+															work={w()}
+															title={title()}
+															review={review}
+															reviewFirst={reviewFirst()}
+														/>
+													</Section>
+													<ChatNow
+														day={props.day}
+														work={w()}
+														placeKey={props.place.key}
+														reread={() => void mirror.source.read(props.place.subject)}
+													/>
+													<Report work={w()} />
+													<Screens
+														mirror={mirror}
+														work={w()}
+														fresh={fresh()}
+														resultKey={props.place.key}
+													/>
+													<If when={review}>
+														<Block>
+															<CodeChanges
+																review={review as ReviewSession}
+																work={w()}
+																placeKey={key}
+																primary={
+																	reviewFirst() &&
+																	!backOpen()[key] &&
+																	doneAsk()?.key !== key &&
+																	!review?.editorOpen()
+																}
+																onOpen={() => openCodeReview(key)}
+															/>
+														</Block>
+													</If>
+													<Outputs
+														mirror={mirror}
+														place={props.place}
+														work={w()}
+														fresh={fresh()}
+														anchors={anchors}
+													/>
+												</>
+											}
+											side={
+												<>
+													<Stands work={w()} unsettled={unsettled()} />
+													<If when={w().deliveryId}>
+														<AgentWorkPanel
+															mirror={mirror}
+															place={props.place}
+															work={w()}
+															fresh={fresh()}
+														/>
+													</If>
+													<If when={props.day.feedback && w().deliveryId}>
+														<LinkedFeedback
+															mirror={props.day.feedback!}
+															scope={feedbackScope}
+															disabled={!fresh()}
+														/>
+													</If>
+												</>
+											}
 										/>
-										<Report work={w()} />
-										<Screens mirror={mirror} work={w()} fresh={fresh()} resultKey={props.place.key} />
-										<If when={review}>
-											<CodeChanges
-												review={review as ReviewSession}
-												work={w()}
-												placeKey={key}
-												primary={
-													reviewFirst() &&
-													!backOpen()[key] &&
-													doneAsk()?.key !== key &&
-													!review?.editorOpen()
-												}
-												onOpen={() => openCodeReview(key)}
-											/>
-										</If>
-										<Outputs
-											mirror={mirror}
-											place={props.place}
-											work={w()}
-											fresh={fresh()}
-											anchors={anchors}
-										/>
-										<If when={w().deliveryId}>
-											<AgentWorkPanel mirror={mirror} place={props.place} work={w()} fresh={fresh()} />
-										</If>
-										<Stands work={w()} unsettled={unsettled()} />
-										<YourCheck
-											mirror={mirror}
-											place={props.place}
-											work={w()}
-											title={title()}
-											review={review}
-											reviewFirst={reviewFirst()}
-										/>
-										<If when={props.day.feedback && w().deliveryId}>
-											<LinkedFeedback
-												mirror={props.day.feedback!}
-												scope={feedbackScope}
-												disabled={!fresh()}
-											/>
-										</If>
-									</View>
-								);
-							}}
-						</Each>
-					</If>
+									);
+								}}
+							</Each>
+						</If>
+					</Panel>
 				</Page>
 			</Scroll>
 		);

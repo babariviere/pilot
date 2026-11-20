@@ -1,5 +1,7 @@
 // Test-only native-channel projection. The test supplies all host replies.
 import { mount, signal, Text, View } from "nsh";
+// This fixture also loads as its own app (fixtures/recovery/Projection.tsx), where the parts in ./ui cannot load:
+// ui/fonts.ts imports font files outside that app's directory. So it keeps the base Button and plain Text.
 import { Button } from "nsh/base";
 import { ConnectedSessionChat, mirrorSessionChat, type SessionChat } from "./sessionChat";
 

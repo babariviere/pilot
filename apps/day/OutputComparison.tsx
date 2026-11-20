@@ -5,14 +5,14 @@
 // a full window opened from here closes with it. Looking records nothing.
 // With `pair`, the sides are the worker's named screen captures instead of a choice:
 // each side reads its own pin once, when it shows.
-import { cleanup, effect, keymap, signal, Text, untracked, View } from "nsh";
+import { cleanup, effect, type JSX, keymap, signal, untracked, View } from "nsh";
 import { savedTitle } from "./ArtifactExport";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import type { Shown } from "./artifactReads";
 import { artifactSelection } from "./deliveryArtifact";
 import type { ArtifactLink, DeliveredWork, DeliverySource } from "./deliveryFeed";
 import type { ScreenPair } from "./deliveryScreens";
-import { Picker, TabItem, TabRow } from "./ui";
+import { Body, BodyStrong, Caption, Picker, Spacer, Tab, Tabs } from "./ui";
 
 type Side = "Before" | "After";
 
@@ -116,64 +116,68 @@ export function OutputComparison(props: {
 		});
 	};
 	return (
-		<View testID={`${tid}-comparison`} class="gap-2 rounded-xl border border-border p-3">
+		<View testID={`${tid}-comparison`} class="gap-2">
 			{/* The tabs keep their own width; when the row is narrow, the icons wrap below them, never under them. */}
-			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
-				<View class="flex-row">
-					<TabRow>
-						<TabItem
-							label="Before"
-							selected={side() === "Before"}
-							testID={`${tid}-tab-before`}
-							onPress={() => side.set("Before")}
-						/>
-						<TabItem
-							label="After"
-							selected={side() === "After"}
-							testID={`${tid}-tab-after`}
-							onPress={() => side.set("After")}
-						/>
-					</TabRow>
-				</View>
+			<View class="flex-row flex-wrap items-end gap-x-3 gap-y-1">
+				<Tabs>
+					<Tab
+						label="Before"
+						selected={side() === "Before"}
+						testID={`${tid}-tab-before`}
+						onPress={() => side.set("Before")}
+					/>
+					<Tab
+						label="After"
+						selected={side() === "After"}
+						testID={`${tid}-tab-after`}
+						onPress={() => side.set("After")}
+					/>
+				</Tabs>
+				<Spacer />
 				<If when={current()}>
-					<View class="ml-auto">
-						<ArtifactTools shown={current() as Shown} testID={tid} onFull={full} />
-					</View>
+					<ArtifactTools shown={current() as Shown} testID={tid} onFull={full} />
 				</If>
 			</View>
-			<If when={!props.pair}>
-				<View class="flex-row">
-					<Picker
-						label={`${side()} output`}
-						testID={`${tid}-${side().toLowerCase()}`}
-						placeholder={`Choose the ${side()} output`}
-						items={links().map((a) => ({
-							value: id(a),
-							title: `${a.title || "Artifact"} · revision ${a.revision}`,
-						}))}
-						value={selected()[side()] ?? null}
-						onChange={(value) => void choose(side(), value)}
-					/>
-				</View>
-			</If>
-			<If when={current()} else={<Text class="text-sm text-muted-foreground">{missing()}</Text>}>
-				<View class="flex-row flex-wrap items-baseline gap-x-2">
-					<Text testID={`${tid}-title`} class="text-sm font-medium text-foreground">
-						{savedTitle(current() as Shown)}
-					</Text>
-					<Text class="text-xs text-faint">{paneLine(current() as Shown)}</Text>
-				</View>
-				<If when={!inFull(fullId)} else={<InFullNote />}>
-					<Each of={[side()]} key={String}>
-						{() => <ArtifactBody shown={current() as Shown} bounded />}
-					</Each>
+			<TabPane>
+				<If when={!props.pair}>
+					<View class="flex-row">
+						<Picker
+							label={`${side()} output`}
+							testID={`${tid}-${side().toLowerCase()}`}
+							placeholder={`Choose the ${side()} output`}
+							items={links().map((a) => ({
+								value: id(a),
+								title: `${a.title || "Artifact"} · revision ${a.revision}`,
+							}))}
+							value={selected()[side()] ?? null}
+							onChange={(value) => void choose(side(), value)}
+						/>
+					</View>
 				</If>
-			</If>
-			<Text class="text-xs text-faint">
-				{props.pair
-					? "The agent captured these from the app, without its change and with it. Looking records nothing."
-					: "Before and After are saved outputs of this result. Looking records nothing."}
-			</Text>
+				<If when={current()} else={<Body tone="muted">{missing()}</Body>}>
+					<View class="flex-row flex-wrap items-baseline gap-x-2">
+						<BodyStrong testID={`${tid}-title`}>{savedTitle(current() as Shown)}</BodyStrong>
+						<Caption tone="faint">{paneLine(current() as Shown)}</Caption>
+					</View>
+					<If when={!inFull(fullId)} else={<InFullNote />}>
+						<Each of={[side()]} key={String}>
+							{() => <ArtifactBody shown={current() as Shown} bounded />}
+						</Each>
+					</If>
+				</If>
+				<Caption tone="faint">
+					{props.pair
+						? "The agent captured these from the app, without its change and with it. Looking records nothing."
+						: "Before and After are saved outputs of this result. Looking records nothing."}
+				</Caption>
+			</TabPane>
 		</View>
 	);
+}
+
+// LIBRARY GAP: Tabs attach only to a Panel's top edge, and TabRow (tabs that switch one pane inside a section) is
+// deprecated. Before and After switch one pane inside a result, so this draws the pane the tabs sit on: a hairline
+// under the tabs, as a Panel's top edge. The library should offer tabs for a pane inside a section.
+function TabPane(props: { children?: JSX.Element }) {
+	return <View class="-mt-2 gap-2 border-t border-border pt-3">{props.children}</View>;
 }

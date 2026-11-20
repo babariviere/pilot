@@ -1,11 +1,12 @@
 // Headless test fixture only, never app runtime. No daemon, provider or
 // storage. A topic round asking about a prototype, with a scripted artifact
 // source: the card names the exact pinned revision and one press reads it once.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
 import { FullArtifact } from "./ArtifactShelf";
 import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
 import { RoundPrototype } from "./RoundPrototype";
+import { Column, GridBackdrop, Page, PageFoot, Panel } from "./ui";
 
 const reads = signal<string[]>([]);
 const item = {
@@ -39,10 +40,27 @@ const source: ArtifactSource = {
 	},
 };
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 gap-4 bg-background p-6">
-		<RoundPrototype page={page} source={source} />
-		<Text>{`Reads: [${reads().join(" ")}]`}</Text>
+	<FixtureWindow>
+		<Page>
+			<Panel>
+				<Column>
+					<RoundPrototype page={page} source={source} />
+				</Column>
+			</Panel>
+			<PageFoot text={`Reads: [${reads().join(" ")}]`} />
+		</Page>
 		<FullArtifact />
-	</View>
+	</FixtureWindow>
 ));

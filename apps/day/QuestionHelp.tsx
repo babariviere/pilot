@@ -2,12 +2,12 @@
 // read-only chat, and notes for Pilot (say it simpler, reword it). Notes wait here and go
 // together, with one note on the whole round, when the user sends them: Pilot then redoes
 // the round. Nothing here answers a question or approves anything.
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { errorText, logEvent } from "./dayLog";
 import type { Plans } from "./planning";
 import { put } from "./planView";
-import { Action, QuietPanel, TextField, ToggleChip } from "./ui";
+import { Body, Button, Buttons, Caption, Chip, Chips, Link, Quote, Spacer, TextField } from "./ui";
 
 /** A note on one question: say it simpler, and the user's own words about it. */
 export type QuestionNote = { simpler: boolean; text: string };
@@ -142,94 +142,93 @@ export function QuestionHelp(props: {
 	};
 	return (
 		<View testID={`help-${q().id}`} class="gap-3">
-			<View class="flex-row flex-wrap gap-1.5">
+			<Chips>
 				<If when={q().context}>
-					<ToggleChip
+					<Chip
 						label="More context"
 						shortcut={HELP_KEYS.context}
 						pressed={panel(key, "context")}
 						onChange={() => toggle(key, "context")}
 					/>
 				</If>
-				<ToggleChip
+				<Chip
 					label="Say it simpler"
 					shortcut={HELP_KEYS.simpler}
 					pressed={note().simpler}
 					onChange={(pressed) => setNote(props.interview.id, q().id, { simpler: pressed })}
 				/>
 				<If when={canAsk()}>
-					<ToggleChip
+					<Chip
 						label="Ask a question"
 						shortcut={HELP_KEYS.ask}
 						pressed={panel(key, "ask") || q().asks.length > 0}
 						onChange={() => toggle(key, "ask")}
 					/>
 				</If>
-				<ToggleChip
+				<Chip
 					label="Reword this"
 					shortcut={HELP_KEYS.reword}
 					pressed={panel(key, "reword") || note().text.trim() !== ""}
 					onChange={() => toggle(key, "reword")}
 				/>
-			</View>
+			</Chips>
 			<If when={panel(key, "context") && q().context}>
-				<QuietPanel testID={`context-${q().id}`}>
-					<Text class="text-sm leading-relaxed text-foreground">{q().context}</Text>
-				</QuietPanel>
+				<Quote testID={`context-${q().id}`} text={q().context} />
 			</If>
 			<If when={note().simpler}>
-				<Text testID={`simpler-${q().id}`} class="text-xs text-faint">
+				<Caption testID={`simpler-${q().id}`} tone="faint">
 					Noted: Pilot says this one more simply when you send your notes.
-				</Text>
+				</Caption>
 			</If>
 			<If when={canAsk() && (panel(key, "ask") || q().asks.length > 0)}>
-				<QuietPanel testID={`ask-${q().id}`} class="gap-3">
-					<Each of={q().asks} key={(a) => a.id}>
-						{(a) => (
-							<View class="gap-1">
-								<Text class="text-sm text-muted-foreground">{a().text}</Text>
-								<If when={a().state === "answered"}>
-									<Text class="text-sm leading-relaxed text-foreground">{a().answer}</Text>
-								</If>
-								<If when={a().state === "asking"}>
-									<Text class="text-sm text-faint">Pilot is writing an answer…</Text>
-								</If>
-								<If when={a().state === "failed"}>
-									<Text class="text-sm text-needs-ink">{a().reason || "No answer came. Ask again."}</Text>
-								</If>
-							</View>
-						)}
-					</Each>
-					<View class="flex-row items-center gap-2">
-						<TextField
-							testID={`ask-text-${q().id}`}
-							value={draft()}
-							onChange={({ value }) => put(askDrafts, key, value)}
-							onSubmit={() => void ask()}
-							submitBehavior="submit"
-							placeholder="What do you want to know?"
-							accessibilityLabel="Ask about this question"
-							compact
-							class="flex-1"
-						/>
-						<Action
-							testID={`ask-send-${q().id}`}
-							label={askBusy()[key] ? "Asking…" : "Ask"}
-							disabled={askBusy()[key] === true || !draft().trim()}
-							onPress={() => void ask()}
-						/>
+				<Quote testID={`ask-${q().id}`}>
+					<View class="gap-3">
+						<Each of={q().asks} key={(a) => a.id}>
+							{(a) => (
+								<View class="gap-1">
+									<Body tone="muted">{a().text}</Body>
+									<If when={a().state === "answered"}>
+										<Body>{a().answer}</Body>
+									</If>
+									<If when={a().state === "asking"}>
+										<Body tone="faint">Pilot is writing an answer…</Body>
+									</If>
+									<If when={a().state === "failed"}>
+										<Body tone="needs">{a().reason || "No answer came. Ask again."}</Body>
+									</If>
+								</View>
+							)}
+						</Each>
+						<View class="flex-row items-center gap-2">
+							<TextField
+								testID={`ask-text-${q().id}`}
+								value={draft()}
+								onChange={({ value }) => put(askDrafts, key, value)}
+								onSubmit={() => void ask()}
+								submitBehavior="submit"
+								placeholder="What do you want to know?"
+								accessibilityLabel="Ask about this question"
+								class="flex-1"
+							/>
+							<Button
+								testID={`ask-send-${q().id}`}
+								label={askBusy()[key] ? "Asking…" : "Ask"}
+								disabled={askBusy()[key] === true || !draft().trim()}
+								onPress={() => void ask()}
+							/>
+						</View>
+						<If when={askMessages()[key]}>
+							<Caption tone="needs">{askMessages()[key] ?? ""}</Caption>
+						</If>
+						<Caption tone="faint">
+							A separate chat answers from the mission's records. It answers nothing for you.
+						</Caption>
 					</View>
-					<If when={askMessages()[key]}>
-						<Text class="text-xs text-needs-ink">{askMessages()[key] ?? ""}</Text>
-					</If>
-					<Text class="text-xs text-faint">
-						A separate chat answers from the mission's records. It answers nothing for you.
-					</Text>
-				</QuietPanel>
+				</Quote>
 			</If>
 			<If when={panel(key, "reword")}>
-				<QuietPanel class="gap-1.5">
-					<Text class="text-sm text-foreground">What should change about this question?</Text>
+				<Quote>
+					<Body>What should change about this question?</Body>
 					<TextField
 						testID={`reword-${q().id}`}
 						multiline
@@ -237,10 +236,9 @@ export function QuestionHelp(props: {
 						onChange={({ value }) => setNote(props.interview.id, q().id, { text: value })}
 						placeholder="For example: this mixes two things, or I don't know this term"
 						accessibilityLabel="Your note on this question"
-						compact
 					/>
-					<Text class="text-xs text-faint">Notes wait here. Send them together at the end of the round.</Text>
-				</QuietPanel>
+					<Caption tone="faint">Notes wait here. Send them together at the end of the round.</Caption>
+				</Quote>
 			</If>
 		</View>
 	);
@@ -280,7 +278,7 @@ export function RoundNotes(props: { plans: Plans; page: PlanPage; interview: Int
 		}
 	};
 	return (
-		<View testID="round-notes" class="gap-2 border-t border-border pt-4">
+		<View testID="round-notes" class="gap-2">
 			<If when={writing() || round().trim()}>
 				<TextField
 					testID="round-note"
@@ -289,20 +287,15 @@ export function RoundNotes(props: { plans: Plans; page: PlanPage; interview: Int
 					onChange={({ value }) => put(roundNotes, id(), value)}
 					placeholder="A note on the whole round, for example: too technical overall"
 					accessibilityLabel="Your note on the whole round"
-					compact
 				/>
 			</If>
-			<View class="flex-row flex-wrap items-center gap-2">
+			<Buttons>
 				<If when={!writing() && !round().trim()}>
-					<Action
-						testID="round-note-open"
-						label="Add a note on the whole round"
-						onPress={() => writing.set(true)}
-					/>
+					<Link testID="round-note-open" label="Add a note on the whole round" onPress={() => writing.set(true)} />
 				</If>
-				<View class="flex-1" />
+				<Spacer />
 				<If when={count() > 0}>
-					<Action
+					<Button
 						testID="notes-send"
 						label={
 							busy() ? "Sending…" : count() === 1 ? "Send 1 note to Pilot" : `Send ${count()} notes to Pilot`
@@ -312,14 +305,14 @@ export function RoundNotes(props: { plans: Plans; page: PlanPage; interview: Int
 						onPress={() => void send()}
 					/>
 				</If>
-			</View>
+			</Buttons>
 			<If when={count() > 0 && !props.page.canComment && !busy()}>
-				<Text class="text-xs text-faint">Pilot is working. Send your notes when it stops.</Text>
+				<Caption tone="faint">Pilot is working. Send your notes when it stops.</Caption>
 			</If>
 			<If when={message()}>
-				<Text testID="notes-message" class="text-xs text-faint">
+				<Caption testID="notes-message" tone="faint">
 					{message()}
-				</Text>
+				</Caption>
 			</If>
 		</View>
 	);

@@ -10,7 +10,7 @@
 // says the scroll offset and where the message being read sits in the
 // viewport, and "Save and reopen" keeps the window as a close or an update
 // saves it and shows it again fresh.
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal, View } from "nsh";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
 import { scrollOf } from "./kept";
@@ -19,7 +19,7 @@ import { readingProbe } from "./ThreadScreen";
 import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
 import { openThread, refreshOpenThread } from "./threadView";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const threads = new ScriptedThreads();
@@ -39,79 +39,81 @@ let probes = 0;
 
 mount(() => (
 	<View class="flex-1">
-		<View class="flex-row flex-wrap items-center gap-1 px-6 pt-2">
-			<Text testID="counts">{`Writes: ${threads.writes()} · Sends: ${threads.sends()} · Checks: ${threads.checks()}`}</Text>
-			<Text testID="reads">{`Page reads: ${threads.reads()}`}</Text>
-			<Each of={NEXT} key={(n) => n}>
-				{(n) => <Action label={`Next ${n()}`} onPress={() => threads.next.set(n())} />}
-			</Each>
-			<Action label="Hold" onPress={() => threads.held.set(true)} />
-			{/* A read as Pilot starts one on its own: a service change reads the open thread. */}
-			<Action label="Fixture read" onPress={() => refreshOpenThread(day.threads)} />
-			<Action label="Unreadable" onPress={() => threads.unreadable.set(true)} />
-			<Action
-				label="Denied"
-				onPress={() => {
-					threads.refusal.set("denied");
-					threads.unreadable.set(true);
-				}}
-			/>
-			<Action label="Open a gone thread" onPress={() => openThread("search", "search-gone")} />
-			<Action label="Changed elsewhere" onPress={() => threads.changeElsewhere("search")} />
-			<Action label="Hand off" onPress={() => threads.handOff("search")} />
-			<Action label="Resolve" onPress={() => threads.resolve("search")} />
-			<Action
-				label="Coordinator replies"
-				onPress={() => threads.reply("search", "PDFs can wait. I noted it.", ["search-scope"])}
-			/>
-			<Action
-				label="Coordinator replies elsewhere"
-				onPress={() => threads.reply("search", "Tagged releases only.", ["search-release"])}
-			/>
-			<Action
-				label="Coordinator works"
-				onPress={() => threads.reply("search", "I ran the exporter tests for another task.")}
-			/>
-			<Action label="Chat replies" onPress={() => threads.chatReply("search", "CSV first, then JSON.")} />
-			<Action
-				label="Coordinator busy"
-				onPress={() => threads.busy("search", "Markdown export is ready to review.")}
-			/>
-			<Action label="Place waiting" onPress={() => threads.placeWaiting("search")} />
-			<Action label="Old words unplaced" onPress={() => threads.unplace("search")} />
-			<Action label="Old words placed" onPress={() => threads.placeOld("search")} />
-			<Action label="Reply links unknown" onPress={() => threads.learnLinks("search", false)} />
-			<Action label="Reply links learned" onPress={() => threads.learnLinks("search", true)} />
-			<Action
-				label="Where"
-				onPress={() => {
-					where.set(`Scroll: ${Math.round(scrollOf("thread/search/search-scope"))}`);
-					const n = ++probes;
-					void readingProbe().then((p) =>
-						anchor.set(p ? `Anchor ${n}: ${p.key} ${Math.round(p.top)}` : `Anchor ${n}: none`),
-					);
-				}}
-			/>
-			<Text testID="where">{where()}</Text>
-			<Text testID="anchor">{anchor()}</Text>
-			<Action label="Pages fail" onPress={() => threads.pagesFail.set(true)} />
-			<Action label="Pages work" onPress={() => threads.pagesFail.set(false)} />
-			<Action label="Unlinked replies" onPress={() => threads.unlinked.set(true)} />
-			<Action label="Replies unknown" onPress={() => threads.replyUnknown.set(true)} />
-			<Action label="Turn ended" onPress={() => threads.turnEnded.set(true)} />
-			<Action label="Hold reads" onPress={() => threads.holdReads.set(true)} />
-			<Action label="Release reads" onPress={() => threads.releaseReads()} />
-			<Action
-				label="Save and reopen"
-				onPress={() => {
-					const v = captureView(day.today());
-					kept.set(`${v.thread ?? ""} | ${(v.threads ?? []).join(" | ")}`);
-					startFresh();
-					restoreView(v, undefined, day.today());
-				}}
-			/>
-			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
-		</View>
+		<Block>
+			<Buttons>
+				<Caption testID="counts">{`Writes: ${threads.writes()} · Sends: ${threads.sends()} · Checks: ${threads.checks()}`}</Caption>
+				<Caption testID="reads">{`Page reads: ${threads.reads()}`}</Caption>
+				<Each of={NEXT} key={(n) => n}>
+					{(n) => <Button label={`Next ${n()}`} onPress={() => threads.next.set(n())} />}
+				</Each>
+				<Button label="Hold" onPress={() => threads.held.set(true)} />
+				{/* A read as Pilot starts one on its own: a service change reads the open thread. */}
+				<Button label="Fixture read" onPress={() => refreshOpenThread(day.threads)} />
+				<Button label="Unreadable" onPress={() => threads.unreadable.set(true)} />
+				<Button
+					label="Denied"
+					onPress={() => {
+						threads.refusal.set("denied");
+						threads.unreadable.set(true);
+					}}
+				/>
+				<Button label="Open a gone thread" onPress={() => openThread("search", "search-gone")} />
+				<Button label="Changed elsewhere" onPress={() => threads.changeElsewhere("search")} />
+				<Button label="Hand off" onPress={() => threads.handOff("search")} />
+				<Button label="Resolve" onPress={() => threads.resolve("search")} />
+				<Button
+					label="Coordinator replies"
+					onPress={() => threads.reply("search", "PDFs can wait. I noted it.", ["search-scope"])}
+				/>
+				<Button
+					label="Coordinator replies elsewhere"
+					onPress={() => threads.reply("search", "Tagged releases only.", ["search-release"])}
+				/>
+				<Button
+					label="Coordinator works"
+					onPress={() => threads.reply("search", "I ran the exporter tests for another task.")}
+				/>
+				<Button label="Chat replies" onPress={() => threads.chatReply("search", "CSV first, then JSON.")} />
+				<Button
+					label="Coordinator busy"
+					onPress={() => threads.busy("search", "Markdown export is ready to review.")}
+				/>
+				<Button label="Place waiting" onPress={() => threads.placeWaiting("search")} />
+				<Button label="Old words unplaced" onPress={() => threads.unplace("search")} />
+				<Button label="Old words placed" onPress={() => threads.placeOld("search")} />
+				<Button label="Reply links unknown" onPress={() => threads.learnLinks("search", false)} />
+				<Button label="Reply links learned" onPress={() => threads.learnLinks("search", true)} />
+				<Button
+					label="Where"
+					onPress={() => {
+						where.set(`Scroll: ${Math.round(scrollOf("thread/search/search-scope"))}`);
+						const n = ++probes;
+						void readingProbe().then((p) =>
+							anchor.set(p ? `Anchor ${n}: ${p.key} ${Math.round(p.top)}` : `Anchor ${n}: none`),
+						);
+					}}
+				/>
+				<Caption testID="where">{where()}</Caption>
+				<Caption testID="anchor">{anchor()}</Caption>
+				<Button label="Pages fail" onPress={() => threads.pagesFail.set(true)} />
+				<Button label="Pages work" onPress={() => threads.pagesFail.set(false)} />
+				<Button label="Unlinked replies" onPress={() => threads.unlinked.set(true)} />
+				<Button label="Replies unknown" onPress={() => threads.replyUnknown.set(true)} />
+				<Button label="Turn ended" onPress={() => threads.turnEnded.set(true)} />
+				<Button label="Hold reads" onPress={() => threads.holdReads.set(true)} />
+				<Button label="Release reads" onPress={() => threads.releaseReads()} />
+				<Button
+					label="Save and reopen"
+					onPress={() => {
+						const v = captureView(day.today());
+						kept.set(`${v.thread ?? ""} | ${(v.threads ?? []).join(" | ")}`);
+						startFresh();
+						restoreView(v, undefined, day.today());
+					}}
+				/>
+				<Caption testID="kept">{`Kept: [${kept()}]`}</Caption>
+			</Buttons>
+		</Block>
 		<MockDayScreen day={day} />
 	</View>
 ));

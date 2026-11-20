@@ -1,10 +1,11 @@
 // The artifacts a chat attached to its question, such as a mockup to look at
 // before answering. Opening one reads its saved revision once; it sends
 // nothing and answers nothing.
-import { Text, View } from "nsh";
+import { View } from "nsh";
 import type { DecisionArtifact } from "pilot-day/native";
 import { createShelf, PinnedArtifacts } from "./ArtifactShelf";
 import type { ArtifactRow, ArtifactSource } from "./artifactReads";
+import { Caption } from "./ui";
 
 export function QuestionArtifacts(props: { source: ArtifactSource; artifacts: DecisionArtifact[]; label?: string }) {
 	const shelf = createShelf();
@@ -20,12 +21,12 @@ export function QuestionArtifacts(props: { source: ArtifactSource; artifacts: De
 		}));
 	return (
 		<View testID="question-artifacts" class="gap-2">
-			<Text class="text-xs text-muted-foreground">
+			<Caption>
 				{props.label ??
 					(props.artifacts.length === 1
 						? "The chat attached this to look at:"
 						: "The chat attached these to look at:")}
-			</Text>
+			</Caption>
 			<PinnedArtifacts source={props.source} shelf={shelf} rows={rows()} />
 		</View>
 	);

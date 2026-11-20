@@ -1,8 +1,28 @@
-import { cleanup, keymap, Scroll, signal, Text, View } from "nsh";
+import { cleanup, keymap, Scroll, signal } from "nsh";
 import type { Decision, IntentOutcome } from "pilot-day/native";
 import { call, windowId } from "./bridge";
 import { ScopedInterviewCard } from "./InterviewCard";
-import { Action, CheckboxRow, Page, PageTitle, RadioList, RadioRow, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	KeyHints,
+	Link,
+	Option,
+	Options,
+	Page,
+	PageHead,
+	Panel,
+	Question,
+	Row,
+	Rows,
+	Section,
+	Spacer,
+	TextField,
+} from "./ui";
 
 type Selector = { projectId: string; decisionId: string; interviewRoundId?: string };
 type Target = { selector: Selector; pin: string };
@@ -65,27 +85,29 @@ export function ScopedAnswerDrafts() {
 	};
 	return (
 		<If when={drafts().length > 0}>
-			<View class="gap-2">
-				<Text class="text-sm font-semibold text-foreground">Unsent answers from other projects</Text>
-				<Each of={drafts()} key={(draft) => draft.target.pin}>
-					{(draft) => (
-						<View class="gap-2 border-b border-border py-2">
-							<View selectable>
-								<Text class="text-sm text-muted-foreground">{draft().answer.text || "Unsent choice"}</Text>
-							</View>
-							<View class="flex-row">
-								<Action
-									label="Discard draft"
-									onPress={() => {
-										kept.delete(draft().target.pin);
-										draftVersion.update((v) => v + 1);
-									}}
-								/>
-							</View>
-						</View>
-					)}
-				</Each>
-			</View>
+			<Section title="Unsent answers from other projects" count={drafts().length}>
+				<Rows>
+					<Each of={drafts()} key={(draft) => draft.target.pin}>
+						{(draft) => (
+							<Row
+								title={draft().answer.text || "Unsent choice"}
+								wrap
+								selectable
+								trailing={
+									<Button
+										small
+										label="Discard draft"
+										onPress={() => {
+											kept.delete(draft().target.pin);
+											draftVersion.update((v) => v + 1);
+										}}
+									/>
+								}
+							/>
+						)}
+					</Each>
+				</Rows>
+			</Section>
 		</If>
 	);
 }
@@ -183,114 +205,132 @@ export function ScopedQuestion(props: {
 	);
 	read();
 	return (
-		<Scroll class="flex-1 bg-background">
-			<Page gap={8}>
-				<View class="gap-2">
-					<Text class="text-xs text-muted-foreground">{props.place.projectName}</Text>
-					<PageTitle title={card()?.decision.title ?? "Agent question"} />
-					<Text class="text-sm text-muted-foreground">
-						{card()?.decision.reason || card()?.decision.context || ""}
-					</Text>
-				</View>
-				<If when={selector.interviewRoundId && card() && !checking()}>
-					<Each of={card() ? [card()!] : []} key={(row) => row.target.pin}>
-						{(row) => (
-							<ScopedInterviewCard
-								decision={row().decision}
-								identity={row().target.pin}
-								draftText={answer().text}
-								keyboardActive={!busy()}
-								draftMessage={message()}
-								onSave={(text) => edit({ picks: [], text })}
-								onSubmit={async (text): Promise<IntentOutcome> => {
-									const reply = await run({ kind: "send", target: row().target, answer: { picks: [], text } });
-									return {
-										status: reply?.state === "accepted" ? "accepted" : checking() ? "unknown" : "rejected",
-										revision: row().decision.revision,
-										message: message(),
-									};
-								}}
-								onCheck={() => void run({ kind: "recover", target: row().target })}
-							/>
-						)}
-					</Each>
-				</If>
-				<If when={!selector.interviewRoundId && card() && !checking()}>
-					<RadioList>
-						<Each of={card()?.decision.options ?? []} key={(option) => option.id}>
-							{(option) => {
-								const id = () => option().id;
-								const picked = () => answer().picks.includes(id());
-								const choose = () =>
-									edit({
-										...answer(),
-										picks: card()?.decision.multiple
-											? picked()
-												? answer().picks.filter((i) => i !== id())
-												: [...answer().picks, id()]
-											: [id()],
-									});
-								return (
-									<If
-										when={card()?.decision.multiple}
-										else={
-											<RadioRow
-												label={option().label}
-												checked={picked()}
-												disabled={busy()}
-												onChange={choose}
-											/>
-										}
-									>
-										<CheckboxRow
-											label={option().label}
-											checked={picked()}
-											disabled={busy()}
-											onChange={choose}
+		<Scroll class="flex-1">
+			<Page>
+				<PageHead
+					pre={<Caption>{props.place.projectName}</Caption>}
+					title={card()?.decision.title ?? "Agent question"}
+					text={card()?.decision.reason || card()?.decision.context || ""}
+				/>
+				<Panel>
+					<Column>
+						<Section title="Needs you">
+							<If when={selector.interviewRoundId && card() && !checking()}>
+								<Each of={card() ? [card()!] : []} key={(row) => row.target.pin}>
+									{(row) => (
+										<ScopedInterviewCard
+											decision={row().decision}
+											identity={row().target.pin}
+											draftText={answer().text}
+											keyboardActive={!busy()}
+											draftMessage={message()}
+											onSave={(text) => edit({ picks: [], text })}
+											onSubmit={async (text): Promise<IntentOutcome> => {
+												const reply = await run({
+													kind: "send",
+													target: row().target,
+													answer: { picks: [], text },
+												});
+												return {
+													status:
+														reply?.state === "accepted"
+															? "accepted"
+															: checking()
+																? "unknown"
+																: "rejected",
+													revision: row().decision.revision,
+													message: message(),
+												};
+											}}
+											onCheck={() => void run({ kind: "recover", target: row().target })}
 										/>
+									)}
+								</Each>
+							</If>
+							<If when={!selector.interviewRoundId && card() && !checking()}>
+								<Question
+									title="Your answer"
+									foot={
+										<>
+											<Button
+												kind="primary"
+												label="Send answer"
+												shortcut={commitKeys}
+												disabled={busy() || (!answer().picks.length && !answer().text.trim())}
+												onPress={send}
+											/>
+											<Spacer />
+											<KeyHints hints={[[commitKeys, "Send answer"]]} />
+										</>
+									}
+								>
+									<Options multiple={card()?.decision.multiple === true}>
+										<Each of={card()?.decision.options ?? []} key={(option) => option.id}>
+											{(option) => {
+												const id = () => option().id;
+												const picked = () => answer().picks.includes(id());
+												const choose = () =>
+													edit({
+														...answer(),
+														picks: card()?.decision.multiple
+															? picked()
+																? answer().picks.filter((i) => i !== id())
+																: [...answer().picks, id()]
+															: [id()],
+													});
+												return (
+													<Option
+														multiple={card()?.decision.multiple === true}
+														title={option().label}
+														checked={picked()}
+														disabled={busy()}
+														onChange={choose}
+													/>
+												);
+											}}
+										</Each>
+									</Options>
+									<TextField
+										accessibilityLabel="Your answer"
+										placeholder="Answer in your own words"
+										multiline
+										rows={3}
+										value={answer().text}
+										disabled={busy()}
+										onChange={({ value }) => edit({ ...answer(), text: value })}
+									/>
+								</Question>
+							</If>
+							<If
+								when={message() || busy() || checking() || (!card() && !busy() && message() !== "Answer sent.")}
+							>
+								<Block>
+									<If when={message() || busy()}>
+										<Body tone="muted">{busy() ? "Working…" : message()}</Body>
 									</If>
-								);
-							}}
-						</Each>
-					</RadioList>
-					<TextField
-						accessibilityLabel="Your answer"
-						placeholder="Answer in your own words"
-						multiline
-						rows={3}
-						value={answer().text}
-						disabled={busy()}
-						onChange={({ value }) => edit({ ...answer(), text: value })}
-					/>
-					<View class="flex-row gap-2">
-						<Action
-							label="Send answer"
-							variant="primary"
-							shortcut={commitKeys}
-							disabled={busy() || (!answer().picks.length && !answer().text.trim())}
-							onPress={send}
-						/>
-					</View>
-				</If>
-				<If when={message() || busy()}>
-					<Text class="text-sm text-muted-foreground">{busy() ? "Working…" : message()}</Text>
-				</If>
-				<If when={checking()}>
-					<Action
-						label="Check answer"
-						disabled={busy()}
-						onPress={() =>
-							unresolved()
-								? void run({ kind: "check", selector, operationId: unresolved() })
-								: card()
-									? void run({ kind: "recover", target: card()!.target })
-									: read()
-						}
-					/>
-				</If>
-				<If when={!card() && !checking() && !busy() && message() !== "Answer sent."}>
-					<Action label="Read again" onPress={read} />
-				</If>
+									<If when={checking()}>
+										<Buttons>
+											<Button
+												label="Check answer"
+												disabled={busy()}
+												onPress={() =>
+													unresolved()
+														? void run({ kind: "check", selector, operationId: unresolved() })
+														: card()
+															? void run({ kind: "recover", target: card()!.target })
+															: read()
+												}
+											/>
+										</Buttons>
+									</If>
+									<If when={!card() && !checking() && !busy() && message() !== "Answer sent."}>
+										<Link label="Read again" onPress={read} />
+									</If>
+								</Block>
+							</If>
+						</Section>
+					</Column>
+				</Panel>
 			</Page>
 		</Scroll>
 	);
