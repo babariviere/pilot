@@ -263,8 +263,11 @@ test("native HTTP Day reads/reviews/receipts are exact, no-store, authenticated 
 	).json();
 	assert.equal(review.state, "ready");
 	const op = f.operation(review.payload);
-	assert.equal((await (await post("operations", op)).json()).state, "accepted");
-	assert.equal((await (await post("operations/receipt", op)).json()).state, "accepted");
+	const receipt = await (await post("operations", op)).json();
+	assert.equal(receipt.state, "accepted");
+	assert.deepEqual(await (await post("operations/receipt", op)).json(), receipt);
+	assert.deepEqual(await (await post("operations", op)).json(), receipt);
+	assert.equal((await (await get("insights/day")).json()).revision, 1);
 	assert.notEqual(
 		(
 			await fetch(`${f.url}/api/operations/receipt`, {

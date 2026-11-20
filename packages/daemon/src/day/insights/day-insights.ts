@@ -1,3 +1,4 @@
+import type { ControlOperation } from "../../transport/operations/operations.ts";
 import type { DayInsightsPayload, DayInsightsPreflight, DayInsightsStatus, DurableOperation } from "@pilot/protocol";
 import type { DayInsightsAllowance } from "./day-insights-allowance.ts";
 import { dayInsightsExact, dayInsightsSourceAllowed, validateDayInsightsSettings } from "./day-insights-policy.ts";
@@ -5,7 +6,10 @@ import type { DayInsightsStore } from "./day-insights-store.ts";
 import { Conflict, NotFound } from "../../runtime/contracts/errors.ts";
 import { canonicalFundingQuote } from "../../models/funding/funding-requests.ts";
 import { deriveInsightsWorkspaceAuthority } from "../../insights/ownership/insights-workspace.ts";
-import type { InsightsWorkspaceAuthority, InsightsWorkspaceStore } from "../../insights/ownership/insights-workspace-store.ts";
+import type {
+	InsightsWorkspaceAuthority,
+	InsightsWorkspaceStore,
+} from "../../insights/ownership/insights-workspace-store.ts";
 import type { ModelCatalog } from "../../models/models.ts";
 import { canonicalJSON, OperationConflict, OperationRejected } from "../../transport/operations/operation-journal.ts";
 import type { ProjectStore } from "../../projects/projects.ts";
@@ -85,7 +89,10 @@ export class DayInsights {
 	get executionAvailable(): boolean {
 		return !!this.deps.runtime;
 	}
-	assertAdmission(current: import("../../insights/ownership/insights-owner-store.ts").InsightsOwnerExecution, configurationOnly = false) {
+	assertAdmission(
+		current: import("../../insights/ownership/insights-owner-store.ts").InsightsOwnerExecution,
+		configurationOnly = false,
+	) {
 		if (!this.executionAvailable) throw new Conflict("day_insights_execution_adapter_unavailable");
 		if (configurationOnly) throw new Conflict("day_insights_configuration_worker_forbidden");
 		this.deps.store.assertCommitted(current.authority.owner.workspaceId, current.settings.revision);
@@ -112,7 +119,11 @@ export class DayInsights {
 		const owner = store.current(home, this.guard)?.owner;
 		if (!owner) return;
 		await sessions.recoverCancelledDayStop(owner.reportSessionId, (run) => {
-			if (store.uncertain(home) || store.blockingRun(owner.workspaceId) || !store.isCancelledRun(owner.workspaceId, run))
+			if (
+				store.uncertain(home) ||
+				store.blockingRun(owner.workspaceId) ||
+				!store.isCancelledRun(owner.workspaceId, run)
+			)
 				return false;
 			const authority = this.authority(owner.projectId);
 			owners.assertNoEntered(authority);
@@ -156,7 +167,11 @@ export class DayInsights {
 			return !!source && this.sourceAllowed(source, cutoff) && this.sourceAllowed(source, Date.now());
 		});
 	}
-	async backlog(id: string, input: unknown, worker?: import("../../sessions/workers/kernel-worker.ts").SessionWorker): Promise<unknown> {
+	async backlog(
+		id: string,
+		input: unknown,
+		worker?: import("../../sessions/workers/kernel-worker.ts").SessionWorker,
+	): Promise<unknown> {
 		const request = (await import("../../insights/insights-backlog.ts")).parseInsightsBacklog(input);
 		const run = this.deps.sessions!.dayInsightsRunId(id);
 		const admission = this.deps.sessions!.insightsOwnerAdmission(id, worker);
@@ -473,4 +488,17 @@ export class DayInsights {
 			result: prior.result,
 		};
 	}
+}
+
+export function dayInsightsOperation(service?: DayInsights): ControlOperation {
+	return {
+		kind: "day-insights",
+		unavailable: "Day Insights unavailable",
+		outcomeUnknown: "Day Insights outcome unknown; check the exact receipt",
+		...(service && {
+			admit: (op, firstEntry) => service.admit(op, firstEntry),
+			lookup: (op) => service.supersededReceipt(op),
+			recover: (op) => service.admit(op, false),
+		}),
+	};
 }

@@ -725,18 +725,17 @@ test("native HTTP routes are passive, capability-gated and never wake source/rep
 	});
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsWorkspace, 2);
-	for (const path of ["", "/findings", "/reports", "/preflight"]) {
+	for (const path of ["", "/findings", "/reports"]) {
 		const response = await fetch(`${root}/insights/workspace${path}`);
 		assert.equal(response.headers.get("cache-control"), "no-store");
 		assert.equal(response.status, 200);
 	}
-	const preview = await (await fetch(`${root}/insights/workspace/preflight?projectId=${f.project.id}`)).json();
-	assert.equal(preview.state, "ready", JSON.stringify(preview));
+	assert.equal((await fetch(`${root}/insights/workspace/preflight?projectId=${f.project.id}`)).status, 410);
 	assert.equal(sessions.list().length, 1);
 	assert.equal(schedules.list().length, 0);
 	assert.equal((await fetch(`${root}/insights/workspace?missionId=forged`)).status, 400);
 	assert.equal((await fetch(`${root}/insights/workspace`, { method: "POST" })).status, 405);
-	const op = f.operation("insights-workspace-reserve", preview.payload, preview.payload.owner.workspaceId);
+	const op = await f.intent();
 	const post = (native: boolean, path = "operations", intent = op) =>
 		fetch(`${root}/${path}`, {
 			method: "POST",
@@ -745,13 +744,14 @@ test("native HTTP routes are passive, capability-gated and never wake source/rep
 		});
 	assert.notEqual((await post(false)).status, 200);
 	assert.equal((await (await post(false, "operations/receipt")).json()).state, "unknown");
-	assert.equal((await (await post(true)).json()).state, "accepted");
+	assert.equal((await post(true)).status, 410);
+	assert.deepEqual(await (await post(true, "operations/receipt")).json(), { state: "unknown" });
 	const old = f.operation(
 		"insights-create",
 		{ projectId: f.project.id, missionId: "forged", model: model.id, disclosure: "insights-history-v1" },
 		randomUUID(),
 	);
-	assert.equal((await post(true, "operations", old)).status, 409);
+	assert.equal((await post(true, "operations", old)).status, 410);
 	assert.equal(starts, 0);
 	assert.equal(sessions.list().length, 1);
 	assert.deepEqual(await readFile(join(sourceDir, "meta.json")), sourceBytes);

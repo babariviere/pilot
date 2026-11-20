@@ -7,8 +7,14 @@ changed daemon/lineage cannot silently acquire its old owner.
 
 ## Native contract
 
-`hello.capabilities.insightsWorkspace:2` means passive projections and explicit
-reservation are supported. It does **not** mean activation or transition is
+**Current setup uses [Day Insights](../../../../docs/insights.md).**
+The standalone workspace preflight and new reservation requests now return
+410. Exact reservation receipts and previously accepted operations keep
+their original format. Workspace reads, tracking and explicit migration
+remain supported. The reservation details below describe the saved contract,
+not a second way to set up Insights.
+
+`hello.capabilities.insightsWorkspace:2` means passive workspace projections are supported. It does **not** mean activation or transition is
 supported. Native must not call v1 Enable with a v2 workspace ID.
 
 - `GET /api/insights/workspace`: status and the current owner, or explicit absent,

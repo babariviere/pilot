@@ -76,7 +76,7 @@ import { daemonPerformance, operations } from "./runtime/process/event-loop-watc
 import { dispositionTarget } from "./reviews/human/human-reviews.ts";
 import { insightsSetupDefaults } from "./insights/insights-defaults.ts";
 import type { InsightsLegacySelector } from "./insights/migration/insights-legacy.ts";
-import { insightsFindingsPage, isInsightsOperation } from "./insights/insights-native.ts";
+import { insightsFindingsPage, isInsightsOperation, isRetiredInsightsSetup } from "./insights/insights-native.ts";
 import { isInsightsOwnerOperation } from "./insights/ownership/insights-owner.ts";
 import { isInsightsWorkspaceOperation } from "./insights/ownership/insights-workspace.ts";
 import { LandedChanges } from "./changes/landed-changes.ts";
@@ -383,7 +383,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		insightsOwner,
 		insightsLegacy,
 		insightsEnable,
-		insightsApply,
 		insightsReplacement,
 		connectionControls,
 		slackControls,
@@ -873,27 +872,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!insightsWorkspace) throw new ServiceUnavailable("App-owned Insights workspace unavailable");
 			const route = parts[3];
-			const allowed =
-				route === "preflight"
-					? ["projectId", "model", "thinking"]
-					: (route === "reports" || route === "findings") &&
-							(parts.length === 4 || (parts.length === 6 && parts[5] === "history"))
-						? ["cursor"]
-						: [];
+			if (parts.length === 4 && route === "preflight") throw new HttpError(410, "Set up Insights in Pilot Day");
+			const acceptsCursor =
+				(route === "reports" || route === "findings") &&
+				(parts.length === 4 || (parts.length === 6 && parts[5] === "history"));
 			for (const key of url.searchParams.keys())
-				if (!allowed.includes(key) || url.searchParams.getAll(key).length !== 1)
+				if (!acceptsCursor || key !== "cursor" || url.searchParams.getAll(key).length !== 1)
 					throw new HttpError(400, "Invalid workspace query");
 			if (parts.length === 3) return json(res, 200, await insightsWorkspace.status());
-			if (parts.length === 4 && route === "preflight")
-				return json(
-					res,
-					200,
-					await insightsWorkspace.preflight(
-						url.searchParams.get("projectId") ?? undefined,
-						url.searchParams.get("model") ?? undefined,
-						url.searchParams.get("thinking") ?? undefined,
-					),
-				);
 			if (parts.length === 4 && route === "settings") return json(res, 200, await insightsWorkspace.settings());
 			if (route === "reports" || route === "findings") {
 				const kind = route === "reports" ? "report" : "finding";
@@ -911,25 +897,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "insights" && parts[2] === "replacement" && parts.length === 4) {
 			res.setHeader("cache-control", "no-store");
 			if (!insightsReplacement) throw new ServiceUnavailable("Insights replacement is unavailable");
-			if (parts[3] === "preflight") {
-				if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
-				const projectId = url.searchParams.get("projectId"),
-					missionId = url.searchParams.get("missionId"),
-					oldId = url.searchParams.get("reportSessionId");
-				if (!projectId || !missionId || !oldId)
-					throw new HttpError(400, "projectId, missionId and reportSessionId are required");
-				return json(
-					res,
-					200,
-					await insightsReplacement.preview(
-						projectId,
-						missionId,
-						oldId,
-						url.searchParams.get("model") ?? undefined,
-						url.searchParams.get("thinking") ?? undefined,
-					),
-				);
-			}
+			if (parts[3] === "preflight") throw new HttpError(410, "Set up Insights in Pilot Day");
 			if (parts[3] === "status") {
 				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
 				const op = await readJson<DurableOperation>(req);
@@ -941,24 +909,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		if (parts[1] === "insights" && parts[2] === "enable" && parts.length === 4) {
 			res.setHeader("cache-control", "no-store");
 			if (!insightsEnable) throw new ServiceUnavailable("Weekly Insights is unavailable");
-			if (parts[3] === "preflight") {
-				if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
-				const projectId = url.searchParams.get("projectId");
-				const missionId = url.searchParams.get("missionId");
-				if (!projectId || !missionId) throw new HttpError(400, "projectId and missionId are required");
-				return json(
-					res,
-					200,
-					await insightsEnable.preflight(
-						projectId,
-						missionId,
-						url.searchParams.get("model") ?? undefined,
-						url.searchParams.get("thinking") ?? undefined,
-						undefined,
-						url.searchParams.get("reportSessionId") ?? undefined,
-					),
-				);
-			}
+			if (parts[3] === "preflight") throw new HttpError(410, "Set up Insights in Pilot Day");
 			if (parts[3] === "status") {
 				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
 				const op = await readJson<DurableOperation>(req);
@@ -984,10 +935,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			const status = sessions.insightsStatus(id);
 			if (!status) return json(res, 404, { error: "not_insights" });
 			if (parts.length === 4) return json(res, 200, status);
-			if (parts[4] === "apply") {
-				if (!insightsApply) throw new ServiceUnavailable("Insights Apply is unavailable");
-				return json(res, 200, await insightsApply.preflight(id));
-			}
+			if (parts[4] === "apply") throw new HttpError(410, "Set up Insights in Pilot Day");
 			if (parts[4] === "settings") {
 				if (!insightsEnable) throw new ServiceUnavailable("Insights settings are unavailable");
 				return json(res, 200, await insightsEnable.settings(id));
@@ -1070,7 +1018,8 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					throw new HttpError(400, error instanceof Error ? error.message : String(error));
 				}
 				const saved = await journal.lookup(operation);
-				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				if (parts[2] === "receipt")
+					return json(res, 200, (await control.lookup?.(operation)) ?? saved ?? { state: "unknown" });
 				const end = mutations.begin({ kind: "operation", id: operation.operationId });
 				try {
 					const options = control.safetyReduction
@@ -1323,10 +1272,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					end();
 				}
 			}
-			if (
-				(operation?.kind === "insights-workspace-transfer" || operation?.kind === "day-insights") &&
-				parts[2] === "receipt"
-			) {
+			if (operation?.kind === "insights-workspace-transfer" && parts[2] === "receipt") {
 				if (!nativeAuthority) throw new ServiceUnavailable("Native transfer lookup unavailable");
 				await nativeAuthority.authenticate(req.headers[PILOT_CAPABILITY_HEADER]);
 			}
@@ -1339,7 +1285,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			}
 			if (
 				(operation?.kind === "repair-create" ||
-					operation?.kind === "day-insights" ||
 					isInsightsOperation(operation?.kind) ||
 					isInsightsWorkspaceOperation(operation?.kind) ||
 					isInsightsOwnerOperation(operation?.kind) ||
@@ -1361,24 +1306,22 @@ export function createDaemonServer(services: DaemonServices): Server & {
 						!isInsightsWorkspaceOperation(kind) &&
 						!isInsightsOwnerOperation(kind) &&
 						!isWorkflowOperation(kind) &&
-						!["day-insights", "insights-workspace-transfer", "review-disposition"].includes(kind))
+						!["insights-workspace-transfer", "review-disposition"].includes(kind))
 				)
 					throw new HttpError(400, "Unsupported operation kind");
+				if (isRetiredInsightsSetup(kind)) {
+					res.setHeader("cache-control", "no-store");
+					const saved = await journal.lookup(operation);
+					if (!saved) throw new HttpError(410, "Set up Insights in Pilot Day");
+					// Keep exact receipts readable. Startup can reconcile pending legacy effects.
+					return json(res, 200, saved);
+				}
 				if (isInsightsOperation(kind)) insightsWorkspace?.assertLegacyAllowed();
 			}
 			const receipt =
 				parts[2] === "receipt"
 					? await journal.lookup(operation)
 					: await journal.execute(operation, async (op, entry) => {
-							if (op.kind === "day-insights") {
-								if (!dayInsights) throw new OperationRejected("Day Insights unavailable");
-								const end = mutations.begin({ kind: "operation", id: op.operationId });
-								try {
-									return await dayInsights.admit(op, entry.firstEntry);
-								} finally {
-									end();
-								}
-							}
 							if (isInsightsOwnerOperation(op.kind)) {
 								if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
 								const end = mutations.begin({ kind: "operation", id: op.operationId });
@@ -1415,10 +1358,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					return json(res, 200, { state: "unknown" });
 			}
 			res.setHeader("cache-control", "no-store");
-			if (operation.kind === "day-insights" && parts[2] === "receipt" && dayInsights) {
-				const superseded = await dayInsights.supersededReceipt(operation);
-				if (superseded) return json(res, 200, superseded);
-			}
 			return json(res, 200, receipt ?? { state: "unknown" });
 		}
 		if (parts[1] === "review" && parts[2] === "requests") {
@@ -1514,10 +1453,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					durableInputGeneration: 1,
 					globalUpdate: globalUpdate ? 1 : undefined,
 					insights: missions && nativeAuthority && hello.lineageId ? 1 : undefined,
-					insightsEnable: insightsEnable && nativeAuthority ? 1 : undefined,
-					insightsSettings: insightsEnable && nativeAuthority ? 1 : undefined,
-					insightsApply: insightsApply && nativeAuthority ? 1 : undefined,
-					insightsReplacement: insightsReplacement && nativeAuthority ? 1 : undefined,
 					insightsWorkspace: insightsWorkspace && nativeAuthority ? 2 : undefined,
 					dayInsights: dayInsights && nativeAuthority ? 1 : undefined,
 					insightsWorkspaceExecution: insightsOwner && nativeAuthority ? 2 : undefined,

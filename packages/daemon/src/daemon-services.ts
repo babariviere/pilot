@@ -7,7 +7,7 @@ import { RepositoryChanges } from "./changes/changes.ts";
 import type { ChatSettingsService } from "./day/chat/chat-settings.ts";
 import type { DaemonConfig } from "./config.ts";
 import { ConnectionControls, connectionOperations } from "./setup/connection-controls.ts";
-import { DayInsights } from "./day/insights/day-insights.ts";
+import { DayInsights, dayInsightsOperation } from "./day/insights/day-insights.ts";
 import { DayInsightsExecution } from "./day/insights/day-insights-execution.ts";
 import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { diagnosticContextResponse } from "./runtime/diagnostics/diagnostic-context.ts";
@@ -74,7 +74,10 @@ import { type ReservationReceipt, UpdateReservation } from "./runtime/updates/up
 import { UserFeedbackService } from "./day/feedback/user-feedback.ts";
 import { FEEDBACK_WORK, UserFeedbackWorkService } from "./day/feedback/user-feedback-work.ts";
 import { UserVerifications } from "./user-verification.ts";
-import { isWorkflowOperation, WorkflowConfirmations } from "./missions/planning/confirmations/workflow-confirmations.ts";
+import {
+	isWorkflowOperation,
+	WorkflowConfirmations,
+} from "./missions/planning/confirmations/workflow-confirmations.ts";
 
 /** Native host capability authenticates locally verified updater checkpoints, not agent assertions.
  * The capability holder must validate the signed staged candidate and measured source/GUI build,
@@ -759,6 +762,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			scheduleOperations(scheduleControls, journal?.destination),
 			diagnosticsOperations(diagnosticsControls, journal?.destination),
 			modelOperations(modelControls, journal),
+			dayInsightsOperation(dayInsights),
 		].map((handler) => [handler.kind, handler]),
 	);
 	// A chat draft is bound to this daemon and storage lineage, even during retry.
@@ -777,7 +781,10 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	};
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		const control = controlOperations.get(op.kind);
-		if (control) throw new Error(control.outcomeUnknown);
+		if (control) {
+			if (control.recover) return control.recover(op);
+			throw new Error(control.outcomeUnknown);
+		}
 		// The database feature is removed. Its saved operations stay lookup only.
 		if (op.kind === "database-controls") throw new Error("Database outcome unknown; lookup only");
 		if (isThreadOperation(op.kind)) {
@@ -831,10 +838,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		if (isInsightsOwnerOperation(op.kind)) {
 			if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
 			return insightsOwner.admit(op);
-		}
-		if (op.kind === "day-insights") {
-			if (!dayInsights) throw new OperationRejected("Day Insights unavailable");
-			return dayInsights.admit(op, false);
 		}
 		if (isInsightsWorkspaceOperation(op.kind)) {
 			if (!insightsWorkspace) throw new OperationRejected("App-owned Insights workspace unavailable");
@@ -1001,7 +1004,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		insightsOwner,
 		insightsLegacy,
 		insightsEnable,
-		insightsApply,
 		insightsReplacement,
 		connectionControls,
 		slackControls,

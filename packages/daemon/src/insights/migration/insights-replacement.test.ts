@@ -808,9 +808,12 @@ test("disabled scheduling and saved successor settings refuse implicit activatio
 	assert.equal((await f.replacement.status(op)).state, "blocked");
 });
 
-test("HTTP replacement is native-gated; preview and status are passive, scoped, no-store and lineage-bound", async (t) => {
+test("retired replacement keeps exact status and receipts without starting work", async (t) => {
 	const f = await fixture(t);
 	await f.deleteOld();
+	const op = await f.intent();
+	const accepted = await f.run(op);
+	assert.equal(accepted.state, "accepted");
 	const args: Parameters<typeof createDaemonServer>[0] = {
 		config: { home: f.home, host: "127.0.0.1", port: 0 },
 		sessions: f.sessions,
@@ -848,22 +851,11 @@ test("HTTP replacement is native-gated; preview and status are passive, scoped, 
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
-	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsReplacement, 1);
-	assert.equal((await fetch(`${root}/insights/replacement/preflight`)).status, 400);
+	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsReplacement, undefined);
+	const preview = await fetch(`${root}/insights/replacement/preflight`);
+	assert.equal(preview.status, 410);
+	assert.equal(preview.headers.get("cache-control"), "no-store");
 	assert.equal((await fetch(`${root}/insights/replacement/status`)).status, 405);
-	const url = `${root}/insights/replacement/preflight?projectId=${f.project.id}&missionId=${f.mission.id}&reportSessionId=${f.oldId}`;
-	const response = await fetch(url);
-	assert.equal(response.headers.get("cache-control"), "no-store");
-	const text = await response.text();
-	const preview = JSON.parse(text);
-	assert.equal(preview.state, "ready");
-	assert.ok(preview.payload);
-	assert.equal(text.includes(f.home), false);
-	assert.equal(text.includes("grantId"), false);
-	assert.equal(text.includes("Prepare the next"), false);
-	assert.equal(preview.references[0].payload, undefined);
-	assert.equal(preview.rules[0].target, undefined);
-	const op = f.operation("insights-replace", preview.payload.successorSessionId, preview.payload);
 	const post = (path: string, native = false, intent = op) =>
 		fetch(`${root}/${path}`, {
 			method: "POST",
@@ -873,9 +865,11 @@ test("HTTP replacement is native-gated; preview and status are passive, scoped, 
 			},
 			body: JSON.stringify(intent),
 		});
-	assert.equal((await (await post("insights/replacement/status")).json()).state, "not_found");
+	const fresh = f.operation(op.kind, op.targetId, JSON.parse(op.payload));
+	assert.equal((await post("operations", true, fresh)).status, 410);
+	assert.equal((await (await post("insights/replacement/status", false, fresh)).json()).state, "not_found");
 	assert.notEqual((await post("operations")).status, 200);
-	assert.equal((await (await post("operations/receipt")).json()).state, "unknown");
+	assert.deepEqual(await (await post("operations/receipt")).json(), accepted);
 	assert.equal(
 		(
 			await post("insights/replacement/status", false, {
@@ -885,8 +879,6 @@ test("HTTP replacement is native-gated; preview and status are passive, scoped, 
 		).status,
 		400,
 	);
-	const accepted = await (await post("operations", true)).json();
-	assert.equal(accepted.state, "accepted", JSON.stringify(accepted));
 	const receiptBytes = await readFile(join(f.home, "operations", `${payloadHash(op.operationId)}.json`), "utf8");
 	assert.notEqual((await post("operations")).status, 200, "even exact re-admission needs native capability");
 	assert.deepEqual(

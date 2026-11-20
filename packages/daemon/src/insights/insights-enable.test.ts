@@ -10,14 +10,12 @@ import { type TestContext, test } from "node:test";
 import type {
 	DurableOperation,
 	InsightsApplyPayload,
-	InsightsApplyPreflight,
 	InsightsApplyProgress,
 	InsightsEnablePayload,
 	InsightsEnableProgress,
 	InsightsSettingsPayload,
 	InsightsSettingsSnapshot,
 	ModelOption,
-	OperationReceipt,
 } from "@pilot/protocol";
 import { Conflict } from "../runtime/contracts/errors.ts";
 import { InsightsApply } from "./insights-apply.ts";
@@ -27,7 +25,12 @@ import type { InsightsSchedule } from "./insights-schedule.ts";
 import { MissionService } from "../missions/mission-service.ts";
 import { MissionStore } from "../missions/missions.ts";
 import type { ModelCatalog } from "../models/models.ts";
-import { canonicalJSON, OperationExpired, OperationJournal, payloadHash } from "../transport/operations/operation-journal.ts";
+import {
+	canonicalJSON,
+	OperationExpired,
+	OperationJournal,
+	payloadHash,
+} from "../transport/operations/operation-journal.ts";
 import { ProjectStore } from "../projects/projects.ts";
 import { ScheduleStore } from "../schedules/schedule-store.ts";
 import { ScheduleService } from "../schedules/schedules.ts";
@@ -841,8 +844,18 @@ for (const fence of ["Stop", "revoke", "home", "project", "backlog", "disable"] 
 	});
 }
 
-test("native HTTP contract gates only enable, passive reads/status never provision or read history", async (t) => {
+test("retired desktop setup keeps exact pending and settled receipts without entering new effects", async (t) => {
 	const f = await fixture(t);
+	const op = await f.intent();
+	const accepted = await f.run(op);
+	assert.equal(accepted.state, "accepted");
+	const preview = await f.enable.preflight(f.project.id, f.mission.id);
+	assert.ok(preview.payload);
+	const fresh = f.operation(preview.payload, op.targetId);
+	const pending = f.operation(preview.payload, op.targetId);
+	const pendingReceipt = await f.journal.reserve(pending);
+	const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
+	const create = t.mock.method(f.schedules.insights, "createInsights");
 	const terminals = new TerminalManager();
 	const args: Parameters<typeof createDaemonServer>[0] = {
 		config: { home: f.home, host: "127.0.0.1", port: 0 },
@@ -881,24 +894,12 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
-	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsEnable, 1);
-	assert.equal((await fetch(`${root}/insights/enable/preflight`)).status, 400);
-	const knownMissing = randomUUID();
-	const pinned = await (
-		await fetch(
-			`${root}/insights/enable/preflight?projectId=${f.project.id}&missionId=${f.mission.id}&reportSessionId=${knownMissing}`,
-		)
-	).json();
-	assert.equal(pinned.reason, "report_identity_unavailable");
-	assert.equal(pinned.targetId, knownMissing);
-	assert.equal(pinned.payload, null);
-	const preflight = await (
-		await fetch(`${root}/insights/enable/preflight?projectId=${f.project.id}&missionId=${f.mission.id}`)
-	).json();
-	const op = f.operation(preflight.payload, preflight.targetId);
-	const frozenPayload = op.payload;
-	assert.equal(op.destination.hostId, "local");
-	assert.equal(preflight.payload.expectedHome.hostId, "daemon");
+	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsEnable, undefined);
+	for (const path of ["enable/preflight", "replacement/preflight", `sessions/${op.targetId}/apply`]) {
+		const response = await fetch(`${root}/insights/${path}`);
+		assert.equal(response.status, 410);
+		assert.equal(response.headers.get("cache-control"), "no-store");
+	}
 	const post = (path: string, native = false, intent = op) =>
 		fetch(`${root}/${path}`, {
 			method: "POST",
@@ -908,101 +909,37 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 			},
 			body: JSON.stringify(intent),
 		});
-	assert.equal((await (await post("insights/enable/status")).json()).state, "not_found");
 	assert.notEqual((await post("operations")).status, 200);
-	const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
-	const create = t.mock.method(f.schedules.insights, "createInsights");
-	for (const field of ["daemonId", "lineageId"] as const) {
-		const mismatched = { ...op, destination: { ...op.destination, [field]: "different" } };
-		for (const path of ["operations", "insights/enable/status", "operations/receipt"]) {
-			const response = await post(path, true, mismatched);
-			assert.equal(response.status, 400);
-			assert.match((await response.json()).error, /Destination lineage changed/);
-		}
+	for (const kind of [
+		"insights-create",
+		"insights-enable",
+		"insights-apply",
+		"insights-settings",
+		"insights-replace",
+	]) {
+		const intent = { ...fresh, kind };
+		assert.equal((await post("operations", true, intent)).status, 410);
+		assert.deepEqual(await (await post("operations/receipt", true, intent)).json(), { state: "unknown" });
 	}
-	for (const field of ["hostId", "daemonId", "lineageId"] as const) {
-		const changed = f.operation(
-			{ ...preflight.payload, expectedHome: { ...preflight.payload.expectedHome, [field]: "different" } },
-			op.targetId,
-		);
-		const response = await post("operations", true, changed);
-		assert.equal(response.status, 200);
-		const refused = (await response.json()) as OperationReceipt;
-		assert.equal(refused.state, "rejected");
-		assert.equal(refused.result, undefined, "frozen home mismatch enters no step");
-		assert.deepEqual((await (await post("insights/enable/status", false, changed)).json()).receipt, refused);
-	}
-	assert.equal(spawn.mock.callCount(), 0);
-	assert.equal(create.mock.callCount(), 0);
-	assert.equal(f.sessions.list().length, 0);
-	assert.equal(f.schedules.list().length, 0);
-	const accepted = (await (await post("operations", true)).json()) as OperationReceipt;
-	assert.equal(accepted.state, "accepted");
-	assert.deepEqual(accepted.destination, op.destination);
+	assert.deepEqual(await (await post("operations", true, pending)).json(), pendingReceipt);
+	assert.deepEqual(await (await post("operations/receipt", true, pending)).json(), pendingReceipt);
+	assert.deepEqual(await (await post("operations", true)).json(), accepted);
+	assert.deepEqual(await (await post("operations/receipt")).json(), accepted);
 	const status = await post("insights/enable/status");
 	assert.equal(status.headers.get("cache-control"), "no-store");
-	const enabled = await status.json();
-	assert.equal(enabled.state, "enabled");
-	assert.deepEqual(enabled.receipt, accepted);
-	assert.deepEqual(await (await post("operations/receipt")).json(), accepted);
-	assert.deepEqual(await (await post("operations", true)).json(), accepted);
-	const record = JSON.parse(await readFile(join(f.home, "operations", `${payloadHash(op.operationId)}.json`), "utf8"));
-	assert.equal(record.operation.payload, frozenPayload, "persist actual preflight bytes without home-label rewriting");
-	assert.equal(record.operation.payloadHash, payloadHash(frozenPayload));
-	assert.deepEqual(record.receipt, accepted);
-	const restored = new OperationJournal(join(f.home, "operations"), host);
-	assert.deepEqual(await restored.lookup(op), accepted, "native label survives cold receipt loading");
-	const relabeled = { ...op, destination: host };
+	assert.equal((await status.json()).state, "enabled");
+	assert.equal((await fetch(`${root}/insights/sessions/${op.targetId}/settings`)).status, 200);
+	const restarted = new OperationJournal(join(f.home, "operations"), host);
+	assert.deepEqual(await restarted.lookup(op), accepted);
+	assert.deepEqual(await restarted.lookup(pending), pendingReceipt);
+	const relabeled = { ...op, destination: { ...op.destination, lineageId: "different" } };
 	assert.equal((await post("insights/enable/status", false, relabeled)).status, 400);
 	assert.equal((await post("operations", true, relabeled)).status, 400);
-	const existing = await (
-		await fetch(`${root}/insights/enable/preflight?projectId=${f.project.id}&missionId=${f.mission.id}`)
-	).json();
-	const stale = f.operation(existing.payload, existing.targetId);
-	const settingsResponse = await fetch(`${root}/insights/sessions/${op.targetId}/settings`);
-	assert.equal(settingsResponse.headers.get("cache-control"), "no-store");
-	const snapshot = (await settingsResponse.json()) as InsightsSettingsSnapshot;
-	assert.equal(snapshot.revision, 0);
-	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsSettings, 1);
-	const save = { ...f.operation(settingsPayload(snapshot), op.targetId), kind: "insights-settings" };
-	assert.notEqual((await post("operations", false, save)).status, 200);
-	assert.equal((await (await post("operations/receipt", false, save)).json()).state, "unknown");
-	const saved = (await (await post("operations", true, save)).json()) as OperationReceipt;
-	assert.equal(saved.state, "accepted");
-	assert.equal((saved.result as { revision: number }).revision, 1);
-	assert.deepEqual(await (await post("operations/receipt", false, save)).json(), saved);
-	assert.deepEqual(await (await post("operations", true, save)).json(), saved);
-	assert.equal(f.missions.insights.settings.current(f.sessions.insightsHostAdmission(op.targetId))?.revision, 1);
-	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsApply, 1);
-	const applyResponse = await fetch(`${root}/insights/sessions/${op.targetId}/apply`);
-	assert.equal(applyResponse.headers.get("cache-control"), "no-store");
-	const preview = (await applyResponse.json()) as InsightsApplyPreflight;
-	assert.ok(preview.payload, preview.reason ?? "Apply unavailable");
-	assert.equal((await fetch(`${root}/insights/sessions/${op.targetId}/apply`, { method: "POST" })).status, 405);
-	const apply = { ...f.operation(preview.payload, op.targetId), kind: "insights-apply" };
-	assert.notEqual((await post("operations", false, apply)).status, 200);
-	assert.equal((await (await post("operations/receipt", false, apply)).json()).state, "unknown");
-	const applied = (await (await post("operations", true, apply)).json()) as OperationReceipt;
-	assert.equal(applied.state, "accepted");
-	assert.equal((applied.result as InsightsApplyProgress).phase, "applied");
-	assert.deepEqual(await (await post("operations/receipt", false, apply)).json(), applied);
-	assert.deepEqual(await (await post("operations", true, apply)).json(), applied);
-	const storedApply = JSON.parse(
-		await readFile(join(f.home, "operations", `${payloadHash(apply.operationId)}.json`), "utf8"),
-	);
-	assert.equal(storedApply.operation.payload, apply.payload);
-	assert.equal(storedApply.operation.payloadHash, apply.payloadHash);
-	f.sessions["metas"].get(op.targetId)!.insightsGrant!.host.hostId = "different";
-	assert.equal(((await (await post("operations", true, stale)).json()) as OperationReceipt).state, "rejected");
-	const blocked = await (await post("insights/enable/status")).json();
-	assert.equal(blocked.state, "blocked");
-	assert.deepEqual(blocked.receipt, accepted, "stale grant blocks current status, never rewrites accepted receipt");
-	assert.equal(spawn.mock.callCount(), 1);
-	assert.equal(create.mock.callCount(), 2);
+	assert.equal(spawn.mock.callCount(), 0);
+	assert.equal(create.mock.callCount(), 0);
 	assert.equal(f.sessions.list().length, 1);
-	assert.equal(f.schedules.list().length, 2);
+	assert.equal(f.schedules.list().length, 1);
 	assert.equal(f.workerStarts, 0);
-	assert.equal(await stat(join(f.home, "sessions", op.targetId, "history.sqlite")).catch(() => null), null);
 });
 
 function applyService(f: Awaited<ReturnType<typeof fixture>>) {

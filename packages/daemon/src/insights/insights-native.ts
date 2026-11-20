@@ -18,16 +18,14 @@ export const INSIGHTS_DISCLOSURE: InsightsDisclosure = "insights-history-v1";
 export const INSIGHTS_SETUP_MESSAGE =
 	"This chat is set up for Pilot Insights. Briefly confirm your role and limits. Do not read chat history or start a review until a review is requested.";
 
+const legacySetup = ["insights-create", "insights-enable", "insights-settings", "insights-apply", "insights-replace"];
+
 export function isInsightsOperation(kind: string): boolean {
-	return [
-		"insights-create",
-		"insights-enable",
-		"insights-settings",
-		"insights-apply",
-		"insights-replace",
-		"insights-revoke",
-		"insights-lifecycle",
-	].includes(kind);
+	return legacySetup.includes(kind) || kind === "insights-revoke" || kind === "insights-lifecycle";
+}
+
+export function isRetiredInsightsSetup(kind: string): boolean {
+	return legacySetup.includes(kind) || kind === "insights-workspace-reserve";
 }
 
 function exact(payload: Record<string, unknown>, keys: string[], optional: string[] = []): void {
