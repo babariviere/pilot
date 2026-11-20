@@ -166,12 +166,9 @@ test("a failed save and an unproven job exit stop the update before anything is 
 	expect(app.shows("This app 0.9.2 · Service 0.9.2")).toBe(true);
 
 	await confirm(app, "Update from 0.9.2 to 0.9.3?");
-	await app.waitFor("Work that needs attention");
-	expect(
-		app.shows(
-			"Not updated. A job in “Release notes” may still have processes running, and Pilot cannot prove they ended, so it stopped before replacing anything. The other paused agents went back to work.",
-		),
-	).toBe(true);
+	await app.waitFor(
+		"Not updated. A job in “Release notes” may still have processes running, and Pilot cannot prove they ended, so it stopped before replacing anything. The other paused agents went back to work.",
+	);
 	expect(app.shows("Updated to 0.9.3")).toBe(false);
 	expect(app.shows("This app 0.9.2 · Service 0.9.2")).toBe(true);
 	expect(app.shows("Working")).toBe(true);
