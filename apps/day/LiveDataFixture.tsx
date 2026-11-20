@@ -1,13 +1,13 @@
 // Headless control fixture only. No daemon, worker, provider or storage.
 // Today on a feed whose reads the test delivers (keys, so the focused field
 // keeps the focus), and the window's automatic reads on a test clock.
-import { keymap, mount, Scroll, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
 import { type Today, TodayFeed } from "pilot-day/native";
 import { mirrorDay } from "./day";
 import type { DayFeed } from "./feeds";
 import { autoRead, type Clock, type ReadResult } from "./freshness";
 import { MockDayScreen } from "./mockFeeds";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 import { anchors } from "./view";
 
 // The asks world: two questions that take the user's own words.
@@ -83,37 +83,51 @@ const card = signal("");
 keymap.bind("mod+shift+1", same, { when: "always" });
 keymap.bind("mod+shift+2", unrelated, { when: "always" });
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 bg-background">
+	<FixtureWindow>
 		<View class="flex-1">
 			<MockDayScreen day={day} />
 		</View>
-		<Scroll class="max-h-40 border-t border-border">
-			<View class="flex-row flex-wrap gap-1 px-6 py-3">
-				<Action label="Mark card" onPress={() => (marked = anchors.get("ask1") ?? null)} />
-				<Action
-					label="Check card"
-					onPress={() =>
-						card.set(marked !== null && anchors.get("ask1") === marked ? "Card kept" : "Card built again")
-					}
-				/>
-				<Text testID="card">{card()}</Text>
-				<Action label="Same read" onPress={same} />
-				<Action label="Unrelated read" onPress={unrelated} />
-				<Action
-					label="Automatic try"
-					onPress={() => {
-						void freshness.now();
-					}}
-				/>
-				<Action label="Six minutes pass" onPress={() => pass(6 * 60_000)} />
-				<Action
-					label="Reads work"
-					onPress={() => {
-						answer = "current";
-					}}
-				/>
-			</View>
+		<Scroll class="max-h-40">
+			<Block>
+				<Buttons>
+					<Caption tone="faint">Mock data</Caption>
+					<Button label="Mark card" onPress={() => (marked = anchors.get("ask1") ?? null)} />
+					<Button
+						label="Check card"
+						onPress={() =>
+							card.set(marked !== null && anchors.get("ask1") === marked ? "Card kept" : "Card built again")
+						}
+					/>
+					<Caption testID="card">{card()}</Caption>
+					<Button label="Same read" onPress={same} />
+					<Button label="Unrelated read" onPress={unrelated} />
+					<Button
+						label="Automatic try"
+						onPress={() => {
+							void freshness.now();
+						}}
+					/>
+					<Button label="Six minutes pass" onPress={() => pass(6 * 60_000)} />
+					<Button
+						label="Reads work"
+						onPress={() => {
+							answer = "current";
+						}}
+					/>
+				</Buttons>
+			</Block>
 		</Scroll>
-	</View>
+	</FixtureWindow>
 ));

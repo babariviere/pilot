@@ -2,7 +2,7 @@
 // with invented tasks in each work state. Every record is mock data. The bar
 // on top picks a situation; Command-Shift-U applies the next live update
 // without moving the keyboard focus. Nothing here reads or sends anything real.
-import { keymap, mount, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, signal, View } from "nsh";
 import type { Freshness, MissionPage, TaskLine, TaskWorkState } from "pilot-day/native";
 import { TodayFeed } from "pilot-day/native";
 import { anchorOnScreen, type Span } from "./contentAnchor";
@@ -12,7 +12,7 @@ import { scrollOf } from "./kept";
 import { MockDayScreen, openMockChat, openPlanning } from "./mockFeeds";
 import { ScriptedThreads } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 import { openMission } from "./view";
 
 type Situation = "running" | "waiting" | "paused" | "empty" | "completed" | "unread" | "older" | "offline";
@@ -224,21 +224,36 @@ async function showWhere() {
 // A live update that does not take the keyboard focus from where the user is.
 keymap.bind("mod+shift+u", () => step.set(step() + 1), { when: "always" });
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 openMission("search");
 mount(() => (
-	<View class="flex-1">
-		<View class="flex-row flex-wrap items-center gap-1 border-b border-border px-4 py-2">
-			<Text class="text-xs text-muted-foreground">Mock data · situation</Text>
-			<Action label="Long chat titles" onPress={() => longTitles.set(true)} />
-			<Each of={SITUATIONS} key={(s) => s}>
-				{(s) => <Action label={s()} testID={`situation-${s()}`} onPress={() => choose(s())} />}
-			</Each>
-			<Text testID="situation-step" class="text-xs text-faint">{`${situation()} · update ${step()}`}</Text>
-			<Action label="Where" testID="where" onPress={() => void showWhere()} />
-			<Text testID="where-text" class="text-xs text-faint">
-				{where()}
-			</Text>
+	<FixtureWindow>
+		<Block>
+			<Buttons>
+				<Caption>Mock data · situation</Caption>
+				<Button small label="Long chat titles" onPress={() => longTitles.set(true)} />
+				<Each of={SITUATIONS} key={(s) => s}>
+					{(s) => <Button small label={s()} testID={`situation-${s()}`} onPress={() => choose(s())} />}
+				</Each>
+				<Caption testID="situation-step" tone="faint">{`${situation()} · update ${step()}`}</Caption>
+				<Button small label="Where" testID="where" onPress={() => void showWhere()} />
+				<Caption testID="where-text" tone="faint">
+					{where()}
+				</Caption>
+			</Buttons>
+		</Block>
+		<View class="min-h-0 flex-1">
+			<MockDayScreen day={day} plans={plans} />
 		</View>
-		<MockDayScreen day={day} plans={plans} />
-	</View>
+	</FixtureWindow>
 ));

@@ -1,8 +1,8 @@
 // Headless source-reading fixture. Invented records, never daemon data.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
 import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const day = openDay("quiet");
 const plans = openPlanning("wayfinder");
@@ -43,19 +43,35 @@ plans.feed = {
 	dispose: () => feed.dispose(),
 	readSource: result,
 };
-mount(() => (
-	<View class="flex-1 bg-background">
-		<View class="flex-row gap-2">
-			<Action
-				label="Revoke source access"
-				onPress={() => {
-					available.set(false);
-					plans.planning.set({ ...plans.planning(), revision: plans.planning().revision + 1 });
-				}}
-			/>
-			<Action label="Wrong source reply" onPress={() => mismatched.set(true)} />
-			<Text>{`Source reads: ${reads()}`}</Text>
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
-		<MockDayScreen day={day} plans={plans} />
-	</View>
+	);
+}
+
+mount(() => (
+	<FixtureWindow>
+		<Block>
+			<Buttons>
+				<Caption tone="faint">Mock data</Caption>
+				<Button
+					label="Revoke source access"
+					onPress={() => {
+						available.set(false);
+						plans.planning.set({ ...plans.planning(), revision: plans.planning().revision + 1 });
+					}}
+				/>
+				<Button label="Wrong source reply" onPress={() => mismatched.set(true)} />
+				<Caption>{`Source reads: ${reads()}`}</Caption>
+			</Buttons>
+		</Block>
+		<View class="min-h-0 flex-1">
+			<MockDayScreen day={day} plans={plans} />
+		</View>
+	</FixtureWindow>
 ));

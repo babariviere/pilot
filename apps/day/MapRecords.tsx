@@ -1,11 +1,11 @@
 // The saved records behind the Wayfinder map: one question, one fog area and
 // the agreement. The outline rows and the chart's field notes show the same
 // records. Reading them answers, approves and starts nothing.
-import { Text, View } from "nsh";
+import { View } from "nsh";
 import type { Exploration, ExploreKind, FogArea, MapInfo, PlanPage } from "pilot-day/native";
 import { MapSources } from "./MapSources";
 import type { Plans } from "./planning";
-import { Action, type MarkKind } from "./ui";
+import { Body, Caption, Link, type MarkKind, Row, Rows } from "./ui";
 
 /** Where a question is, in one line. */
 export function exploreLine(e: Exploration): string {
@@ -25,19 +25,22 @@ export function exploreLine(e: Exploration): string {
 	}
 }
 
-/** A question's state mark. */
+/**
+ * A question's state mark: Needs you while it asks, Working while it runs or is ready to, Done once settled, and the
+ * quiet New mark while it waits (for other questions, or for Pilot to record finished research).
+ */
 export function exploreMark(e: Exploration): MarkKind {
 	switch (e.state) {
 		case "asking":
 			return "needs";
 		case "running":
-			return e.findingsWaiting ? "still" : "moving";
+			return e.findingsWaiting ? "new" : "working";
 		case "resolved":
 			return "done";
 		case "ready":
-			return "moving";
+			return "working";
 		default:
-			return "unreported";
+			return "new";
 	}
 }
 
@@ -67,9 +70,9 @@ function Detail(props: { title: string; lines: string[] }) {
 	return (
 		<If when={props.lines.length > 0}>
 			<View class="gap-0.5">
-				<Text class="text-xs text-faint">{props.title}</Text>
+				<Caption tone="faint">{props.title}</Caption>
 				<Each of={props.lines} key={(l) => l}>
-					{(l) => <Text class="text-sm leading-relaxed text-foreground">{`• ${l()}`}</Text>}
+					{(l) => <Body>{`• ${l()}`}</Body>}
 				</Each>
 			</View>
 		</If>
@@ -87,23 +90,23 @@ export function ItemRecord(props: { plans: Plans; page: PlanPage; item: Explorat
 			.join(" · ");
 	return (
 		<View testID={`record-${e().id}`} class={`gap-3 ${props.class ?? ""}`}>
-			<Text class="text-sm leading-relaxed text-foreground">{e().question}</Text>
+			<Body>{e().question}</Body>
 			<If when={e().evidence}>
-				<Text class="text-sm text-foreground">{e().evidence}</Text>
+				<Body>{e().evidence}</Body>
 			</If>
 			<If when={e().limits}>
-				<Text class="text-xs text-faint">{`Prototype limits: ${e().limits}`}</Text>
+				<Caption tone="faint">{`Prototype limits: ${e().limits}`}</Caption>
 			</If>
 			<Detail title="What the prototype showed" lines={e().observations} />
 			<Detail title="What it left open" lines={e().unresolved} />
 			<If when={round()}>
 				<View testID={`settled-round-${e().id}`} class="gap-2">
-					<Text class="text-xs text-faint">{`${round()?.title ?? ""} · your answers, as submitted`}</Text>
+					<Caption tone="faint">{`${round()?.title ?? ""} · your answers, as submitted`}</Caption>
 					<Each of={round()?.answers ?? []} key={(a) => a.prompt}>
 						{(a) => (
 							<View class="gap-0.5">
-								<Text class="text-xs text-muted-foreground">{a().prompt}</Text>
-								<Text class="text-sm text-foreground">{a().answer || "No answer"}</Text>
+								<Caption>{a().prompt}</Caption>
+								<Body>{a().answer || "No answer"}</Body>
 							</View>
 						)}
 					</Each>
@@ -111,7 +114,7 @@ export function ItemRecord(props: { plans: Plans; page: PlanPage; item: Explorat
 			</If>
 			<MapSources plans={props.plans} page={props.page} area="item" recordId={e().id} refs={e().sourceRefs} />
 			<If when={origin()}>
-				<Text class="text-xs text-faint">{origin()}</Text>
+				<Caption tone="faint">{origin()}</Caption>
 			</If>
 		</View>
 	);
@@ -122,19 +125,19 @@ export function FogRecord(props: { plans: Plans; page: PlanPage; fog: FogArea })
 	const f = () => props.fog;
 	return (
 		<View class="gap-1">
-			<Text class="text-sm text-muted-foreground">{f().why}</Text>
-			<Text class="text-xs text-foreground">
+			<Body tone="muted">{f().why}</Body>
+			<Caption tone="default">
 				{f().active ? `Ready when: ${f().readyWhen}` : `Became: ${f().became.join(", ")}`}
-			</Text>
+			</Caption>
 			<MapSources plans={props.plans} page={props.page} area="fog" recordId={f().id} refs={f().sourceRefs} />
-			<Text class="text-xs text-faint">
+			<Caption tone="faint">
 				{[
 					f().after.length > 0 ? `After: ${f().after.join(", ")}` : "",
 					f().sources.length > 0 ? `From ${f().sources.join(", ")}` : "",
 				]
 					.filter(Boolean)
 					.join(" · ")}
-			</Text>
+			</Caption>
 		</View>
 	);
 }
@@ -144,21 +147,22 @@ export function Agreement(props: { info: MapInfo; onOpenTasks?: () => void }) {
 	return (
 		<If when={props.info.agreement || props.info.tasks.length > 0}>
 			<View testID="map-agreement" class="gap-1">
-				<Text class="text-xs text-faint">Agreement</Text>
-				<Text class="text-sm text-foreground">{props.info.agreement}</Text>
-				<Each of={props.info.tasks} key={(t) => t.id}>
-					{(t) => (
-						<View class="flex-row items-baseline gap-3 py-1">
-							<Text class="w-7 text-xs text-faint">{t().number > 0 ? `#${t().number}` : ""}</Text>
-							<Text class="flex-1 text-sm text-foreground">{t().title}</Text>
-							<Text class="text-xs text-muted-foreground">{t().status}</Text>
-						</View>
-					)}
-				</Each>
+				<Caption tone="faint">Agreement</Caption>
+				<Body>{props.info.agreement}</Body>
+				<Rows>
+					<Each of={props.info.tasks} key={(t) => t.id}>
+						{(t) => (
+							<Row
+								title={t().title}
+								meta={t().number > 0 ? `#${t().number}` : undefined}
+								state={t().status}
+								wrap
+							/>
+						)}
+					</Each>
+				</Rows>
 				<If when={props.info.tasks.length > 0 && props.onOpenTasks}>
-					<View class="flex-row">
-						<Action label="Open the tasks" onPress={() => props.onOpenTasks?.()} />
-					</View>
+					<Link label="Open the tasks" onPress={() => props.onOpenTasks?.()} />
 				</If>
 			</View>
 		</If>

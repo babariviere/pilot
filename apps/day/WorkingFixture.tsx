@@ -1,11 +1,11 @@
 // Scripted transport, real Today/chat views. No service, provider or execution.
-import { keymap, mount, Scroll, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
 import { TodayFeed } from "pilot-day/native";
 import { mirrorDay } from "./day";
 import { MockDayScreen } from "./mockFeeds";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
 import { mirrorScope, type ScopeMirror, todayProject } from "./todayScope";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const feed = new TodayFeed("decisions");
 const opened = signal("");
@@ -143,19 +143,30 @@ function moveUp() {
 	});
 }
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => {
 	keymap.bind("mod+shift+u", changeTask, { when: "always" });
 	keymap.bind("mod+shift+q", moveUp, { when: "always" });
 	return (
-		<View class="flex-1 bg-background">
+		<FixtureWindow>
 			<View class="flex-1">
 				<MockDayScreen day={day} />
 			</View>
-			<Scroll class="max-h-44 border-t border-border">
-				<View class="gap-1 px-6 py-2">
-					<Text>{`Opened: ${opened()} · Sends: ${sends()}`}</Text>
-					<View class="flex-row flex-wrap gap-1">
-						<Action
+			<Scroll class="max-h-44">
+				<Block>
+					<Caption>{`Opened: ${opened()} · Sends: ${sends()}`}</Caption>
+					<Buttons>
+						<Button
 							label="Change task"
 							onPress={() =>
 								update(() => {
@@ -165,7 +176,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Stop agent"
 							onPress={() =>
 								update(() => {
@@ -173,7 +184,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Queue chat"
 							onPress={() =>
 								update(() => {
@@ -189,8 +200,8 @@ mount(() => {
 								})
 							}
 						/>
-						<Action label="Move up" onPress={moveUp} />
-						<Action
+						<Button label="Move up" onPress={moveUp} />
+						<Button
 							label="Start queued"
 							onPress={() =>
 								update(() => {
@@ -209,7 +220,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Start agent"
 							onPress={() =>
 								update(() => {
@@ -227,7 +238,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="None working"
 							onPress={() =>
 								update(() => {
@@ -235,7 +246,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Access lost"
 							onPress={() =>
 								update(() => {
@@ -243,7 +254,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Disconnected"
 							onPress={() =>
 								update(() => {
@@ -251,7 +262,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Failed"
 							onPress={() =>
 								update(() => {
@@ -259,7 +270,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Stale"
 							onPress={() =>
 								update(() => {
@@ -267,8 +278,8 @@ mount(() => {
 								})
 							}
 						/>
-						<Action label="Duplicate read" onPress={read} />
-						<Action
+						<Button label="Duplicate read" onPress={read} />
+						<Button
 							label="Start many"
 							onPress={() =>
 								update(() => {
@@ -286,8 +297,8 @@ mount(() => {
 								})
 							}
 						/>
-						<Action label="Invalidate" onPress={() => scope.invalidate?.()} />
-						<Action
+						<Button label="Invalidate" onPress={() => scope.invalidate?.()} />
+						<Button
 							label="Identity lost"
 							onPress={() =>
 								update(() => {
@@ -295,7 +306,7 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Restore access"
 							onPress={() =>
 								update(() => {
@@ -303,24 +314,24 @@ mount(() => {
 								})
 							}
 						/>
-						<Action
+						<Button
 							label="Hold reads"
 							onPress={() => {
 								hold = true;
 								read();
 							}}
 						/>
-						<Action
+						<Button
 							label="Release newer"
 							onPress={() => {
 								hold = false;
 								held.pop()?.();
 							}}
 						/>
-						<Action label="Release older" onPress={() => held.shift()?.()} />
-					</View>
-				</View>
+						<Button label="Release older" onPress={() => held.shift()?.()} />
+					</Buttons>
+				</Block>
 			</Scroll>
-		</View>
+		</FixtureWindow>
 	);
 });

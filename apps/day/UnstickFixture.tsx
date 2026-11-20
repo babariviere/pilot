@@ -1,11 +1,11 @@
 // Headless fixture only: a stuck mock mission whose saved answers belong to an earlier wording,
 // with Unstick's repair agent. Mock data.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
 import { feedbackDraft, feedbackOpen } from "./feedbackView";
 import { openPlanning } from "./mockFeeds";
 import { Unstick } from "./Unstick";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 type Repair = NonNullable<NonNullable<PlanPage["unstick"]>["repair"]>;
 
@@ -66,50 +66,65 @@ plans.feed = Object.assign(Object.create(Object.getPrototypeOf(source)), source,
 		return accepted(intent.missionId, "Sent. Pilot continues planning with this note.");
 	},
 });
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 gap-4 bg-background p-8">
+	<FixtureWindow>
 		<Unstick plans={plans} page={page()} />
-		<Text testID="applied">{`Applied: ${applied()}`}</Text>
-		<Text testID="sent-note">{`Note: ${sentNote()}`}</Text>
-		<Text testID="feedback-draft">
-			{feedbackOpen() ? `Feedback: ${feedbackDraft().text.split("\n")[2] ?? ""}` : ""}
-		</Text>
-		<Action
-			testID="agent-bug"
-			label="Agent found a bug"
-			onPress={() =>
-				repair({
-					available: true,
-					state: "proposed",
-					current: true,
-					chatId: "repair-2",
-					proposal: {
-						fix: "codeRepair",
-						cause: "Pilot refuses every save over 40 questions.",
-						note: "",
-						certainty: "medium",
-						evidence: ["mission-plans.ts list limit"],
-					},
-				})
-			}
-		/>
-		<Action
-			testID="agent-done"
-			label="Agent done"
-			onPress={() =>
-				repair({
-					available: true,
-					state: "proposed",
-					current: true,
-					proposal: {
-						fix: "plannerNote",
-						cause: "The map is full: Pilot refused a save with 42 questions.",
-						note: "Merge open research questions a and b.",
-						certainty: "high",
-						evidence: ["plan-map refused: Invalid planning list"],
-					},
-				})
-			}
-		/>
-	</View>
+		<Block gap={3}>
+			<Caption testID="applied">{`Applied: ${applied()}`}</Caption>
+			<Caption testID="sent-note">{`Note: ${sentNote()}`}</Caption>
+			<Caption testID="feedback-draft">
+				{feedbackOpen() ? `Feedback: ${feedbackDraft().text.split("\n")[2] ?? ""}` : ""}
+			</Caption>
+			<Buttons>
+				<Button
+					testID="agent-bug"
+					label="Agent found a bug"
+					onPress={() =>
+						repair({
+							available: true,
+							state: "proposed",
+							current: true,
+							chatId: "repair-2",
+							proposal: {
+								fix: "codeRepair",
+								cause: "Pilot refuses every save over 40 questions.",
+								note: "",
+								certainty: "medium",
+								evidence: ["mission-plans.ts list limit"],
+							},
+						})
+					}
+				/>
+				<Button
+					testID="agent-done"
+					label="Agent done"
+					onPress={() =>
+						repair({
+							available: true,
+							state: "proposed",
+							current: true,
+							proposal: {
+								fix: "plannerNote",
+								cause: "The map is full: Pilot refused a save with 42 questions.",
+								note: "Merge open research questions a and b.",
+								certainty: "high",
+								evidence: ["plan-map refused: Invalid planning list"],
+							},
+						})
+					}
+				/>
+			</Buttons>
+		</Block>
+	</FixtureWindow>
 ));

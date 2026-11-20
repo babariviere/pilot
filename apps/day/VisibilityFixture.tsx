@@ -1,10 +1,10 @@
 // Synthetic attention only. No daemon, filesystem or retry authority: Continue
 // and Dismiss go to a script that counts them and drops the row, as the next
 // read would.
-import { keymap, mount, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, signal, View } from "nsh";
 import { MockDayScreen, openDay, openMockChat } from "./mockFeeds";
 import { mirrorSessionChat, type SessionChatSource } from "./sessionChat";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const sends = signal<string[]>([]);
 const base = openMockChat().source;
@@ -103,17 +103,33 @@ day.today.update((t) => ({
 	],
 }));
 
-mount(() => (
-	<View class="flex-1 bg-background">
-		<MockDayScreen day={day} />
-		<View class="flex-row border-t border-border px-6 py-2">
-			<Action
-				label="Stale read"
-				onPress={() => day.today.update((t) => ({ ...t, freshness: { ...t.freshness, state: "offline" } }))}
-			/>
-			<Action label="Resolve problems" onPress={() => day.today.update((t) => ({ ...t, problems: [] }))} />
-			<Action label="Missing attention" onPress={() => day.today.update((t) => ({ ...t, problemsKnown: false }))} />
-			<Text class="text-xs text-faint">{`Synthetic read. Sent: ${sends().join(", ") || "nothing"}`}</Text>
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
-	</View>
+	);
+}
+
+mount(() => (
+	<FixtureWindow>
+		<MockDayScreen day={day} />
+		<Block>
+			<Buttons>
+				<Button
+					label="Stale read"
+					onPress={() => day.today.update((t) => ({ ...t, freshness: { ...t.freshness, state: "offline" } }))}
+				/>
+				<Button label="Resolve problems" onPress={() => day.today.update((t) => ({ ...t, problems: [] }))} />
+				<Button
+					label="Missing attention"
+					onPress={() => day.today.update((t) => ({ ...t, problemsKnown: false }))}
+				/>
+				<Caption tone="faint">{`Synthetic read. Sent: ${sends().join(", ") || "nothing"}`}</Caption>
+			</Buttons>
+		</Block>
+	</FixtureWindow>
 ));

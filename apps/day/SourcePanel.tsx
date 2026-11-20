@@ -1,11 +1,11 @@
 // One shown saved revision's content only: the saved text exactly as stored, a
 // saved raster image, or why it is not shown. Its viewer's header names it and
 // offers Share. Raster images draw; code never runs here.
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import type { Shown } from "./artifactReads";
 import { excerpt, sizeOf, unavailableLine } from "./deliveryView";
 import { SavedImage } from "./SavedImage";
-import { Action, QuietPanel } from "./ui";
+import { Body, Caption, Link, Quote } from "./ui";
 
 /** `fill`: takes the height it is given, so a saved image grows into it (the full window). */
 export function SourcePanel(props: { inspection: Shown; fill?: boolean }) {
@@ -25,43 +25,41 @@ export function SourcePanel(props: { inspection: Shown; fill?: boolean }) {
 		return c?.state === "unavailable" ? unavailableLine(i().kind, c.reason) : "";
 	};
 	return (
-		<QuietPanel testID="artifact-source" class={`gap-2 ${props.fill ? "min-h-0 flex-1" : ""}`}>
+		<View testID="artifact-source" class={`gap-2 ${props.fill ? "min-h-0 flex-1" : ""}`}>
 			<If when={i().state === "reading"}>
-				<Text class="text-sm text-muted-foreground">Reading the saved source…</Text>
+				<Body tone="muted">Reading the saved source…</Body>
 			</If>
 			<If when={i().state === "refused"}>
-				<Text role="alert" testID="artifact-source-refused" class="text-sm text-muted-foreground">
+				<Body role="alert" testID="artifact-source-refused" tone="muted">
 					{i().message}
-				</Text>
+				</Body>
 			</If>
 			<If when={text()}>
 				{/* Only the saved text is selectable, so a double click never lands on a control. */}
-				<View selectable>
-					<Text testID="artifact-source-text" class="font-mono text-xs leading-relaxed text-foreground">
-						{text()?.text ?? ""}
-					</Text>
-				</View>
+				<Quote code testID="artifact-source-text" text={text()?.text ?? ""} />
 				<If when={text()?.note}>
 					<View class="flex-row items-center gap-3">
-						<Text class="flex-1 text-xs text-faint">{text()?.note ?? ""}</Text>
-						<Action label="Show all" testID="artifact-source-all" onPress={() => all.set(true)} />
+						<Caption tone="faint" grow>
+							{text()?.note ?? ""}
+						</Caption>
+						<Link label="Show all" testID="artifact-source-all" onPress={() => all.set(true)} />
 					</View>
 				</If>
-				<Text class="text-xs text-faint">{`Saved copy, ${sizeOf(bytes())}.`}</Text>
+				<Caption tone="faint">{`Saved copy, ${sizeOf(bytes())}.`}</Caption>
 			</If>
 			<If when={saved()?.content.state === "image"}>
 				<SavedImage inspection={i()} fill={props.fill} />
 			</If>
 			<If when={unavailable()}>
-				<Text testID="artifact-source-unavailable" class="text-sm text-muted-foreground">
+				<Body testID="artifact-source-unavailable" tone="muted">
 					{unavailable()}
-				</Text>
+				</Body>
 			</If>
 			<If when={i().kind !== "image"}>
-				<Text class="text-xs text-faint">
+				<Caption tone="faint">
 					Plain text from this saved revision. Pilot does not run or draw it, and looking records nothing.
-				</Text>
+				</Caption>
 			</If>
-		</QuietPanel>
+		</View>
 	);
 }

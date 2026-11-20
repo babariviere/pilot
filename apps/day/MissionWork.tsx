@@ -1,10 +1,11 @@
 // The mission's work, first: what is working now, what is next in the plan,
-// and what is blocked. Every task's work state and reason come from the
+// and what is blocked. Each is a Section of the mission's panel: Now and Next
+// in its main column, Blockers in its side column. Every task's work state and reason come from the
 // native read (`TaskLine.workState`, `workReason`); this file keeps the
 // canonical task order and says each state in words. It never decides that a
 // task can run, that a chat is free or that a dependency is met. Opening a
 // chat or a task's details only reads.
-import { effect, signal, Text, untracked, View, type ViewRef } from "nsh";
+import { effect, type JSX, signal, untracked, View, type ViewRef } from "nsh";
 import type { Decision, MissionPage, TaskLine, TaskPrerequisite } from "pilot-day/native";
 import { openChat } from "./chatView";
 import { type ContentAnchor, yieldAnchor } from "./contentAnchor";
@@ -13,9 +14,29 @@ import type { Day } from "./day";
 import { restoreScroll, scrollOf } from "./kept";
 import { goHome, goSettings } from "./nav";
 import { OpenChatAction } from "./OpenChatAction";
-import { Action, Disclosure, DividedRow, glide, InlineAction, Mark, QuietPanel, Pressable, SectionTitle } from "./ui";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Caption,
+	Disclosure,
+	DividedRow,
+	EmptyLine,
+	glide,
+	Link,
+	Mark,
+	type MarkKind,
+	Num,
+	Pressable,
+	Row,
+	RowDetail,
+	RowGroup,
+	Rows,
+	Section,
+} from "./ui";
 import { focused, focusFront, todayPlace } from "./view";
-import { nextLine, provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
+import { nextLine, provenance, stateOf, taskWord, type WorkState, workWord } from "./words";
 
 type Lane = "now" | "next" | "blocked";
 
@@ -97,14 +118,16 @@ export function MoreRows(props: { listKey: string; total: number; first: number;
 	const more = () => Math.min(props.step, props.total - n());
 	return (
 		<If when={props.total > n()}>
-			<View testID={props.testID} class="flex-row flex-wrap items-center gap-x-3 gap-y-1 py-2">
-				<Text class="text-xs text-muted-foreground">{`Showing ${n()} of ${props.total}.`}</Text>
-				<Action
-					label={`Show ${more()} more`}
-					testID={`${props.testID}-more`}
-					onPress={() => shownCount.update((all) => ({ ...all, [props.listKey]: n() + more() }))}
-				/>
-			</View>
+			<Block testID={props.testID}>
+				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+					<Caption>{`Showing ${n()} of ${props.total}.`}</Caption>
+					<Link
+						label={`Show ${more()} more`}
+						testID={`${props.testID}-more`}
+						onPress={() => shownCount.update((all) => ({ ...all, [props.listKey]: n() + more() }))}
+					/>
+				</View>
+			</Block>
 		</If>
 	);
 }
@@ -161,8 +184,36 @@ function laneOf(task: TaskLine): Lane | null {
 	}
 }
 
+/**
+ * A task's state mark, from the library's seven states: Working while an agent has it, Needs you while it waits
+ * for an answer, Paused while held, Done once completed, and the quiet New mark while it waits in the plan or for
+ * other work. A work state this read does not know shows no mark; its words say so.
+ */
+export function taskMark(state: WorkState): MarkKind | undefined {
+	switch (state) {
+		case "working":
+		case "review":
+			return "working";
+		case "waitingForUser":
+			return "needs";
+		case "held":
+			return "paused";
+		case "completed":
+			return "done";
+		case "unknown":
+			return undefined;
+		default:
+			return "new";
+	}
+}
+
+/** A state word's tone in a task row: amber only while it waits for the user. */
+function taskTone(state: WorkState): "needs" | "quiet" {
+	return state === "waitingForUser" ? "needs" : "quiet";
+}
+
 /** The host's reasons, one line each. */
-function Reasons(props: { task: TaskLine; class?: string }) {
+function Reasons(props: { task: TaskLine; quiet?: boolean }) {
 	const lines = () =>
 		(props.task.workReason ?? "")
 			.split("\n")
@@ -170,7 +221,7 @@ function Reasons(props: { task: TaskLine; class?: string }) {
 			.filter((l) => l);
 	return (
 		<Each of={lines()} key="index">
-			{(line) => <Text class={props.class ?? "text-sm text-foreground"}>{line()}</Text>}
+			{(line) => <Body tone={props.quiet ? "muted" : "default"}>{line()}</Body>}
 		</Each>
 	);
 }
@@ -187,31 +238,12 @@ function Prerequisites(props: { task: TaskLine }) {
 	return (
 		<If when={(props.task.prerequisites ?? []).length > 0}>
 			<View testID={`prerequisites-${props.task.id}`} class="gap-0.5">
-				<Text class="text-xs text-muted-foreground">Waits for</Text>
+				<Caption>Waits for</Caption>
 				<Each of={props.task.prerequisites ?? []} key={(p) => p.id}>
-					{(p) => <Text class="text-xs text-foreground">{line(p())}</Text>}
+					{(p) => <Caption tone="default">{line(p())}</Caption>}
 				</Each>
 			</View>
 		</If>
-	);
-}
-
-/** A task's state: its mark and words. The words carry the meaning. */
-function WorkStatus(props: { state: WorkState }) {
-	return (
-		<View class="flex-row items-center gap-1.5">
-			<Mark kind={workMark(props.state)} />
-			<Text
-				class="text-xs"
-				classList={{
-					"text-needs-ink": props.state === "waitingForUser",
-					"text-foreground": props.state === "working",
-					"text-muted-foreground": props.state !== "waitingForUser" && props.state !== "working",
-				}}
-			>
-				{workWord(props.state)}
-			</Text>
-		</View>
 	);
 }
 
@@ -219,14 +251,12 @@ function WorkStatus(props: { state: WorkState }) {
 function ChatLink(props: { day: Day; page: MissionPage; task: TaskLine; lane: Lane }) {
 	return (
 		<If when={props.task.sessionId && props.day.chat}>
-			<View class="flex-row">
-				<OpenChatAction
-					label="Open agent chat"
-					testID={`${props.lane}-chat-${props.task.id}`}
-					accessibilityLabel={`Open agent chat for #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
-					onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
-				/>
-			</View>
+			<OpenChatAction
+				label="Open agent chat"
+				testID={`${props.lane}-chat-${props.task.id}`}
+				accessibilityLabel={`Open agent chat for #${props.task.number} ${props.task.title}, read only. Opening it sends nothing.`}
+				onPress={() => openMemberChat(props.page, props.task.sessionId ?? "")}
+			/>
 		</If>
 	);
 }
@@ -239,10 +269,10 @@ function TaskModel(props: { task: TaskLine; lane: Lane }) {
 	return (
 		<If when={props.task.modelLine ?? ""}>
 			<View class="flex-row flex-wrap items-center gap-x-2">
-				<Text testID={`${props.lane}-model-${props.task.id}`} class="text-xs text-faint">
+				<Caption testID={`${props.lane}-model-${props.task.id}`} tone="faint">
 					{props.task.modelLine ?? ""}
-				</Text>
-				<InlineAction
+				</Caption>
+				<Link
 					label="Change"
 					testID={`${props.lane}-model-change-${props.task.id}`}
 					onPress={() =>
@@ -271,52 +301,113 @@ function Details(props: { task: TaskLine; lane: Lane; target: Target }) {
 			onBlur={props.target.onBlur}
 			onToggle={() => toggleWork(props.task.id, props.target)}
 		>
-			<View selectable class="gap-1 pl-5">
-				<Text class="text-sm leading-relaxed text-muted-foreground">
-					{(props.task.body ?? "") || "No details are recorded for this task."}
-				</Text>
+			<View selectable class="pl-5">
+				<Body tone="muted">{(props.task.body ?? "") || "No details are recorded for this task."}</Body>
 			</View>
 		</Disclosure>
 	);
 }
 
-/** A task with work on it now, large: what it is, where it stands, who has it and its chat. */
-function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
+/** A task with work on it now: what it is, where it stands, who has it and its chat, with its reasons under it. */
+function NowRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const t = () => props.task;
 	const target = laneFocus(props.task.id, "now");
 	return (
-		<QuietPanel testID={`now-${t().id}`} tone="card" size="lg" class="gap-2">
-			<View class="flex-row items-start gap-3">
-				<View selectable class="min-w-0 flex-1 flex-row flex-wrap items-baseline gap-x-2 gap-y-1">
-					<Text class="text-xs text-faint">{`#${t().number}`}</Text>
-					<Text class="min-w-40 flex-1 text-base font-semibold text-foreground">{t().title}</Text>
-					<WorkStatus state={stateOf(t())} />
-				</View>
-				<ChatLink day={props.day} page={props.page} task={t()} lane="now" />
-			</View>
-			<View selectable class="gap-2">
-				<Reasons task={t()} />
-				<If when={t().report}>
-					<Text class="text-sm text-muted-foreground">{t().report?.summary ?? ""}</Text>
-					<If when={t().report?.movement === "notMoving" && t().report?.nextStep}>
-						<Text class="text-sm text-muted-foreground">
-							{t().report ? nextLine(t().report as NonNullable<TaskLine["report"]>) : ""}
-						</Text>
+		<Row
+			testID={`now-${t().id}`}
+			mark={taskMark(stateOf(t()))}
+			title={t().title}
+			meta={`#${t().number}`}
+			state={workWord(stateOf(t()))}
+			stateTone={taskTone(stateOf(t()))}
+			trailing={<ChatLink day={props.day} page={props.page} task={t()} lane="now" />}
+			detail={
+				<RowDetail>
+					<View selectable class="gap-1">
+						<Reasons task={t()} />
+						<If when={t().report}>
+							<Body tone="muted">{t().report?.summary ?? ""}</Body>
+							<If when={t().report?.movement === "notMoving" && t().report?.nextStep}>
+								<Body tone="muted">
+									{t().report ? nextLine(t().report as NonNullable<TaskLine["report"]>) : ""}
+								</Body>
+							</If>
+							<Caption tone="faint">
+								{t().report
+									? `${provenance(t().report as NonNullable<TaskLine["report"]>)} · agent words, not verified`
+									: ""}
+							</Caption>
+						</If>
+						<If when={t().ownerTitle ?? ""}>
+							<Caption>{`Owner: ${t().ownerTitle ?? ""}`}</Caption>
+						</If>
+						<Prerequisites task={t()} />
+					</View>
+					<TaskModel task={t()} lane="now" />
+					<Details task={t()} lane="now" target={target} />
+				</RowDetail>
+			}
+		/>
+	);
+}
+
+// LIBRARY GAP: Row has no form that opens in place. A Next task needs a row whose press shows its details below
+// (with the expanded state for screen readers, and focus and blur reports so the keyboard focus can follow the task
+// to another lane), an aside outside the press target for its chat, and a line under it that is always shown and
+// stays outside the press target (its model and Change). The library should offer an
+// "open in place" Row (an `open` prop, `onToggle`, `onFocus`, `onBlur`, an aside slot and the content under it).
+// Until then this helper builds one from DividedRow and Pressable, with Row's slots and spacing.
+function OpenRow(props: {
+	testID: string;
+	title: string;
+	meta?: string;
+	mark?: MarkKind;
+	state?: string;
+	open: boolean;
+	accessibilityLabel: string;
+	target: Target;
+	onToggle: () => void;
+	/** Beside the row, outside its press target: its chat. */
+	aside?: JSX.Element;
+	/** Under the row, always shown and outside its press target: its model. */
+	detail?: JSX.Element;
+	/** What shows under the row while it is open. */
+	children?: JSX.Element;
+}) {
+	return (
+		<DividedRow open={props.open} content={<View class="gap-1.5 pb-2 pl-10 pr-4">{props.children}</View>}>
+			<View class="flex-row items-start gap-2 pr-4">
+				<Pressable
+					anchor={props.target.anchor}
+					onFocus={props.target.onFocus}
+					onBlur={props.target.onBlur}
+					testID={props.testID}
+					accessibilityLabel={props.accessibilityLabel}
+					expanded={props.open}
+					onPress={props.onToggle}
+					class="min-w-0 flex-1 flex-row items-start gap-2.5 py-1.5 pl-4"
+				>
+					<View class="h-4.5 w-3.5 items-center justify-center">
+						<If when={props.mark}>
+							<Mark kind={props.mark as MarkKind} />
+						</If>
+					</View>
+					<View class="min-w-0 flex-1">
+						<BodyStrong truncate>{props.title}</BodyStrong>
+						<If when={props.meta}>
+							<Caption tone="faint" truncate>
+								{props.meta ?? ""}
+							</Caption>
+						</If>
+					</View>
+					<If when={props.state}>
+						<Caption>{props.state ?? ""}</Caption>
 					</If>
-					<Text class="text-xs text-faint">
-						{t().report
-							? `${provenance(t().report as NonNullable<TaskLine["report"]>)} · agent words, not verified`
-							: ""}
-					</Text>
-				</If>
-				<If when={t().ownerTitle ?? ""}>
-					<Text class="text-xs text-muted-foreground">{`Owner: ${t().ownerTitle ?? ""}`}</Text>
-				</If>
-				<Prerequisites task={t()} />
+				</Pressable>
+				<View class="flex-row items-center gap-2 self-center">{props.aside}</View>
 			</View>
-			<TaskModel task={t()} lane="now" />
-			<Details task={t()} lane="now" target={target} />
-		</QuietPanel>
+			<View class="pl-10 pr-4">{props.detail}</View>
+		</DividedRow>
 	);
 }
 
@@ -326,66 +417,59 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const open = () => !!openWork()[t().id];
 	const target = laneFocus(props.task.id, "next");
 	return (
-		<DividedRow
+		<OpenRow
+			testID={`next-${t().id}`}
+			mark={taskMark(stateOf(t()))}
+			title={t().title}
+			meta={`#${t().number}`}
+			state={workWord(stateOf(t()))}
 			open={open()}
-			content={
-				<View class="gap-1.5 pb-3 pl-10">
-					<View selectable class="gap-1.5">
-						<Reasons task={t()} class="text-sm text-muted-foreground" />
-						<If when={t().ownerTitle ?? ""}>
-							<Text class="text-xs text-muted-foreground">{`Owner: ${t().ownerTitle ?? ""}`}</Text>
-						</If>
-						<Prerequisites task={t()} />
-						<Text class="text-sm leading-relaxed text-muted-foreground">
-							{(t().body ?? "") || "No details are recorded for this task."}
-						</Text>
-					</View>
-				</View>
+			accessibilityLabel={`#${t().number} ${t().title}, ${workWord(stateOf(t()))}. ${open() ? "Hide" : "Show"} its details.`}
+			target={target}
+			onToggle={() => toggleWork(t().id, target)}
+			aside={<ChatLink day={props.day} page={props.page} task={t()} lane="next" />}
+			detail={
+				<If when={t().modelLine ?? ""}>
+					<RowDetail>
+						<TaskModel task={t()} lane="next" />
+					</RowDetail>
+				</If>
 			}
 		>
-			<View class="flex-row items-start gap-3">
-				<Pressable
-					anchor={target.anchor}
-					onFocus={target.onFocus}
-					onBlur={target.onBlur}
-					testID={`next-${t().id}`}
-					accessibilityLabel={`#${t().number} ${t().title}, ${workWord(stateOf(t()))}. ${open() ? "Hide" : "Show"} its details.`}
-					expanded={open()}
-					onPress={() => toggleWork(t().id, target)}
-					class="min-w-0 flex-1 flex-row items-start gap-3 rounded-md px-1 py-2 hover:bg-accent"
-				>
-					<Text class="w-7 text-xs text-faint">{`#${t().number}`}</Text>
-					<View class="min-w-0 flex-1 gap-1">
-						<Text class="text-sm text-foreground">{t().title}</Text>
-						<Text class="text-xs text-muted-foreground">{workWord(stateOf(t()))}</Text>
-					</View>
-				</Pressable>
-				<View class="py-2">
-					<TaskModel task={t()} lane="next" />
-				</View>
-				<ChatLink day={props.day} page={props.page} task={t()} lane="next" />
+			<View selectable class="gap-1.5">
+				<Reasons task={t()} quiet />
+				<If when={t().ownerTitle ?? ""}>
+					<Caption>{`Owner: ${t().ownerTitle ?? ""}`}</Caption>
+				</If>
+				<Prerequisites task={t()} />
+				<Body tone="muted">{(t().body ?? "") || "No details are recorded for this task."}</Body>
 			</View>
-		</DividedRow>
+		</OpenRow>
 	);
 }
 
 /** One blocked task in the narrow column: why it cannot move, and what it waits for. */
-function BlockedItem(props: { day: Day; page: MissionPage; task: TaskLine }) {
+function BlockedRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const t = () => props.task;
 	const target = laneFocus(props.task.id, "blocked");
 	return (
-		<QuietPanel testID={`blocked-${t().id}`} tone="card" size="md" class="gap-1.5">
-			<View class="flex-row items-start gap-3">
-				<Text class="min-w-0 flex-1 text-xs font-semibold text-foreground">{workWord(stateOf(t()))}</Text>
-				<ChatLink day={props.day} page={props.page} task={t()} lane="blocked" />
-			</View>
-			<View selectable class="gap-1">
-				<Text class="text-sm text-foreground">{`#${t().number} ${t().title}`}</Text>
-				<Reasons task={t()} class="text-xs text-muted-foreground" />
-				<Prerequisites task={t()} />
-			</View>
-			<Details task={t()} lane="blocked" target={target} />
-		</QuietPanel>
+		<Row
+			testID={`blocked-${t().id}`}
+			mark={taskMark(stateOf(t()))}
+			title={t().title}
+			meta={`#${t().number}`}
+			state={workWord(stateOf(t()))}
+			trailing={<ChatLink day={props.day} page={props.page} task={t()} lane="blocked" />}
+			detail={
+				<RowDetail>
+					<View selectable class="gap-1">
+						<Reasons task={t()} quiet />
+						<Prerequisites task={t()} />
+					</View>
+					<Details task={t()} lane="blocked" target={target} />
+				</RowDetail>
+			}
+		/>
 	);
 }
 
@@ -398,45 +482,51 @@ function Waiting(props: { decision: Decision }) {
 		return "Decide on Today";
 	};
 	return (
-		<QuietPanel testID="mission-waiting" tone="card" size="md" class="gap-1.5">
-			<View class="flex-row items-center gap-1.5">
-				<Mark kind={decisionMark(d())} />
-				<Text class="text-xs font-semibold text-needs-ink">Waiting for you</Text>
-			</View>
-			<Text class="text-sm font-medium text-foreground">{d().title}</Text>
-			<View class="flex-row pt-1">
-				<Action
-					variant="primary"
-					label={verb()}
-					accessibilityLabel={`${verb()}: ${d().title}`}
-					onPress={() => {
-						// The card takes the keyboard focus on Today, not the mission's row.
-						todayPlace.row = null;
-						focused.set(d().id);
-						focusFront.set(true);
-						goHome();
-					}}
-				/>
-			</View>
-		</QuietPanel>
+		<Row
+			testID="mission-waiting"
+			mark={decisionMark(d())}
+			title={d().title}
+			state="Waiting for you"
+			stateTone="needs"
+			wrap
+			detail={
+				<RowDetail>
+					<Button
+						small
+						label={verb()}
+						accessibilityLabel={`${verb()}: ${d().title}`}
+						onPress={() => {
+							// The card takes the keyboard focus on Today, not the mission's row.
+							todayPlace.row = null;
+							focused.set(d().id);
+							focusFront.set(true);
+							goHome();
+						}}
+					/>
+				</RowDetail>
+			}
+		/>
 	);
 }
 
 /**
  * The mission's own Pause. It holds new work; a chat the read still shows
- * working is in Now with its reasons. Resume stays in the control panel above.
+ * working is in Now with its reasons. Resume stays in the control section.
  */
 function Paused(props: { page: MissionPage }) {
 	const state = () => props.page.row.state;
 	return (
-		<QuietPanel testID="mission-held" tone="card" size="md" class="gap-1">
-			<Text class="text-xs font-semibold text-foreground">{state() === "paused" ? "Paused" : "Pausing"}</Text>
-			<Text class="text-xs text-muted-foreground">
-				{state() === "paused"
+		<Row
+			testID="mission-held"
+			mark="paused"
+			title={state() === "paused" ? "Paused" : "Pausing"}
+			meta={
+				state() === "paused"
 					? "No new work starts in this mission until you resume it."
-					: "Its work is stopping at safe points. No new work starts."}
-			</Text>
-		</QuietPanel>
+					: "Its work is stopping at safe points. No new work starts."
+			}
+			wrap
+		/>
 	);
 }
 
@@ -456,112 +546,129 @@ function nextEmpty(page: MissionPage): string {
 	return "Nothing is queued in the plan.";
 }
 
+const of = (page: MissionPage, lane: Lane) => page.tasks.filter((t) => laneOf(t) === lane);
+
 /**
- * The focus stack: work now as large cards, the plan's next tasks below,
- * and blockers in a narrow column beside them. In a narrow window the
- * blockers wrap under the work.
+ * Now: the tasks with work on them, then the chats working in the mission that no task row stands for. The
+ * content anchor's "work" part is this section.
  */
-export function MissionWork(props: { day: Day; page: MissionPage; anchor?: ContentAnchor }) {
+export function MissionNow(props: { day: Day; page: MissionPage; anchor?: ContentAnchor }) {
 	const work = props.anchor?.part("work");
+	const id = () => props.page.row.id;
+	const now = () => of(props.page, "now");
+	// Chats the read shows working that no working task row stands for, including one whose task is done.
+	const others = () =>
+		props.page.chats.filter((c) => !now().some((t) => stateOf(t) === "working" && t.sessionId === c.id));
+	return (
+		<View ref={work?.ref} onLayout={work?.onLayout}>
+			<Section testID="mission-now" title="Now" count={now().length}>
+				<If when={now().length === 0 && others().length === 0}>
+					<EmptyLine text={nowEmpty(props.page)} />
+				</If>
+				<Rows>
+					<Each of={limited(`${id()}/now`, now(), NOW_SHOWN)} key={(t) => t.id}>
+						{(t) => <NowRow day={props.day} page={props.page} task={t()} />}
+					</Each>
+				</Rows>
+				<MoreRows
+					listKey={`${id()}/now`}
+					total={now().length}
+					first={NOW_SHOWN}
+					step={NOW_SHOWN}
+					testID="now-limit"
+				/>
+				<If when={others().length > 0}>
+					<View testID="mission-also-working">
+						<RowGroup
+							label={now().length > 0 ? "Also working in this mission" : "Chats working in this mission"}
+						/>
+						<Rows>
+							<Each of={others()} key={(c) => c.id}>
+								{(c) => (
+									<Row
+										mark="working"
+										title={c().title}
+										trailing={
+											<>
+												<Num>{`since ${c().since}`}</Num>
+												<If when={props.day.chat}>
+													<OpenChatAction
+														testID={`mission-chat-${c().id}`}
+														accessibilityLabel={`Open the chat “${c().title}”, read only. Opening it sends nothing.`}
+														onPress={() => openMemberChat(props.page, c().id)}
+													/>
+												</If>
+											</>
+										}
+									/>
+								)}
+							</Each>
+						</Rows>
+					</View>
+				</If>
+			</Section>
+		</View>
+	);
+}
+
+/** Next: the plan's next tasks, each opening in place. `lead` shows first, such as the task ready to start. */
+export function MissionNext(props: { day: Day; page: MissionPage; anchor?: ContentAnchor; lead?: JSX.Element }) {
 	const nextPart = props.anchor?.part("next");
 	const id = () => props.page.row.id;
-	const of = (lane: Lane) => props.page.tasks.filter((t) => laneOf(t) === lane);
-	const now = () => of("now");
-	const next = () => of("next");
-	const blocked = () => of("blocked");
+	const next = () => of(props.page, "next");
+	const loose = () => unplaced(props.page).length;
+	return (
+		<View ref={nextPart?.ref} onLayout={nextPart?.onLayout}>
+			<Section testID="mission-next" title="Next" count={next().length}>
+				{props.lead}
+				<If when={next().length === 0 && nextEmpty(props.page)}>
+					<EmptyLine text={nextEmpty(props.page)} />
+				</If>
+				<Rows>
+					<Each of={limited(`${id()}/next`, next(), NEXT_SHOWN)} key={(t) => t.id}>
+						{(t) => <NextRow day={props.day} page={props.page} task={t()} />}
+					</Each>
+				</Rows>
+				<MoreRows listKey={`${id()}/next`} total={next().length} first={NEXT_SHOWN} step={25} testID="next-limit" />
+				<If when={loose() > 0}>
+					<EmptyLine
+						testID="mission-unplaced"
+						text={`${loose() === 1 ? "1 task has" : `${loose()} tasks have`} no work state in this read. Tasks shows their recorded status.`}
+					/>
+				</If>
+			</Section>
+		</View>
+	);
+}
+
+/** Blockers: the mission's pause, its decision for the user and the blocked tasks, in the side column. */
+export function MissionBlockers(props: { day: Day; page: MissionPage }) {
+	const id = () => props.page.row.id;
+	const now = () => of(props.page, "now");
+	const blocked = () => of(props.page, "blocked");
 	const decision = (): Decision | undefined =>
 		props.day.today().decisions.find((d) => d.id === props.page.row.decisionId);
 	const paused = () => props.page.row.state === "paused" || props.page.row.state === "pausing";
 	const blockers = () => blocked().length + (decision() ? 1 : 0) + (paused() ? 1 : 0);
-	// Held work and questions are cards in Now; the empty column must not say nothing waits.
+	// Held work and questions are rows in Now; the empty section must not say nothing waits.
 	const elsewhere = () => now().some((t) => stateOf(t) === "held" || stateOf(t) === "waitingForUser");
-	// Chats the read shows working that no working task card stands for, including one whose task is done.
-	const others = () =>
-		props.page.chats.filter((c) => !now().some((t) => stateOf(t) === "working" && t.sessionId === c.id));
 	const loose = () => unplaced(props.page).length;
 	return (
-		<View
-			ref={work?.ref}
-			onLayout={work?.onLayout}
-			testID="mission-work"
-			class="flex-row flex-wrap items-start gap-x-8 gap-y-8"
-		>
-			<View class="min-w-72 flex-1 gap-8">
-				<View testID="mission-now" class="gap-3">
-					<SectionTitle title="Now" count={now().length} />
-					<If when={now().length === 0 && others().length === 0}>
-						<Text class="text-sm text-muted-foreground">{nowEmpty(props.page)}</Text>
-					</If>
-					<Each of={limited(`${id()}/now`, now(), NOW_SHOWN)} key={(t) => t.id}>
-						{(t) => <NowCard day={props.day} page={props.page} task={t()} />}
-					</Each>
-					<MoreRows
-						listKey={`${id()}/now`}
-						total={now().length}
-						first={NOW_SHOWN}
-						step={NOW_SHOWN}
-						testID="now-limit"
-					/>
-					<If when={others().length > 0}>
-						<View testID="mission-also-working" class="gap-1 pt-1">
-							<Text class="text-xs text-muted-foreground">
-								{now().length > 0 ? "Also working in this mission" : "Chats working in this mission"}
-							</Text>
-							<Each of={others()} key={(c) => c.id}>
-								{(c) => (
-									<View class="flex-row items-start gap-3 py-1">
-										<Text class="min-w-0 flex-1 text-sm text-foreground">{c().title}</Text>
-										<Text class="text-xs text-faint">{`since ${c().since}`}</Text>
-										<If when={props.day.chat}>
-											<OpenChatAction
-												testID={`mission-chat-${c().id}`}
-												accessibilityLabel={`Open the chat “${c().title}”, read only. Opening it sends nothing.`}
-												onPress={() => openMemberChat(props.page, c().id)}
-											/>
-										</If>
-									</View>
-								)}
-							</Each>
-						</View>
-					</If>
-				</View>
-				<View ref={nextPart?.ref} onLayout={nextPart?.onLayout} testID="mission-next" class="gap-1">
-					<View class="pb-1">
-						<SectionTitle title="Next" count={next().length} />
-					</View>
-					<If when={next().length === 0 && nextEmpty(props.page)}>
-						<Text class="text-sm text-muted-foreground">{nextEmpty(props.page)}</Text>
-					</If>
-					<Each of={limited(`${id()}/next`, next(), NEXT_SHOWN)} key={(t) => t.id}>
-						{(t) => <NextRow day={props.day} page={props.page} task={t()} />}
-					</Each>
-					<MoreRows
-						listKey={`${id()}/next`}
-						total={next().length}
-						first={NEXT_SHOWN}
-						step={25}
-						testID="next-limit"
-					/>
-					<If when={loose() > 0}>
-						<Text testID="mission-unplaced" class="pt-1 text-xs text-muted-foreground">
-							{`${loose() === 1 ? "1 task has" : `${loose()} tasks have`} no work state in this read. Tasks shows their recorded status.`}
-						</Text>
-					</If>
-				</View>
-			</View>
-			<View testID="mission-blockers" class="w-64 gap-2">
-				<SectionTitle title="Blockers" count={blockers()} />
-				<If when={blockers() === 0}>
-					<Text class="text-sm text-muted-foreground">
-						{!props.page.tasksKnown
+		<Section testID="mission-blockers" title="Blockers" count={blockers()}>
+			<If when={blockers() === 0}>
+				<EmptyLine
+					text={
+						!props.page.tasksKnown
 							? "Blocked tasks are not known from this read."
 							: elsewhere()
 								? "No other blockers. Held work and questions for you are in Now."
 								: loose() > 0
 									? "No blocked task in this read. Some tasks have no work state."
-									: "No prerequisite blockers in this read."}
-					</Text>
-				</If>
+									: "No prerequisite blockers in this read."
+					}
+				/>
+			</If>
+			<Rows>
 				<If when={paused()}>
 					<Paused page={props.page} />
 				</If>
@@ -569,16 +676,16 @@ export function MissionWork(props: { day: Day; page: MissionPage; anchor?: Conte
 					{(d) => <Waiting decision={d()} />}
 				</Each>
 				<Each of={limited(`${id()}/blocked`, blocked(), BLOCKED_SHOWN)} key={(t) => t.id}>
-					{(t) => <BlockedItem day={props.day} page={props.page} task={t()} />}
+					{(t) => <BlockedRow day={props.day} page={props.page} task={t()} />}
 				</Each>
-				<MoreRows
-					listKey={`${id()}/blocked`}
-					total={blocked().length}
-					first={BLOCKED_SHOWN}
-					step={BLOCKED_SHOWN}
-					testID="blocked-limit"
-				/>
-			</View>
-		</View>
+			</Rows>
+			<MoreRows
+				listKey={`${id()}/blocked`}
+				total={blocked().length}
+				first={BLOCKED_SHOWN}
+				step={BLOCKED_SHOWN}
+				testID="blocked-limit"
+			/>
+		</Section>
 	);
 }

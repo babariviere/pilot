@@ -1,11 +1,27 @@
 // Settings › Models › Work profiles: kinds of work, each with a large and a small model list. Every change sends the
 // whole list once against the revision shown (modelControls.write). Which profile is open and the add form's words
 // are kept across reads.
-import { effect, signal, Text, untracked, View, type ViewRef } from "nsh";
+import { effect, signal, untracked, View, type ViewRef } from "nsh";
 import type { ProfileModel, WorkProfile, WorkSize } from "../../packages/protocol/src/work-profiles";
 import type { ModelControls, ModelSettings } from "./modelControls";
 import { settingsReveal, settingsTarget } from "./preferencesView";
-import { Action, CheckboxRow, ExpandableRow, Field, InlineAction, LinkAction, Picker, SectionTitle } from "./ui";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	EmptyLine,
+	ExpandableRow,
+	Field,
+	Link,
+	Option,
+	Options,
+	Picker,
+	Section,
+	Spacer,
+} from "./ui";
 
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const word = (level: string) => level.charAt(0).toUpperCase() + level.slice(1);
@@ -88,16 +104,16 @@ function Entry(props: {
 				onChange={(thinking) => set({ thinking })}
 			/>
 			<If when={!signedIn()}>
-				<Text class="text-xs text-needs-ink">Not signed in</Text>
+				<Caption tone="needs">Not signed in</Caption>
 			</If>
-			<View class="flex-1" />
+			<Spacer />
 			<If when={at() > 0}>
-				<InlineAction label="Up" testID={`profile-up-${id()}`} onPress={() => !props.disabled && move(-1)} />
+				<Link label="Up" testID={`profile-up-${id()}`} onPress={() => !props.disabled && move(-1)} />
 			</If>
 			<If when={at() < list().length - 1}>
-				<InlineAction label="Down" testID={`profile-down-${id()}`} onPress={() => !props.disabled && move(1)} />
+				<Link label="Down" testID={`profile-down-${id()}`} onPress={() => !props.disabled && move(1)} />
 			</If>
-			<InlineAction
+			<Link
 				label="Remove"
 				testID={`profile-remove-${id()}`}
 				onPress={() => !props.disabled && props.change(list().filter((e) => e.model !== props.entry.model))}
@@ -118,11 +134,11 @@ function SizeList(props: {
 	return (
 		<View testID={`profile-${props.profile.id}-${props.size.size}`} class="gap-2">
 			<View class="flex-row items-baseline gap-2">
-				<Text class="text-sm font-medium text-foreground">{props.size.title}</Text>
-				<Text class="text-xs text-muted-foreground">{props.size.detail}</Text>
+				<BodyStrong>{props.size.title}</BodyStrong>
+				<Caption>{props.size.detail}</Caption>
 			</View>
 			<If when={list().length === 0}>
-				<Text class="text-xs text-muted-foreground">No models. This size starts your default model.</Text>
+				<Caption>No models. This size starts your default model.</Caption>
 			</If>
 			<Each of={list()} key={(e) => e.model}>
 				{(e) => (
@@ -179,10 +195,9 @@ function ProfileRow(props: {
 			anchor={(node) => summary.set(node)}
 			open={open()}
 			onToggle={() => openProfile.set(open() ? "" : p().id)}
-			class="py-1"
-			summaryClass="gap-0.5 px-1 py-2"
+			summaryClass="gap-0.5 px-4 py-1.5"
 			content={
-				<View class="gap-4 px-1 pb-4 pt-2">
+				<Block gap={4}>
 					<Each of={SIZES} key={(s) => s.size}>
 						{(size) => (
 							<SizeList
@@ -194,37 +209,37 @@ function ProfileRow(props: {
 							/>
 						)}
 					</Each>
-					<Text class="text-xs text-faint">First is preferred when both are equally busy.</Text>
-					<CheckboxRow
-						testID={`profile-opt-in-${p().id}`}
-						tickTestID={`profile-opt-in-tick-${p().id}`}
-						label="Opt-in only"
-						checked={p().optInOnly}
-						disabled={props.disabled}
-						onChange={() => change({ optInOnly: !p().optInOnly })}
-					>
-						<Text class="text-xs text-muted-foreground">
-							Off in every project until you allow it in that project's settings.
-						</Text>
-					</CheckboxRow>
-					<View class="flex-row">
-						<Action
+					<Caption tone="faint">First is preferred when both are equally busy.</Caption>
+					<Options multiple>
+						<Option
+							multiple
+							testID={`profile-opt-in-${p().id}`}
+							tickTestID={`profile-opt-in-tick-${p().id}`}
+							title="Opt-in only"
+							hint="Off in every project until you allow it in that project's settings."
+							checked={p().optInOnly}
+							disabled={props.disabled}
+							onChange={() => change({ optInOnly: !p().optInOnly })}
+						/>
+					</Options>
+					<Buttons>
+						<Button
 							label="Remove profile"
 							testID={`profile-delete-${p().id}`}
 							disabled={props.disabled}
 							onPress={() => props.save(all().filter((x) => x.id !== p().id))}
 						/>
-					</View>
-				</View>
+					</Buttons>
+				</Block>
 			}
 		>
 			<View class="flex-row items-baseline gap-2">
-				<Text class="text-sm font-semibold text-foreground">{p().name}</Text>
-				<Text class="text-xs text-muted-foreground">{p().covers}</Text>
+				<BodyStrong>{p().name}</BodyStrong>
+				<Caption>{p().covers}</Caption>
 			</View>
-			<Text testID={`profile-summary-${p().id}`} class="text-xs text-faint">
+			<Caption testID={`profile-summary-${p().id}`} tone="faint">
 				{`${profileSummary(props.settings, p())}${p().optInOnly ? " · Off until a project allows it" : ""}`}
-			</Text>
+			</Caption>
 		</ExpandableRow>
 	);
 }
@@ -268,25 +283,21 @@ export function WorkProfiles(props: { controls: ModelControls; settings: ModelSe
 		}
 	};
 	return (
-		<View testID="work-profiles" ref={(node: ViewRef) => section.set(node)} class="gap-3 border-t border-border pt-3">
-			<SectionTitle title="Work profiles">
-				<LinkAction
-					label="Add a profile"
-					testID="profile-add"
-					pressed={adding()}
-					onPress={() => adding.set(!adding())}
-				/>
-			</SectionTitle>
-			<Text class="text-sm text-muted-foreground">
-				The planner gives each task a profile and a size. Pilot starts the model in that list with the fewest of
-				your chats working. A model you set on a task wins.
-			</Text>
-			<If when={list().length === 0}>
-				<Text testID="profiles-empty" class="text-sm text-muted-foreground">
-					No work profiles. Every task uses your default model.
-				</Text>
-			</If>
-			<View>
+		<View ref={(node: ViewRef) => section.set(node)}>
+			<Section
+				testID="work-profiles"
+				title="Work profiles"
+				action={<Link label="Add a profile" testID="profile-add" onPress={() => adding.set(!adding())} />}
+			>
+				<Block>
+					<Body tone="muted" measure>
+						The planner gives each task a profile and a size. Pilot starts the model in that list with the fewest
+						of your chats working. A model you set on a task wins.
+					</Body>
+				</Block>
+				<If when={list().length === 0}>
+					<EmptyLine testID="profiles-empty" text="No work profiles. Every task uses your default model." />
+				</If>
 				<Each of={list()} key={(p) => p.id}>
 					{(p) => (
 						<ProfileRow
@@ -298,29 +309,35 @@ export function WorkProfiles(props: { controls: ModelControls; settings: ModelSe
 						/>
 					)}
 				</Each>
-			</View>
-			<If when={adding()}>
-				<View testID="profile-form" class="gap-3 rounded-xl border border-border px-4 py-3">
-					<Field label="Name" testID="profile-name" value={addName()} placeholder="Data" onChange={addName.set} />
-					<Field
-						label="What it covers"
-						testID="profile-covers"
-						value={addCovers()}
-						placeholder="Pipelines, warehouse queries and their checks."
-						onChange={addCovers.set}
-					/>
-					<View class="flex-row gap-2">
-						<Action
-							variant="primary"
-							label="Add profile"
-							testID="profile-save"
-							disabled={disabled() || !addName().trim() || !addCovers().trim()}
-							onPress={() => void add()}
+				<If when={adding()}>
+					<Block testID="profile-form" gap={3}>
+						<Field
+							label="Name"
+							testID="profile-name"
+							value={addName()}
+							placeholder="Data"
+							onChange={addName.set}
 						/>
-						<Action label="Cancel" onPress={() => adding.set(false)} />
-					</View>
-				</View>
-			</If>
+						<Field
+							label="What it covers"
+							testID="profile-covers"
+							value={addCovers()}
+							placeholder="Pipelines, warehouse queries and their checks."
+							onChange={addCovers.set}
+						/>
+						<Buttons>
+							<Button
+								kind="primary"
+								label="Add profile"
+								testID="profile-save"
+								disabled={disabled() || !addName().trim() || !addCovers().trim()}
+								onPress={() => void add()}
+							/>
+							<Button label="Cancel" onPress={() => adding.set(false)} />
+						</Buttons>
+					</Block>
+				</If>
+			</Section>
 		</View>
 	);
 }

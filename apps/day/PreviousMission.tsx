@@ -1,10 +1,10 @@
 // Finished replacements keep their old agreement and work readable, not executable.
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import { openChat } from "./chatView";
 import type { DayFeed } from "./feeds";
 import type { MigrationView } from "./migration";
 import { OpenChatAction } from "./OpenChatAction";
-import { Action } from "./ui";
+import { Block, Body, Button, Buttons, Caption, Heading, Notice, Row, Rows } from "./ui";
 
 export function PreviousMission(props: {
 	source: Pick<DayFeed, "migration">;
@@ -32,75 +32,71 @@ export function PreviousMission(props: {
 		}
 	}
 	return (
-		<View class="gap-3">
-			<View class="flex-row gap-2">
-				<Action
-					testID="previous-mission"
-					label={shown() ? "Read history again" : "Read previous mission"}
-					disabled={busy() || !props.source.migration}
-					onPress={() => void read()}
-				/>
-				<If when={shown()}>
-					<Action label="Hide history" onPress={() => shown.set(false)} />
-				</If>
-			</View>
+		<View>
+			<Block>
+				<Buttons>
+					<Button
+						testID="previous-mission"
+						label={shown() ? "Read history again" : "Read previous mission"}
+						disabled={busy() || !props.source.migration}
+						onPress={() => void read()}
+					/>
+					<If when={shown()}>
+						<Button label="Hide history" onPress={() => shown.set(false)} />
+					</If>
+				</Buttons>
+			</Block>
 			<If when={shown()}>
 				<If when={note()}>
-					<Text role="alert" class="text-sm text-muted-foreground">
-						{note()}
-					</Text>
+					<Notice placement="section" kind="failed" role="alert" text={note()} />
 				</If>
 				<If when={history()}>
-					<View testID="previous-mission-history" class="gap-3 border-t border-border pt-4">
-						<Text role="header" class="text-xl font-semibold text-foreground">
-							{history()?.oldTitle ?? "Previous mission"}
-						</Text>
-						<Text class="text-sm text-muted-foreground">
-							Archived history. Reading does not restart old work or transfer permissions.
-						</Text>
-						<View selectable class="gap-3">
-							<Text class="text-sm text-foreground">{history()?.oldGoal ?? ""}</Text>
-							<Text class="text-sm text-muted-foreground">{history()?.oldAgreement ?? "No saved brief."}</Text>
-						</View>
-						<Each of={history()?.decisions ?? []} key={(d) => d.id}>
-							{(d) => (
-								<Text class="text-sm text-muted-foreground">{`D${d().number}: ${d().text}${d().replacement ? " (replaced)" : d().withdrawn ? " (withdrawn)" : ""}`}</Text>
-							)}
-						</Each>
-						<Each of={history()?.oldTasks ?? []} key={(t) => t.id}>
-							{(t) => (
-								<View class="gap-1">
-									<View class="flex-row items-start gap-3">
-										<Text class="min-w-0 flex-1 text-sm text-foreground">{`#${t().number} ${t().title} (${t().status})`}</Text>
-										<If when={t().sessionId && props.canReadChats}>
-											<OpenChatAction
-												label="Open saved chat"
-												testID={`previous-chat-${t().id}`}
-												accessibilityLabel={`Open saved chat for #${t().number} ${t().title}, read only. This starts nothing.`}
-												onPress={() =>
-													openChat(t().sessionId ?? "", history()?.oldTitle ?? "Previous mission")
-												}
-											/>
-										</If>
-									</View>
-									<Text class="text-sm text-muted-foreground">{t().body ?? ""}</Text>
-								</View>
-							)}
-						</Each>
-						<Each of={history()?.resources ?? []} key={(r) => r.id}>
-							{(r) => (
-								<View selectable class="gap-1">
-									<Text class="text-sm text-foreground">{r().title ?? "Saved link"}</Text>
-									<Text class="text-xs text-muted-foreground">{r().url}</Text>
-								</View>
-							)}
-						</Each>
-						<Text class="text-xs text-muted-foreground">
-							Recent saved activity. Earlier events remain kept in the old mission.
-						</Text>
-						<Each of={history()?.events ?? []} key={(e) => e.id}>
-							{(e) => <Text class="text-xs text-muted-foreground">{e().text}</Text>}
-						</Each>
+					<View testID="previous-mission-history">
+						<Block gap={3}>
+							<Heading role="header">{history()?.oldTitle ?? "Previous mission"}</Heading>
+							<Caption>Archived history. Reading does not restart old work or transfer permissions.</Caption>
+							<View selectable class="gap-3">
+								<Body>{history()?.oldGoal ?? ""}</Body>
+								<Body tone="muted">{history()?.oldAgreement ?? "No saved brief."}</Body>
+								<Each of={history()?.decisions ?? []} key={(d) => d.id}>
+									{(d) => (
+										<Body tone="muted">{`D${d().number}: ${d().text}${d().replacement ? " (replaced)" : d().withdrawn ? " (withdrawn)" : ""}`}</Body>
+									)}
+								</Each>
+							</View>
+						</Block>
+						<Rows>
+							<Each of={history()?.oldTasks ?? []} key={(t) => t.id}>
+								{(t) => (
+									<Row
+										title={`#${t().number} ${t().title} (${t().status})`}
+										meta={t().body ?? ""}
+										wrap
+										trailing={
+											<If when={t().sessionId && props.canReadChats}>
+												<OpenChatAction
+													label="Open saved chat"
+													testID={`previous-chat-${t().id}`}
+													accessibilityLabel={`Open saved chat for #${t().number} ${t().title}, read only. This starts nothing.`}
+													onPress={() =>
+														openChat(t().sessionId ?? "", history()?.oldTitle ?? "Previous mission")
+													}
+												/>
+											</If>
+										}
+									/>
+								)}
+							</Each>
+							<Each of={history()?.resources ?? []} key={(r) => r.id}>
+								{(r) => <Row title={r().title ?? "Saved link"} meta={r().url} selectable />}
+							</Each>
+						</Rows>
+						<Block gap={1}>
+							<Caption>Recent saved activity. Earlier events remain kept in the old mission.</Caption>
+							<Each of={history()?.events ?? []} key={(e) => e.id}>
+								{(e) => <Caption tone="faint">{e().text}</Caption>}
+							</Each>
+						</Block>
 					</View>
 				</If>
 			</If>

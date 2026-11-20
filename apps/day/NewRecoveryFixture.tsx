@@ -1,10 +1,11 @@
 // Isolated fixture: unknown receipts and a new draft, never real creation.
-import { mount, Text, View } from "nsh";
+import { mount, View } from "nsh";
 import type { PlanOutcome } from "pilot-day/native";
 import type { PlanningFeed } from "./feeds";
 import { openPlanning } from "./mockFeeds";
 import { NewScreen } from "./NewScreen";
 import { goalDraft } from "./planView";
+import { Block, Caption } from "./ui";
 
 const plans = openPlanning("fresh");
 const original = plans.feed;
@@ -40,7 +41,9 @@ const feed: PlanningFeed = {
 };
 mount(() => (
 	<View class="flex-1">
-		<Text>Mock data · New recovery</Text>
+		<Block>
+			<Caption tone="faint">Mock data · New recovery</Caption>
+		</Block>
 		<NewScreen plans={{ ...plans, feed }} />
 	</View>
 ));

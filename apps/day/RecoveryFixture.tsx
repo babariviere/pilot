@@ -1,10 +1,10 @@
 // Synthetic recovery UI only. No daemon, credentials, processes or filesystem.
-import { host, mount, signal, Text, View } from "nsh";
+import { host, type JSX, mount, signal, View } from "nsh";
 import { ChatScreen } from "./ChatScreen";
 import type { Day } from "./day";
 import { restoreRecoveryNotes, savedRecoveryNotes } from "./recoveryDraft";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const sends = signal(0);
 const checks = signal(0);
@@ -103,45 +103,58 @@ const source: SessionChatSource = {
 	},
 };
 const day = { chat: mirrorSessionChat(source) } as Day;
-mount(() => (
-	<View class="flex-1 bg-background">
-		<View class="flex-row flex-wrap gap-3 p-3">
-			<Text>Mock data</Text>
-			<Action label="Hide chat" onPress={() => shown.set(false)} />
-			<Action label="Reopen chat" onPress={() => shown.set(true)} />
-			<Action label="Lose next answer" onPress={() => lost.set(true)} />
-			<Action
-				label="Offer handoff"
-				onPress={() => {
-					handoff.set(true);
-					publish(failed());
-				}}
-			/>
-			<Action label="Refresh same chat" onPress={() => publish({ ...chat()! })} />
-			<Action label="Fail again" onPress={() => publish(failed())} />
-			<Action label="Startup failure" onPress={() => publish({ ...failed(), restartOnly: true })} />
-			<Action
-				label="Setup failed"
-				onPress={() =>
-					publish({ ...failed(), recoveryBlocked: "Repair setup before retrying. Existing files are kept." })
-				}
-			/>
-			<Action label="Archive view" onPress={() => publish({ ...failed(), archived: true })} />
-			<Action
-				label="Save and reopen"
-				onPress={() => {
-					const kept = savedRecoveryNotes();
-					shown.set(false);
-					restoreRecoveryNotes([]);
-					restoreRecoveryNotes(kept);
-					shown.set(true);
-				}}
-			/>
-			<Text>{`Sends: ${sends()} / Checks: ${checks()}`}</Text>
-			<Text>{`Sent: [${last()}]`}</Text>
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
+	);
+}
+
+mount(() => (
+	<FixtureWindow>
+		<Block>
+			<Buttons>
+				<Caption tone="faint">Mock data</Caption>
+				<Button label="Hide chat" onPress={() => shown.set(false)} />
+				<Button label="Reopen chat" onPress={() => shown.set(true)} />
+				<Button label="Lose next answer" onPress={() => lost.set(true)} />
+				<Button
+					label="Offer handoff"
+					onPress={() => {
+						handoff.set(true);
+						publish(failed());
+					}}
+				/>
+				<Button label="Refresh same chat" onPress={() => publish({ ...chat()! })} />
+				<Button label="Fail again" onPress={() => publish(failed())} />
+				<Button label="Startup failure" onPress={() => publish({ ...failed(), restartOnly: true })} />
+				<Button
+					label="Setup failed"
+					onPress={() =>
+						publish({ ...failed(), recoveryBlocked: "Repair setup before retrying. Existing files are kept." })
+					}
+				/>
+				<Button label="Archive view" onPress={() => publish({ ...failed(), archived: true })} />
+				<Button
+					label="Save and reopen"
+					onPress={() => {
+						const kept = savedRecoveryNotes();
+						shown.set(false);
+						restoreRecoveryNotes([]);
+						restoreRecoveryNotes(kept);
+						shown.set(true);
+					}}
+				/>
+				<Caption>{`Sends: ${sends()} / Checks: ${checks()}`}</Caption>
+				<Caption>{`Sent: [${last()}]`}</Caption>
+			</Buttons>
+		</Block>
 		<If when={shown()}>
 			<ChatScreen day={day} sessionId="recovery-chat" />
 		</If>
-	</View>
+	</FixtureWindow>
 ));

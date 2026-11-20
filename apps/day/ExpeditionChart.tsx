@@ -19,6 +19,7 @@ import {
 	computed,
 	createAnimatedValue,
 	effect,
+	type JSX,
 	keymap,
 	Path2D,
 	reduceMotion,
@@ -60,7 +61,20 @@ import {
 } from "./chartLayout";
 import { Agreement, exploreLine, FogRecord, ItemRecord, itemWord } from "./MapRecords";
 import type { Plans } from "./planning";
-import { Action, Icon, Pressable, SectionTitle } from "./ui";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Caption,
+	GridBackdrop,
+	Heading,
+	Icon,
+	Pressable,
+	Row,
+	Rows,
+	Section,
+} from "./ui";
 
 /** The keystroke that opens the chart full window, and closes it again. */
 export const OPEN_CHART = "mod+shift+m";
@@ -1071,6 +1085,7 @@ export function ExpeditionChart(props: {
 			/>
 			<If when={!full}>
 				<View class="absolute right-3 top-3">
+					{/* On the chart's paper, drawn in its own colours: see ChartButton. */}
 					<Pressable
 						anchor={(node) => {
 							openButton = node;
@@ -1136,22 +1151,21 @@ export function FullChart(props: { plans: Plans; page: PlanPage; onClose: () => 
 	const state = chartState();
 	const frame = signal<Frame | null>(null);
 	return (
-		<View testID="chart-full" class="absolute inset-0 bg-background">
-			<View class="flex-row items-center gap-4 border-b border-border px-6 py-2.5">
-				<Text role="header" class="text-sm font-semibold text-foreground">
-					{`Expedition chart · ${props.page.title || "This mission"}`}
-				</Text>
-				<Text class="flex-1 text-xs text-faint">
+		<FullWindow>
+			<FullWindowBar>
+				<Heading role="header">{`Expedition chart · ${props.page.title || "This mission"}`}</Heading>
+				<Caption tone="faint" grow>
 					Drag or scroll to look around. Pinch, ⌘-scroll or − and + zoom. Esc closes the notes, then the chart.
-				</Text>
-				<Action
+				</Caption>
+				<Button
+					kind="quiet"
 					label="Close chart (Esc)"
 					icon="fullscreenExit"
 					iconOnly
 					testID="chart-close"
 					onPress={props.onClose}
 				/>
-			</View>
+			</FullWindowBar>
 			<View
 				class="flex-1 p-4"
 				onLayout={({ bounds }) =>
@@ -1170,7 +1184,25 @@ export function FullChart(props: { plans: Plans; page: PlanPage; onClose: () => 
 					/>
 				</If>
 			</View>
+		</FullWindow>
+	);
+}
+
+// LIBRARY GAP: no part for a full-window view over a page (an opaque canvas with the grid, and a bar across its
+// top with a hairline under it). The library has PathBar for the window's own top bar only. These two local
+// helpers draw the chart's full window until the library offers one; the artifact's full window would use it too.
+function FullWindow(props: { children?: JSX.Element }) {
+	return (
+		<View testID="chart-full" class="absolute inset-0 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
+	);
+}
+
+function FullWindowBar(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-row items-center gap-4 border-b border-border bg-background px-6 py-2.5">{props.children}</View>
 	);
 }
 
@@ -1207,6 +1239,9 @@ function MotionMark(props: { motion: Motion; at: At }) {
 	);
 }
 
+// LIBRARY GAP: no Button for the chart's own paper. Controls that sit on the chart (Open chart, zoom, Whole chart)
+// are drawn in its map-* colours so they read as part of the chart (DESIGN.md); the library's Button draws on the
+// panel's surface. The library should offer a map tone for Button (and an icon-only form with a tooltip).
 function ChartButton(props: {
 	label: string;
 	accessibilityLabel?: string;
@@ -1528,38 +1563,31 @@ function FieldNotes(props: {
 		(props.id === "home" ? "Your brief" : props.id === "dest" ? props.page.destination : "Planning rounds here");
 	return (
 		<If when={shown()}>
-			<View
-				testID="field-notes"
-				accessibilityLabel="Field notes"
-				class="absolute top-14 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-md"
-				classList={{
-					"bottom-3 left-3": props.side === "left",
-					// On the right the notes stop above the compass, which stays in view.
-					"bottom-36 right-3": props.side === "right",
-				}}
-			>
+			<NotesCard side={props.side}>
 				<Scroll class="flex-1">
-					<View class="gap-3 p-4">
+					<Block gap={3}>
 						<View class="flex-row items-center gap-2">
-							<Text class="flex-1 text-xs text-faint">{kind()}</Text>
-							<Pressable
+							<Caption tone="faint" grow>
+								{kind()}
+							</Caption>
+							<Button
+								small
+								label="Close"
+								shortcut="Esc"
 								accessibilityLabel="Close field notes"
-								tooltip="Close  Esc"
 								onPress={props.onClose}
-								class="size-7 items-center justify-center rounded-md hover:bg-accent"
-							>
-								<Text class="text-base text-muted-foreground">×</Text>
-							</Pressable>
+							/>
 						</View>
+						{/* The place's name, in the chart's serif, as the chart labels it. */}
 						<Text role="header" class="font-serif text-xl leading-snug text-popover-foreground">
 							{title()}
 						</Text>
 						<If when={item()}>
 							{(e) => (
 								<View class="gap-3">
-									<Text class="text-sm text-foreground">{exploreLine(e())}</Text>
+									<Body>{exploreLine(e())}</Body>
 									<Each of={e().changed} key={(c) => c}>
-										{(c) => <Text class="text-xs text-needs-ink">{c()}</Text>}
+										{(c) => <Caption tone="needs">{c()}</Caption>}
 									</Each>
 									<ItemRecord plans={props.plans} page={props.page} item={e()} />
 								</View>
@@ -1569,46 +1597,44 @@ function FieldNotes(props: {
 							{(f) => (
 								<View class="gap-2">
 									<FogRecord plans={props.plans} page={props.page} fog={f()} />
-									<Text class="text-xs leading-relaxed text-faint">
+									<Caption tone="faint">
 										Fog of war is an area Pilot does not understand well enough to ask about yet. It blocks
 										nothing.
-									</Text>
+									</Caption>
 								</View>
 							)}
 						</If>
 						<If when={props.id === "home"}>
-							<Text class="text-sm leading-relaxed text-foreground">
-								{props.page.goal || "Your brief is not shown here."}
-							</Text>
-							<Text class="text-xs leading-relaxed text-faint">
+							<Body>{props.page.goal || "Your brief is not shown here."}</Body>
+							<Caption tone="faint">
 								Where the mission set out: your words, as you wrote them. Pilot reads them and never changes
 								them.
-							</Text>
+							</Caption>
 						</If>
 						<If when={props.id === "dest"}>
-							<Text class="text-sm text-muted-foreground">{stageName(props.page)}</Text>
+							<Body tone="muted">{stageName(props.page)}</Body>
 							<If when={props.page.map}>
 								<Agreement
 									info={props.page.map as NonNullable<PlanPage["map"]>}
 									onOpenTasks={props.onOpenTasks}
 								/>
 							</If>
-							<Text class="text-xs leading-relaxed text-faint">
+							<Caption tone="faint">
 								Approving a plan publishes build tasks. It starts nothing; each task starts only when you start
 								it.
-							</Text>
+							</Caption>
 						</If>
 						<If when={props.id === "harbor"}>
 							<Each of={props.page.rounds} key={(r) => r.id}>
 								{(r) => (
-									<View class="gap-1 border-t border-border pt-2">
-										<Text class="text-sm font-medium text-foreground">{r().title}</Text>
-										<Text class="text-xs text-muted-foreground">{r().line}</Text>
+									<View class="gap-1">
+										<BodyStrong>{r().title}</BodyStrong>
+										<Caption>{r().line}</Caption>
 										<Each of={r().answers} key={(a) => a.prompt}>
 											{(a) => (
-												<View class="gap-0.5 pt-1">
-													<Text class="text-xs text-faint">{a().prompt}</Text>
-													<Text class="text-sm text-foreground">{a().answer || "No answer"}</Text>
+												<View class="gap-0.5">
+													<Caption tone="faint">{a().prompt}</Caption>
+													<Body>{a().answer || "No answer"}</Body>
 												</View>
 											)}
 										</Each>
@@ -1616,17 +1642,37 @@ function FieldNotes(props: {
 								)}
 							</Each>
 							<If when={props.chart.camps.length > props.page.rounds.length + 1}>
-								<Text class="text-xs text-faint">{props.chart.camps[props.chart.camps.length - 1].line}</Text>
+								<Caption tone="faint">{props.chart.camps[props.chart.camps.length - 1].line}</Caption>
 							</If>
-							<Text class="text-xs leading-relaxed text-faint">
+							<Caption tone="faint">
 								Each planning round is a camp on Pilot's route. Submitting a round completes that round only; it
 								is not approval to build.
-							</Text>
+							</Caption>
 						</If>
-					</View>
+					</Block>
 				</Scroll>
-			</View>
+			</NotesCard>
 		</If>
+	);
+}
+
+// LIBRARY GAP: no part for a card that floats over a canvas (the field notes beside the chart: a popover surface
+// with a frame and a shadow, placed by the page). Menus have one inside Picker, but it is not offered on its own.
+// The library should offer a floating card; until then this helper draws the notes' frame.
+function NotesCard(props: { side: "left" | "right"; children?: JSX.Element }) {
+	return (
+		<View
+			testID="field-notes"
+			accessibilityLabel="Field notes"
+			class="absolute top-14 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-md"
+			classList={{
+				"bottom-3 left-3": props.side === "left",
+				// On the right the notes stop above the compass, which stays in view.
+				"bottom-36 right-3": props.side === "right",
+			}}
+		>
+			{props.children}
+		</View>
 	);
 }
 
@@ -1636,42 +1682,44 @@ function FieldNotes(props: {
 export function ExpeditionLog(props: { page: PlanPage; state: ChartState }) {
 	const camps = computed(() => chartOf(props.page).camps);
 	return (
-		<View testID="expedition-log" class="gap-1">
-			<SectionTitle title="Expedition log" count={camps().length}>
-				<Text class="text-xs text-faint">Oldest first</Text>
-			</SectionTitle>
-			<Each of={camps()} key={(c) => `${c.n}`}>
-				{(c, i) => (
-					<Pressable
-						testID={`log-${c().n}`}
-						accessibilityLabel={`Planning round ${c().n}: ${c().title}. ${c().line}. Show it on the chart.`}
-						onPress={() => {
-							props.state.selected.set(c().harbor === "region" ? "harbor" : c().harbor);
-							props.state.frame.ref?.reveal({ vertical: "nearest" });
-						}}
-						class="group flex-row items-start gap-3 rounded-md border-t border-border py-2"
-					>
-						<View
-							class="mt-0.5 size-5 items-center justify-center rounded-full border border-map-route"
-							classList={{ "bg-map-route": i() === camps().length - 1 }}
-						>
-							<Text
-								class="font-serif text-xs font-semibold"
-								classList={{
-									"text-map-paper": i() === camps().length - 1,
-									"text-map-route": i() !== camps().length - 1,
-								}}
-							>
-								{String(c().n)}
-							</Text>
-						</View>
-						<View class="flex-1 gap-0.5">
-							<Text class="text-sm font-medium text-foreground group-hover:underline">{c().title}</Text>
-							<Text class="line-clamp-2 text-xs text-muted-foreground">{c().line}</Text>
-						</View>
-					</Pressable>
-				)}
-			</Each>
+		<Section testID="expedition-log" title="Expedition log" count={camps().length} note="Oldest first">
+			<Rows>
+				<Each of={camps()} key={(c) => `${c.n}`}>
+					{(c, i) => (
+						<Row
+							testID={`log-${c().n}`}
+							title={c().title}
+							meta={c().line}
+							trailing={<RoundBadge n={c().n} latest={i() === camps().length - 1} />}
+							accessibilityLabel={`Planning round ${c().n}: ${c().title}. ${c().line}. Show it on the chart.`}
+							onPress={() => {
+								props.state.selected.set(c().harbor === "region" ? "harbor" : c().harbor);
+								props.state.frame.ref?.reveal({ vertical: "nearest" });
+							}}
+						/>
+					)}
+				</Each>
+			</Rows>
+		</Section>
+	);
+}
+
+/**
+ * A planning round's number as the chart draws its harbor: a serif figure in a ring of the route's colour, filled
+ * for the latest round. It is the chart's own drawing, so a log row shows the same mark the chart does.
+ */
+function RoundBadge(props: { n: number; latest: boolean }) {
+	return (
+		<View
+			class="size-5 items-center justify-center rounded-full border border-map-route"
+			classList={{ "bg-map-route": props.latest }}
+		>
+			<Text
+				class="font-serif text-xs font-semibold"
+				classList={{ "text-map-paper": props.latest, "text-map-route": !props.latest }}
+			>
+				{String(props.n)}
+			</Text>
 		</View>
 	);
 }
@@ -1730,25 +1778,28 @@ const KEY: { mark: { kind: GlyphKind; tone: Tone } | { line: "trail" | "route" |
 /** What each mark on the chart means. */
 export function ChartKey() {
 	return (
-		<View testID="chart-key" class="gap-1">
-			<SectionTitle title="Key to the chart" />
-			<Each of={KEY} key={(k) => k.words}>
-				{(k) => (
-					<View class="flex-row items-center gap-3 py-0.5">
-						<View class="w-8 items-center">
-							{"line" in k().mark ? (
-								<Swatch kind={(k().mark as { line: "trail" | "route" | "channel" }).line} />
-							) : (
-								<Glyph
-									kind={(k().mark as { kind: GlyphKind; tone: Tone }).kind}
-									tone={(k().mark as { kind: GlyphKind; tone: Tone }).tone}
-								/>
-							)}
+		<Section testID="chart-key" title="Key to the chart">
+			<Block gap={1}>
+				<Each of={KEY} key={(k) => k.words}>
+					{(k) => (
+						<View class="flex-row items-center gap-3">
+							<View class="w-8 items-center">
+								{"line" in k().mark ? (
+									<Swatch kind={(k().mark as { line: "trail" | "route" | "channel" }).line} />
+								) : (
+									<Glyph
+										kind={(k().mark as { kind: GlyphKind; tone: Tone }).kind}
+										tone={(k().mark as { kind: GlyphKind; tone: Tone }).tone}
+									/>
+								)}
+							</View>
+							<Body tone="muted" grow>
+								{k().words}
+							</Body>
 						</View>
-						<Text class="flex-1 text-sm text-muted-foreground">{k().words}</Text>
-					</View>
-				)}
-			</Each>
-		</View>
+					)}
+				</Each>
+			</Block>
+		</Section>
 	);
 }

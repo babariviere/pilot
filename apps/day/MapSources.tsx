@@ -1,9 +1,9 @@
 // A source opens in place. The map, interview, draft and their native views stay mounted.
-import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, keymap, signal, View, type ViewRef } from "nsh";
 import type { MapSource, PlanPage } from "pilot-day/native";
 import { exactSource, type MapSourceDetail, type MapSourceRequest } from "./mapSourceContract";
 import type { Plans } from "./planning";
-import { Action, QuietPanel } from "./ui";
+import { Body, BodyStrong, Button, Buttons, Caption, Link, Quote } from "./ui";
 
 /** Original records, alongside the map question or fog area that cites them. Reading changes nothing. */
 export function MapSources(props: {
@@ -90,7 +90,7 @@ function Original(props: { plans: Plans; page: PlanPage; area: "item" | "fog"; r
 	};
 	return (
 		<View testID={`source-${props.recordId}-${props.source.id}`} class="gap-2">
-			<Action
+			<Link
 				label={`Open ${props.source.label}`}
 				anchor={(node) => {
 					anchor = node;
@@ -99,45 +99,44 @@ function Original(props: { plans: Plans; page: PlanPage; area: "item" | "fog"; r
 				disabled={busy()}
 			/>
 			<If when={open()}>
-				<QuietPanel testID="original-source" selectable class="gap-3">
-					<Text class="text-xs text-faint">{`From this map · ${props.source.kind} ${props.source.id}`}</Text>
+				{/* The source's words are a quote; its commands stay outside, so a double click never lands on one. */}
+				<Quote testID="original-source">
+					<Caption tone="faint">{`From this map · ${props.source.kind} ${props.source.id}`}</Caption>
 					<If
 						when={detail()}
 						else={
-							<Text class="text-sm text-muted-foreground">
+							<Body tone="muted">
 								{busy()
 									? "Reading the original source…"
 									: "Source unavailable or currentness unknown. Earlier content is hidden. Nothing was answered or accepted."}
-							</Text>
+							</Body>
 						}
 					>
-						<Text role="header" class="text-base font-medium text-foreground">
-							{detail()?.title}
-						</Text>
-						<Text class="text-xs text-muted-foreground">
+						<BodyStrong role="header">{detail()?.title ?? ""}</BodyStrong>
+						<Caption>
 							{detail()?.currentness === "current"
 								? "Current source. Reading is not approval or acceptance."
 								: "Stale citation. This record is history, not current agreement."}
-						</Text>
-						<Text class="text-sm leading-relaxed text-foreground">{detail()?.body}</Text>
+						</Caption>
+						<Body>{detail()?.body ?? ""}</Body>
 						<If when={detail()?.check}>
-							<Text class="text-xs text-muted-foreground">{detail()?.check}</Text>
+							<Caption>{detail()?.check ?? ""}</Caption>
 						</If>
 						<Each of={detail()?.history ?? []} key={(line) => line}>
-							{(line) => <Text class="text-xs text-muted-foreground">{line()}</Text>}
+							{(line) => <Caption>{line()}</Caption>}
 						</Each>
 						<View class="gap-1">
-							<Text class="text-xs text-faint">Source and provenance</Text>
+							<Caption tone="faint">Source and provenance</Caption>
 							<Each of={detail()?.provenance ?? []} key={(line) => line}>
-								{(line) => <Text class="text-xs text-muted-foreground">{line()}</Text>}
+								{(line) => <Caption>{line()}</Caption>}
 							</Each>
 						</View>
 					</If>
-					<View class="flex-row gap-2">
-						<Action label="Back to map" onPress={close} />
-						<Action label="Read source again" onPress={() => void load()} disabled={busy()} />
-					</View>
-				</QuietPanel>
+				</Quote>
+				<Buttons>
+					<Button small label="Back to map" onPress={close} />
+					<Button small label="Read source again" onPress={() => void load()} disabled={busy()} />
+				</Buttons>
 			</If>
 		</View>
 	);

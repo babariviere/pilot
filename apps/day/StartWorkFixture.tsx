@@ -1,8 +1,8 @@
 // Headless control fixture only. No daemon, worker, provider or storage.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import { openPlanning } from "./mockFeeds";
 import { StartWork } from "./PlanScreen";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const plans = openPlanning("review");
 const source = plans.feed;
@@ -67,14 +67,29 @@ plans.feed = {
 		};
 	},
 };
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 gap-4 bg-background p-8">
+	<FixtureWindow>
 		<StartWork plans={plans} page={page()} />
-		<Text>{`Sends: ${sends()} · Checks: ${checks()}`}</Text>
-		<Action
-			label="Change plan"
-			onPress={() => page.set({ ...page(), work: { ...page().work, context: "changed" } })}
-		/>
-		<Action label="Lose acknowledgement" onPress={() => lost.set(true)} />
-	</View>
+		<Block gap={3}>
+			<Caption>{`Sends: ${sends()} · Checks: ${checks()}`}</Caption>
+			<Buttons>
+				<Button
+					label="Change plan"
+					onPress={() => page.set({ ...page(), work: { ...page().work, context: "changed" } })}
+				/>
+				<Button label="Lose acknowledgement" onPress={() => lost.set(true)} />
+			</Buttons>
+		</Block>
+	</FixtureWindow>
 ));

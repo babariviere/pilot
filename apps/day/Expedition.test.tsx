@@ -361,8 +361,10 @@ test("finished research says its findings wait for Pilot; only chats still at wo
 	expect(placeLine(page, at("audit-2"))).toBe("Findings wait for Pilot");
 	expect(chart.places.find((p) => p.id === "audit-0")?.glyph).toBe("tent");
 	expect(chart.places.find((p) => p.id === "audit-2")?.glyph).toBe("tent-done");
-	expect(exploreMark(at("audit-2"))).toBe("still");
-	expect(exploreMark(at("audit-0"))).toBe("moving");
+	// The marks use the library's seven states now (ui/README.md): the older "still" is the quiet New mark and
+	// "moving" is Working. The meaning is the same: finished research waits, a chat at work works.
+	expect(exploreMark(at("audit-2"))).toBe("new");
+	expect(exploreMark(at("audit-0"))).toBe("working");
 	expect(exploreLine(at("audit-2"))).toContain("Findings wait for Pilot");
 	expect(placeLine(page, at("safety"))).toBe("Settled");
 });

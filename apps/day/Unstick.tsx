@@ -3,14 +3,27 @@
 // When stuck, an agent can look: a read-only chat reads the planner's chat and proposes
 // one fix, which also applies only on Apply.
 
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import type { PlanPage } from "pilot-day/native";
 import { openChat } from "./chatView";
 import { errorText, logEvent } from "./dayLog";
 import { openFeedbackWith } from "./feedbackView";
 import { OpenChatAction } from "./OpenChatAction";
 import type { Plans } from "./planning";
-import { Action, MarkLine, QuietPanel, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	Disclosure,
+	Mark,
+	type MarkKind,
+	Question,
+	Quote,
+	State,
+	TextField,
+} from "./ui";
 
 type Repair = NonNullable<NonNullable<PlanPage["unstick"]>["repair"]>;
 type Fix = NonNullable<Repair["proposal"]>["fix"];
@@ -62,53 +75,56 @@ export function PlannerWaits(props: { plans: Plans; page: PlanPage }) {
 	const ready = () => !busy() && props.page.fresh && props.page.canContinue;
 	return (
 		<If when={plannerWaits(props.page) || message()}>
-			<QuietPanel testID="planner-waits" class="gap-3">
+			<View testID="planner-waits">
 				<If when={plannerWaits(props.page)}>
-					<MarkLine kind="needs">
-						<Text testID="planner-waits-line" class="text-sm text-foreground">
-							{u()?.line ?? ""}
-						</Text>
-					</MarkLine>
-					<If when={u()?.plannerSays}>
-						<View selectable class="gap-0.5">
-							<Text class="text-xs text-faint">Its last message</Text>
-							<Text testID="planner-says" class="text-sm leading-relaxed text-foreground">
-								{u()?.plannerSays ?? ""}
-							</Text>
-						</View>
-					</If>
-					<TextField
-						testID="planner-reply"
-						multiline
-						compact
-						value={reply()}
-						onChange={({ value }) => reply.set(value)}
-						accessibilityLabel="Your reply to Pilot's planning agent. It reads it as a note and continues."
-					/>
-					<View class="-ml-3 flex-row gap-2">
-						<Action
-							variant="outline"
-							testID="planner-reply-send"
-							label={busy() ? "Sending…" : "Reply"}
-							disabled={!ready() || !reply().trim()}
-							accessibilityLabel="Send your reply to Pilot's planning agent. Sent once. It answers no interview question."
-							onPress={() => void send(reply())}
+					{/* The planner waits for the user's words: a Question, with Reply and Continue in its foot. */}
+					<Question
+						title={u()?.line ?? ""}
+						titleTestID="planner-waits-line"
+						meta={<State kind="needs" plain />}
+						foot={
+							<>
+								<Button
+									testID="planner-reply-send"
+									label={busy() ? "Sending…" : "Reply"}
+									disabled={!ready() || !reply().trim()}
+									accessibilityLabel="Send your reply to Pilot's planning agent. Sent once. It answers no interview question."
+									onPress={() => void send(reply())}
+								/>
+								<Button
+									testID="planner-continue"
+									label="Continue"
+									disabled={!ready()}
+									accessibilityLabel="Continue planning with no reply. Pilot's planning agent picks up where it stopped."
+									onPress={() => void send("")}
+								/>
+							</>
+						}
+					>
+						<If when={u()?.plannerSays}>
+							<View class="gap-1">
+								<Caption tone="faint">Its last message</Caption>
+								<Quote testID="planner-says" text={u()?.plannerSays ?? ""} />
+							</View>
+						</If>
+						<TextField
+							testID="planner-reply"
+							multiline
+							rows={3}
+							value={reply()}
+							onChange={({ value }) => reply.set(value)}
+							accessibilityLabel="Your reply to Pilot's planning agent. It reads it as a note and continues."
 						/>
-						<Action
-							testID="planner-continue"
-							label="Continue"
-							disabled={!ready()}
-							accessibilityLabel="Continue planning with no reply. Pilot's planning agent picks up where it stopped."
-							onPress={() => void send("")}
-						/>
-					</View>
+					</Question>
 				</If>
 				<If when={message()}>
-					<Text testID="planner-waits-message" class="text-xs text-faint">
-						{message()}
-					</Text>
+					<Block>
+						<Caption testID="planner-waits-message" tone="faint">
+							{message()}
+						</Caption>
+					</Block>
 				</If>
-			</QuietPanel>
+			</View>
 		</If>
 	);
 }
@@ -152,42 +168,43 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 				: feed.dropEarlierAnswers?.({ missionId }),
 		);
 	};
+	// Stuck needs the user; moving is work going on; waiting is quiet.
+	const mark = (): MarkKind => (u()?.state === "stuck" ? "needs" : u()?.state === "moving" ? "working" : "new");
 	return (
 		<If when={u()}>
-			<View class="gap-2">
-				<View class="-ml-3 flex-row">
-					<Action
-						testID="unstick"
-						label={open() ? "Hide Unstick" : "Unstick"}
-						accessibilityLabel="Unstick: why planning moves, waits or is stuck. Reading changes nothing."
-						onPress={() => open.set(!open())}
-					/>
-				</View>
-				<If when={open()}>
-					<QuietPanel testID="unstick-card" class="gap-3">
-						<MarkLine kind={u()?.state === "stuck" ? "needs" : u()?.state === "moving" ? "moving" : "still"}>
-							<Text testID="unstick-line" class="text-sm text-foreground">
+			<Block>
+				<Disclosure
+					testID="unstick"
+					label={open() ? "Hide Unstick" : "Unstick"}
+					accessibilityLabel="Unstick: why planning moves, waits or is stuck. Reading changes nothing."
+					open={open()}
+					onToggle={() => open.set(!open())}
+				>
+					<View testID="unstick-card" class="gap-3">
+						<View class="flex-row items-start gap-2">
+							<Mark kind={mark()} />
+							<Body testID="unstick-line" grow>
 								{u()?.line ?? ""}
-							</Text>
-						</MarkLine>
+							</Body>
+						</View>
 						<If when={u()?.state === "stuck" && u()?.fix !== "none" && !agentProposes()}>
 							<View class="gap-2">
-								<Text class="text-sm text-muted-foreground">{`Fix: ${FIX_WORDS[(u()?.fix ?? "continue") as keyof typeof FIX_WORDS] ?? ""}`}</Text>
-								<View class="-ml-3 flex-row gap-2">
-									<Action
+								<Body tone="muted">{`Fix: ${FIX_WORDS[(u()?.fix ?? "continue") as keyof typeof FIX_WORDS] ?? ""}`}</Body>
+								<Buttons>
+									<Button
 										testID="unstick-apply"
 										label={busy() ? "Applying…" : "Apply"}
 										disabled={busy() || !props.page.fresh}
 										onPress={apply}
 									/>
-									<Action label="Not now" disabled={busy()} onPress={() => open.set(false)} />
-								</View>
+									<Button label="Not now" disabled={busy()} onPress={() => open.set(false)} />
+								</Buttons>
 							</View>
 						</If>
 						<View class="gap-0.5">
-							<Text class="text-xs text-faint">What Pilot checked</Text>
+							<Caption tone="faint">What Pilot checked</Caption>
 							<Each of={u()?.checks ?? []} key={(line) => line}>
-								{(line) => <Text class="text-xs text-faint">{`• ${line()}`}</Text>}
+								{(line) => <Caption tone="faint">{`• ${line()}`}</Caption>}
 							</Each>
 						</View>
 						<If when={u()?.repair?.available || (u()?.repair && u()?.repair?.state !== "none")}>
@@ -201,13 +218,13 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 							/>
 						</If>
 						<If when={message() && messageFor() === u()?.repair?.state}>
-							<Text testID="unstick-message" class="text-xs text-faint">
+							<Caption testID="unstick-message" tone="faint">
 								{message()}
-							</Text>
+							</Caption>
 						</If>
-					</QuietPanel>
-				</If>
-			</View>
+					</View>
+				</Disclosure>
+			</Block>
 		</If>
 	);
 }
@@ -248,12 +265,12 @@ function RepairAgent(props: {
 			].join("\n"),
 		);
 	return (
-		<View testID="repair" class="gap-2 border-t border-border pt-3">
+		<View testID="repair" class="gap-2">
 			<If when={r()?.state === "looking"}>
 				<View class="flex-row items-start gap-2">
-					<Text testID="repair-looking" class="flex-1 text-sm text-muted-foreground">
+					<Body testID="repair-looking" tone="muted" grow>
 						An agent is looking. This takes about a minute.
-					</Text>
+					</Body>
 					<OpenChatAction
 						label="Open planning repair chat"
 						accessibilityLabel="Open planning repair chat"
@@ -262,46 +279,44 @@ function RepairAgent(props: {
 				</View>
 			</If>
 			<If when={r()?.state === "failed"}>
-				<Text testID="repair-failed" class="text-sm text-muted-foreground">
+				<Body testID="repair-failed" tone="muted">
 					{r()?.reason || "The agent could not look."}
-				</Text>
+				</Body>
 			</If>
 			<If when={shown()}>
 				<View testID="repair-proposal" class="gap-2">
 					<View class="flex-row items-start gap-3">
-						<Text class="min-w-0 flex-1 text-xs text-faint">{`The agent's view · ${p()?.certainty ?? ""} certainty`}</Text>
+						<Caption tone="faint" grow>{`The agent's view · ${p()?.certainty ?? ""} certainty`}</Caption>
 						<OpenChatAction
 							label="Open planning repair chat"
 							accessibilityLabel="Open planning repair chat"
 							onPress={() => openChat(r()?.chatId ?? "", "Plan")}
 						/>
 					</View>
-					<Text testID="repair-cause" class="text-sm text-foreground">
-						{p()?.cause ?? ""}
-					</Text>
-					<Text class="text-sm text-muted-foreground">{REPAIR_WORDS[p()?.fix ?? "none"]}</Text>
+					<Body testID="repair-cause">{p()?.cause ?? ""}</Body>
+					<Body tone="muted">{REPAIR_WORDS[p()?.fix ?? "none"]}</Body>
 					<If when={p()?.fix === "plannerNote"}>
 						<TextField
 							testID="repair-note"
 							multiline
-							compact
+							rows={3}
 							value={note() ?? p()?.note ?? ""}
 							onChange={({ value }) => note.set(value)}
 							accessibilityLabel="The note to Pilot's planning agent"
 						/>
 					</If>
 					<View class="gap-0.5">
-						<Text class="text-xs text-faint">What the agent read</Text>
+						<Caption tone="faint">What the agent read</Caption>
 						<Each of={p()?.evidence ?? []} key={(line) => line}>
-							{(line) => <Text class="text-xs text-faint">{`• ${line()}`}</Text>}
+							{(line) => <Caption tone="faint">{`• ${line()}`}</Caption>}
 						</Each>
 					</View>
 					<If when={!r()?.current}>
-						<Text class="text-xs text-faint">The mission changed since the agent looked. Ask again.</Text>
+						<Caption tone="faint">The mission changed since the agent looked. Ask again.</Caption>
 					</If>
-					<View class="-ml-3 flex-row gap-2">
+					<Buttons>
 						<If when={canApply()}>
-							<Action
+							<Button
 								testID="repair-apply"
 								label={props.busy ? "Applying…" : "Apply"}
 								disabled={props.busy || !r()?.current || !props.page.fresh}
@@ -309,22 +324,22 @@ function RepairAgent(props: {
 							/>
 						</If>
 						<If when={p()?.fix === "codeRepair"}>
-							<Action testID="repair-report" label="Report with Feedback" onPress={report} />
+							<Button testID="repair-report" label="Report with Feedback" onPress={report} />
 						</If>
-						<Action label="Not now" disabled={props.busy} onPress={props.hide} />
-					</View>
+						<Button label="Not now" disabled={props.busy} onPress={props.hide} />
+					</Buttons>
 				</View>
 			</If>
 			<If when={r()?.available}>
-				<View class="-ml-3 flex-row">
-					<Action
+				<Buttons>
+					<Button
 						testID="repair-start"
 						label={r()?.state === "none" ? "Have an agent look" : "Ask an agent again"}
 						accessibilityLabel="Start a read-only chat that reads the planner's chat and proposes one fix"
 						disabled={props.busy || !props.page.fresh}
 						onPress={start}
 					/>
-				</View>
+				</Buttons>
 			</If>
 		</View>
 	);
