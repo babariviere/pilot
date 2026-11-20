@@ -576,6 +576,8 @@ interface SessionMeta extends OutcomeMeta {
 	inputGeneration?: number;
 	/** Interrupted durable work, retained until a replacement kernel is ready. */
 	kernelRestartPending?: boolean;
+	/** Proof of a complete idle child census, close ACK and worker exit. */
+	parkedChildrenProof?: string;
 	id: string;
 	title: string;
 	/** Latest attempt list reported by the kernel, kept while it is parked. */
@@ -1996,8 +1998,6 @@ export class SessionManager {
 		SessionWorker,
 		{ operationId: string; requestId: string; children: KernelSubagent[]; clear: boolean }
 	>();
-	/** Same-daemon proof only. Saved child history does not prove a cold worker ever drained. */
-	private readonly parkedQuiescent = new WeakMap<SessionMeta, KernelSubagent[]>();
 	/** Invalidated whenever a new worker starts. Also supplements persisted reads after parking. */
 	private readonly coldSnapshots = new Map<
 		string,
@@ -4411,6 +4411,7 @@ ${run.excerpt}`,
 	): Promise<void> {
 		// Obtain the final census after kernel shutdown of its work, not the idle preflight observation.
 		const census = { operationId: randomUUID(), requestId: randomUUID(), children, clear: false };
+		const proof = this.parkedChildrenProof(meta, children);
 		this.parkingCensus.set(worker, census);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let acknowledged = false;
@@ -4433,7 +4434,19 @@ ${run.excerpt}`,
 			this.parkingCensus.delete(worker);
 		}
 		await worker.close();
-		if (acknowledged && census.clear && meta.subagents === children) this.parkedQuiescent.set(meta, children);
+		if (
+			acknowledged &&
+			census.clear &&
+			meta.subagents === children &&
+			proof === this.parkedChildrenProof(meta, children)
+		) {
+			meta.parkedChildrenProof = proof;
+			await this.save(meta, undefined, undefined, true);
+		}
+	}
+
+	private parkedChildrenProof(meta: SessionMeta, children: KernelSubagent[]): string {
+		return payloadHash(canonicalJSON([meta.id, meta.createdAt, meta.inputGeneration ?? 0, children]));
 	}
 
 	/** Wait for an inactivity close, so the next worker can take the session's storage lease. */
@@ -9562,8 +9575,9 @@ ${run.excerpt}`,
 		if (!meta.lifecycleCheckpoint || meta.lifecycleCheckpoint === prior) {
 			const children = meta.subagents;
 			const parkedWithProof =
-				children &&
-				this.parkedQuiescent.get(meta) === children &&
+				children?.length &&
+				meta.parkedChildrenProof !== undefined &&
+				meta.parkedChildrenProof === this.parkedChildrenProof(meta, children) &&
 				children.every((child) => child.state === "idle") &&
 				!meta.pending?.length &&
 				!meta.failure &&
@@ -14468,7 +14482,17 @@ ${run.excerpt}`,
 		this.validateMode(meta, true);
 		this.coldSnapshots.delete(id);
 		this.coldLoading.delete(id);
-		this.parkedQuiescent.delete(meta);
+		// Never start a worker while disk can still claim the previous worker was the last one to run.
+		if (meta.parkedChildrenProof !== undefined) {
+			const proof = meta.parkedChildrenProof;
+			delete meta.parkedChildrenProof;
+			try {
+				await this.save(meta, undefined, undefined, true);
+			} catch (error) {
+				meta.parkedChildrenProof = proof; // The next attempt must retry the durable clear.
+				throw error;
+			}
+		}
 		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
 		const createWorker =
 			this.factories.worker ??

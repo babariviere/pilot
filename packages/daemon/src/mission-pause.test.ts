@@ -124,11 +124,12 @@ async function fixture(
 		action,
 		...(pauseOperationId ? { pauseOperationId } : {}),
 	});
+	let reloaded: SessionManager | undefined;
 	t.after(async () => {
 		closeGate = undefined;
 		closing = undefined;
 		options.failExit = false;
-		await sessions.shutdown();
+		await (reloaded ?? sessions).shutdown();
 		store.close();
 		await rm(home, { recursive: true, force: true });
 	});
@@ -143,6 +144,25 @@ async function fixture(
 		opened,
 		closed,
 		command,
+		restart: async () => {
+			await sessions.shutdown();
+			reloaded = new SessionManager(
+				home,
+				new ProjectStore(home),
+				undefined,
+				{
+					worker: () => {
+						assert.fail("Pause must not reopen a parked worker");
+					},
+				},
+				{},
+				offlineSessionOptions(),
+			);
+			const restarted = new MissionService(store, reloaded, projects);
+			restarted.controls.setScheduleDrain(async () => {});
+			await reloaded.load();
+			return restarted;
+		},
 		parkIdleMember: async () => {
 			idle.get(a.id)!();
 			sessions["lastUse"].set(a.id, 0);
@@ -183,6 +203,16 @@ test("mission Pause holds an idle member parked with child history, without reop
 	assert.equal(f.opened.filter((id) => id === f.a.id).length, 1);
 });
 
+test("mission Pause holds a verified parked member after the daemon restarts", async (t) => {
+	const f = await fixture(t);
+	await f.parkIdleMember();
+	assert.deepEqual(f.closed, [f.a.id]);
+	const restarted = await f.restart();
+	const pause = await restarted.controls.execute(f.mission.id, f.command());
+	assert.equal(pause.control.state, "paused", JSON.stringify(pause.members));
+	assert.deepEqual(pause.members, [{ sessionId: f.a.id, state: "held" }]);
+});
+
 for (const options of [
 	{ lostAck: true },
 	{ remainingJobs: 1 },
@@ -207,7 +237,7 @@ for (const options of [
 	});
 }
 
-test("a reopened worker cannot reuse the earlier parked child's quiescence proof", async (t) => {
+test("a reopened worker cannot reuse an earlier park receipt after a daemon restart", async (t) => {
 	const options = { lostAck: false };
 	const f = await fixture(t, options);
 	await f.parkIdleMember();
@@ -215,7 +245,8 @@ test("a reopened worker cannot reuse the earlier parked child's quiescence proof
 	assert.equal(f.opened.filter((id) => id === f.a.id).length, 2);
 	options.lostAck = true;
 	await f.parkIdleMember();
-	const pause = await f.service.controls.execute(f.mission.id, f.command());
+	const restarted = await f.restart();
+	const pause = await restarted.controls.execute(f.mission.id, f.command());
 	assert.equal(pause.control.state, "pausing");
 	assert.equal(pause.members[0]?.state, "unknown");
 });
