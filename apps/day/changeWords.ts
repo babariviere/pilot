@@ -29,18 +29,21 @@ export function attentionWord(attention: ChangeAttention): string {
 	}
 }
 
-/** A change's mark: what waits, what the user put off, what is history. */
+/**
+ * A change's mark: what waits on the user (Needs you), what they put off (Paused), an answer or request state Pilot
+ * could not confirm (Unconfirmed: it looks the answer up itself), what landed (Done) and the rest (New).
+ */
 export function attentionMark(row: ChangeRow): MarkKind {
-	if (row.delivery === "unknown" || row.delivery === "checking") return "unknown";
+	if (row.delivery === "unknown" || row.delivery === "checking") return "unconfirmed";
 	switch (row.attention) {
 		case "waiting":
 			return "needs";
 		case "later":
-			return "still";
+			return "paused";
 		case "unknown":
-			return "unknown";
+			return "unconfirmed";
 		default:
-			return row.landing === "seen" ? "done" : "unreported";
+			return row.landing === "seen" ? "done" : "new";
 	}
 }
 

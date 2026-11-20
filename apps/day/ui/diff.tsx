@@ -1,11 +1,48 @@
-// A read-only diff of one exact patch.
-import { type JSX, signal, Text, View } from "nsh";
+// A read-only diff of one exact patch, its counts, and the split of a file list beside it.
+import { type JSX, Scroll, signal, Text, View } from "nsh";
 import type { DiffAnnotation, DiffLineRange } from "nsh/base";
 import { Button, type DiffFile, DiffView, type DiffViewClasses, type DiffViewRef } from "nsh/base";
 import { FOCUS_RING } from "./button";
 import { Icon } from "./icon";
+import { narrow } from "./layout";
+import { Column } from "./panel";
+import { Num } from "./text";
 
 export type { DiffAnnotation, DiffLineRange } from "nsh/base";
+
+/**
+ * A diff's counts ("+8 −1") in the diff's own added and removed tones, not Ready's green and Failed's red. Put it
+ * in a file row's trailing slot or a diff's head.
+ */
+export function DiffCounts(props: { added: number; removed: number; testID?: string }) {
+	return (
+		<View testID={props.testID} class="flex-row gap-1.5">
+			<Num tone="added">{`+${props.added}`}</Num>
+			<Num tone="removed">{`−${props.removed}`}</Num>
+		</View>
+	);
+}
+
+/**
+ * A file list beside a diff, inside a `Panel fill`: a narrow column of files (`files`, `Section`s of `Row`s) at the
+ * left, split by a hairline, and the diff filling the rest of the panel's height. In a narrow window the list sits
+ * above the diff, kept short (180 points) so the diff keeps the room. `list` false shows the diff alone (one file).
+ */
+export function DiffSplit(props: { list: boolean; files: JSX.Element; diff: JSX.Element; testID?: string }) {
+	return (
+		<View testID={props.testID} class={`min-h-0 flex-1 ${narrow() ? "" : "flex-row"}`}>
+			<If when={props.list}>
+				<Scroll
+					class={`border-border ${narrow() ? "border-b" : "w-72 border-r"}`}
+					style={narrow() ? { maxHeight: 180 } : undefined}
+				>
+					<Column>{props.files}</Column>
+				</Scroll>
+			</If>
+			<View class="min-h-0 min-w-0 flex-1">{props.diff}</View>
+		</View>
+	);
+}
 
 /**
  * Saved two-text comparison with private annotations. Callers own selections and comment bodies. The Comment

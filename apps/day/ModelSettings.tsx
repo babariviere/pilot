@@ -147,7 +147,7 @@ export function ModelStatus(props: { controls: ModelControls }) {
 			<Each of={c.unknown()} key={(o) => o.operationId}>
 				{(o) => (
 					<Notice
-						kind="needs"
+						kind="unconfirmed"
 						placement="section"
 						text="An earlier AI settings action is Unknown. No automatic retry."
 						action={

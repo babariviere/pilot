@@ -1,7 +1,7 @@
 // Atmosphere: the dithered sky of a quiet place, and the faint grid of the canvas behind the panel. Both are drawn
 // once for each size and appearance (a `Canvas` runs its drawing again only when it resizes or a token it reads
 // changes); nothing here animates or runs per frame.
-import { Canvas, type CanvasRenderingContext2D, Path2D, View, token } from "nsh";
+import { Canvas, type CanvasRenderingContext2D, type JSX, Path2D, token, View } from "nsh";
 import { Caption, Title } from "./text";
 
 /** The 8 by 8 ordered (Bayer) threshold matrix: hard square pixels, no smooth gradients. */
@@ -72,7 +72,7 @@ const GRID = 32;
 
 /**
  * The canvas behind a window's pages: a faint 32-point grid on the background colour. Put it first in the window's
- * root, which must not be transparent; it takes no presses and screen readers skip it.
+ * root, which must not be transparent; it takes no presses and screen readers skip it. `WindowCanvas` does both.
  */
 export function GridBackdrop() {
 	return (
@@ -87,5 +87,19 @@ export function GridBackdrop() {
 				cx.fill(lines);
 			}}
 		/>
+	);
+}
+
+/**
+ * A window's root: the background colour with the canvas grid behind its children. Every window and every test
+ * entry that mounts a screen or a part without Day's own window root starts with it, so pages sit on the same
+ * canvas everywhere.
+ */
+export function WindowCanvas(props: { testID?: string; children?: JSX.Element }) {
+	return (
+		<View testID={props.testID} class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
 	);
 }

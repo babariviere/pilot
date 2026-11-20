@@ -1,12 +1,12 @@
 // Isolated fixture: a linked mission draft from Feedback in New, beside an
 // existing New draft. Mock data. No service, provider or real creation.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
 import type { NewIntent, PlanOutcome } from "pilot-day/native";
 import type { ScriptedChats } from "./chatDemo";
-import type { PlanningFeed } from "./feeds";
 import type { FeedbackItem } from "./feedbackFeed";
 import type { ChatStep } from "./feedbackSteps";
 import { feedbackOpen } from "./feedbackView";
+import type { PlanningFeed } from "./feeds";
 import { draftLinkedMission } from "./linkedMission";
 import { MissionScreen } from "./MissionScreen";
 import { openDay, openPlanning } from "./mockFeeds";
@@ -22,7 +22,7 @@ import {
 	resetPlanningView,
 	restorePlanningDraft,
 } from "./planView";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("fresh");
 const original = plans.feed;
@@ -123,19 +123,8 @@ chatPick.set({ projectId: "demo-website", mode: "ask" });
 requestDraft.set({ itemId: "slack-1", revision: 2, title: "Shortcuts please", source: "Slack" });
 
 const last = () => sent().at(-1);
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block gap={1}>
 			<Caption>Mock data · Linked mission from Feedback</Caption>
 			<Buttons>
@@ -193,5 +182,5 @@ mount(() => (
 		<If when={planRoute()?.kind === "new"}>
 			<NewScreen plans={{ ...plans, feed }} />
 		</If>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

@@ -3,14 +3,14 @@
 // (chatDemo.ts): two invented projects, passive selection, one send per
 // creation, Unknown until Check, and a save-and-reopen that restores only
 // the words and the user's own choice.
-import { type JSX, mount, Scroll, View } from "nsh";
+import { mount, Scroll, View } from "nsh";
 import { PlanFeed } from "pilot-day/native";
 import { DEMO_PROJECTS, ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
 import { NewScreen } from "./NewScreen";
 import { mirrorPlanning } from "./planning";
 import { planRoute } from "./planView";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const chats = new ScriptedChats(DEMO_PROJECTS, DEMO_PROJECTS[0].projectId);
@@ -27,19 +27,8 @@ function startedLine(): string {
 	return [...chats.started.values()].map((c) => `${c.projectId} ${c.mode} [${c.message}]`).join(" | ");
 }
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<If when={planRoute()?.kind === "new"}>
 			<View class="flex-1">
 				<NewScreen plans={plans} />
@@ -107,5 +96,5 @@ mount(() => (
 				</Buttons>
 			</Block>
 		</Scroll>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

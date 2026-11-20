@@ -1,6 +1,6 @@
 // Content shown on request. Opening only shows what is already read: it
 // sends, saves and changes nothing. The page owns whether each is open.
-import { type JSX, Text, type ViewRef } from "nsh";
+import { type JSX, Text, View, type ViewRef } from "nsh";
 import { Collapsible } from "nsh/base";
 import { Pressable } from "./button";
 import { Icon } from "./icon";
@@ -47,25 +47,25 @@ export function Disclosure(props: {
 
 /**
  * One row of a divided list whose `content` shows below while `open`. Its `children` hold the row and its own
- * press target; use `ExpandableRow` when the whole row is the target.
+ * press target; use `ExpandableRow` when the whole row is the target. Its hairline starts 16 points in, as a
+ * `Row`'s does.
  */
-export function DividedRow(props: {
-	open: boolean;
-	/** Layout classes of the row, such as its padding. */
-	class?: string;
-	content: JSX.Element;
-	children?: JSX.Element;
-}) {
+export function DividedRow(props: { open: boolean; content: JSX.Element; children?: JSX.Element }) {
 	return (
-		<Collapsible open={props.open} class={`border-t border-border ${props.class ?? ""}`} content={props.content}>
-			{props.children}
-		</Collapsible>
+		<View class="relative">
+			<Collapsible open={props.open} content={props.content}>
+				{props.children}
+			</Collapsible>
+			<View class="absolute left-4 right-0 top-0 h-px bg-border" />
+		</View>
 	);
 }
 
 /**
- * One row of a divided list that opens in place: its summary (`children`) is the press target, and its `content`
- * shows below while `open`. The summary's `group-hover:` classes follow the pointer.
+ * One row of a divided list that opens a part of the page in place ("Goal and spec", a screen's Before and After):
+ * its summary (`children`: a chevron `Icon`, a `BodyStrong grow`, a `Caption`) is the press target, laid out in a
+ * row with a Row's spacing, and its `content` shows below while `open`. A list item that opens in place is a `Row`
+ * with `onToggle`; this is for a part of the page that has no state of its own.
  */
 export function ExpandableRow(props: {
 	open: boolean;
@@ -77,15 +77,11 @@ export function ExpandableRow(props: {
 	onFocus?: () => void;
 	onBlur?: () => void;
 	onToggle: () => void;
-	/** Layout classes of the row, such as its padding. */
-	class?: string;
-	/** Layout classes of the summary. */
-	summaryClass?: string;
 	content: JSX.Element;
 	children?: JSX.Element;
 }) {
 	return (
-		<DividedRow open={props.open} class={props.class} content={props.content}>
+		<DividedRow open={props.open} content={props.content}>
 			<Pressable
 				anchor={props.anchor}
 				onFocus={props.onFocus}
@@ -94,7 +90,7 @@ export function ExpandableRow(props: {
 				accessibilityLabel={props.accessibilityLabel}
 				expanded={props.open}
 				onPress={props.onToggle}
-				class={`group rounded-md ${props.summaryClass ?? ""}`}
+				class="group flex-row items-center gap-2.5 px-4 py-1.5 hover:bg-accent active:bg-accent"
 			>
 				{props.children}
 			</Pressable>

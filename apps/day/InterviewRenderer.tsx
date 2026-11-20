@@ -18,8 +18,6 @@ import {
 	Num,
 	Option,
 	Options,
-	OptionTag,
-	Pressable,
 	Question as QuestionPart,
 	Row,
 	RowGroup,
@@ -159,57 +157,6 @@ function pickKeys(question: Question | undefined): string {
 	return n <= 1 ? "1" : `1–${n}`;
 }
 
-// LIBRARY GAP: Option has no one-choice form that clears when pressed again. A suggestion here clears on a second
-// press (by click or by its key), and each one is its own Tab stop, while Option's radios cannot uncheck and select
-// on arrow keys. This draws Option's look on a Pressable; the library should offer `Option clearable`.
-function ClearableOption(props: {
-	title: string;
-	tag?: string;
-	hint?: string;
-	checked: boolean;
-	disabled?: boolean;
-	testID?: string;
-	accessibilityLabel?: string;
-	anchor?: (node: ViewRef) => void;
-	onChange: () => void;
-}) {
-	return (
-		<Pressable
-			testID={props.testID}
-			accessibilityLabel={props.accessibilityLabel}
-			selected={props.checked}
-			disabled={props.disabled}
-			anchor={props.anchor}
-			onPress={props.onChange}
-			class={`group flex-row items-start gap-2.5 rounded-lg px-3 py-2 disabled:opacity-60 ${props.checked ? "bg-selection" : "hover:bg-accent"}`}
-		>
-			<View
-				class={`mt-px size-4 items-center justify-center rounded-full border-[1.5px] ${props.checked ? "border-primary" : "border-input"}`}
-			>
-				<View class={`size-2 rounded-full ${props.checked ? "bg-primary" : ""}`} />
-			</View>
-			<View class="min-w-0 flex-1 gap-0.5">
-				<View class="flex-row flex-wrap items-center gap-2">
-					<BodyStrong>{props.title}</BodyStrong>
-					<If when={props.tag}>
-						<OptionTag label={props.tag ?? ""} />
-					</If>
-				</View>
-				<If when={props.hint}>
-					<Caption>{props.hint ?? ""}</Caption>
-				</If>
-			</View>
-		</Pressable>
-	);
-}
-
-// LIBRARY GAP: Rows inside a Question's body indent twice (the Question pads 16 and each Row pads 16 again); Options
-// reach out by 12 for the same reason. The answers page lists its questions as rows inside the Question, so this
-// cancels the Question's padding. The library should let Rows sit flush in a Question.
-function QuestionRows(props: { children?: JSX.Element }) {
-	return <View class="-mx-4">{props.children}</View>;
-}
-
 /** One question: its help, suggestions and the user's own words. The Question around it shows its words. */
 function QuestionView(props: {
 	source: InterviewSource;
@@ -329,7 +276,8 @@ function QuestionView(props: {
 						<If
 							when={several()}
 							else={
-								<ClearableOption
+								<Option
+									clearable
 									anchor={anchor(c().id)}
 									testID={`choice-${q().id}-${c().id}`}
 									title={c().meaning}
@@ -358,7 +306,8 @@ function QuestionView(props: {
 					)}
 				</Each>
 				<If when={!open()}>
-					<ClearableOption
+					<Option
+						clearable
 						testID={`own-${q().id}`}
 						title={picked() ? "Add detail" : "Something else: write your own"}
 						accessibilityLabel={picked() ? "Add detail to your choice" : "Answer in your own words"}
@@ -470,7 +419,7 @@ function Answers(props: { source: InterviewSource; all: boolean }) {
 			<If when={props.all}>
 				<BodyStrong role="header">{iv().submit === "open" ? "Check your answers" : "Your answers"}</BodyStrong>
 			</If>
-			<QuestionRows>
+			<Rows flush>
 				<Each of={groups()} key={(g) => g.section}>
 					{(g) => (
 						<>
@@ -495,7 +444,7 @@ function Answers(props: { source: InterviewSource; all: boolean }) {
 						</>
 					)}
 				</Each>
-			</QuestionRows>
+			</Rows>
 			<If when={!iv().current}>
 				<Notice
 					text={

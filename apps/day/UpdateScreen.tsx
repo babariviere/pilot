@@ -36,8 +36,8 @@ import {
 	Panel,
 	Question,
 	Row,
-	type RowTone,
 	Rows,
+	type RowTone,
 	Section,
 } from "./ui";
 import type { Update } from "./updateFeed";

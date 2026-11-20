@@ -10,7 +10,7 @@ import { FeedbackQuestion } from "../../FeedbackQuestion";
 import type { FeedbackItem, StepResult, UserFeedbackQuestion } from "../../feedbackFeed";
 import type { ChatStep } from "../../feedbackSteps";
 import { QuestionArtifacts } from "../../QuestionArtifacts";
-import { Action, MarkLine, QuietPanel, TabItem, TabRow } from "../../ui";
+import { Button, MarkedLine, Tab, TabBar } from "../../ui";
 
 type State = "proposal" | "question" | "fix";
 const state = signal<State>("question");
@@ -71,15 +71,13 @@ const question: UserFeedbackQuestion = {
 	],
 };
 
-function Line(props: { kind: "moving" | "needs" | "ready"; text: string; chat?: string }) {
+function Line(props: { kind: "working" | "needs" | "ready"; text: string; chat?: string }) {
 	return (
 		<View class="gap-1.5">
-			<MarkLine kind={props.kind}>
-				<Text class="text-sm leading-relaxed text-foreground">{props.text}</Text>
-			</MarkLine>
+			<MarkedLine kind={props.kind} text={props.text} />
 			<If when={props.chat}>
 				<View class="flex-row pl-4.5">
-					<Action label={props.chat ?? ""} />
+					<Button label={props.chat ?? ""} onPress={() => {}} />
 				</View>
 			</If>
 		</View>
@@ -88,7 +86,7 @@ function Line(props: { kind: "moving" | "needs" | "ready"; text: string; chat?: 
 
 function PrototypeProposal() {
 	return (
-		<QuietPanel class="gap-2.5">
+		<View class="gap-2.5 rounded-lg bg-muted p-4">
 			<Text class="text-xs font-medium text-muted-foreground">Proposed: try a prototype first</Text>
 			<Text class="text-sm leading-relaxed text-foreground">
 				The look of a task's owner on plan rows is unclear.
@@ -103,11 +101,11 @@ function PrototypeProposal() {
 				<Text class="text-sm text-foreground">3. Owner on hover only</Text>
 			</View>
 			<View class="flex-row flex-wrap items-center gap-2">
-				<Action variant="outline" label="Start prototype" onPress={() => state.set("question")} />
-				<Action label="Start fix" />
+				<Button label="Start prototype" onPress={() => state.set("question")} />
+				<Button label="Start fix" onPress={() => {}} />
 			</View>
 			<Text class="text-xs text-faint">A prototype makes mockups to choose from. It writes no code.</Text>
-		</QuietPanel>
+		</View>
 	);
 }
 
@@ -115,7 +113,7 @@ function ChosenFix() {
 	const shelf = createShelf();
 	const chosen = mockups[0]!;
 	return (
-		<QuietPanel class="gap-2.5">
+		<View class="gap-2.5 rounded-lg bg-muted p-4">
 			<Text class="text-xs font-medium text-muted-foreground">Proposed: a small fix, from your choice</Text>
 			<Text class="text-sm leading-relaxed text-foreground">Inline owner chips on plan rows.</Text>
 			<Text class="text-sm leading-relaxed text-muted-foreground">
@@ -126,9 +124,9 @@ function ChosenFix() {
 				<PinnedArtifacts source={source} shelf={shelf} rows={[{ ...chosen, pinned: true, updatedAt: 0 }]} />
 			</View>
 			<View class="flex-row flex-wrap items-center gap-2">
-				<Action variant="outline" label="Start fix" />
+				<Button label="Start fix" onPress={() => {}} />
 			</View>
-		</QuietPanel>
+		</View>
 	);
 }
 
@@ -136,15 +134,11 @@ mount(() => (
 	<View class="flex-1 bg-background">
 		<View class="flex-row items-center gap-4 px-6 py-3">
 			<Text class="text-xs text-faint">Mockup. Mock data.</Text>
-			<TabRow>
-				<TabItem label="1. Proposal" selected={state() === "proposal"} onPress={() => state.set("proposal")} />
-				<TabItem
-					label="2. Choose a mockup"
-					selected={state() === "question"}
-					onPress={() => state.set("question")}
-				/>
-				<TabItem label="3. Fix from choice" selected={state() === "fix"} onPress={() => state.set("fix")} />
-			</TabRow>
+			<TabBar>
+				<Tab label="1. Proposal" selected={state() === "proposal"} onPress={() => state.set("proposal")} />
+				<Tab label="2. Choose a mockup" selected={state() === "question"} onPress={() => state.set("question")} />
+				<Tab label="3. Fix from choice" selected={state() === "fix"} onPress={() => state.set("fix")} />
+			</TabBar>
 		</View>
 		<Scroll class="flex-1">
 			<View class="mx-auto w-full max-w-3xl gap-2.5 border-t border-border px-6 py-3">
@@ -180,8 +174,8 @@ mount(() => (
 					<ChosenFix />
 				</If>
 				<View class="flex-row flex-wrap items-center gap-2">
-					<Action label="Mark resolved" />
-					<Action label="Remove" />
+					<Button label="Mark resolved" onPress={() => {}} />
+					<Button label="Remove" onPress={() => {}} />
 				</View>
 			</View>
 		</Scroll>

@@ -1,10 +1,10 @@
 // Fixture data only. Real screen, no provider or Slack access.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
+import { type IntakeSource, type IntakeView, mirrorIntake } from "./intakeFeed";
 import { SlackReportsScreen } from "./SlackReportsScreen";
-import type { SlackControls, SlackSnapshot, ReportDetails } from "./slackControls";
+import type { ReportDetails, SlackControls, SlackSnapshot } from "./slackControls";
 import { restoreSlackReports, savedSlackReports } from "./slackView";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
-import { mirrorIntake, type IntakeSource, type IntakeView } from "./intakeFeed";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const snapshot = signal<SlackSnapshot | null>({
 	version: 1,
@@ -175,19 +175,8 @@ const source: IntakeSource = {
 };
 const day = { slack: controls, intake: mirrorIntake(source) };
 const shown = signal(true);
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block gap={1}>
 			<Caption tone="faint">Fixture data · Slack reports</Caption>
 			<Caption tone="faint">{`Sends: ${sends()}`}</Caption>
@@ -216,5 +205,5 @@ mount(() => (
 		<If when={shown()}>
 			<SlackReportsScreen day={day} />
 		</If>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

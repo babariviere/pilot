@@ -1,13 +1,13 @@
 // Headless control fixture only. No daemon, worker, provider or storage.
 // Today on a feed whose reads the test delivers (keys, so the focused field
 // keeps the focus), and the window's automatic reads on a test clock.
-import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
+import { keymap, mount, Scroll, signal, View } from "nsh";
 import { type Today, TodayFeed } from "pilot-day/native";
 import { mirrorDay } from "./day";
 import type { DayFeed } from "./feeds";
 import { autoRead, type Clock, type ReadResult } from "./freshness";
 import { MockDayScreen } from "./mockFeeds";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 import { anchors } from "./view";
 
 // The asks world: two questions that take the user's own words.
@@ -83,19 +83,8 @@ const card = signal("");
 keymap.bind("mod+shift+1", same, { when: "always" });
 keymap.bind("mod+shift+2", unrelated, { when: "always" });
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<View class="flex-1">
 			<MockDayScreen day={day} />
 		</View>
@@ -129,5 +118,5 @@ mount(() => (
 				</Buttons>
 			</Block>
 		</Scroll>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

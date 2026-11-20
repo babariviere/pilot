@@ -74,7 +74,10 @@ test("a chat waiting for a reply shows its last message; Reply sends the user's 
 	expect(app.shows("id:chat-waits-sent-waiting-chat")).toBe(true);
 });
 
-test("only stale reports get the folded document mark", () => {
+// The old marks (a folded document for a stale report, thin and amber hollow squares) are gone from the library.
+// A mission Pilot cannot confirm (no report, a stale or unavailable one, an unconfirmed state) now shows the one
+// Unconfirmed mark; its words still say which ("Old report", "No report yet").
+test("missions without a current report or a confirmed state show the Unconfirmed mark", () => {
 	const report = {
 		taskId: "t",
 		currentness: "stale" as const,
@@ -85,11 +88,11 @@ test("only stale reports get the folded document mark", () => {
 		nextStep: "Check",
 		evidence: [],
 	};
-	expect(stateMark({ state: "unreported", report })).toBe("oldReport");
-	expect(stateMark({ state: "unreported", report: null })).toBe("unreported");
-	expect(stateMark({ state: "unreported", report: { ...report, currentness: "unavailable" } })).toBe("unreported");
+	expect(stateMark({ state: "unreported", report })).toBe("unconfirmed");
+	expect(stateMark({ state: "unreported", report: null })).toBe("unconfirmed");
+	expect(stateMark({ state: "unreported", report: { ...report, currentness: "unavailable" } })).toBe("unconfirmed");
 	expect(stateMark({ state: "stuck", report })).toBe("failed");
-	expect(stateMark({ state: "unconfirmed", report })).toBe("unknown");
+	expect(stateMark({ state: "unconfirmed", report })).toBe("unconfirmed");
 });
 
 test("a report that is not moving says what the work waits for", () => {

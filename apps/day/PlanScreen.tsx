@@ -96,8 +96,9 @@ export function stageMark(stage: PlanStage): MarkKind {
 	switch (stage) {
 		case "questions":
 		case "review":
-		case "unknown":
 			return "needs";
+		case "unknown":
+			return "unconfirmed";
 		case "published":
 			return "done";
 		default:
@@ -112,7 +113,7 @@ function stepMark(state: StepState): MarkKind {
 		case "now":
 			return "working";
 		case "unknown":
-			return "needs";
+			return "unconfirmed";
 		default:
 			return "new";
 	}
@@ -868,7 +869,7 @@ function PlanBody(props: {
 					/>
 					{/* The map's chart needs the panel's whole width, so the map spans it under the columns. */}
 					<If when={wayfinder()}>
-						<Column testID="plan-map">
+						<Column testID="plan-map" under>
 							<MapView
 								plans={props.plans}
 								page={p()}

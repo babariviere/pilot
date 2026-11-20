@@ -19,7 +19,6 @@ import {
 	computed,
 	createAnimatedValue,
 	effect,
-	type JSX,
 	keymap,
 	Path2D,
 	reduceMotion,
@@ -33,7 +32,6 @@ import {
 	View,
 	type ViewProps,
 	type ViewRef,
-	windowSize,
 } from "nsh";
 import type { Exploration, ExploreKind, PlanPage } from "pilot-day/native";
 import {
@@ -66,11 +64,13 @@ import {
 	Body,
 	BodyStrong,
 	Button,
+	Buttons,
 	Caption,
-	GridBackdrop,
+	FloatingCard,
+	FullWindow,
 	Heading,
-	Icon,
 	Pressable,
+	panelWidth,
 	Row,
 	Rows,
 	Section,
@@ -739,7 +739,8 @@ export function ExpeditionChart(props: {
 		]);
 	});
 	const width = computed(() =>
-		full ? (props.frame?.w ?? 800) : Math.max(320, Math.min(windowSize().width - 48, 1120)),
+		// Inline, the chart spans the plan page's panel exactly, inside its hairlines.
+		full ? (props.frame?.w ?? 800) : Math.max(320, panelWidth()),
 	);
 	const height = computed(() => (full ? (props.frame?.h ?? 600) : fitHeight(chart(), width())));
 	/** The whole chart: fitted and still inline, readable and movable full window. */
@@ -1085,48 +1086,45 @@ export function ExpeditionChart(props: {
 			/>
 			<If when={!full}>
 				<View class="absolute right-3 top-3">
-					{/* On the chart's paper, drawn in its own colours: see ChartButton. */}
-					<Pressable
+					{/* On the chart's paper, drawn in its own colours. */}
+					<Button
+						paper="map"
+						icon="fullscreen"
+						iconOnly
 						anchor={(node) => {
 							openButton = node;
 						}}
 						testID="open-chart"
-						accessibilityLabel={`Open chart (${keymap.label(OPEN_CHART)})`}
-						tooltip={`Open chart (${keymap.label(OPEN_CHART)})`}
+						label={`Open chart (${keymap.label(OPEN_CHART)})`}
 						onPress={() => props.onOpenFull?.(openButton)}
-						class="size-8 items-center justify-center rounded-lg border border-map-ink/30 bg-map-paper hover:bg-map-ink/10"
-					>
-						<Icon name="fullscreen" tint="tint-map-ink" />
-					</Pressable>
+					/>
 				</View>
 			</If>
 			<If when={full}>
 				<View class="absolute right-3 top-3 flex-row items-center gap-2">
 					<If when={moved()}>
-						<ChartButton
-							testID="whole-chart"
-							label="Whole chart"
-							hint="Back to the whole chart"
-							onPress={home}
-							wide
-						/>
+						<Button paper="map" testID="whole-chart" label="Whole chart" onPress={home} />
 					</If>
-					<View class="flex-row rounded-lg border border-map-ink/30 bg-map-paper">
-						<ChartButton
+					<Buttons>
+						<Button
+							paper="map"
+							kind="quiet"
 							label="−"
 							accessibilityLabel="Zoom out"
-							hint="Zoom out  −"
+							shortcut="−"
 							disabled={atMin()}
 							onPress={() => zoomBy(1 / 1.45)}
 						/>
-						<ChartButton
+						<Button
+							paper="map"
+							kind="quiet"
 							label="+"
 							accessibilityLabel="Zoom in"
-							hint="Zoom in  +"
+							shortcut="+"
 							disabled={atMax()}
 							onPress={() => zoomBy(1.45)}
 						/>
-					</View>
+					</Buttons>
 				</View>
 			</If>
 			<FieldNotes
@@ -1151,12 +1149,17 @@ export function FullChart(props: { plans: Plans; page: PlanPage; onClose: () => 
 	const state = chartState();
 	const frame = signal<Frame | null>(null);
 	return (
-		<FullWindow>
-			<FullWindowBar>
-				<Heading role="header">{`Expedition chart · ${props.page.title || "This mission"}`}</Heading>
-				<Caption tone="faint" grow>
-					Drag or scroll to look around. Pinch, ⌘-scroll or − and + zoom. Esc closes the notes, then the chart.
-				</Caption>
+		<FullWindow
+			testID="chart-full"
+			bar={
+				<>
+					<Heading role="header">{`Expedition chart · ${props.page.title || "This mission"}`}</Heading>
+					<Caption tone="faint">
+						Drag or scroll to look around. Pinch, ⌘-scroll or − and + zoom. Esc closes the notes, then the chart.
+					</Caption>
+				</>
+			}
+			actions={
 				<Button
 					kind="quiet"
 					label="Close chart (Esc)"
@@ -1165,11 +1168,13 @@ export function FullChart(props: { plans: Plans; page: PlanPage; onClose: () => 
 					testID="chart-close"
 					onPress={props.onClose}
 				/>
-			</FullWindowBar>
+			}
+			padded
+		>
 			<View
-				class="flex-1 p-4"
+				class="flex-1"
 				onLayout={({ bounds }) =>
-					frame.set({ w: Math.max(320, bounds.size.width - 32), h: Math.max(240, bounds.size.height - 32) })
+					frame.set({ w: Math.max(320, bounds.size.width), h: Math.max(240, bounds.size.height) })
 				}
 			>
 				<If when={frame()}>
@@ -1185,24 +1190,6 @@ export function FullChart(props: { plans: Plans; page: PlanPage; onClose: () => 
 				</If>
 			</View>
 		</FullWindow>
-	);
-}
-
-// LIBRARY GAP: no part for a full-window view over a page (an opaque canvas with the grid, and a bar across its
-// top with a hairline under it). The library has PathBar for the window's own top bar only. These two local
-// helpers draw the chart's full window until the library offers one; the artifact's full window would use it too.
-function FullWindow(props: { children?: JSX.Element }) {
-	return (
-		<View testID="chart-full" class="absolute inset-0 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
-function FullWindowBar(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-row items-center gap-4 border-b border-border bg-background px-6 py-2.5">{props.children}</View>
 	);
 }
 
@@ -1236,33 +1223,6 @@ function MotionMark(props: { motion: Motion; at: At }) {
 				],
 			}}
 		/>
-	);
-}
-
-// LIBRARY GAP: no Button for the chart's own paper. Controls that sit on the chart (Open chart, zoom, Whole chart)
-// are drawn in its map-* colours so they read as part of the chart (DESIGN.md); the library's Button draws on the
-// panel's surface. The library should offer a map tone for Button (and an icon-only form with a tooltip).
-function ChartButton(props: {
-	label: string;
-	accessibilityLabel?: string;
-	hint: string;
-	testID?: string;
-	disabled?: boolean;
-	wide?: boolean;
-	onPress: () => void;
-}) {
-	return (
-		<Pressable
-			testID={props.testID}
-			accessibilityLabel={props.accessibilityLabel}
-			tooltip={props.hint}
-			disabled={props.disabled}
-			onPress={props.onPress}
-			class="h-8 min-w-8 items-center justify-center rounded-lg px-2 hover:bg-map-ink/10 disabled:opacity-40"
-			classList={{ "border border-map-ink/30 bg-map-paper px-3": props.wide === true }}
-		>
-			<Text class={props.wide ? "text-sm text-map-ink" : "text-base text-map-ink"}>{props.label}</Text>
-		</Pressable>
 	);
 }
 
@@ -1563,116 +1523,107 @@ function FieldNotes(props: {
 		(props.id === "home" ? "Your brief" : props.id === "dest" ? props.page.destination : "Planning rounds here");
 	return (
 		<If when={shown()}>
-			<NotesCard side={props.side}>
-				<Scroll class="flex-1">
-					<Block gap={3}>
-						<View class="flex-row items-center gap-2">
-							<Caption tone="faint" grow>
-								{kind()}
-							</Caption>
-							<Button
-								small
-								label="Close"
-								shortcut="Esc"
-								accessibilityLabel="Close field notes"
-								onPress={props.onClose}
-							/>
-						</View>
-						{/* The place's name, in the chart's serif, as the chart labels it. */}
-						<Text role="header" class="font-serif text-xl leading-snug text-popover-foreground">
-							{title()}
-						</Text>
-						<If when={item()}>
-							{(e) => (
-								<View class="gap-3">
-									<Body>{exploreLine(e())}</Body>
-									<Each of={e().changed} key={(c) => c}>
-										{(c) => <Caption tone="needs">{c()}</Caption>}
-									</Each>
-									<ItemRecord plans={props.plans} page={props.page} item={e()} />
-								</View>
-							)}
-						</If>
-						<If when={fog()}>
-							{(f) => (
-								<View class="gap-2">
-									<FogRecord plans={props.plans} page={props.page} fog={f()} />
-									<Caption tone="faint">
-										Fog of war is an area Pilot does not understand well enough to ask about yet. It blocks
-										nothing.
-									</Caption>
-								</View>
-							)}
-						</If>
-						<If when={props.id === "home"}>
-							<Body>{props.page.goal || "Your brief is not shown here."}</Body>
-							<Caption tone="faint">
-								Where the mission set out: your words, as you wrote them. Pilot reads them and never changes
-								them.
-							</Caption>
-						</If>
-						<If when={props.id === "dest"}>
-							<Body tone="muted">{stageName(props.page)}</Body>
-							<If when={props.page.map}>
-								<Agreement
-									info={props.page.map as NonNullable<PlanPage["map"]>}
-									onOpenTasks={props.onOpenTasks}
+			<View
+				class="absolute top-14 w-80"
+				classList={{
+					"bottom-3 left-3": props.side === "left",
+					// On the right the notes stop above the compass, which stays in view.
+					"bottom-36 right-3": props.side === "right",
+				}}
+			>
+				<FloatingCard variant="flush" testID="field-notes" accessibilityLabel="Field notes">
+					<Scroll class="flex-1">
+						<Block gap={3}>
+							<View class="flex-row items-center gap-2">
+								<Caption tone="faint" grow>
+									{kind()}
+								</Caption>
+								<Button
+									small
+									kind="quiet"
+									icon="close"
+									iconOnly
+									label="Close field notes"
+									shortcut="Esc"
+									onPress={props.onClose}
 								/>
-							</If>
-							<Caption tone="faint">
-								Approving a plan publishes build tasks. It starts nothing; each task starts only when you start
-								it.
-							</Caption>
-						</If>
-						<If when={props.id === "harbor"}>
-							<Each of={props.page.rounds} key={(r) => r.id}>
-								{(r) => (
-									<View class="gap-1">
-										<BodyStrong>{r().title}</BodyStrong>
-										<Caption>{r().line}</Caption>
-										<Each of={r().answers} key={(a) => a.prompt}>
-											{(a) => (
-												<View class="gap-0.5">
-													<Caption tone="faint">{a().prompt}</Caption>
-													<Body>{a().answer || "No answer"}</Body>
-												</View>
-											)}
+							</View>
+							{/* The place's name, in the chart's serif, as the chart labels it. */}
+							<Text role="header" class="font-serif text-xl leading-snug text-popover-foreground">
+								{title()}
+							</Text>
+							<If when={item()}>
+								{(e) => (
+									<View class="gap-3">
+										<Body>{exploreLine(e())}</Body>
+										<Each of={e().changed} key={(c) => c}>
+											{(c) => <Caption tone="needs">{c()}</Caption>}
 										</Each>
+										<ItemRecord plans={props.plans} page={props.page} item={e()} />
 									</View>
 								)}
-							</Each>
-							<If when={props.chart.camps.length > props.page.rounds.length + 1}>
-								<Caption tone="faint">{props.chart.camps[props.chart.camps.length - 1].line}</Caption>
 							</If>
-							<Caption tone="faint">
-								Each planning round is a camp on Pilot's route. Submitting a round completes that round only; it
-								is not approval to build.
-							</Caption>
-						</If>
-					</Block>
-				</Scroll>
-			</NotesCard>
+							<If when={fog()}>
+								{(f) => (
+									<View class="gap-2">
+										<FogRecord plans={props.plans} page={props.page} fog={f()} />
+										<Caption tone="faint">
+											Fog of war is an area Pilot does not understand well enough to ask about yet. It blocks
+											nothing.
+										</Caption>
+									</View>
+								)}
+							</If>
+							<If when={props.id === "home"}>
+								<Body>{props.page.goal || "Your brief is not shown here."}</Body>
+								<Caption tone="faint">
+									Where the mission set out: your words, as you wrote them. Pilot reads them and never changes
+									them.
+								</Caption>
+							</If>
+							<If when={props.id === "dest"}>
+								<Body tone="muted">{stageName(props.page)}</Body>
+								<If when={props.page.map}>
+									<Agreement
+										info={props.page.map as NonNullable<PlanPage["map"]>}
+										onOpenTasks={props.onOpenTasks}
+									/>
+								</If>
+								<Caption tone="faint">
+									Approving a plan publishes build tasks. It starts nothing; each task starts only when you
+									start it.
+								</Caption>
+							</If>
+							<If when={props.id === "harbor"}>
+								<Each of={props.page.rounds} key={(r) => r.id}>
+									{(r) => (
+										<View class="gap-1">
+											<BodyStrong>{r().title}</BodyStrong>
+											<Caption>{r().line}</Caption>
+											<Each of={r().answers} key={(a) => a.prompt}>
+												{(a) => (
+													<View class="gap-0.5">
+														<Caption tone="faint">{a().prompt}</Caption>
+														<Body>{a().answer || "No answer"}</Body>
+													</View>
+												)}
+											</Each>
+										</View>
+									)}
+								</Each>
+								<If when={props.chart.camps.length > props.page.rounds.length + 1}>
+									<Caption tone="faint">{props.chart.camps[props.chart.camps.length - 1].line}</Caption>
+								</If>
+								<Caption tone="faint">
+									Each planning round is a camp on Pilot's route. Submitting a round completes that round only;
+									it is not approval to build.
+								</Caption>
+							</If>
+						</Block>
+					</Scroll>
+				</FloatingCard>
+			</View>
 		</If>
-	);
-}
-
-// LIBRARY GAP: no part for a card that floats over a canvas (the field notes beside the chart: a popover surface
-// with a frame and a shadow, placed by the page). Menus have one inside Picker, but it is not offered on its own.
-// The library should offer a floating card; until then this helper draws the notes' frame.
-function NotesCard(props: { side: "left" | "right"; children?: JSX.Element }) {
-	return (
-		<View
-			testID="field-notes"
-			accessibilityLabel="Field notes"
-			class="absolute top-14 w-80 overflow-hidden rounded-xl border border-border bg-popover shadow-md"
-			classList={{
-				"bottom-3 left-3": props.side === "left",
-				// On the right the notes stop above the compass, which stays in view.
-				"bottom-36 right-3": props.side === "right",
-			}}
-		>
-			{props.children}
-		</View>
 	);
 }
 

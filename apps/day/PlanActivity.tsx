@@ -7,7 +7,7 @@ import type { PlanActivity, PlanPage } from "pilot-day/native";
 import { activityQuiet, activityTime } from "./activityWords";
 import { ChatTranscript } from "./ChatRows";
 import type { Plans } from "./planning";
-import { Block, Body, Caption, Mark, Notice, Section } from "./ui";
+import { Block, Caption, Notice, Row, Rows, Section } from "./ui";
 
 /** How often the times read again while the line shows. */
 const CLOCK_MS = 15_000;
@@ -24,25 +24,20 @@ export function ActivityLine(props: { plans: Plans; page: PlanPage; activity: Pl
 	return (
 		<View testID="plan-activity">
 			<If when={status()}>
-				<Block>
-					{/* LIBRARY GAP: Row cannot put a test ID on its title or meta, and tests read the step and its time by
-					    their own IDs. This mark-and-words line uses layout classes only until Row offers them. */}
-					<View class="flex-row items-start gap-2.5">
-						<Mark kind={props.activity.working ? "working" : "new"} />
-						<View class="min-w-0 flex-1 gap-0.5">
-							<Body testID="plan-activity-step">
-								{props.activity.working
-									? props.activity.step || "Working"
-									: "Pilot's planning agent is not working now."}
-							</Body>
-							<If when={time()}>
-								<Caption testID="plan-activity-time" tone="faint">
-									{time()}
-								</Caption>
-							</If>
-						</View>
-					</View>
-				</Block>
+				<Rows>
+					<Row
+						mark={props.activity.working ? "working" : "new"}
+						title={
+							props.activity.working
+								? props.activity.step || "Working"
+								: "Pilot's planning agent is not working now."
+						}
+						titleTestID="plan-activity-step"
+						meta={time() || undefined}
+						metaTestID="plan-activity-time"
+						wrap
+					/>
+				</Rows>
 			</If>
 			<If when={quiet()}>
 				<Notice testID="plan-activity-quiet" kind="needs" role="alert" placement="section" text={quiet()} />

@@ -13,12 +13,14 @@ const POPUP = "min-w-56 rounded-(--radius-panel) border border-border bg-popover
  * The select: one value chosen from a list, such as a project or a model. Its trigger is 26 points high, framed like
  * a field, naming the choice with a chevron; its popup lists the items with a second line each (`detail`).
  * `searchable` adds a filter field for long lists. Choosing only reports the value; the caller decides what it does.
- * In a `Row` it sits in the trailing slot.
+ * In a `Row` it sits in the trailing slot. In a form, `field` shows `label` above it, as `Field` does.
  */
 export function Picker(props: {
 	testID?: string;
 	/** What the choice is about, for screen readers. */
 	label: string;
+	/** Shows `label` above the trigger, for a form. */
+	field?: boolean;
 	items: SelectItem[];
 	value: string | null;
 	/** What the trigger says while nothing listed is chosen. */
@@ -44,7 +46,7 @@ export function Picker(props: {
 		mark: () => props.agent,
 		actions: { setValue: (value) => props.onChange(String(value)) },
 	});
-	return (
+	const select = () => (
 		<Select
 			ref={agent.anchor}
 			testID={props.testID}
@@ -86,6 +88,16 @@ export function Picker(props: {
 				</View>
 			}
 		/>
+	);
+	return (
+		<If when={props.field} else={select()}>
+			<View class="gap-1.5">
+				<Text class="text-foreground" style={TYPE.control}>
+					{props.label}
+				</Text>
+				<View class="flex-row">{select()}</View>
+			</View>
+		</If>
 	);
 }
 

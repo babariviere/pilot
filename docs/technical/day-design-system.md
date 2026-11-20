@@ -57,7 +57,7 @@ its own structural types instead. They make no host, storage, file or network ca
 5. Describe the part in [the guide](../../apps/day/ui/README.md). If artifacts should use it, add it to the short
    parts table in `packages/kernel/skills/pilot-artifacts/references/nsh.md`.
 
-Until a part exists, screens mark the gap with a `LIBRARY GAP:` comment. `rg 'LIBRARY GAP' apps/day` lists them.
+A screen never works around a missing part with its own look classes. Add the part first.
 
 ## Verification
 

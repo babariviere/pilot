@@ -2,7 +2,7 @@
 // with invented tasks in each work state. Every record is mock data. The bar
 // on top picks a situation; Command-Shift-U applies the next live update
 // without moving the keyboard focus. Nothing here reads or sends anything real.
-import { type JSX, keymap, mount, signal, View } from "nsh";
+import { keymap, mount, signal, View } from "nsh";
 import type { Freshness, MissionPage, TaskLine, TaskWorkState } from "pilot-day/native";
 import { TodayFeed } from "pilot-day/native";
 import { anchorOnScreen, type Span } from "./contentAnchor";
@@ -12,7 +12,7 @@ import { scrollOf } from "./kept";
 import { MockDayScreen, openMockChat, openPlanning } from "./mockFeeds";
 import { ScriptedThreads } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 import { openMission } from "./view";
 
 type Situation = "running" | "waiting" | "paused" | "empty" | "completed" | "unread" | "older" | "offline";
@@ -224,20 +224,9 @@ async function showWhere() {
 // A live update that does not take the keyboard focus from where the user is.
 keymap.bind("mod+shift+u", () => step.set(step() + 1), { when: "always" });
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 openMission("search");
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Buttons>
 				<Caption>Mock data · situation</Caption>
@@ -255,5 +244,5 @@ mount(() => (
 		<View class="min-h-0 flex-1">
 			<MockDayScreen day={day} plans={plans} />
 		</View>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

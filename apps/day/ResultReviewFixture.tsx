@@ -1,6 +1,6 @@
 // Invented service data only. Exercises the production result page and its Review code page over a scripted
 // result (deliveryDemo.ts) and a scripted private review, not a second screen.
-import { type JSX, keymap, mount, signal, View } from "nsh";
+import { keymap, mount, signal, View } from "nsh";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
 import { mirrorDelivery } from "./deliveryFeed";
@@ -13,7 +13,7 @@ import {
 	restoreReviewDrafts,
 	reviewDrafts,
 } from "./resultReview";
-import { Block, Body, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Body, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const KEY = "task/mock-project/native/native-4";
 const delivery = new ScriptedDelivery();
@@ -119,17 +119,6 @@ const source: ResultReviewSource = {
 		return { state: receipt ? "saved" : "unknown", operationId: id, receipt };
 	},
 };
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => {
 	// A background read of the same result, as a fresh copy, from a key so the focus stays where it is.
 	keymap.bind(
@@ -142,7 +131,7 @@ mount(() => {
 		{ when: "always" },
 	);
 	return (
-		<FixtureWindow>
+		<WindowCanvas>
 			<View class="min-h-0 flex-1">
 				<Each
 					of={deliveryRoute() ? [{ place: deliveryRoute() as DeliveryPlace, at: revision() }] : []}
@@ -201,6 +190,6 @@ mount(() => {
 					/>
 				</Buttons>
 			</Block>
-		</FixtureWindow>
+		</WindowCanvas>
 	);
 });

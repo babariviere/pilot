@@ -2,11 +2,11 @@
 // a request in prose: the plan page shows its last words, a reply field,
 // Reply and Continue; Today's planning row shows them with a way there.
 // Reads arrive by shortcut, so the focused field keeps the focus.
-import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
+import { keymap, mount, Scroll, signal, View } from "nsh";
 import type { PlanPage, PlanRow } from "pilot-day/native";
 import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
 import { PlannerWaits } from "./Unstick";
-import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, Panel, Section } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel, Section, WindowCanvas } from "./ui";
 
 const SAYS = "Which database should the export use? Tell me and I will go on.";
 const plans = openPlanning("wayfinder");
@@ -67,20 +67,9 @@ todayPlans.planning.update((p) => ({ ...p, plans: [row, ...p.plans] }));
 const day = openDay();
 const showToday = signal(false);
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 // The planning page shows the planner's request first in its Planning agent section; this fixture does the same.
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<View class="min-h-0 flex-1">
 			<If
 				when={showToday()}
@@ -107,5 +96,5 @@ mount(() => (
 				<Button small label="Show Today" onPress={() => showToday.set(true)} />
 			</Buttons>
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

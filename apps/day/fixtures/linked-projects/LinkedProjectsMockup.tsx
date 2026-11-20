@@ -1,7 +1,7 @@
 // MOCKUP. Mock data only: linked projects in Settings > Projects. No daemon, files or effects.
 // Run from the repository root: apps/day/nsh.sh run fixtures/linked-projects/LinkedProjectsMockup.tsx
 import { mount, Scroll, signal, Text, View } from "nsh";
-import { CheckboxRow, Disclosure, SectionTitle } from "../../ui";
+import { Checkbox, Disclosure, Heading } from "../../ui";
 
 type Project = { id: string; name: string; path: string; linked: string[] };
 const projects = signal<Project[]>([
@@ -32,7 +32,7 @@ mount(() => (
 		</View>
 		<Scroll class="flex-1">
 			<View class="mx-auto w-full max-w-3xl gap-4 px-6 py-6">
-				<SectionTitle title="Local projects" />
+				<Heading role="header">Local projects</Heading>
 				<Each of={projects()} key={(p) => p.id}>
 					{(p) => (
 						<View class="gap-1 border-t border-border pt-3">
@@ -50,7 +50,7 @@ mount(() => (
 									</Text>
 									<Each of={projects().filter((other) => other.id !== p().id)} key={(o) => o.id}>
 										{(o) => (
-											<CheckboxRow
+											<Checkbox
 												label={o().name}
 												checked={p().linked.includes(o().id)}
 												onChange={() => toggle(p(), o().id)}

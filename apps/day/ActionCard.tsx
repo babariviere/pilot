@@ -114,7 +114,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 			meta={
 				<>
 					<State
-						kind={a().delivery === "unknown" ? "unknown" : "needs"}
+						kind={a().delivery === "unknown" ? "unconfirmed" : "needs"}
 						label={a().state === "deferred" ? "Action for you · put off" : "Action for you"}
 						plain
 					/>

@@ -2,30 +2,19 @@
 // Today with nothing else waiting and a scripted request source
 // (intakeDemo.ts): new Slack requests queue in Needs you as cards; the
 // Linear request is counted on the Linear row only.
-import { type JSX, mount, View } from "nsh";
+import { mount, View } from "nsh";
 import { intakeCounts, intakeOpened, intakeScript, scriptedIntake } from "./intakeDemo";
 import { mirrorIntake } from "./intakeFeed";
 import { mockRituals, openDay } from "./mockFeeds";
 import { goalDraft, linkedMission, planRoute, requestDraft } from "./planView";
 import { TodayScreen } from "./TodayScreen";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const day = { ...openDay("quiet"), intake: mirrorIntake(scriptedIntake) };
 void scriptedIntake.read();
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<View class="min-h-0 flex-1">
 			<TodayScreen day={day} rituals={mockRituals(day)} />
 		</View>
@@ -65,5 +54,5 @@ mount(() => (
 				<Button small label="Service unavailable" onPress={() => intakeScript.unreadable("unavailable")} />
 			</Buttons>
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

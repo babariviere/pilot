@@ -7,7 +7,7 @@
 // A close or an update keeps the page, its project, the open issue and the
 // scroll offset (windowState.ts). The restored page reads again, as opening
 // it does, and shows nothing when the read is for another project.
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, View, type ViewRef } from "nsh";
+import { effect, keymap, Scroll, type ScrollRef, signal, View, type ViewRef } from "nsh";
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
 import { keepRead, staleLine } from "./freshness";
@@ -39,16 +39,13 @@ import {
 import {
 	Block,
 	Body,
-	BodyStrong,
 	Button,
 	Buttons,
 	Caption,
 	Column,
 	EmptyLine,
-	ExpandableRow,
 	glide,
 	Link,
-	Mark,
 	type MarkKind,
 	Notice,
 	Page,
@@ -56,6 +53,7 @@ import {
 	PageHead,
 	Panel,
 	Progress,
+	Row,
 	Rows,
 	Section,
 } from "./ui";
@@ -133,46 +131,6 @@ function PlaceAction(props: { place: Place; itemId: string }) {
 	);
 }
 
-// LIBRARY GAP: Row has no form that opens in place (MissionWork.tsx needs the same). An issue's row shows its details
-// below it when pressed, with the expanded state for screen readers, and keeps the keyboard focus. The library should
-// offer an "open in place" Row (an `open` prop, `onToggle` and the content under it). Until then this helper builds
-// one from ExpandableRow, with Row's slots (mark, title, meta, a state word) and Row's spacing.
-function OpenRow(props: {
-	open: boolean;
-	testID: string;
-	accessibilityLabel: string;
-	mark: MarkKind;
-	title: string;
-	meta: string;
-	state: string;
-	anchor: (node: ViewRef) => void;
-	onToggle: () => void;
-	content: JSX.Element;
-}) {
-	return (
-		<ExpandableRow
-			open={props.open}
-			anchor={props.anchor}
-			testID={props.testID}
-			accessibilityLabel={props.accessibilityLabel}
-			onToggle={props.onToggle}
-			summaryClass="flex-row items-start gap-2.5 px-4 py-1.5 hover:bg-accent"
-			content={<View class="gap-2 pb-2.5 pl-10 pr-4">{props.content}</View>}
-		>
-			<View class="h-4.5 w-3.5 items-center justify-center">
-				<Mark kind={props.mark} />
-			</View>
-			<View class="min-w-0 flex-1">
-				<BodyStrong truncate>{props.title}</BodyStrong>
-				<Caption tone="faint" truncate>
-					{props.meta}
-				</Caption>
-			</View>
-			<Caption>{props.state}</Caption>
-		</ExpandableRow>
-	);
-}
-
 /** One saved issue: opens in place to its link, parent and place in Pilot. */
 function Issue(props: { day: Day; item: TrackedItem; group: GroupKey; place: Place }) {
 	const i = () => props.item;
@@ -211,7 +169,7 @@ function Issue(props: { day: Day; item: TrackedItem; group: GroupKey; place: Pla
 		}
 	});
 	return (
-		<OpenRow
+		<Row
 			open={open()}
 			anchor={(n: ViewRef) => node.set(n)}
 			testID={`linear-issue-${i().id}`}

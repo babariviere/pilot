@@ -1,8 +1,8 @@
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal, View } from "nsh";
 import { ChatScreen } from "./ChatScreen";
 import { openDay, openMockChat } from "./mockFeeds";
 import { type LiveChangesResult, mirrorSessionChat, type SessionChat } from "./sessionChat";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const source = openMockChat().source;
 const key = signal<string | undefined>("first");
@@ -29,19 +29,8 @@ const shown = (): SessionChat | null => {
 };
 const day = openDay();
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Buttons>
 				<Button small label="Replace workspace" onPress={() => key.set("second")} />
@@ -77,5 +66,5 @@ mount(() => (
 				sessionId="test-chat"
 			/>
 		</View>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

@@ -1,13 +1,25 @@
 // Text roles. A screen picks a role for each piece of words and never sets a size, a weight or a family: the
-// role does. Sizes follow the compact Forge scale (round-4 mockup, "Size and shape"): display 22/650, title
-// 16/600, heading 13/600, body 13/18, caption 11.5, numbers 11 in Geist Mono. Colour comes from a tone.
+// role does. Sizes follow the compact Forge scale (round-4 mockup, "Size and shape"): display 22/700, title
+// 16/600, heading 13/600, body 13/18, caption 11.5, numbers 11 in Geist Mono. Geist ships at 400, 500, 600 and 700
+// only, so every weight here is one of those. Colour comes from a tone.
 import { type JSX, Text, type TextStyle } from "nsh";
 
 /**
  * A text colour, by meaning. `default` is the main text; `muted` meta and help; `faint` times, counts and quiet
- * notes; `needs`, `failed` and `ok` only for those states' words; `accent` only for a link's words.
+ * notes; `needs`, `failed` and `ok` only for those states' words; `accent` only for a link's words; `added` and
+ * `removed` only for a diff's counts and lines (not Ready's green or Failed's red).
  */
-export type Tone = "default" | "muted" | "faint" | "needs" | "failed" | "ok" | "accent" | "onAccent";
+export type Tone =
+	| "default"
+	| "muted"
+	| "faint"
+	| "needs"
+	| "failed"
+	| "ok"
+	| "accent"
+	| "onAccent"
+	| "added"
+	| "removed";
 
 /** The token class of each tone. Library parts use it; screens pass `tone`. */
 export const TONE: Record<Tone, string> = {
@@ -19,6 +31,8 @@ export const TONE: Record<Tone, string> = {
 	ok: "text-ok-ink",
 	accent: "text-primary",
 	onAccent: "text-primary-foreground",
+	added: "text-added-ink",
+	removed: "text-removed-ink",
 };
 
 /**

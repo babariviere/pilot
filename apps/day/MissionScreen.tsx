@@ -515,11 +515,11 @@ function Control(props: { day: Day; page: MissionPage }) {
 					<Each of={control().members} key={(m) => m.title}>
 						{(m) => (
 							<Row
-								mark={m().state === "unknown" ? "needs" : "paused"}
+								mark={m().state === "unknown" ? "unconfirmed" : "paused"}
 								title={m().title}
 								meta={m().reason ?? undefined}
 								state={memberWord(m().state)}
-								stateTone={m().state === "unknown" ? "needs" : "quiet"}
+								stateTone="quiet"
 								wrap
 							/>
 						)}
@@ -987,7 +987,6 @@ function PartRow(props: { missionId: string; section: Part; title: string; conte
 				// A press gives the row the keyboard focus, so Space and Return work on it next.
 				row?.focus();
 			}}
-			summaryClass="flex-row items-center gap-2.5 px-4 py-1.5"
 			content={<View class="gap-3">{props.content}</View>}
 		>
 			<Icon name={open() ? "chevron" : "right"} tint="tint-muted-foreground" />
@@ -1073,13 +1072,11 @@ function Results(props: { day: Day; page: MissionPage; shelf: Shelf; finished: T
 				/>
 			</View>
 			<If when={props.day.artifacts}>
-				<Block>
-					<MissionArtifacts
-						source={props.day.artifacts as NonNullable<Day["artifacts"]>}
-						shelf={props.shelf}
-						missionId={id()}
-					/>
-				</Block>
+				<MissionArtifacts
+					source={props.day.artifacts as NonNullable<Day["artifacts"]>}
+					shelf={props.shelf}
+					missionId={id()}
+				/>
 			</If>
 		</View>
 	);
@@ -1239,9 +1236,7 @@ function MissionBody(props: {
 											section="discussions"
 											title="Discussions"
 											content={
-												<Block>
-													<MissionThreadsSection day={props.day} missionId={row().id} heading={false} />
-												</Block>
+												<MissionThreadsSection day={props.day} missionId={row().id} heading={false} />
 											}
 										/>
 									</If>

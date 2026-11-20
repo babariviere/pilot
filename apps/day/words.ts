@@ -44,17 +44,17 @@ export function stateMark(row: Pick<MissionRow, "state" | "report">): MarkKind {
 	switch (row.state) {
 		case "moving":
 		case "resuming":
-			return "moving";
+			return "working";
 		case "notMoving":
-			return "still";
+			return "new";
 		case "unreported":
-			return row.report?.currentness === "stale" ? "oldReport" : "unreported";
+			return "unconfirmed";
 		case "waiting":
 			return "needs";
 		case "stuck":
 			return "failed";
 		case "unconfirmed":
-			return "unknown";
+			return "unconfirmed";
 		case "pausing":
 		case "paused":
 			return "paused";
@@ -63,7 +63,7 @@ export function stateMark(row: Pick<MissionRow, "state" | "report">): MarkKind {
 
 /** Whether a mission's words ask for attention, and how. */
 export function stateTone(row: MissionRow): "needs" | "failed" | "quiet" {
-	if (row.state === "waiting" || row.state === "unconfirmed" || row.control.needsLook) return "needs";
+	if (row.state === "waiting" || row.control.needsLook) return "needs";
 	if (row.state === "stuck") return "failed";
 	return "quiet";
 }
@@ -196,7 +196,7 @@ export function workWord(state: WorkState): string {
 export function workMark(state: WorkState): MarkKind {
 	switch (state) {
 		case "working":
-			return "moving";
+			return "working";
 		case "waitingForUser":
 			return "needs";
 		case "held":
@@ -204,9 +204,9 @@ export function workMark(state: WorkState): MarkKind {
 		case "completed":
 			return "done";
 		case "unknown":
-			return "unreported";
+			return "unconfirmed";
 		default:
-			return "still";
+			return "new";
 	}
 }
 

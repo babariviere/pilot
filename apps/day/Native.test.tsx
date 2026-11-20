@@ -3,6 +3,16 @@
 // the captures only mean something on a target.
 import { expect, open, test } from "nsh/test";
 
+test("the connected entry draws its amber notice: the theme is set before it mounts", async () => {
+	// App.tsx used to mount inside an imported module, before NSH gave the entry its theme, so the notice's amber
+	// fill and mark were unknown classes. It now mounts after the theme (ConnectedDay.tsx).
+	for (const scheme of ["light", "dark"] as const) {
+		const app = await open("./App.tsx", { platform: "macos", width: 900, height: 500, colorScheme: scheme });
+		await app.waitFor("id:not-connected");
+		await app.screenshot(`output/connected-not-connected-${scheme}.png`);
+	}
+});
+
 const DECIDE = "id:decision >> role:button[Decide]";
 test("work profiles: settings, project checkboxes, the task line and Today's Cyber question, captured", async () => {
 	const settings = await open("./ModelSettingsFixture.tsx", { platform: "macos", width: 1000, height: 1800 });

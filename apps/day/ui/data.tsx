@@ -2,14 +2,31 @@
 // library's own, so the library needs nothing from Day's native module.
 import { type JSX, signal, Text, View } from "nsh";
 import { Link } from "./button";
-import { TYPE } from "./text";
+import { Caption, TYPE } from "./text";
 
 /** One piece of evidence: its words and how it bears on the report. */
 export type EvidenceItem = { label: string; tone: "neutral" | "warn" | "bad" | (string & {}) };
 /** One bar of a chart: its name and its value. */
 export type BarItem = { label: string; value: number };
-/** A mission's task counts. */
-export type TrackCounts = { done: number; review: number; active: number; blocked: number; todo: number };
+
+/**
+ * One figure with its label above it and an optional quiet note under it ("Merged this week", "12", "3 more than
+ * last week"): the figure in the Display size, in Geist Mono like every number. It draws no frame; several sit side
+ * by side in a `Block` or each in its own column. Rule: a figure says one number; its words say what it counts.
+ */
+export function Figure(props: { label: string; value: string; note?: string; testID?: string }) {
+	return (
+		<View testID={props.testID} class="gap-1">
+			<Caption>{props.label}</Caption>
+			<Text class="font-mono text-foreground" style={TYPE.display}>
+				{props.value}
+			</Text>
+			<If when={props.note}>
+				<Caption tone="faint">{props.note ?? ""}</Caption>
+			</If>
+		</View>
+	);
+}
 
 /**
  * Facts about one thing, as label and value pairs ("Where", "Link", "Asked by"; "Project", "Branch"): labels faint
@@ -109,24 +126,6 @@ export function Bars(props: { bars: BarItem[] }) {
 					</View>
 				)}
 			</Each>
-		</View>
-	);
-}
-
-/**
- * A mission's tasks as one thin bar: done, in progress, stopped, not started.
- * @deprecated Use `Progress` (a row of squares and a count).
- */
-export function Track(props: { progress: TrackCounts }) {
-	return (
-		<View class="h-1 w-40 flex-row overflow-hidden bg-track">
-			<View class="h-full bg-muted-foreground" style={{ flexGrow: props.progress.done, flexBasis: 0 }} />
-			<View
-				class="h-full bg-progress"
-				style={{ flexGrow: props.progress.review + props.progress.active, flexBasis: 0 }}
-			/>
-			<View class="h-full bg-failed" style={{ flexGrow: props.progress.blocked, flexBasis: 0 }} />
-			<View class="h-full" style={{ flexGrow: props.progress.todo, flexBasis: 0 }} />
 		</View>
 	);
 }

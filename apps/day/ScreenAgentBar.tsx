@@ -7,7 +7,6 @@ import {
 	computed,
 	effect,
 	keymap,
-	type JSX,
 	type MouseEvent,
 	Overlay,
 	type PressEvent,
@@ -43,6 +42,7 @@ import {
 	controlAt,
 	controlFrames,
 	Event,
+	FloatingCard,
 	frameOf,
 	type Glance,
 	glance,
@@ -52,6 +52,7 @@ import {
 	Mark,
 	Notice,
 	Reply,
+	Ring,
 	Spacer,
 	smallestAt,
 	TextField,
@@ -61,33 +62,7 @@ import {
 /** The bar's width: the composer's line and an answer of a few lines. */
 const BAR_WIDTH = 600;
 
-type Ring = { frame: AgentFrame; label: string };
-
-// LIBRARY GAP: no part marks a control on the window with its name (the ring around what the person pointed at,
-// or what the agent just used). This ring draws with theme tokens over the page until the library offers one.
-/** A ring around a control: the one the person pointed at, or the one the agent just used. */
-function RingMark(props: { ring: Ring }) {
-	return (
-		<View
-			class="absolute"
-			style={{
-				pointerEvents: "none",
-				left: props.ring.frame.x - 4,
-				top: props.ring.frame.y - 4,
-				width: props.ring.frame.width + 8,
-				height: props.ring.frame.height + 8,
-			}}
-		>
-			<View class="absolute inset-0 rounded-lg border-2 border-ring bg-primary/10" />
-			{/* The name goes below a control at the top of the window, where above would be cut off. */}
-			<View
-				class={`absolute left-0 w-max rounded-md bg-primary px-1.5 py-0.5 ${props.ring.frame.y < 28 ? "-bottom-6" : "-top-6"}`}
-			>
-				<Caption tone="onAccent">{props.ring.label}</Caption>
-			</View>
-		</View>
-	);
-}
+type Ringed = { frame: AgentFrame; label: string };
 
 /** One line of the conversation, as the chat page shows it. */
 function Line(props: { row: SessionChat["rows"][number] }) {
@@ -109,32 +84,6 @@ function Line(props: { row: SessionChat["rows"][number] }) {
 					<WorkingLine text={props.row.text} />
 				</If>
 			</If>
-		</View>
-	);
-}
-
-// LIBRARY GAP: no part is a card that floats over the window (an opaque popover surface with the panel's radius,
-// a hairline and a shadow). The bar's answer, conversation and feedback draft, and its composer, need one: the
-// Panel sits in page flow and the Composer's soft fill shows the page through it. `small` is the pointing hint.
-// `bare` only lays the opaque surface under the Composer, which draws its own frame.
-function FloatingCard(props: {
-	testID?: string;
-	maxHeight?: number;
-	small?: boolean;
-	bare?: boolean;
-	children?: JSX.Element;
-}) {
-	return (
-		<View
-			testID={props.testID}
-			class={
-				props.bare
-					? "rounded-(--radius-panel) bg-popover shadow-lg"
-					: `rounded-(--radius-panel) border border-border bg-popover shadow-lg ${props.small ? "flex-row items-center gap-2 px-3 py-1.5" : "gap-3 px-4 py-3.5"}`
-			}
-			style={props.maxHeight ? { maxHeight: props.maxHeight } : undefined}
-		>
-			{props.children}
 		</View>
 	);
 }
@@ -165,7 +114,7 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 	const asked = signal(false);
 	const picture = signal<ScreenPicture | null>(null);
 	const sent = signal("");
-	const actedRing = signal<Ring | null>(null);
+	const actedRing = signal<Ringed | null>(null);
 
 	keymap.bind("mod+j", () => screenAgentOpen.set(!screenAgentOpen()), { when: "always" });
 	// What the window showed when the bar opened; the next question carries it once.
@@ -269,22 +218,15 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 			<If when={screenAgentOpen()}>
 				<View class="absolute inset-0" style={{ pointerEvents: "none" }}>
 					<If when={pointed()}>
-						<RingMark
-							ring={{
-								frame: (pointed() as { frame: AgentFrame }).frame,
-								label: pointed()?.label ?? "You pointed",
-							}}
-						/>
+						<Ring frame={(pointed() as { frame: AgentFrame }).frame} label={pointed()?.label ?? "You pointed"} />
 					</If>
 					<If when={actedRing()}>
-						<RingMark ring={actedRing() as Ring} />
+						<Ring frame={(actedRing() as Ringed).frame} label={actedRing()?.label ?? ""} />
 					</If>
 					<If when={pointing() && hovered()}>
-						<RingMark
-							ring={{
-								frame: (hovered() as ControlFrame).frame,
-								label: hovered()?.label ?? hovered()?.component ?? "",
-							}}
+						<Ring
+							frame={(hovered() as ControlFrame).frame}
+							label={hovered()?.label ?? hovered()?.component ?? ""}
 						/>
 					</If>
 				</View>
@@ -298,7 +240,7 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 							onPress={(e: PressEvent) => void point(e)}
 						/>
 						<View class="absolute left-0 right-0 top-14 items-center" style={{ pointerEvents: "none" }}>
-							<FloatingCard small>
+							<FloatingCard variant="hint">
 								<Caption tone="default">Click what you mean</Caption>
 								<KeyCap label="esc" />
 							</FloatingCard>
@@ -401,7 +343,7 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 							</Buttons>
 						</FloatingCard>
 					</If>
-					<FloatingCard bare>
+					<FloatingCard variant="surface">
 						<Composer
 							field={
 								<TextField

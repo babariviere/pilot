@@ -1,11 +1,11 @@
 // Scripted transport, real Today/chat views. No service, provider or execution.
-import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
+import { keymap, mount, Scroll, signal, View } from "nsh";
 import { TodayFeed } from "pilot-day/native";
 import { mirrorDay } from "./day";
 import { MockDayScreen } from "./mockFeeds";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
 import { mirrorScope, type ScopeMirror, todayProject } from "./todayScope";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const feed = new TodayFeed("decisions");
 const opened = signal("");
@@ -143,22 +143,11 @@ function moveUp() {
 	});
 }
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => {
 	keymap.bind("mod+shift+u", changeTask, { when: "always" });
 	keymap.bind("mod+shift+q", moveUp, { when: "always" });
 	return (
-		<FixtureWindow>
+		<WindowCanvas>
 			<View class="flex-1">
 				<MockDayScreen day={day} />
 			</View>
@@ -332,6 +321,6 @@ mount(() => {
 					</Buttons>
 				</Block>
 			</Scroll>
-		</FixtureWindow>
+		</WindowCanvas>
 	);
 });

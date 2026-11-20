@@ -34,7 +34,7 @@ import {
 	Rows,
 	Section,
 	Tab,
-	Tabs,
+	TabBar,
 } from "./ui";
 
 export { FullArtifact } from "./ArtifactViewer";
@@ -194,10 +194,6 @@ function ShelfRow(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRo
 	);
 }
 
-// LIBRARY GAP: Tabs attach only to the Panel's top edge, and no part switches between two views inside a section.
-// Before and After use Tabs and Tab as they are, above the one pane they switch; the library should offer a small
-// switch for a view inside a section (a segmented control).
-
 /**
  * The open artifact, under its row: its preview or saved source, and Close.
  * Compare previous version reads the revision before once; Before and After
@@ -330,22 +326,20 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 				</View>
 				{/* The tabs keep their own width, above the one pane they switch. */}
 				<If when={before()}>
-					<View class="flex-row">
-						<Tabs>
-							<Tab
-								label={pair() ? "Before" : `Before · revision ${before()?.pin.revision ?? ""}`}
-								selected={side() === "before"}
-								testID="artifact-tab-before"
-								onPress={() => side.set("before")}
-							/>
-							<Tab
-								label={pair() ? "After" : `After · revision ${now().pin.revision}`}
-								selected={side() === "after"}
-								testID="artifact-tab-after"
-								onPress={() => side.set("after")}
-							/>
-						</Tabs>
-					</View>
+					<TabBar>
+						<Tab
+							label={pair() ? "Before" : `Before · revision ${before()?.pin.revision ?? ""}`}
+							selected={side() === "before"}
+							testID="artifact-tab-before"
+							onPress={() => side.set("before")}
+						/>
+						<Tab
+							label={pair() ? "After" : `After · revision ${now().pin.revision}`}
+							selected={side() === "after"}
+							testID="artifact-tab-after"
+							onPress={() => side.set("after")}
+						/>
+					</TabBar>
 				</If>
 				<If when={!inFull(props.shelf)} else={<InFullNote />}>
 					{/* A new artifact or side starts its own pane; a preview there starts again from its saved revision. */}

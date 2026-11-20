@@ -1,11 +1,11 @@
 // Headless fixture only: a stuck mock mission whose saved answers belong to an earlier wording,
 // with Unstick's repair agent. Mock data.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
 import { feedbackDraft, feedbackOpen } from "./feedbackView";
 import { openPlanning } from "./mockFeeds";
 import { Unstick } from "./Unstick";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 type Repair = NonNullable<NonNullable<PlanPage["unstick"]>["repair"]>;
 
@@ -66,19 +66,8 @@ plans.feed = Object.assign(Object.create(Object.getPrototypeOf(source)), source,
 		return accepted(intent.missionId, "Sent. Pilot continues planning with this note.");
 	},
 });
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Unstick plans={plans} page={page()} />
 		<Block gap={3}>
 			<Caption testID="applied">{`Applied: ${applied()}`}</Caption>
@@ -126,5 +115,5 @@ mount(() => (
 				/>
 			</Buttons>
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

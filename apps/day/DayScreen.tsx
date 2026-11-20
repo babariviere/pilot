@@ -45,7 +45,7 @@ import { TodayScreen } from "./TodayScreen";
 import { threadRoute } from "./threadView";
 import { todayProject } from "./todayScope";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
-import { Arrive, GridBackdrop, Notice } from "./ui";
+import { Arrive, Notice, WindowCanvas } from "./ui";
 import type { Update } from "./updateFeed";
 import { updateEntry } from "./updateView";
 import { route } from "./view";
@@ -127,8 +127,7 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 		was = now;
 	});
 	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
+		<WindowCanvas>
 			<AppHeader day={props.day} plans={props.plans} changes={props.changes} />
 			<If when={navigationError()}>
 				<Notice text={navigationError()} placement="panel" />
@@ -165,7 +164,7 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 				{/* One artifact in the whole window, over any page. Hidden until opened there. */}
 				<FullArtifact />
 			</View>
-		</View>
+		</WindowCanvas>
 	);
 }
 

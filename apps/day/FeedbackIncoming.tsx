@@ -6,7 +6,7 @@ import type { FeedbackItem } from "./feedbackFeed";
 import { askingOf, chatState, clip, stepsOf } from "./feedbackSteps";
 import { dayOf, feedbackLater } from "./feedbackView";
 import { todayProject } from "./todayScope";
-import { Block, Button, EmptyLine, Link, Row, Rows } from "./ui";
+import { Block, Button, Buttons, EmptyLine, Link, Row, Rows } from "./ui";
 
 /** User-selected feedback can come forward without answering the current chat question. */
 export const feedbackFocus = signal<string | null>(null);
@@ -75,7 +75,9 @@ export function FeedbackIncoming(props: { day: Day; active?: boolean }) {
 							when={dayOf(item().recordedAt)}
 							routeKey="today"
 						/>
-						<Button label="Later" testID={`feedback-later-${item().id}`} onPress={() => defer(item(), true)} />
+						<Buttons>
+							<Button label="Later" testID={`feedback-later-${item().id}`} onPress={() => defer(item(), true)} />
+						</Buttons>
 					</Block>
 				)}
 			</Each>

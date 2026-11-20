@@ -1,7 +1,7 @@
 import { cleanup, keymap, Scroll, signal } from "nsh";
 import type { KnowledgeDetail } from "../../packages/protocol/src/knowledge";
-import { type Shown, readRefused } from "./artifactReads";
 import { ArtifactBody, ArtifactTools, paneLine } from "./ArtifactViewer";
+import { readRefused, type Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import { InspectInWindow } from "./InspectionWindow";
 import { backTarget, type Places } from "./nav";

@@ -1,8 +1,8 @@
 // Headless control fixture only. No daemon, worker, provider or storage.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
 import { openPlanning } from "./mockFeeds";
 import { StartWork } from "./PlanScreen";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const plans = openPlanning("review");
 const source = plans.feed;
@@ -67,19 +67,8 @@ plans.feed = {
 		};
 	},
 };
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<StartWork plans={plans} page={page()} />
 		<Block gap={3}>
 			<Caption>{`Sends: ${sends()} · Checks: ${checks()}`}</Caption>
@@ -91,5 +80,5 @@ mount(() => (
 				<Button label="Lose acknowledgement" onPress={() => lost.set(true)} />
 			</Buttons>
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

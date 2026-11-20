@@ -3,13 +3,13 @@
 // (linearDemo.ts) and a New section with Linear requests, so the page can
 // point back to them. "Save and reopen" keeps the window as a close or an
 // update saves it and shows it again in a fresh window state.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal, View } from "nsh";
 import type { Request } from "pilot-day/native";
 import { type IntakeSource, type IntakeView, mirrorIntake } from "./intakeFeed";
 import { type LinearDemoMode, ScriptedLinear } from "./linearDemo";
 import { mirrorLinear } from "./linearFeed";
 import { MockDayScreen, openDay } from "./mockFeeds";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const linear = new ScriptedLinear();
@@ -79,19 +79,8 @@ const MODES: [string, LinearDemoMode][] = [
 /** The last saved Linear place, as the window kept it. */
 const kept = signal("");
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does, under the controls.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Buttons>
 				<Caption testID="reads">{`Reads: ${linear.reads()}`}</Caption>
@@ -117,5 +106,5 @@ mount(() => (
 		<View class="min-h-0 flex-1">
 			<MockDayScreen day={day} />
 		</View>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

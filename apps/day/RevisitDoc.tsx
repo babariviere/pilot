@@ -29,7 +29,7 @@ import {
 	Disclosure,
 	EmptyLine,
 	glide,
-	Mark,
+	MarkedLine,
 	type MarkKind,
 	Notice,
 	Num,
@@ -557,14 +557,11 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 							</Body>
 						</If>
 						<If when={stageLine(props.page, r())}>
-							{/* LIBRARY GAP: Row cannot put a test ID on its title, and tests read this line by its own ID.
-							    This mark-and-words line uses layout classes only until Row offers it. */}
-							<View class="flex-row items-start gap-2.5">
-								<Mark kind={r().stage === "confirmed" ? "done" : "working"} />
-								<Body testID="revisit-stage" grow>
-									{stageLine(props.page, r())}
-								</Body>
-							</View>
+							<MarkedLine
+								kind={r().stage === "confirmed" ? "done" : "working"}
+								text={stageLine(props.page, r())}
+								textTestID="revisit-stage"
+							/>
 						</If>
 						<Now missionId={id()} revisit={r()} />
 						{/* With a revision shown, its confirmation shows the message, next to the button that sent it. */}

@@ -9,7 +9,7 @@ import type { Day } from "./day";
 import type { DeliveryEntry, DeliveryMirror, DeliveryOp, DeliveryView } from "./deliveryFeed";
 import { openDelivery, ownPullRequests, settledLine, titleOf, unsettledLine, waitsForCheck } from "./deliveryView";
 import { restoreScroll, scrollOf } from "./kept";
-import { Block, Body, EmptyLine, Link, Notice, Row, RowGroup, Rows, SectionTitle } from "./ui";
+import { Block, Body, EmptyLine, Link, Notice, Row, RowGroup, Rows, Section } from "./ui";
 import { placeRow } from "./view";
 
 function missions(day: Day): MissionRow[] {
@@ -125,17 +125,27 @@ function LiveToCheck(props: {
 	};
 	return (
 		<If when={visible()}>
-			<View testID="to-check">
-				<If
-					when={props.nested && !props.queued}
-					else={
-						<If when={!props.queued}>
-							<SectionTitle title="To check" count={rows().length} />
+			{/* On its own (a mission's page) it is a section; nested in Today's queue it is a group of rows. */}
+			<If
+				when={!props.nested && !props.queued}
+				else={
+					<View testID="to-check">
+						<If when={props.nested && !props.queued}>
+							<RowGroup label={rows().length > 0 ? `To check · ${rows().length}` : "To check"} />
 						</If>
-					}
-				>
-					<RowGroup label={rows().length > 0 ? `To check · ${rows().length}` : "To check"} />
-				</If>
+						{body()}
+					</View>
+				}
+			>
+				<Section testID="to-check" title="To check" count={rows().length}>
+					{body()}
+				</Section>
+			</If>
+		</If>
+	);
+	function body() {
+		return (
+			<>
 				<If when={discovery()?.reason}>
 					<EmptyLine text={discovery()?.reason ?? ""} />
 				</If>
@@ -215,7 +225,7 @@ function LiveToCheck(props: {
 							return (
 								<Row
 									testID={id}
-									mark={e().snapshot?.pendingOperationId ? "unknown" : "needs"}
+									mark={e().snapshot?.pendingOperationId ? "unconfirmed" : "needs"}
 									title={name()}
 									meta={meta(entry.key)}
 									state={e().snapshot?.pendingOperationId ? "Check not confirmed" : "To check"}
@@ -228,9 +238,9 @@ function LiveToCheck(props: {
 						}}
 					</Each>
 				</Rows>
-			</View>
-		</If>
-	);
+			</>
+		);
+	}
 }
 
 /**

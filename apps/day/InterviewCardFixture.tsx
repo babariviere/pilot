@@ -1,10 +1,10 @@
 // Mock data only. No account, daemon or real continuation.
-import { effect, type JSX, mount, Scroll, signal, View } from "nsh";
+import { effect, mount, Scroll, signal, View } from "nsh";
 import type { Decision, DraftIntent, ReplyIntent } from "pilot-day/native";
 import { DecisionCard } from "./DecisionCard";
 import { ScopedInterviewCard } from "./InterviewCard";
 import { openDay } from "./mockFeeds";
-import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, PageHead, Panel, Section } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, PageHead, Panel, Section, WindowCanvas } from "./ui";
 
 const day = openDay();
 const base = day.today().decisions[0]!;
@@ -85,19 +85,8 @@ function reopen() {
 	visible.set(true);
 }
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Scroll testID="interview-scroll" class="flex-1">
 			<Page>
 				<PageHead pre={<Caption>Mock data. Standalone interview</Caption>} title="Interview" />
@@ -191,5 +180,5 @@ mount(() => (
 				</Block>
 			</Page>
 		</Scroll>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

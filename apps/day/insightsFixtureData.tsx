@@ -1,4 +1,4 @@
-import { type JSX, signal, View } from "nsh";
+import { signal } from "nsh";
 import { InsightsScreen } from "./InsightsScreen";
 import {
 	type InsightsControls,
@@ -7,7 +7,7 @@ import {
 	type InsightsSnapshot,
 	insightsSelection,
 } from "./insightsView";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const report: InsightsDetail = {
 	key: "november",
@@ -97,20 +97,9 @@ const controls: InsightsControls = {
 	},
 };
 insightsSelection.set({ kind: "reports", key: report.key });
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 export function Fixture(props: { debug?: boolean }) {
 	return (
-		<FixtureWindow>
+		<WindowCanvas>
 			<If when={props.debug}>
 				<Block gap={1}>
 					<Caption>{`Writes: ${count()}`}</Caption>
@@ -141,6 +130,6 @@ export function Fixture(props: { debug?: boolean }) {
 						work.set(kind === "fix" ? "Fix draft, no work started" : "Mission draft, no work started"),
 				}}
 			/>
-		</FixtureWindow>
+		</WindowCanvas>
 	);
 }

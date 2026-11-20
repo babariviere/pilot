@@ -87,7 +87,7 @@ export function ResultCard(props: { day: Day; entry: DeliveryEntry; index: numbe
 			meta={
 				<>
 					<State
-						kind={unconfirmed() ? "unknown" : "needs"}
+						kind={unconfirmed() ? "unconfirmed" : "needs"}
 						label={unconfirmed() ? "Check not confirmed" : "To check"}
 						plain
 					/>

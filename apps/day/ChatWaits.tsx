@@ -68,7 +68,6 @@ export function ChatWaits(props: {
 					onSelectionChange={field.select}
 					testID={`chat-reply-${id()}`}
 					multiline
-					compact
 					value={text()}
 					onChange={({ value }) => setText(value)}
 					accessibilityLabel="Your reply to this chat. It reads your words as your answer and goes on."

@@ -11,6 +11,7 @@ import {
 	Caption,
 	Column,
 	EmptyLine,
+	Field,
 	Link,
 	Notice,
 	Num,
@@ -23,7 +24,6 @@ import {
 	RowDetail,
 	Rows,
 	Section,
-	TextField,
 } from "./ui";
 
 function flowState(state?: string): string {
@@ -419,22 +419,17 @@ function ScheduleEditor(props: { controls: ScheduleControls }) {
 			() => String(d()?.[key] ?? ""),
 		);
 		return (
-			// LIBRARY GAP: Field takes no ref, readonly, focus or selection handlers, which keepField needs to restore the
-			// caret after a reopen. This is Field's own shape (a label above a TextField) until it offers them.
-			<View class="gap-1.5">
-				<BodyStrong>{label}</BodyStrong>
-				<TextField
-					readonly={c.busy() || c.blocked() || c.operations().some((o) => o.pending)}
-					ref={field.ref}
-					accessibilityLabel={label}
-					value={String(d()[key])}
-					placeholder={placeholder}
-					testID={`schedule-${key}`}
-					onFocus={field.focus}
-					onSelectionChange={field.select}
-					onChange={({ value }) => change(key, value)}
-				/>
-			</View>
+			<Field
+				label={label}
+				readonly={c.busy() || c.blocked() || c.operations().some((o) => o.pending)}
+				anchor={field.ref}
+				value={String(d()[key])}
+				placeholder={placeholder}
+				testID={`schedule-${key}`}
+				onFocus={field.focus}
+				onSelectionChange={field.select}
+				onChange={(value) => change(key, value)}
+			/>
 		);
 	};
 	const allowed = () =>

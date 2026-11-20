@@ -18,8 +18,8 @@ import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull
 import { artifactPreviewsAvailable } from "./bridge";
 import { ContinueRow } from "./ChatScreen";
 import { ChatWaits } from "./ChatWaits";
-import { openChat } from "./chatView";
 import { CodeChanges, CodeReviewScreen, ReviewStatus } from "./CodeReviewScreen";
+import { openChat } from "./chatView";
 import type { Day } from "./day";
 import { artifactSelection } from "./deliveryArtifact";
 import type { AgentWork, OwnedChange } from "./deliveryBridge";
@@ -291,7 +291,6 @@ function Screens(props: { mirror: DeliveryMirror; work: DeliveredWork; fresh: bo
 							accessibilityLabel={`${p().title}: ${screenLine(p())}`}
 							anchor={(node) => rows.set(p().key, node)}
 							onToggle={() => open.set(open() === p().key ? null : p().key)}
-							summaryClass="flex-row items-center gap-2.5 px-4 py-1.5"
 							content={
 								<If when={open() === p().key}>
 									<Block>

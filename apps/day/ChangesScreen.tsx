@@ -5,7 +5,7 @@
 // Reopening approves nothing. Later and Bring back are intents that name
 // the request and revision shown; Rust fences and sends them. Read again
 // only reads: it sends nothing and settles no unconfirmed answer.
-import { computed, type JSX, keymap, Scroll, Text, View } from "nsh";
+import { computed, keymap, Scroll, View } from "nsh";
 import type { ChangePage, ChangeRow } from "pilot-day/native";
 import type { Changes } from "./changeFeed";
 import {
@@ -36,6 +36,8 @@ import {
 	Button,
 	Caption,
 	Column,
+	DiffCounts,
+	DiffSplit,
 	EmptyLine,
 	Fact,
 	Facts,
@@ -43,7 +45,6 @@ import {
 	type MarkKind,
 	Notice,
 	Num,
-	narrow,
 	Page,
 	PageHead,
 	Panel,
@@ -54,7 +55,6 @@ import {
 	State,
 	Tab,
 	Tabs,
-	TYPE,
 } from "./ui";
 import { setFor } from "./view";
 
@@ -126,16 +126,9 @@ function rowMeta(row: ChangeRow): string {
 		.join(" · ");
 }
 
-/**
- * A change's mark among the seven states. `attentionMark` still names older kinds: an unconfirmed answer needs the
- * user's Check (needs), a review put off is paused, and history or an unknown request state is a quiet new mark.
- */
+/** A change's mark: its attention mark (`changeWords.ts`). */
 function changeMark(row: ChangeRow): MarkKind {
-	const kind = attentionMark(row);
-	if (kind === "unknown") return row.delivery === "unknown" || row.delivery === "checking" ? "needs" : "new";
-	if (kind === "still") return "paused";
-	if (kind === "unreported") return "new";
-	return kind;
+	return attentionMark(row);
 }
 
 /** A change's state word: Unconfirmed while an answer is not known, else its review request's state. */
@@ -547,7 +540,8 @@ function ChangeView(props: { changes: Changes; page: ChangePage }) {
 				<Now page={props.page} />
 				<Kept changes={props.changes} page={props.page} />
 			</PageHead>
-			<FillPanel
+			<Panel
+				fill
 				testID="change-panel"
 				tabs={
 					<Tabs>
@@ -563,7 +557,7 @@ function ChangeView(props: { changes: Changes; page: ChangePage }) {
 				<If when={tab() === "diff"} else={<History page={props.page} />}>
 					<Diff page={props.page} />
 				</If>
-			</FillPanel>
+			</Panel>
 		</>
 	);
 }
@@ -610,13 +604,13 @@ function ChangeScreen(props: { changes: Changes; snapshotId: string }) {
 		},
 	});
 	return (
-		<FillPage>
+		<Page fill>
 			<If when={page()} else={<NotShown changes={props.changes} snapshotId={props.snapshotId} />}>
 				<Each of={page() ? [page() as ChangePage] : []} key={(p) => p.identity.snapshotId}>
 					{(p) => <ChangeView changes={props.changes} page={p()} />}
 				</Each>
 			</If>
-		</FillPage>
+		</Page>
 	);
 }
 
@@ -632,68 +626,5 @@ export function ChangesScreen(props: { changes: Changes; onBackFromJump?: () => 
 				{(id) => <ChangeScreen changes={props.changes} snapshotId={id()} />}
 			</Each>
 		</If>
-	);
-}
-
-// LIBRARY GAP: Page and Panel grow with their content inside a Scroll. A page whose diff scrolls on its own (a kept
-// change here, Review code in CodeReviewScreen.tsx) needs a Page that fills the window's height and a Panel that
-// fills the rest of it, so the facts above the diff stay put. The library should offer `Page fill` and `Panel fill`.
-// Until then these helpers repeat Page's and Panel's sizes and frame with flex-1.
-export function FillPage(props: { testID?: string; children?: JSX.Element }) {
-	return (
-		<View
-			testID={props.testID}
-			class={`min-h-0 w-full flex-1 self-center pb-6 pt-7.5 ${narrow() ? "px-3" : "px-6"}`}
-			style={{ maxWidth: 1088 }}
-		>
-			{props.children}
-		</View>
-	);
-}
-
-export function FillPanel(props: {
-	testID?: string;
-	tabs?: JSX.Element;
-	notice?: JSX.Element;
-	children?: JSX.Element;
-}) {
-	return (
-		<View testID={props.testID} class="min-h-0 flex-1">
-			<View class="relative z-10 -mb-px">{props.tabs}</View>
-			<View class="min-h-0 flex-1 overflow-hidden rounded-(--radius-panel) border border-border bg-card">
-				{props.notice}
-				{props.children}
-			</View>
-		</View>
-	);
-}
-
-// LIBRARY GAP: Columns splits a panel 1.45 to 1 and grows with its content. A file list beside a diff (round-4's
-// Changes tab) needs a narrow list column at the left and a diff that fills the panel's height; in a narrow window
-// the list sits above the diff, kept short. The library should offer this split.
-export function DiffSplit(props: { list: boolean; files: JSX.Element; diff: JSX.Element }) {
-	return (
-		<View class={`min-h-0 flex-1 ${narrow() ? "" : "flex-row"}`}>
-			<If when={props.list}>
-				<Scroll
-					class={`border-border ${narrow() ? "border-b" : "w-72 border-r"}`}
-					style={narrow() ? { maxHeight: 180 } : undefined}
-				>
-					<Column>{props.files}</Column>
-				</Scroll>
-			</If>
-			<View class="min-h-0 min-w-0 flex-1">{props.diff}</View>
-		</View>
-	);
-}
-
-// LIBRARY GAP: Num has no tone for a diff's counts. "+8 −1" takes the diff's `added-ink` and `removed-ink` roles, not
-// Ready's green and Failed's red. The library should offer the counts as a part (or `added` and `removed` tones).
-export function DiffCounts(props: { added: number; removed: number }) {
-	return (
-		<View class="flex-row gap-1.5">
-			<Text class="font-mono text-added-ink" style={TYPE.number}>{`+${props.added}`}</Text>
-			<Text class="font-mono text-removed-ink" style={TYPE.number}>{`−${props.removed}`}</Text>
-		</View>
 	);
 }

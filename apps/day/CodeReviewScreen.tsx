@@ -3,7 +3,6 @@
 // opens a comment field under them. Comments are kept with the result and never posted to GitHub; Send back sends
 // them to the agent once, through the result's own Send back. Opening the page or reading code records nothing.
 import { cleanup, computed, effect, keymap, signal, untracked, View, type ViewRef } from "nsh";
-import { DiffCounts, DiffSplit, FillPage, FillPanel } from "./ChangesScreen";
 import type { DeliveredWork, DeliveryMirror } from "./deliveryFeed";
 import { webLink } from "./deliveryFeed";
 import {
@@ -41,7 +40,9 @@ import {
 	Buttons,
 	Caption,
 	type DiffAnnotation,
+	DiffCounts,
 	type DiffLineRange,
+	DiffSplit,
 	Disclosure,
 	EmptyLine,
 	Link,
@@ -50,7 +51,9 @@ import {
 	MenuTrigger,
 	Notice,
 	Num,
+	Page,
 	PageHead,
+	Panel,
 	Picker,
 	Quote,
 	ReviewDiff,
@@ -90,6 +93,7 @@ export function ReviewStatus(props: { review: ReviewSession }) {
 			<Each of={props.review.pending()} key={(id) => id}>
 				{(id) => (
 					<Notice
+						kind="unconfirmed"
 						text="Private save not confirmed"
 						detail="Only this result is held. Independent work continues."
 						action={
@@ -494,7 +498,7 @@ export function CodeReviewScreen(props: {
 	keymap.bind("mod+[", back, { when: "always" });
 	const source = props.source ?? connectedResultReview();
 	return (
-		<FillPage testID="code-review">
+		<Page fill testID="code-review">
 			<If
 				when={source}
 				else={
@@ -507,7 +511,7 @@ export function CodeReviewScreen(props: {
 			>
 				<Review {...props} source={source as ResultReviewSource} back={back} placeKey={key} />
 			</If>
-		</FillPage>
+		</Page>
 	);
 }
 
@@ -687,7 +691,7 @@ function Review(props: {
 				<ReviewStatus review={review} />
 			</PageHead>
 			<View class="min-h-0 flex-1 gap-3">
-				<FillPanel testID="code-review-panel">
+				<Panel fill testID="code-review-panel">
 					<DiffSplit
 						list={files().length > 0}
 						files={
@@ -758,7 +762,7 @@ function Review(props: {
 							</>
 						}
 					/>
-				</FillPanel>
+				</Panel>
 				{/* The page's one commit stays in view under the panel, beside what it sends. */}
 				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-2">
 					<Caption testID="review-count" grow>

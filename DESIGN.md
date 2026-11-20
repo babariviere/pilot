@@ -151,7 +151,7 @@ word and the accessible name always carry the state, so colour is never the only
 | Paused | Two bars | Held on purpose: a Pause, or set aside with Later | No |
 | New | Small square | It came in and nobody started it | Slack requests queue in Needs you |
 | Done | A tick | Finished and reviewed | No |
-| Unconfirmed | Being added | Pilot could not read or confirm it, such as a lost answer | Not by itself |
+| Unconfirmed | Hollow amber square | Pilot could not read or confirm it, such as a lost answer | Not by itself |
 
 - A screen may use a more exact word for the same state ("Did not confirm", "Pausing"), never a new mark or colour.
 - Unconfirmed never looks empty or done. It is not Needs you and does not ask for the user by itself.

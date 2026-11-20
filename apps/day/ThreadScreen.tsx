@@ -12,7 +12,6 @@
 import {
 	cleanup,
 	effect,
-	type JSX,
 	keymap,
 	Scroll,
 	type ScrollRef,
@@ -22,8 +21,6 @@ import {
 	View,
 	type ViewRef,
 } from "nsh";
-// LIBRARY GAP: see ConfirmDialog below; the interrupt confirmation needs the base Dialog.
-import { Dialog } from "nsh/base";
 import type { Day } from "./day";
 import { openDelivery } from "./deliveryView";
 import { keepRead, staleLine } from "./freshness";
@@ -75,6 +72,7 @@ import {
 	Caption,
 	Column,
 	Composer,
+	Confirm,
 	Disclosure,
 	EmptyLine,
 	Event,
@@ -97,7 +95,6 @@ import {
 	State,
 	Steps,
 	TextField,
-	Title,
 } from "./ui";
 
 const STATUS: Record<Topic["disposition"], { word: string; mark: MarkKind }> = {
@@ -372,11 +369,11 @@ function TopicRow(props: { missionId: string; topic: Topic; ops: ThreadOp[] }) {
 	return (
 		<Row
 			testID={`thread-${props.topic.id}`}
-			mark={pending() ? "needs" : status().mark}
+			mark={pending() ? "unconfirmed" : status().mark}
 			title={props.topic.title}
 			meta={meta()}
 			state={pending() ? "Not confirmed" : status().word}
-			stateTone={pending() ? "needs" : "quiet"}
+			stateTone="quiet"
 			accessibilityLabel={`${props.topic.title}, ${pending() ? "not confirmed" : status().word}. Open the thread.`}
 			onPress={open}
 		/>
@@ -1151,7 +1148,7 @@ function Message(props: {
 					<Spacer />
 					<State
 						testID={`message-reply-${m().key}`}
-						kind={m().reply === "unknown" ? "needs" : "new"}
+						kind={m().reply === "unknown" ? "unconfirmed" : "new"}
 						label={REPLY[m().reply]}
 						plain
 					/>
@@ -1501,46 +1498,25 @@ function ReplyBox(props: {
 				</Caption>
 			</If>
 			<If when={interrupting()}>
-				<ConfirmDialog
+				<Confirm
 					testID="thread-interrupt-confirm"
 					title="Interrupt this discussion?"
+					escape={false}
 					onClose={() => interrupting.set(false)}
+					actions={
+						<>
+							<Button label="Cancel" onPress={() => interrupting.set(false)} />
+							<Button label="Interrupt" disabled={!canSend()} onPress={() => void go(true)} />
+						</>
+					}
 				>
 					<Body tone="muted">
 						Save and stop its current response, then send your message now. This does not pause coding agents or
 						clear the mission's other holds.
 					</Body>
-					<Buttons>
-						<Button label="Cancel" onPress={() => interrupting.set(false)} />
-						<Button label="Interrupt" disabled={!canSend()} onPress={() => void go(true)} />
-					</Buttons>
-				</ConfirmDialog>
+				</Confirm>
 			</If>
 		</View>
-	);
-}
-
-// LIBRARY GAP: the library has no confirmation dialog: a modal over the page that asks before a strong action
-// (here, interrupting a discussion). This keeps the base Dialog this screen used and frames it with the panel's look;
-// the library should offer a `Confirm` part with a title, a sentence and its buttons.
-function ConfirmDialog(props: { testID: string; title: string; onClose: () => void; children?: JSX.Element }) {
-	return (
-		<Dialog
-			accessibilityLabel={props.title}
-			closeOnEscape={false}
-			onOpenChange={(e) => {
-				if (!e.open) props.onClose();
-			}}
-			class="absolute inset-0 items-center justify-center bg-background/90 p-6"
-		>
-			<View
-				testID={props.testID}
-				class="max-w-md gap-3 rounded-(--radius-panel) border border-border bg-popover px-4 py-3.5"
-			>
-				<Title role="header">{props.title}</Title>
-				{props.children}
-			</View>
-		</Dialog>
 	);
 }
 

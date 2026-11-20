@@ -19,11 +19,11 @@ import {
 	Button,
 	Buttons,
 	Caption,
+	Checkbox,
 	Disclosure,
 	EmptyLine,
 	Link,
 	Notice,
-	Option,
 	Quote,
 	Row,
 	RowDetail,
@@ -108,7 +108,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 			<Each of={unsettled()} key={(o) => o.operationId}>
 				{(o) => (
 					<Notice
-						kind="needs"
+						kind="unconfirmed"
 						placement="section"
 						text="The previous action is unconfirmed. Check only reads its receipt."
 						action={
@@ -158,7 +158,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 												<View class="flex-row flex-wrap gap-x-2">
 													<Each of={profiles()} key={(w) => w.id}>
 														{(w) => (
-															<ProfileBox
+															<Checkbox
 																testID={`project-profile-${p().id}-${w().id}`}
 																tickTestID={`project-profile-tick-${p().id}-${w().id}`}
 																label={w().name}
@@ -197,7 +197,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 													key={(o) => o.id}
 												>
 													{(o) => (
-														<ProfileBox
+														<Checkbox
 															testID={`project-link-${p().id}-${o().id}`}
 															label={o().name}
 															checked={(p().linked ?? []).includes(o().id)}
@@ -522,29 +522,5 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 				</Disclosure>
 			</Block>
 		</Section>
-	);
-}
-
-// LIBRARY GAP: `Checkbox` has no `tickTestID`, and tests read a project's allowed profiles by their tick. Until
-// Checkbox shows its tick by test ID, this uses `Option multiple compact`, which does (and draws the same box).
-function ProfileBox(props: {
-	testID: string;
-	tickTestID?: string;
-	label: string;
-	checked: boolean;
-	disabled: boolean;
-	onChange: () => void;
-}) {
-	return (
-		<Option
-			multiple
-			compact
-			title={props.label}
-			testID={props.testID}
-			tickTestID={props.tickTestID}
-			checked={props.checked}
-			disabled={props.disabled}
-			onChange={props.onChange}
-		/>
 	);
 }

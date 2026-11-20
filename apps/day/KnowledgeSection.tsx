@@ -284,7 +284,7 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 				</Block>
 				<If when={stale()}>
 					<Notice
-						kind="needs"
+						kind="unconfirmed"
 						placement="section"
 						text="Earlier read. Currentness unknown. Read again before relying on it."
 					/>

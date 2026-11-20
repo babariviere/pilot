@@ -1,6 +1,5 @@
 // The page's frame: its centred column and its head. A page is a PageHead, then one Panel with its tabs.
-import { type JSX, Text, View, type ViewRef, windowSize } from "nsh";
-import { Pill } from "./state";
+import { type JSX, Text, View, windowSize } from "nsh";
 import { Display, TYPE } from "./text";
 
 /** Below this window width a page uses narrow side padding, stacks its head and stacks a panel's columns. */
@@ -14,28 +13,34 @@ export function narrow(): boolean {
 /** The page widths: one panel at most 1088 points wide (1040 inside the padding), 840 for a form such as Settings. */
 const WIDTH = { page: 1088, form: 840 } as const;
 
-const PAGE_GAP = { 0: "gap-0", 4: "gap-4", 8: "gap-8", 10: "gap-10", 12: "gap-12" } as const;
+/**
+ * The width inside a page's panel at the current window size (reactive): the page's width less its side padding
+ * and the panel's two hairlines. For a drawing that sizes itself to the panel (the plan's chart), so it neither
+ * clips nor leaves a gap at either side.
+ */
+export function panelWidth(width: keyof typeof WIDTH = "page"): number {
+	const page = Math.min(windowSize().width, WIDTH[width]);
+	return page - (narrow() ? 24 : 48) - 2;
+}
 
 /**
  * A page's centred column, inside the screen's `Scroll`: at most 1088 points wide (`width="form"`: 840), 24 points
- * at the sides (12 in a narrow window), 30 above. It holds a `PageHead`, then one `Panel`. Rule: one panel per page;
- * the page sets no colours and no look of its own.
+ * at the sides (12 in a narrow window), 30 above. It holds a `PageHead`, then one `Panel`. `fill` is for a page whose
+ * content scrolls on its own (a diff): it fills the window's height instead of sitting in a `Scroll`, and its
+ * `Panel fill` takes the rest. Rule: one panel per page; the page sets no colours and no look of its own.
  */
 export function Page(props: {
 	testID?: string;
 	/** `page` (default) or `form` for a settings-like page. */
 	width?: keyof typeof WIDTH;
-	/**
-	 * The space between children (Tailwind's scale). New pages leave it at 0: the head and the panel space
-	 * themselves. Older screens pass their own while they move.
-	 */
-	gap?: keyof typeof PAGE_GAP;
+	/** Fills the window's height (not in a Scroll), for a `Panel fill`. */
+	fill?: boolean;
 	children?: JSX.Element;
 }) {
 	return (
 		<View
 			testID={props.testID}
-			class={`w-full self-center pb-24 pt-7.5 ${narrow() ? "px-3" : "px-6"} ${PAGE_GAP[props.gap ?? 0]}`}
+			class={`w-full self-center pt-7.5 ${narrow() ? "px-3" : "px-6"} ${props.fill ? "min-h-0 flex-1 pb-6" : "pb-24"}`}
 			style={{ maxWidth: WIDTH[props.width ?? "page"] }}
 		>
 			{props.children}
@@ -52,6 +57,8 @@ export function PageHead(props: {
 	title: string;
 	/** The title's test ID. */
 	titleTestID?: string;
+	/** The test ID of the sentences under the title (`text`). */
+	textTestID?: string;
 	testID?: string;
 	/** A quiet line above the title, such as the date (use `Num` or `Caption`). */
 	pre?: JSX.Element;
@@ -61,7 +68,7 @@ export function PageHead(props: {
 	text?: string;
 	/** Anything else under the text: a quiet note, a notice about the whole page. */
 	children?: JSX.Element;
-	/** Buttons at the right: Secondary `Button`s, a `Select`. */
+	/** Buttons at the right: Secondary `Button`s, a `Picker`. */
 	actions?: JSX.Element;
 }) {
 	return (
@@ -75,7 +82,7 @@ export function PageHead(props: {
 					{props.state}
 				</View>
 				<If when={props.text}>
-					<Text class="max-w-xl text-muted-foreground" style={TYPE.body}>
+					<Text testID={props.textTestID} class="max-w-xl text-muted-foreground" style={TYPE.body}>
 						{props.text ?? ""}
 					</Text>
 				</If>
@@ -85,9 +92,6 @@ export function PageHead(props: {
 		</View>
 	);
 }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Older shapes, kept while screens move.
 
 /** One quiet closing line under the page's panel ("That is everything for now."). */
 export function PageFoot(props: { text: string; testID?: string }) {
@@ -101,73 +105,4 @@ export function PageFoot(props: { text: string; testID?: string }) {
 /** Takes the free space in a row, pushing what follows to its end: key hints at the end of a Question's foot. */
 export function Spacer() {
 	return <View class="flex-1" />;
-}
-
-/**
- * The column every page sat in.
- * @deprecated Use `Page`.
- */
-export const PAGE_COLUMN = "w-full max-w-5xl self-center px-6 pb-24 pt-10";
-
-/**
- * A page's one title.
- * @deprecated Use `PageHead` (its `title` is the Display role).
- */
-export function PageTitle(props: { title: string; testID?: string; class?: string }) {
-	return (
-		<Text testID={props.testID} role="header" class={`text-foreground ${props.class ?? ""}`} style={TYPE.display}>
-			{props.title}
-		</Text>
-	);
-}
-
-/**
- * A section's title with an optional count and trailing content.
- * @deprecated Use `Section`: its head holds the heading, the count pill, a note and one action.
- */
-export function SectionTitle(props: { title: string; count?: number | null; children?: JSX.Element }) {
-	return (
-		<View class="flex-row items-center gap-2">
-			<Text role="header" class="text-foreground" style={TYPE.heading}>
-				{props.title}
-			</Text>
-			<If when={props.count != null && props.count > 0}>
-				<Pill count={props.count ?? 0} />
-			</If>
-			<View class="flex-1" />
-			{props.children}
-		</View>
-	);
-}
-
-const QUIET_PANEL: Record<"sm" | "md" | "lg", string> = {
-	sm: "rounded-lg px-3 py-2",
-	md: "rounded-lg px-3.5 py-3",
-	lg: "rounded-lg p-4",
-};
-
-/**
- * A muted block that sets one thing apart: a quote, a confirmation, a report. Formerly `Panel`.
- * @deprecated A problem is a `Notice`, a thing that waits for an answer is a `Question`, a list is a `Section` of
- * `Row`s, and a quote or code is a `Quote`. Sections never get their own box.
- */
-export function QuietPanel(props: {
-	testID?: string;
-	size?: "sm" | "md" | "lg";
-	tone?: "muted" | "card";
-	selectable?: boolean;
-	class?: string;
-	anchor?: (node: ViewRef) => void;
-	children?: JSX.Element;
-}) {
-	return (
-		<View
-			ref={props.anchor}
-			testID={props.testID}
-			selectable={props.selectable}
-			class={`${QUIET_PANEL[props.size ?? "md"]} ${props.tone === "card" ? "border border-border bg-card" : "bg-muted"} ${props.class ?? ""}`}
-		>
-			{props.children}
-		</View>
-	);
 }

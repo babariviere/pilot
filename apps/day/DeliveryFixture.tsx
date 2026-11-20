@@ -5,7 +5,7 @@
 // Check reads it; Check never sends again; a save and reopen keeps unsent
 // notes and sends nothing. Inspect source reads one exact pin's saved
 // source once and shows it as plain text; nothing runs it.
-import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
+import { keymap, mount, Scroll, signal, View } from "nsh";
 import { FullArtifact } from "./ArtifactViewer";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { ScriptedDelivery } from "./deliveryDemo";
@@ -15,7 +15,7 @@ import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
 import { openDay } from "./mockFeeds";
 import { resultReviewDemo } from "./resultReviewDemo";
 import { ToCheck } from "./ToCheck";
-import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, Panel } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel, WindowCanvas } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const source = new ScriptedDelivery();
@@ -32,23 +32,12 @@ const loseService = () => {
 };
 const newResult = () => source.deliverAgain("task/mock-project/native/native-4", "4");
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => {
 	// The full window is a dialog over every control here, so tests reach the result by key.
 	keymap.bind("mod+shift+l", loseService, { when: "always" });
 	keymap.bind("mod+shift+n", newResult, { when: "always" });
 	return (
-		<FixtureWindow>
+		<WindowCanvas>
 			<View class="flex-1">
 				<If
 					when={deliveryRoute()}
@@ -151,6 +140,6 @@ mount(() => {
 					</Buttons>
 				</Block>
 			</Scroll>
-		</FixtureWindow>
+		</WindowCanvas>
 	);
 });

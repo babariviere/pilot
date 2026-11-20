@@ -1,11 +1,10 @@
-import { effect, type JSX, Keyboard, keymap, List, signal, View } from "nsh";
-import type { Day } from "./day";
+import { effect, Keyboard, keymap, List, signal, View } from "nsh";
 import { openChat } from "./chatView";
+import type { Day } from "./day";
 import { IntakeWorkControls } from "./Incoming";
 import { keepScroll } from "./kept";
-import { openMission } from "./view";
 import type { ReportDetails, ReportEvidence, SlackControls, SlackReport } from "./slackControls";
-import { closeSlack, selectedSlackReport, slackEdit, slackGroupEdit, slackProject, slackOffset } from "./slackView";
+import { closeSlack, selectedSlackReport, slackEdit, slackGroupEdit, slackOffset, slackProject } from "./slackView";
 import {
 	Block,
 	Body,
@@ -18,15 +17,15 @@ import {
 	Field,
 	Link,
 	Notice,
-	narrow,
 	PageHead,
+	PanelSlice,
 	Picker,
 	ReadField,
 	Row,
-	RowDetail,
 	Section,
 	Spacer,
 } from "./ui";
+import { openMission } from "./view";
 
 const EMPTY: ReportDetails = { client: null, reporter: null, issue: null };
 const NAMES = { client: "Client organization", reporter: "Original reporter", issue: "Issue" };
@@ -262,235 +261,214 @@ function Report(props: { item: SlackReport; day: SlackDay; controls: SlackContro
 			: [];
 	};
 	return (
-		// LIBRARY GAP: Row cannot say it is expanded (ExpandableRow can, but takes padding classes and its own
-		// summary). The report's row opens its details in place, below the row, while it is the selected report.
+		// The report's row opens its details in place, below the row, while it is the selected report.
 		<Row
 			testID={`slack-report-${i().id}`}
 			title={i().title}
 			meta={i().metadata.channelName ? `#${i().metadata.channelName}` : "Slack"}
 			state={status(i())}
 			selected={selectedSlackReport() === i().id}
-			onPress={() => selectedSlackReport.set(selectedSlackReport() === i().id ? null : i().id)}
+			open={selectedSlackReport() === i().id}
+			onToggle={() => selectedSlackReport.set(selectedSlackReport() === i().id ? null : i().id)}
 			accessibilityLabel={`${i().title}, ${status(i())}. Show report details.`}
-			detail={
+			content={
 				<If when={selectedSlackReport() === i().id}>
-					<RowDetail>
-						<View class="gap-4 pt-3">
-							<Buttons>
-								<BodyStrong>Report details</BodyStrong>
-								<Spacer />
-								<Button
-									small
-									label="Correct details…"
-									disabled={props.locked || !!slackEdit()}
-									onPress={() =>
-										slackEdit.set({
-											projectId: s().projectId,
-											binding: s().binding,
-											digest: s().reports!.digest,
-											offset: s().reports!.offset ?? 0,
-											itemId: i().id,
-											details: details(i()),
-										})
-									}
-								/>
-							</Buttons>
-							<View class="flex-row flex-wrap gap-4">
-								<ReadField
-									label="Client organization"
-									value={details(i()).client?.value ?? "Not identified"}
-									evidence={
-										details(i()).client?.evidence ?? "No organization identified in the saved evidence."
-									}
-								/>
-								<ReadField
-									label="Slack author"
-									value={i().metadata.author ?? "Not identified"}
-									evidence="Author of the source Slack message"
-								/>
-								<ReadField
-									label="Original reporter"
-									value={details(i()).reporter?.value ?? "Not identified"}
-									evidence={
-										details(i()).reporter?.evidence ??
-										"No original reporter identified in the saved evidence."
-									}
-								/>
-							</View>
-							<ReadField
-								label="Issue"
-								value={details(i()).issue?.value ?? "Not identified"}
-								evidence={details(i()).issue?.evidence ?? "No issue identified in the saved evidence."}
+					<View class="gap-4">
+						<Buttons>
+							<BodyStrong>Report details</BodyStrong>
+							<Spacer />
+							<Button
+								small
+								label="Correct details…"
+								disabled={props.locked || !!slackEdit()}
+								onPress={() =>
+									slackEdit.set({
+										projectId: s().projectId,
+										binding: s().binding,
+										digest: s().reports!.digest,
+										offset: s().reports!.offset ?? 0,
+										itemId: i().id,
+										details: details(i()),
+									})
+								}
 							/>
-							<View selectable>
-								<Caption tone="faint">{i().url}</Caption>
-							</View>
-							<If when={props.controls.open && s().canOpenUrl !== false}>
-								<View class="flex-row">
-									<Button
-										small
-										label="Source message"
-										disabled={props.locked}
-										onPress={() => void props.controls.open?.(i().id, s().reports!.digest, s().binding)}
-									/>
-								</View>
-							</If>
-							<If when={slackEdit()?.itemId === i().id}>
-								<Corrections controls={props.controls} locked={props.locked} />
-							</If>
-							<Buttons>
-								<Caption>{`Label: ${i().slack?.label ?? "None"} · ${i().slack?.severity ?? "Not identified"} severity`}</Caption>
-								<Picker
-									label="Report label"
-									value={i().slack?.label ?? ""}
-									placeholder="No label"
-									disabled={props.locked}
-									items={[
-										{ value: "", title: "No label" },
-										...(s().labels ?? []).map((l) => ({ value: l.name, title: l.name })),
-									]}
-									onChange={(v) => void mutate({ label: v || null })}
-								/>
-							</Buttons>
-							<Caption tone="faint">Labels organize or hide reports. They never mark tackled.</Caption>
-							<Buttons>
-								<If when={i().sessionId && props.day.chat}>
-									<Button
-										small
-										label="View linked work"
-										onPress={() => openChat(i().sessionId!, "Slack reports")}
-									/>
-								</If>
-								<If when={i().missionId}>
-									<Button
-										small
-										label="View linked mission"
-										onPress={() => {
-											closeSlack();
-											openMission(i().missionId!);
-										}}
-									/>
-								</If>
+						</Buttons>
+						<View class="flex-row flex-wrap gap-4">
+							<ReadField
+								label="Client organization"
+								value={details(i()).client?.value ?? "Not identified"}
+								evidence={details(i()).client?.evidence ?? "No organization identified in the saved evidence."}
+							/>
+							<ReadField
+								label="Slack author"
+								value={i().metadata.author ?? "Not identified"}
+								evidence="Author of the source Slack message"
+							/>
+							<ReadField
+								label="Original reporter"
+								value={details(i()).reporter?.value ?? "Not identified"}
+								evidence={
+									details(i()).reporter?.evidence ?? "No original reporter identified in the saved evidence."
+								}
+							/>
+						</View>
+						<ReadField
+							label="Issue"
+							value={details(i()).issue?.value ?? "Not identified"}
+							evidence={details(i()).issue?.evidence ?? "No issue identified in the saved evidence."}
+						/>
+						<View selectable>
+							<Caption tone="faint">{i().url}</Caption>
+						</View>
+						<If when={props.controls.open && s().canOpenUrl !== false}>
+							<View class="flex-row">
 								<Button
 									small
-									label={i().slack?.status === "done" ? "Mark open" : "Mark tackled"}
-									testID={`slack-tackle-${i().id}`}
+									label="Source message"
 									disabled={props.locked}
-									onPress={() => void mutate({ status: i().slack?.status === "done" ? "open" : "done" })}
+									onPress={() => void props.controls.open?.(i().id, s().reports!.digest, s().binding)}
 								/>
-							</Buttons>
-							<If
-								when={
-									!i().sessionId && !i().missionId && !i().startOperationId && i().slack?.status === "open"
-										? intake()
-										: null
-								}
-							>
-								{(mirror) => (
-									<If
-										when={i().triageState === "new"}
-										else={
-											<View class="flex-row">
-												<Button
-													small
-													label="Bring back"
-													disabled={props.locked}
-													onPress={async () => {
-														const v = mirror().view();
-														const result = await mirror().source.triage({
-															itemId: i().id,
-															revision: i().revision,
-															contextDigest: v.contextDigest,
-															state: "new",
-														});
-														if (result.status === "accepted") await props.controls.read();
-													}}
-												/>
-											</View>
-										}
-									>
-										<IntakeWorkControls
-											mirror={mirror()}
-											row={{
-												revision: i().revision,
-												request: {
-													id: i().id,
-													title: i().title,
-													source: "slack",
-													sourceLabel: "Slack",
-													place: i().metadata.channelName ?? "",
-													age: "",
-													link: i().url,
-													kind: i().slack?.type ?? "",
-													who: "",
-													quote: "",
-													client: "",
-													reporter: "",
-												},
-											}}
-											missions={missions()}
-											busy={
-												props.locked ||
-												mirror().view().sending.includes(i().id) ||
-												mirror()
-													.view()
-													.unsettled.some((o) => o.itemId === i().id)
-											}
-											onStarted={() => void props.controls.read()}
-										/>
-									</If>
-								)}
+							</View>
+						</If>
+						<If when={slackEdit()?.itemId === i().id}>
+							<Corrections controls={props.controls} locked={props.locked} />
+						</If>
+						<Buttons>
+							<Caption>{`Label: ${i().slack?.label ?? "None"} · ${i().slack?.severity ?? "Not identified"} severity`}</Caption>
+							<Picker
+								label="Report label"
+								value={i().slack?.label ?? ""}
+								placeholder="No label"
+								disabled={props.locked}
+								items={[
+									{ value: "", title: "No label" },
+									...(s().labels ?? []).map((l) => ({ value: l.name, title: l.name })),
+								]}
+								onChange={(v) => void mutate({ label: v || null })}
+							/>
+						</Buttons>
+						<Caption tone="faint">Labels organize or hide reports. They never mark tackled.</Caption>
+						<Buttons>
+							<If when={i().sessionId && props.day.chat}>
+								<Button
+									small
+									label="View linked work"
+									onPress={() => openChat(i().sessionId!, "Slack reports")}
+								/>
 							</If>
-
-							<Each
-								of={
-									intake()
-										?.view()
-										.unsettled.filter((o) => o.itemId === i().id) ?? []
-								}
-								key={(o) => o.operationId}
-							>
-								{(o) => (
-									<Notice
-										text="Starting this work is not confirmed. It will not be started again."
-										action={
-											<Link
-												label="Check start status"
-												disabled={o().delivery === "checking"}
+							<If when={i().missionId}>
+								<Button
+									small
+									label="View linked mission"
+									onPress={() => {
+										closeSlack();
+										openMission(i().missionId!);
+									}}
+								/>
+							</If>
+							<Button
+								small
+								label={i().slack?.status === "done" ? "Mark open" : "Mark tackled"}
+								testID={`slack-tackle-${i().id}`}
+								disabled={props.locked}
+								onPress={() => void mutate({ status: i().slack?.status === "done" ? "open" : "done" })}
+							/>
+						</Buttons>
+						<If
+							when={
+								!i().sessionId && !i().missionId && !i().startOperationId && i().slack?.status === "open"
+									? intake()
+									: null
+							}
+						>
+							{(mirror) => (
+								<If
+									when={i().triageState === "new"}
+									else={
+										<View class="flex-row">
+											<Button
+												small
+												label="Bring back"
+												disabled={props.locked}
 												onPress={async () => {
-													await intake()?.source.check(o().operationId);
-													await props.controls.read();
+													const v = mirror().view();
+													const result = await mirror().source.triage({
+														itemId: i().id,
+														revision: i().revision,
+														contextDigest: v.contextDigest,
+														state: "new",
+													});
+													if (result.status === "accepted") await props.controls.read();
 												}}
 											/>
+										</View>
+									}
+								>
+									<IntakeWorkControls
+										mirror={mirror()}
+										row={{
+											revision: i().revision,
+											request: {
+												id: i().id,
+												title: i().title,
+												source: "slack",
+												sourceLabel: "Slack",
+												place: i().metadata.channelName ?? "",
+												age: "",
+												link: i().url,
+												kind: i().slack?.type ?? "",
+												who: "",
+												quote: "",
+												client: "",
+												reporter: "",
+											},
+										}}
+										missions={missions()}
+										busy={
+											props.locked ||
+											mirror().view().sending.includes(i().id) ||
+											mirror()
+												.view()
+												.unsettled.some((o) => o.itemId === i().id)
 										}
+										onStarted={() => void props.controls.read()}
 									/>
-								)}
-							</Each>
-							<Caption tone="faint">
-								Starting work does not mark tackled. Only a start reaction is sent to Slack.
-							</Caption>
-						</View>
-					</RowDetail>
+								</If>
+							)}
+						</If>
+
+						<Each
+							of={
+								intake()
+									?.view()
+									.unsettled.filter((o) => o.itemId === i().id) ?? []
+							}
+							key={(o) => o.operationId}
+						>
+							{(o) => (
+								<Notice
+									kind="unconfirmed"
+									text="Starting this work is not confirmed. It will not be started again."
+									action={
+										<Link
+											label="Check start status"
+											disabled={o().delivery === "checking"}
+											onPress={async () => {
+												await intake()?.source.check(o().operationId);
+												await props.controls.read();
+											}}
+										/>
+									}
+								/>
+							)}
+						</Each>
+						<Caption tone="faint">
+							Starting work does not mark tackled. Only a start reaction is sent to Slack.
+						</Caption>
+					</View>
 				</If>
 			}
 		/>
-	);
-}
-
-// LIBRARY GAP: Panel cannot hold a virtualized List: its frame is one view around its children, and the reports
-// page keeps a List so a page of 100 reports does not draw every row. This splits the panel's frame into a top
-// (rounded, under the page's head), a slice per list item (its sides) and a foot (rounded), at the page's width.
-// For the same reason the List's header and footer place the PageHead and the bottom space as Page would.
-function PanelPart(props: { part: "top" | "body" | "foot"; children?: JSX.Element }) {
-	const frame = {
-		top: "rounded-t-(--radius-panel) border-x border-t",
-		body: "border-x",
-		foot: "h-2.5 rounded-b-(--radius-panel) border-x border-b",
-	}[props.part];
-	return (
-		<View class={`w-full self-center ${narrow() ? "px-3" : "px-6"}`} style={{ maxWidth: 1088 }}>
-			<View class={`overflow-hidden border-border bg-card ${frame}`}>{props.children}</View>
-		</View>
 	);
 }
 
@@ -544,8 +522,8 @@ export function SlackReportsScreen(props: { day: SlackDay }) {
 	);
 	const head = (
 		<View>
-			{/* The page's head, as Page places it: the List scrolls the whole page. */}
-			<View class={`w-full self-center pt-7.5 ${narrow() ? "px-3" : "px-6"}`} style={{ maxWidth: 1088 }}>
+			{/* The List scrolls the whole page, so the page and its panel come in slices. */}
+			<PanelSlice part="head">
 				<PageHead
 					title="Slack reports"
 					text={`${s()?.projectName ?? "Reading saved reports…"} · Coverage is incomplete`}
@@ -555,12 +533,13 @@ export function SlackReportsScreen(props: { day: SlackDay }) {
 						<Body tone="needs">{c.message()}</Body>
 					</If>
 				</PageHead>
-			</View>
-			<PanelPart part="top">
+			</PanelSlice>
+			<PanelSlice part="top">
 				<Each of={c.unknown()} key={(o) => o.operationId}>
 					{(o) => (
 						<Notice
 							placement="panel"
+							kind="unconfirmed"
 							text="This Slack action is not confirmed. It will not be sent again."
 							action={
 								<Link label="Check status" disabled={c.busy()} onPress={() => void c.check(o().operationId)} />
@@ -615,7 +594,7 @@ export function SlackReportsScreen(props: { day: SlackDay }) {
 				<If when={here() && s()?.reports && !visible().length}>
 					<EmptyLine text="No reports match these filters. Show tackled or hidden labels to include more." />
 				</If>
-			</PanelPart>
+			</PanelSlice>
 		</View>
 	);
 	return (
@@ -626,15 +605,11 @@ export function SlackReportsScreen(props: { day: SlackDay }) {
 			estimatedItemSize={72}
 			class="min-h-0 flex-1"
 			header={head}
-			footer={
-				<View class="pb-24">
-					<PanelPart part="foot" />
-				</View>
-			}
+			footer={<PanelSlice part="foot" />}
 			{...keepScroll("slack")}
 		>
 			{(row) => (
-				<PanelPart part="body">
+				<PanelSlice part="item">
 					<If
 						when={row().item}
 						else={
@@ -670,7 +645,7 @@ export function SlackReportsScreen(props: { day: SlackDay }) {
 					>
 						<Report item={row().item!} day={props.day} controls={c} locked={locked()} />
 					</If>
-				</PanelPart>
+				</PanelSlice>
 			)}
 		</List>
 	);

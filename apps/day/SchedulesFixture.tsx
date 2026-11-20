@@ -1,24 +1,13 @@
 // Test-only schedule adapter. No host, storage, provider or execution.
-import { type JSX, mount, View } from "nsh";
+import { mount } from "nsh";
 import { SchedulesScreen } from "./SchedulesScreen";
 import { restoreSchedules, savedSchedules, scheduleDraft } from "./scheduleDraft";
 import { scriptedSchedules } from "./schedulesDemo";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const { controls, snapshot, writes, checks, reads, many, lastTarget, unknown, operations } = scriptedSchedules();
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Buttons>
 				<Caption tone="faint">Mock data</Caption>
@@ -95,5 +84,5 @@ mount(() => (
 			</Buttons>
 		</Block>
 		<SchedulesScreen controls={controls} />
-	</FixtureWindow>
+	</WindowCanvas>
 ));

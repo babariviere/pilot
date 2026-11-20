@@ -195,7 +195,6 @@ function ProfileRow(props: {
 			anchor={(node) => summary.set(node)}
 			open={open()}
 			onToggle={() => openProfile.set(open() ? "" : p().id)}
-			summaryClass="gap-0.5 px-4 py-1.5"
 			content={
 				<Block gap={4}>
 					<Each of={SIZES} key={(s) => s.size}>
@@ -233,13 +232,15 @@ function ProfileRow(props: {
 				</Block>
 			}
 		>
-			<View class="flex-row items-baseline gap-2">
-				<BodyStrong>{p().name}</BodyStrong>
-				<Caption>{p().covers}</Caption>
+			<View class="min-w-0 flex-1 gap-0.5">
+				<View class="flex-row items-baseline gap-2">
+					<BodyStrong>{p().name}</BodyStrong>
+					<Caption>{p().covers}</Caption>
+				</View>
+				<Caption testID={`profile-summary-${p().id}`} tone="faint">
+					{`${profileSummary(props.settings, p())}${p().optInOnly ? " · Off until a project allows it" : ""}`}
+				</Caption>
 			</View>
-			<Caption testID={`profile-summary-${p().id}`} tone="faint">
-				{`${profileSummary(props.settings, p())}${p().optInOnly ? " · Off until a project allows it" : ""}`}
-			</Caption>
 		</ExpandableRow>
 	);
 }

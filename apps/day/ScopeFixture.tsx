@@ -3,7 +3,7 @@
 // project (pilot) from the decisions world, website with its rows, and billing
 // unreadable until the script says otherwise. Save and reopen restores only
 // the window's screen state, as an update or a close would.
-import { effect, type JSX, mount, Scroll, signal, untracked, View } from "nsh";
+import { effect, mount, Scroll, signal, untracked, View } from "nsh";
 import { PlanFeed, TodayFeed } from "pilot-day/native";
 import { ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
@@ -12,7 +12,7 @@ import { MockDayScreen } from "./mockFeeds";
 import { mirrorPlanning } from "./planning";
 import { ScriptedScope } from "./scopeDemo";
 import { mirrorScope, todayProject } from "./todayScope";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const feed = new TodayFeed("decisions");
@@ -28,19 +28,8 @@ effect(() => {
 });
 const readAgain = () => void day.scope?.read(todayProject());
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<View class="flex-1">
 			<MockDayScreen day={day} plans={plans} />
 		</View>
@@ -98,5 +87,5 @@ mount(() => (
 				</Buttons>
 			</Block>
 		</Scroll>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

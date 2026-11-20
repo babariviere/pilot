@@ -11,7 +11,7 @@
 // read-only chat that makes mockups and asks the user to choose; its
 // question shows here with them. The choice comes back as a fix proposal
 // with the chosen mockup, and Start fix builds exactly that.
-import { type JSX, signal, View } from "nsh";
+import { signal, View } from "nsh";
 import { namedFeedbackPaths } from "../../packages/kernel/src/feedback-paths";
 import type { ArtifactSource } from "./artifactReads";
 import { openChat } from "./chatView";
@@ -62,8 +62,7 @@ import {
 	Facts,
 	Field,
 	glide,
-	Mark,
-	type MarkKind,
+	MarkedLine,
 	Picker,
 	Row,
 	RowDetail,
@@ -95,27 +94,6 @@ function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 				/>
 			</View>
 		</If>
-	);
-}
-
-// LIBRARY GAP: MarkLine is deprecated and Row cannot sit inside a row's detail or a Block (it brings its own inset
-// and hairline). A step of this feedback needs a mark beside a sentence that may wrap, an action at the right and
-// lines under it. This line uses layout classes only until the library offers a marked line.
-/** One step's line: its mark, its words, an action at the right and what belongs under it. */
-function Line(props: { testID: string; mark: MarkKind; text: string; children?: JSX.Element; action?: JSX.Element }) {
-	return (
-		<View testID={props.testID} class="gap-1.5">
-			<View class="flex-row items-start gap-2.5">
-				<View class="h-4.5 w-3.5 items-center justify-center">
-					<Mark kind={props.mark} />
-				</View>
-				<View class="min-w-0 flex-1">
-					<Body>{props.text}</Body>
-				</View>
-				{props.action}
-			</View>
-			{props.children}
-		</View>
 	);
 }
 
@@ -449,7 +427,7 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 	return (
 		<>
 			<If when={steps().resolved}>
-				<Line testID={`feedback-resolved-${props.item.id}`} mark="done" text="You marked this resolved." />
+				<MarkedLine testID={`feedback-resolved-${props.item.id}`} kind="done" text="You marked this resolved." />
 			</If>
 			<If when={triage()}>
 				<Disclosure label="Read access" open={accessOpen()} onToggle={() => accessOpen.set(!accessOpen())}>
@@ -460,9 +438,9 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 			</If>
 			<Each of={triage() && chatLine(triage()!) ? [triage()!] : []} key={(t) => t.operationId}>
 				{(t) => (
-					<Line
+					<MarkedLine
 						testID={`feedback-triage-${props.item.id}`}
-						mark={running(t()) ? (chatState(t()) === "question" ? "needs" : "working") : "needs"}
+						kind={running(t()) ? (chatState(t()) === "question" ? "needs" : "working") : "needs"}
 						text={chatLine(t())}
 						action={
 							<If when={props.day.chat}>
@@ -480,7 +458,7 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 						<If when={!props.day.chat}>
 							<ChatLink day={props.day} item={props.item} step={t()} />
 						</If>
-					</Line>
+					</MarkedLine>
 				)}
 			</Each>
 			<Each
@@ -568,9 +546,9 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 			<Each of={steps().prototype ? [steps().prototype!] : []} key={(p) => p.operationId}>
 				{(p) => (
 					<View class="gap-2.5">
-						<Line
+						<MarkedLine
 							testID={`feedback-prototyping-${props.item.id}`}
-							mark={
+							kind={
 								running(p())
 									? chatState(p()) === "question"
 										? "needs"
@@ -582,7 +560,7 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 							text={chatLine(p())}
 						>
 							<ChatLink day={props.day} item={props.item} step={p()} />
-						</Line>
+						</MarkedLine>
 						<Each of={questionOf(p()) ? [questionOf(p())!] : []} key={(q) => `${p().sessionId}/${q.id}`}>
 							{(q) => (
 								<FeedbackQuestion
@@ -627,9 +605,9 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 			<Each of={steps().fix ? [steps().fix!] : []} key={(f) => f.operationId}>
 				{(f) => (
 					<View class="gap-2.5">
-						<Line
+						<MarkedLine
 							testID={`feedback-fixing-${props.item.id}`}
-							mark={
+							kind={
 								chatState(f()) === "question"
 									? "needs"
 									: running(f())
@@ -648,7 +626,7 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 							<If when={!props.day.chat}>
 								<ChatLink day={props.day} item={props.item} step={f()} />
 							</If>
-						</Line>
+						</MarkedLine>
 						<Each of={questionOf(f()) ? [questionOf(f())!] : []} key={(q) => `${f().sessionId}/${q.id}`}>
 							{(q) => (
 								<FeedbackQuestion
@@ -671,7 +649,7 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 			</Each>
 			<Each of={steps().mission ? [steps().mission!] : []} key={(m) => m.operationId}>
 				{(m) => (
-					<Line testID={`feedback-mission-${props.item.id}`} mark="new" text={missionLine(m())}>
+					<MarkedLine testID={`feedback-mission-${props.item.id}`} kind="new" text={missionLine(m())}>
 						<If when={m().mission && props.day.feed.mission(m().missionId)}>
 							<View class="flex-row">
 								<Button
@@ -685,14 +663,14 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 								/>
 							</View>
 						</If>
-					</Line>
+					</MarkedLine>
 				)}
 			</Each>
 			<Each of={unknown() ? [unknown()!] : []} key={(o) => o.operationId}>
 				{(o) => (
-					<Line
+					<MarkedLine
 						testID={`feedback-step-unknown-${props.item.id}`}
-						mark="needs"
+						kind="needs"
 						text="Pilot does not know if your last step on this was done. It will not send it again."
 					>
 						<View class="flex-row">
@@ -704,7 +682,7 @@ function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 								onPress={() => void check(o().operationId)}
 							/>
 						</View>
-					</Line>
+					</MarkedLine>
 				)}
 			</Each>
 			<If when={!triage() && props.item.investigation}>

@@ -1,6 +1,6 @@
 // Test-only: styled controls and the screen agent's request handling over the injected native host channel.
 // Every control and value here is invented.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
 import { call } from "./bridge";
 import { installScreenAgent } from "./screenAgent";
 import {
@@ -12,11 +12,11 @@ import {
 	Checkbox,
 	Disclosure,
 	Field,
-	GridBackdrop,
 	Notice,
 	Picker,
 	Tab,
 	Tabs,
+	WindowCanvas,
 } from "./ui";
 
 const name = signal("Apollo");
@@ -29,19 +29,8 @@ const pressed = signal("");
 
 installScreenAgent("fixture");
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Body testID="pressed">{pressed() || "nothing"}</Body>
 			<Buttons>
@@ -91,5 +80,5 @@ mount(() => (
 			</AgentScope.Provider>
 			<Notice text="Last read failed" detail="Pilot tries again by itself." />
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

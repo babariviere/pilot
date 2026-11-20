@@ -244,21 +244,19 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 					key={(o) => originKey(o.origin)}
 				>
 					{(o) => (
-						// LIBRARY GAP: Notice takes one way out, and this choice has two (use the context the page was
-						// opened from, or keep the draft's). Both are Links in Notice's action slot until it offers a pair.
 						<Notice
 							testID="feedback-offer"
 							text={`Your unsent feedback is about ${originName(props.day, d().origin)}.`}
 							detail={`You opened this page from ${originName(props.day, o().origin)}. Your words keep their context unless you change it.`}
+							otherAction={
+								<Link
+									label={o().origin ? "Use this one instead" : "Make it general"}
+									testID="feedback-offer-use"
+									onPress={() => setOrigin(o().origin)}
+								/>
+							}
 							action={
-								<>
-									<Link
-										label={o().origin ? "Use this one instead" : "Make it general"}
-										testID="feedback-offer-use"
-										onPress={() => setOrigin(o().origin)}
-									/>
-									<Link label="Keep it" testID="feedback-offer-keep" onPress={() => feedbackOffer.set(null)} />
-								</>
+								<Link label="Keep it" testID="feedback-offer-keep" onPress={() => feedbackOffer.set(null)} />
 							}
 						/>
 					)}
@@ -306,33 +304,32 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 				</If>
 				<Each of={v().unsettled} key={(o) => o.operationId}>
 					{(o) => (
-						// LIBRARY GAP: Notice takes one way out. A lost Send offers Check and, for the draft on screen,
-						// Write another; both are Links in Notice's action slot until it offers a pair.
 						<Notice
 							testID="feedback-unknown"
+							kind="unconfirmed"
 							text={o().text}
 							detail="Save not confirmed. Check only reads this item's result. Other feedback can still be sent."
+							otherAction={
+								<Link
+									label={o().state === "checking" ? "Checking…" : "Check"}
+									testID="feedback-check"
+									disabled={o().state === "checking"}
+									onPress={() => void check(o().operationId)}
+								/>
+							}
 							action={
-								<>
+								<If when={sameFeedback(o(), d())}>
 									<Link
-										label={o().state === "checking" ? "Checking…" : "Check"}
-										testID="feedback-check"
-										disabled={o().state === "checking"}
-										onPress={() => void check(o().operationId)}
+										label="Write another"
+										testID="feedback-another"
+										disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
+										onPress={() => {
+											keepFeedbackDraft(d());
+											feedbackDraft.set({ text: "", origin: d().origin });
+											clearFeedbackImagePreviews();
+										}}
 									/>
-									<If when={sameFeedback(o(), d())}>
-										<Link
-											label="Write another"
-											testID="feedback-another"
-											disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
-											onPress={() => {
-												keepFeedbackDraft(d());
-												feedbackDraft.set({ text: "", origin: d().origin });
-												clearFeedbackImagePreviews();
-											}}
-										/>
-									</If>
-								</>
+								</If>
 							}
 						/>
 					)}

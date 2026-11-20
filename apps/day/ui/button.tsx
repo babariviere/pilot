@@ -1,6 +1,5 @@
 // Commands. `Button` is the app's one button, in four kinds; `Link` is a command inside words or a section's
-// head; `Chip` turns a help on and off. The older shapes below them are kept, restyled, while screens move to
-// these three; each says what replaces it.
+// head; `Chip` turns a help on and off.
 import { type JSX, Text, View, type ViewProps, type ViewRef } from "nsh";
 import { Button as BaseButton, Toggle } from "nsh/base";
 import { type AgentMark, useAgent } from "./agent";
@@ -37,6 +36,14 @@ const TINT: Record<ButtonKind, string> = {
 	destructive: "tint-failed-ink",
 };
 
+/** A button on the plan chart's own paper: its map ink and paper, so it reads as part of the chart. */
+const MAP_FRAME: Record<ButtonKind, string> = {
+	primary: "border border-map-ink/30 bg-map-paper hover:bg-map-ink/10 active:bg-map-ink/10",
+	secondary: "border border-map-ink/30 bg-map-paper hover:bg-map-ink/10 active:bg-map-ink/10",
+	quiet: "hover:bg-map-ink/10 active:bg-map-ink/10",
+	destructive: "border border-map-ink/30 bg-map-paper hover:bg-map-ink/10 active:bg-map-ink/10",
+};
+
 /** What every button takes. */
 export type ButtonProps = {
 	label: string;
@@ -58,6 +65,11 @@ export type ButtonProps = {
 	anchor?: (node: ViewRef) => void;
 	/** What the screen agent must know: `confirm` for a commit only the person may press. */
 	agent?: AgentMark;
+	/**
+	 * `map`: the button sits on the plan chart's paper and draws in its map roles (ink on paper), as the chart's
+	 * own controls do. `secondary` is framed, `quiet` is bare (zoom). Only the chart uses it.
+	 */
+	paper?: "map";
 	onPress: () => void;
 };
 
@@ -80,6 +92,9 @@ export function Button(props: ButtonProps) {
 		if (props.iconOnly) return props.small ? "h-5 px-1" : "h-6.5 px-1.5";
 		return props.small ? "h-5 px-2" : "h-6.5 px-2.5";
 	};
+	const frame = () => (props.paper === "map" ? MAP_FRAME[kind()] : FRAME[kind()]);
+	const words = () => (props.paper === "map" ? "text-map-ink" : WORDS[kind()]);
+	const tint = () => (props.paper === "map" ? "tint-map-ink" : TINT[kind()]);
 	return (
 		<BaseButton
 			ref={(node: ViewRef) => {
@@ -91,13 +106,13 @@ export function Button(props: ButtonProps) {
 			accessibilityLabel={props.accessibilityLabel ?? (props.iconOnly ? props.label : null)}
 			tooltip={props.shortcut ? `${props.label}  ${props.shortcut}` : props.iconOnly ? props.label : undefined}
 			onPress={props.onPress}
-			class={`group min-w-0 shrink-0 flex-row items-center justify-center gap-1.5 rounded-lg transition duration-150 disabled:opacity-45 ${FOCUS_RING} ${size()} ${FRAME[kind()]}`}
+			class={`group min-w-0 shrink-0 flex-row items-center justify-center gap-1.5 rounded-lg transition duration-150 disabled:opacity-45 ${FOCUS_RING} ${size()} ${frame()}`}
 		>
 			<If when={props.icon}>
-				<Icon name={props.icon as IconName} tint={TINT[kind()]} />
+				<Icon name={props.icon as IconName} tint={tint()} />
 			</If>
 			<If when={!props.iconOnly}>
-				<Text class={`shrink truncate ${WORDS[kind()]}`} style={TYPE.control}>
+				<Text class={`shrink truncate ${words()}`} style={TYPE.control}>
 					{props.label}
 				</Text>
 			</If>
@@ -224,179 +239,6 @@ export function Buttons(props: { testID?: string; children?: JSX.Element }) {
 		<View testID={props.testID} class="flex-row flex-wrap items-center gap-2">
 			{props.children}
 		</View>
-	);
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// Older shapes, kept while screens move. Each draws in the new look; new code uses Button, Link or Chip.
-
-/** @deprecated Use `ButtonKind`: `primary` stays, `outline` is `secondary`, `plain` is `quiet` (or a Link in page flow). */
-export type ActionVariant = "plain" | "primary" | "outline";
-
-const ACTION_KIND: Record<ActionVariant, ButtonKind> = { primary: "primary", outline: "secondary", plain: "quiet" };
-
-/**
- * @deprecated Use `Button` (a command) or `Link` (a command in page flow, such as "Show all"). `variant` maps to
- * Button's `kind`: primary → primary, outline → secondary, plain → quiet.
- */
-export function Action(props: {
-	label: string;
-	variant?: ActionVariant;
-	icon?: IconName;
-	iconOnly?: boolean;
-	badge?: string;
-	disabled?: boolean;
-	accessibilityLabel?: string;
-	shortcut?: string;
-	testID?: string;
-	anchor?: (node: ViewRef) => void;
-	agent?: AgentMark;
-	onPress: () => void;
-}) {
-	return (
-		<Button
-			label={props.label}
-			kind={ACTION_KIND[props.variant ?? "plain"]}
-			icon={props.icon}
-			iconOnly={props.iconOnly}
-			count={props.badge}
-			disabled={props.disabled}
-			accessibilityLabel={props.accessibilityLabel}
-			shortcut={props.shortcut}
-			testID={props.testID}
-			anchor={props.anchor}
-			agent={props.agent}
-			onPress={props.onPress}
-		/>
-	);
-}
-
-/** @deprecated Use `Pill`. */
-export function Badge(props: { label: string }) {
-	return <Pill count={props.label} />;
-}
-
-/** @deprecated Use `Link` with `size="body"`. */
-export function InlineAction(props: { label: string; testID?: string; agent?: AgentMark; onPress: () => void }) {
-	return <Link label={props.label} size="body" testID={props.testID} agent={props.agent} onPress={props.onPress} />;
-}
-
-/** @deprecated Use `Row` with `onPress`: the row is the press target and its slots hold the rest. */
-export function RowLink(props: {
-	testID: string;
-	title: string;
-	accessibilityLabel: string;
-	anchor?: (node: ViewRef) => void;
-	agent?: AgentMark;
-	onPress: () => void;
-	children?: JSX.Element;
-}) {
-	const agent = useAgent({
-		component: "button",
-		label: () => props.accessibilityLabel ?? props.title,
-		id: () => props.testID,
-		mark: () => props.agent,
-		actions: { press: () => props.onPress() },
-	});
-	return (
-		<BaseButton
-			ref={(node: ViewRef) => {
-				agent.anchor(node);
-				props.anchor?.(node);
-			}}
-			testID={props.testID}
-			accessibilityLabel={props.accessibilityLabel}
-			onPress={props.onPress}
-			class={`group flex-row items-center gap-3 rounded-md ${FOCUS_RING}`}
-		>
-			<Text class="flex-1 text-foreground group-hover:underline" style={TYPE.bodyStrong}>
-				{props.title}
-			</Text>
-			{props.children}
-		</BaseButton>
-	);
-}
-
-/** @deprecated Use `Chip` (the same part under its new name). */
-export function ToggleChip(props: {
-	label: string;
-	pressed: boolean;
-	testID?: string;
-	shortcut?: string;
-	anchor?: (node: ViewRef) => void;
-	agent?: AgentMark;
-	onChange: (pressed: boolean) => void;
-}) {
-	return (
-		<Chip
-			label={props.label}
-			pressed={props.pressed}
-			testID={props.testID}
-			shortcut={props.shortcut}
-			anchor={props.anchor}
-			agent={props.agent}
-			onChange={props.onChange}
-		/>
-	);
-}
-
-/**
- * @deprecated Use `Link` (a command) or `Chip` (on and off). `pressed` still makes it a toggle that shows when it
- * is on.
- */
-export function LinkAction(props: {
-	label: string;
-	testID?: string;
-	accessibilityLabel?: string;
-	anchor?: (node: ViewRef) => void;
-	pressed?: boolean;
-	tone?: "primary" | "faint";
-	agent?: AgentMark;
-	onPress: () => void;
-}) {
-	const agent = useAgent({
-		component: "button",
-		label: () => props.accessibilityLabel ?? props.label,
-		id: () => props.testID,
-		state: { pressed: () => props.pressed },
-		mark: () => props.agent,
-		actions: { press: () => props.onPress() },
-	});
-	const anchor = (node: ViewRef) => {
-		agent.anchor(node);
-		props.anchor?.(node);
-	};
-	const words = () => (props.tone === "faint" ? "text-faint" : "text-primary");
-	return (
-		<If
-			when={props.pressed !== undefined}
-			else={
-				<BaseButton
-					ref={anchor}
-					testID={props.testID}
-					accessibilityLabel={props.accessibilityLabel ?? null}
-					onPress={props.onPress}
-					class={`group rounded-md px-1 ${FOCUS_RING}`}
-				>
-					<Text class={`group-hover:underline ${words()}`} style={TYPE.captionStrong}>
-						{props.label}
-					</Text>
-				</BaseButton>
-			}
-		>
-			<Toggle
-				ref={anchor}
-				testID={props.testID}
-				accessibilityLabel={props.accessibilityLabel ?? null}
-				pressed={props.pressed === true}
-				onChange={props.onPress}
-				class={`rounded-md px-1.5 hover:bg-accent aria-pressed:bg-selection ${FOCUS_RING}`}
-			>
-				<Text class={words()} style={TYPE.captionStrong}>
-					{props.label}
-				</Text>
-			</Toggle>
-		</If>
 	);
 }
 

@@ -1,18 +1,15 @@
-import { Image, type JSX, Scroll, signal, View } from "nsh";
+import { Image, Scroll, signal, View } from "nsh";
 import { currentWindow, Window } from "nsh/desktop";
 import type { Shown } from "./artifactReads";
-import { Block, Body, Caption, Column, GridBackdrop, Link, Page, PageHead, Panel } from "./ui";
-
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a window that has no
-// DayScreen, such as this separate inspection window. This local root does what DayScreen's root does.
-function WindowCanvas(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
+// Parts come file by file, not from "./ui": the inspection test app (fixtures/inspection) loads this module from
+// its own folder, where the library's font and icon files (imported by ui/index.ts) are outside the app and cannot
+// ship. In Day's window the index has already loaded them.
+import { Link } from "./ui/button";
+import { Page, PageHead } from "./ui/layout";
+import { Column, Panel } from "./ui/panel";
+import { WindowCanvas } from "./ui/quiet";
+import { Block } from "./ui/section";
+import { Body, Caption } from "./ui/text";
 
 /** An immutable copy of already-read evidence, never a live editor or an action source. */
 export function InspectInWindow(props: { title: string; context: string; text?: string; artifact?: Shown }) {

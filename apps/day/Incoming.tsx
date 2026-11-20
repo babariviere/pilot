@@ -7,7 +7,7 @@
 // exact request and revision shown. A write whose answer is lost stays "not
 // confirmed" until Check reads its saved receipt. The words come from
 // outside Pilot and show as text only.
-import { effect, signal, Text, untracked, View, type ViewRef } from "nsh";
+import { effect, signal, untracked, View, type ViewRef } from "nsh";
 import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
 import { findingWork } from "./insightsWork";
@@ -15,16 +15,17 @@ import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triag
 import { groupOf, openLinear } from "./linearView";
 import { goalDraft, linkedMission, openNew, replacesDraft, requestDraft } from "./planView";
 import {
-	Action,
 	Block,
 	Body,
+	BodyStrong,
 	Button,
+	Buttons,
+	Caption,
 	glide,
 	Link,
 	Notice,
-	QuietPanel,
-	RadioList,
-	RadioRow,
+	Option,
+	Options,
 	Row,
 	RowGroup,
 	Rows,
@@ -263,29 +264,27 @@ export function RouteChoice(props: { row: IntakeRow; missions: MissionRow[]; bus
 	const id = () => props.row.request.id;
 	return (
 		<View class="gap-3">
-			<If
-				when={props.missions.length > 0}
-				else={<Text class="text-sm text-muted-foreground">Work on it starts as standalone work.</Text>}
-			>
+			<If when={props.missions.length > 0} else={<Body tone="muted">Work on it starts as standalone work.</Body>}>
 				<View class="gap-1">
-					<Text class="text-xs text-faint">Where should the work go?</Text>
-					<RadioList>
+					<Caption tone="faint">Where should the work go?</Caption>
+					<Options>
 						<Each of={[{ id: "", title: "Standalone work" }, ...props.missions]} key={(m) => m.id}>
 							{(m) => (
-								<RadioRow
+								<Option
+									compact
 									testID={`route-${id()}-${m().id || "standalone"}`}
-									label={m().title}
+									title={m().title}
 									checked={(routes()[id()] ?? "") === m().id}
 									disabled={props.busy || starting(id())}
 									onChange={() => routes.set({ ...routes(), [id()]: m().id })}
 								/>
 							)}
 						</Each>
-					</RadioList>
+					</Options>
 				</View>
 			</If>
 			<If when={!routeOffered(id(), props.missions)}>
-				<Text class="text-sm text-needs-ink">That mission is not running now. Choose again.</Text>
+				<Body tone="needs">That mission is not running now. Choose again.</Body>
 			</If>
 		</View>
 	);
@@ -310,30 +309,28 @@ export function ConfirmStart(props: {
 			: "as standalone work";
 	};
 	return (
-		<QuietPanel testID={`confirm-${id()}`} class="gap-2">
-			<Text class="text-sm text-foreground">
-				{`Start one Build chat for ${quoted(props.row.request.title)} ${place()}?`}
-			</Text>
-			<Text class="text-xs leading-relaxed text-faint">
+		<View testID={`confirm-${id()}`} class="gap-2">
+			<Body>{`Start one Build chat for ${quoted(props.row.request.title)} ${place()}?`}</Body>
+			<Caption tone="faint">
 				{linear()
 					? confirming()?.manageStatus
 						? "Pilot links the issue and manages progress and review only. You mark it complete in Linear."
 						: "Pilot links the issue for context only. Its Linear status does not change."
 					: "It uses this project's task model and its existing limits. Pilot marks the request as started in Slack."}
-			</Text>
+			</Caption>
 			<If when={!startCurrent(props.mirror, props.row, props.missions)}>
-				<Text class="text-xs text-needs-ink">This changed since you chose to start it. Cancel and look again.</Text>
+				<Caption tone="needs">This changed since you chose to start it. Cancel and look again.</Caption>
 			</If>
-			<View class="flex-row gap-2">
-				<Action
+			<Buttons>
+				<Button
+					kind="primary"
 					label={props.busy ? "Starting…" : "Start"}
-					variant="primary"
 					testID={`confirm-start-${id()}`}
 					anchor={props.anchor}
 					disabled={props.busy || !startCurrent(props.mirror, props.row, props.missions)}
 					onPress={() => confirmStart(props.mirror, props.row, props.missions, props.onStarted)}
 				/>
-				<Action
+				<Button
 					label="Cancel"
 					disabled={props.busy}
 					onPress={() => {
@@ -341,8 +338,8 @@ export function ConfirmStart(props: {
 						props.onCancel();
 					}}
 				/>
-			</View>
-		</QuietPanel>
+			</Buttons>
+		</View>
 	);
 }
 
@@ -381,8 +378,8 @@ export function PlanAction(props: { row: IntakeRow; busy: boolean; manageStatus?
 	const conflict = signal(false);
 	return (
 		<View class="gap-2">
-			<View class="flex-row">
-				<Action
+			<Buttons>
+				<Button
 					label={linear() ? "Prefill mission draft" : "Plan a mission…"}
 					testID={`plan-${props.row.request.id}`}
 					disabled={props.busy}
@@ -392,7 +389,7 @@ export function PlanAction(props: { row: IntakeRow; busy: boolean; manageStatus?
 						if (opened) props.onOpened?.();
 					}}
 				/>
-			</View>
+			</Buttons>
 			<If when={conflict()}>
 				<Notice text="You already have a mission draft. Open New to finish or clear it before prefilling another." />
 			</If>
@@ -425,44 +422,46 @@ export function IntakeWorkControls(props: {
 			<RouteChoice row={props.row} missions={props.missions} busy={props.busy} />
 			<If when={linear() && !starting(id())}>
 				<View class="gap-1">
-					<Text class="text-sm text-foreground">Manage status</Text>
-					<RadioList>
-						<RadioRow
+					<BodyStrong>Manage status</BodyStrong>
+					<Options>
+						<Option
+							compact
 							testID={`linear-reference-${id()}`}
-							label="Off (reference only)"
+							title="Off (reference only)"
 							checked={!manageStatus()}
 							disabled={props.busy}
 							onChange={() => manageStatus.set(false)}
 						/>
-						<RadioRow
+						<Option
+							compact
 							testID={`linear-manage-${id()}`}
-							label="On"
+							title="On"
 							checked={manageStatus()}
 							disabled={props.busy}
 							onChange={() => manageStatus.set(true)}
 						/>
-					</RadioList>
-					<Text class="text-xs text-muted-foreground">
+					</Options>
+					<Caption>
 						{manageStatus()
 							? "Pilot can update progress and review. You mark the issue complete."
 							: "Pilot links this issue without updating its status."}
-					</Text>
+					</Caption>
 				</View>
 			</If>
 			<If
 				when={starting(id())}
 				else={
 					<View class="gap-2">
-						<View class="flex-row flex-wrap gap-1">
-							<Action
+						<Buttons>
+							<Button
+								kind="primary"
 								label={linear() ? "Start linked work…" : "Start work…"}
-								variant="primary"
 								testID={`start-${id()}`}
 								anchor={(n) => startNode.set(n)}
 								disabled={props.busy || !routeOffered(id(), props.missions)}
 								onPress={() => askStart(props.mirror, props.row, manageStatus())}
 							/>
-						</View>
+						</Buttons>
 						<If when={props.fromLinearList}>
 							<PlanAction
 								row={props.row}
@@ -495,7 +494,7 @@ function KeptRow(props: { mirror: IntakeMirror; row: IntakeRow; state: "later" |
 	return (
 		<Row
 			testID={`${props.state}-row-${r().id}`}
-			mark="still"
+			mark="paused"
 			title={r().title}
 			meta={requestLine(r())}
 			trailing={
@@ -758,7 +757,7 @@ export function LinearRow(props: { day: Day }) {
 		<If when={shown()}>
 			<Row
 				testID="linear-row"
-				mark={fresh() > 0 ? "new" : "still"}
+				mark="new"
 				title={`${head()}${tail()}`}
 				trailing={
 					<Link

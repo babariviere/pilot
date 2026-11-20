@@ -43,8 +43,8 @@ import {
 	type MarkKind,
 	Option,
 	Options,
-	Quote,
 	Question,
+	Quote,
 	Spacer,
 	State,
 	TextField,
@@ -76,7 +76,7 @@ export const COMMIT_KEY = keymap.label("mod+enter");
 
 /** The mark a decision shows. */
 export function decisionMark(decision: Decision): MarkKind {
-	if (decision.kind === "unknown" || decision.delivery === "unknown") return "unknown";
+	if (decision.kind === "unknown" || decision.delivery === "unknown") return "unconfirmed";
 	if (decision.kind === "failure") return "failed";
 	if (decision.kind === "review") return "ready";
 	return "needs";

@@ -8,7 +8,7 @@ import { queueLine } from "./codingQueue";
 import type { Day } from "./day";
 import { OpenChatAction } from "./OpenChatAction";
 import type { TodayScope } from "./ScopeRows";
-import { EmptyLine, RowGroup, Row, Rows, Section } from "./ui";
+import { EmptyLine, Row, RowGroup, Rows, Section } from "./ui";
 import { placeRow } from "./view";
 
 const expanded = signal<Record<string, boolean>>({});
@@ -102,7 +102,7 @@ export function WorkingNow(props: { day: Day; ctx: TodayScope; list: WorkingList
 						return (
 							<Row
 								testID={`working-${r().sessionId}`}
-								mark={r().earlier ? "unreported" : "working"}
+								mark={r().earlier ? "unconfirmed" : "working"}
 								title={r().title || "Unnamed chat"}
 								meta={`${r().projectName} · ${r().missionTitle || (r().missionId ? "Mission title not available" : "Standalone chat")} · ${r().purpose || "Task or purpose not available"}`}
 								state={r().earlier ? "Was working" : "Working"}
@@ -130,7 +130,7 @@ export function WorkingNow(props: { day: Day; ctx: TodayScope; list: WorkingList
 							return (
 								<Row
 									testID={`waiting-${r().sessionId}`}
-									mark="still"
+									mark="new"
 									title={r().title || "Unnamed chat"}
 									meta={`${r().projectName} · ${queueLine(r().queue)}`}
 									state="Waiting"

@@ -63,10 +63,6 @@ export function TextField(
 		variant?: TextFieldVariant;
 		/** The lines it shows before it grows (default 1). */
 		rows?: TextFieldRows;
-		/** @deprecated Every field is 26 points high now; `compact` changes nothing. */
-		compact?: boolean;
-		/** @deprecated Every field uses the body size now; `large` changes nothing. */
-		large?: boolean;
 		/** Draws the frame red: the value cannot be used. Say why in the help line. */
 		invalid?: boolean;
 		/** Layout classes only, such as `flex-1`. */
@@ -75,7 +71,7 @@ export function TextField(
 		agent?: AgentMark;
 	},
 ) {
-	const [own, rest] = split(props, ["variant", "rows", "compact", "large", "invalid", "class", "agent", "ref"]);
+	const [own, rest] = split(props, ["variant", "rows", "invalid", "class", "agent", "ref"]);
 	const agent = useAgent({
 		component: "input",
 		label: () => rest.accessibilityLabel ?? rest.placeholder,
@@ -103,7 +99,8 @@ export function TextField(
 
 /**
  * A labelled single-line field: the label above, the field, then a help line under it. An `error` takes the help
- * line's place and draws the field red. The page owns the value.
+ * line's place and draws the field red. The page owns the value. `anchor`, `onFocus` and `onSelectionChange` let a
+ * page keep the caret across a reopen; `readonly` keeps the words while a save is on its way.
  */
 export function Field(props: {
 	label: string;
@@ -117,6 +114,12 @@ export function Field(props: {
 	testID?: string;
 	/** The lines it shows; more than one makes it multiline. */
 	rows?: TextFieldRows;
+	/** The words show and can be selected but not changed. */
+	readonly?: boolean;
+	/** Hears the field's node (focus, selection). */
+	anchor?: InputProps["ref"];
+	onFocus?: InputProps["onFocus"];
+	onSelectionChange?: InputProps["onSelectionChange"];
 	onChange: (value: string) => void;
 }) {
 	return (
@@ -135,6 +138,10 @@ export function Field(props: {
 				value={props.value}
 				placeholder={props.placeholder}
 				invalid={!!props.error}
+				readonly={props.readonly}
+				ref={props.anchor}
+				onFocus={props.onFocus}
+				onSelectionChange={props.onSelectionChange}
 				onChange={({ value }) => props.onChange(value)}
 			/>
 			<If when={props.error || props.help}>
@@ -193,13 +200,14 @@ export function Switch(props: {
 
 /**
  * A checkbox with its words beside it ("Lighthouse"), for a pick that adds up with others outside a Question. In a
- * Question, use `Option multiple`.
+ * Question, use `Option multiple`. `tickTestID` names the tick, which shows only while checked.
  */
 export function Checkbox(props: {
 	label: string;
 	checked: boolean;
 	disabled?: boolean;
 	testID?: string;
+	tickTestID?: string;
 	accessibilityLabel?: string;
 	anchor?: (node: ViewRef) => void;
 	agent?: AgentMark;
@@ -234,7 +242,9 @@ export function Checkbox(props: {
 			indicatorClass="size-4 items-center justify-center rounded border-[1.5px] border-input checked:border-primary checked:bg-primary"
 			indicator={
 				<If when={props.checked}>
-					<Icon name="check" tint="tint-primary-foreground" />
+					<View testID={props.tickTestID}>
+						<Icon name="check" tint="tint-primary-foreground" />
+					</View>
 				</If>
 			}
 		>

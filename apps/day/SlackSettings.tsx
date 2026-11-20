@@ -75,7 +75,7 @@ export function SlackSettings(props: { controls: SlackControls }) {
 					{(o) => (
 						<>
 							<Notice
-								kind="needs"
+								kind="unconfirmed"
 								placement="section"
 								text="An action is Unknown. It will not be sent again."
 								action={

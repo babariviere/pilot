@@ -17,18 +17,14 @@ import { OpenChatAction } from "./OpenChatAction";
 import {
 	Block,
 	Body,
-	BodyStrong,
 	Button,
 	Caption,
 	Disclosure,
-	DividedRow,
 	EmptyLine,
 	glide,
 	Link,
-	Mark,
 	type MarkKind,
 	Num,
-	Pressable,
 	Row,
 	RowDetail,
 	RowGroup,
@@ -301,7 +297,7 @@ function Details(props: { task: TaskLine; lane: Lane; target: Target }) {
 			onBlur={props.target.onBlur}
 			onToggle={() => toggleWork(props.task.id, props.target)}
 		>
-			<View selectable class="pl-5">
+			<View selectable>
 				<Body tone="muted">{(props.task.body ?? "") || "No details are recorded for this task."}</Body>
 			</View>
 		</Disclosure>
@@ -351,73 +347,13 @@ function NowRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	);
 }
 
-// LIBRARY GAP: Row has no form that opens in place. A Next task needs a row whose press shows its details below
-// (with the expanded state for screen readers, and focus and blur reports so the keyboard focus can follow the task
-// to another lane), an aside outside the press target for its chat, and a line under it that is always shown and
-// stays outside the press target (its model and Change). The library should offer an
-// "open in place" Row (an `open` prop, `onToggle`, `onFocus`, `onBlur`, an aside slot and the content under it).
-// Until then this helper builds one from DividedRow and Pressable, with Row's slots and spacing.
-function OpenRow(props: {
-	testID: string;
-	title: string;
-	meta?: string;
-	mark?: MarkKind;
-	state?: string;
-	open: boolean;
-	accessibilityLabel: string;
-	target: Target;
-	onToggle: () => void;
-	/** Beside the row, outside its press target: its chat. */
-	aside?: JSX.Element;
-	/** Under the row, always shown and outside its press target: its model. */
-	detail?: JSX.Element;
-	/** What shows under the row while it is open. */
-	children?: JSX.Element;
-}) {
-	return (
-		<DividedRow open={props.open} content={<View class="gap-1.5 pb-2 pl-10 pr-4">{props.children}</View>}>
-			<View class="flex-row items-start gap-2 pr-4">
-				<Pressable
-					anchor={props.target.anchor}
-					onFocus={props.target.onFocus}
-					onBlur={props.target.onBlur}
-					testID={props.testID}
-					accessibilityLabel={props.accessibilityLabel}
-					expanded={props.open}
-					onPress={props.onToggle}
-					class="min-w-0 flex-1 flex-row items-start gap-2.5 py-1.5 pl-4"
-				>
-					<View class="h-4.5 w-3.5 items-center justify-center">
-						<If when={props.mark}>
-							<Mark kind={props.mark as MarkKind} />
-						</If>
-					</View>
-					<View class="min-w-0 flex-1">
-						<BodyStrong truncate>{props.title}</BodyStrong>
-						<If when={props.meta}>
-							<Caption tone="faint" truncate>
-								{props.meta ?? ""}
-							</Caption>
-						</If>
-					</View>
-					<If when={props.state}>
-						<Caption>{props.state ?? ""}</Caption>
-					</If>
-				</Pressable>
-				<View class="flex-row items-center gap-2 self-center">{props.aside}</View>
-			</View>
-			<View class="pl-10 pr-4">{props.detail}</View>
-		</DividedRow>
-	);
-}
-
 /** One task later in the plan. It opens in place with its reasons, owner, prerequisites and body. */
 function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const t = () => props.task;
 	const open = () => !!openWork()[t().id];
 	const target = laneFocus(props.task.id, "next");
 	return (
-		<OpenRow
+		<Row
 			testID={`next-${t().id}`}
 			mark={taskMark(stateOf(t()))}
 			title={t().title}
@@ -425,7 +361,9 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 			state={workWord(stateOf(t()))}
 			open={open()}
 			accessibilityLabel={`#${t().number} ${t().title}, ${workWord(stateOf(t()))}. ${open() ? "Hide" : "Show"} its details.`}
-			target={target}
+			anchor={target.anchor}
+			onFocus={target.onFocus}
+			onBlur={target.onBlur}
 			onToggle={() => toggleWork(t().id, target)}
 			aside={<ChatLink day={props.day} page={props.page} task={t()} lane="next" />}
 			detail={
@@ -435,16 +373,17 @@ function NextRow(props: { day: Day; page: MissionPage; task: TaskLine }) {
 					</RowDetail>
 				</If>
 			}
-		>
-			<View selectable class="gap-1.5">
-				<Reasons task={t()} quiet />
-				<If when={t().ownerTitle ?? ""}>
-					<Caption>{`Owner: ${t().ownerTitle ?? ""}`}</Caption>
-				</If>
-				<Prerequisites task={t()} />
-				<Body tone="muted">{(t().body ?? "") || "No details are recorded for this task."}</Body>
-			</View>
-		</OpenRow>
+			content={
+				<View selectable class="gap-1.5">
+					<Reasons task={t()} quiet />
+					<If when={t().ownerTitle ?? ""}>
+						<Caption>{`Owner: ${t().ownerTitle ?? ""}`}</Caption>
+					</If>
+					<Prerequisites task={t()} />
+					<Body tone="muted">{(t().body ?? "") || "No details are recorded for this task."}</Body>
+				</View>
+			}
+		/>
 	);
 }
 

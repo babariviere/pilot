@@ -1,8 +1,8 @@
 // Mock data only: Today's cyber question over a scripted project setup. No service or writes outside this window.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
 import { CyberSuggestions } from "./CyberSuggestions";
 import type { ProjectSetup, ProjectsSource } from "./projectSetup";
-import { Caption, Column, GridBackdrop, Page, Panel, Section } from "./ui";
+import { Caption, Column, Page, Panel, Section, WindowCanvas } from "./ui";
 
 const actions = signal<string[]>([]);
 const snapshot: ProjectSetup = {
@@ -28,20 +28,9 @@ const source: ProjectsSource = {
 	},
 	check: async () => ({ snapshot }),
 };
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 // Today shows the question first in its Needs you section; this fixture does the same.
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Page>
 			<Caption>{`Mock data. Actions: ${actions().join(", ") || "none"}.`}</Caption>
 			<Panel>
@@ -52,5 +41,5 @@ mount(() => (
 				</Column>
 			</Panel>
 		</Page>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

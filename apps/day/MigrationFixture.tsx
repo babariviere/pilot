@@ -1,9 +1,9 @@
 // Isolated fixture of the production migration controls. No service or executor.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal } from "nsh";
 import { MigrationControls } from "./MigrationControls";
 import type { MigrationIntent, MigrationView } from "./migration";
 import { PreviousMission } from "./PreviousMission";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const mode = signal("lost");
 const sends = signal(0);
@@ -50,19 +50,8 @@ const source = {
 		throw new Error("Migration is not confirmed. Check status; do not finish again.");
 	},
 };
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block gap={4}>
 			<Caption tone="faint">Mock data · Migration</Caption>
 			<Buttons>
@@ -74,5 +63,5 @@ mount(() => (
 		<Block>
 			<Caption>{`Finish sends: ${sends()} · Checks: ${checks()}`}</Caption>
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

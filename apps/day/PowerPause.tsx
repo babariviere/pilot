@@ -17,7 +17,7 @@ function sinceWords(since: number | null): string {
 export function PowerPause(props: { power: PowerControls; narrow: boolean }) {
 	const since = () => sinceWords(props.power.view().since);
 	return (
-		<View testID="power-paused" class="flex-row items-center gap-2 pr-1">
+		<View testID="power-paused" class="flex-row items-center gap-2">
 			<If when={!props.narrow}>
 				<Caption>{props.power.message() || "Work paused for sleep"}</Caption>
 			</If>

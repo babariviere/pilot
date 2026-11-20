@@ -4,7 +4,7 @@
 // component library). Everything draws with the theme's semantic tokens, so an
 // artifact follows the app's light and dark appearance.
 import { type Component, computed, ErrorBoundary, fontScale, type JSX, mount, Scroll, Text, View } from "nsh";
-import { Caption, Page as DayPage, Display, Heading, PageHead, Panel, Tab, Tabs } from "pilot-day/ui";
+import { Block, Page as DayPage, Figure, Heading, PageHead, Panel, Tab, TabBar } from "pilot-day/ui";
 import { attempt, type Laid, list, Problem, record, text } from "./check";
 
 /** Text grows with the reader's text size up to this factor; diagram boxes grow with it. */
@@ -111,7 +111,7 @@ export interface ChoiceOption<T extends string> {
 
 /**
  * A labelled row of options with one chosen, to switch variants, situations or settings in a mockup: Pilot's
- * `Tabs` on a hairline. Many options scroll sideways. Publishing presses each one once.
+ * `TabBar` (its tabs on a hairline). Many options scroll sideways. Publishing presses each one once.
  */
 export function Choices<T extends string>(props: {
 	label: string;
@@ -120,35 +120,22 @@ export function Choices<T extends string>(props: {
 	onChange: (id: T) => void;
 }) {
 	return (
-		<View class="flex-row items-end gap-3 border-b border-border">
-			<View class="w-24 pb-2">
-				<Caption>{props.label}</Caption>
-			</View>
-			<Scroll horizontal class="-mb-px min-w-0 flex-1">
-				<Tabs>
-					<Each of={props.options} key={(o) => o.id}>
-						{(o) => (
-							<Tab label={o().label} selected={props.value === o().id} onPress={() => props.onChange(o().id)} />
-						)}
-					</Each>
-				</Tabs>
-			</Scroll>
-		</View>
+		<TabBar label={props.label}>
+			<Each of={props.options} key={(o) => o.id}>
+				{(o) => <Tab label={o().label} selected={props.value === o().id} onPress={() => props.onChange(o().id)} />}
+			</Each>
+		</TabBar>
 	);
 }
 
-/** One figure with its label, on a Pilot `Panel`. Put several in a `View class="flex-row flex-wrap gap-3"`. */
+/** One figure with its label, on a Pilot `Panel` (Day's `Figure`). Put several in a `View class="flex-row flex-wrap gap-3"`. */
 export function Stat(props: { label: string; value: string; note?: string }) {
 	return (
 		<View class="min-w-40 flex-1">
 			<Panel>
-				<View class="gap-1 p-4">
-					<Caption>{props.label}</Caption>
-					<Display>{props.value}</Display>
-					<If when={props.note}>
-						<Caption>{props.note ?? ""}</Caption>
-					</If>
-				</View>
+				<Block>
+					<Figure label={props.label} value={props.value} note={props.note} />
+				</Block>
 			</Panel>
 		</View>
 	);

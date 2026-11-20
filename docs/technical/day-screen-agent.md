@@ -66,9 +66,6 @@ The palette and the full-window artifact, which assemble `nsh/base` themselves, 
 | `Disclosure`, `ExpandableRow` | `disclosure` | `open` | `setOpen`, `toggle` |
 | `Notice` | `status` | `text` | none |
 
-The deprecated parts kept while screens move register too: `Action`, `InlineAction`, `LinkAction` and `RowLink` as
-`button`, `ToggleChip` and `ToggleRow` as `toggle`, `RadioRow` as `radio`, `CheckboxRow` as `checkbox` and
-`TabItem` as `tab`.
 
 ### Snapshot
 

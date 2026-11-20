@@ -22,7 +22,7 @@ import {
 	triageCard,
 } from "./Incoming";
 import type { IntakeMirror, IntakeRow } from "./intakeFeed";
-import { Body, Button, Caption, Fact, Facts, glide, Link, Question, QuietPanel, Spacer, State } from "./ui";
+import { Body, Button, Caption, Fact, Facts, glide, Link, Question, Spacer, State } from "./ui";
 import { anchors, focusFront } from "./view";
 
 /** The key that takes the front card's one next action, as on the other cards. */
@@ -110,10 +110,10 @@ export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: Intake
 								/>
 							</View>
 							<If when={changing() === r().id}>
-								<QuietPanel class="gap-3">
+								<View class="gap-3">
 									<RouteChoice row={props.row} missions={missions()} busy={busy()} />
 									<PlanAction row={props.row} busy={busy()} />
-								</QuietPanel>
+								</View>
 							</If>
 						</View>
 						<View class="flex-row flex-wrap items-center gap-2">

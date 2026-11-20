@@ -23,8 +23,8 @@ import {
 	Picker,
 	Row,
 	RowDetail,
-	type RowTone,
 	Rows,
+	type RowTone,
 	Section,
 } from "./ui";
 
@@ -86,7 +86,7 @@ export function ConnectionSettings(props: { controls: ConnectionControls }) {
 			<Each of={c.unknown()} key={(o) => o.operationId}>
 				{(o) => (
 					<Notice
-						kind="needs"
+						kind="unconfirmed"
 						placement="section"
 						text="An action is Unknown. It will not be sent again."
 						action={

@@ -1,8 +1,8 @@
 // Headless source-reading fixture. Invented records, never daemon data.
-import { type JSX, mount, signal, View } from "nsh";
+import { mount, signal, View } from "nsh";
 import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
 import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const day = openDay("quiet");
 const plans = openPlanning("wayfinder");
@@ -43,19 +43,8 @@ plans.feed = {
 	dispose: () => feed.dispose(),
 	readSource: result,
 };
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Buttons>
 				<Caption tone="faint">Mock data</Caption>
@@ -73,5 +62,5 @@ mount(() => (
 		<View class="min-h-0 flex-1">
 			<MockDayScreen day={day} plans={plans} />
 		</View>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

@@ -5,14 +5,14 @@
 // a full window opened from here closes with it. Looking records nothing.
 // With `pair`, the sides are the worker's named screen captures instead of a choice:
 // each side reads its own pin once, when it shows.
-import { cleanup, effect, type JSX, keymap, signal, untracked, View } from "nsh";
+import { cleanup, effect, keymap, signal, untracked, View } from "nsh";
 import { savedTitle } from "./ArtifactExport";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import type { Shown } from "./artifactReads";
 import { artifactSelection } from "./deliveryArtifact";
 import type { ArtifactLink, DeliveredWork, DeliverySource } from "./deliveryFeed";
 import type { ScreenPair } from "./deliveryScreens";
-import { Body, BodyStrong, Caption, Picker, Spacer, Tab, Tabs } from "./ui";
+import { Body, BodyStrong, Caption, Picker, Tab, TabBar } from "./ui";
 
 type Side = "Before" | "After";
 
@@ -118,27 +118,27 @@ export function OutputComparison(props: {
 	return (
 		<View testID={`${tid}-comparison`} class="gap-2">
 			{/* The tabs keep their own width; when the row is narrow, the icons wrap below them, never under them. */}
-			<View class="flex-row flex-wrap items-end gap-x-3 gap-y-1">
-				<Tabs>
-					<Tab
-						label="Before"
-						selected={side() === "Before"}
-						testID={`${tid}-tab-before`}
-						onPress={() => side.set("Before")}
-					/>
-					<Tab
-						label="After"
-						selected={side() === "After"}
-						testID={`${tid}-tab-after`}
-						onPress={() => side.set("After")}
-					/>
-				</Tabs>
-				<Spacer />
-				<If when={current()}>
-					<ArtifactTools shown={current() as Shown} testID={tid} onFull={full} />
-				</If>
-			</View>
-			<TabPane>
+			<TabBar
+				aside={
+					<If when={current()}>
+						<ArtifactTools shown={current() as Shown} testID={tid} onFull={full} />
+					</If>
+				}
+			>
+				<Tab
+					label="Before"
+					selected={side() === "Before"}
+					testID={`${tid}-tab-before`}
+					onPress={() => side.set("Before")}
+				/>
+				<Tab
+					label="After"
+					selected={side() === "After"}
+					testID={`${tid}-tab-after`}
+					onPress={() => side.set("After")}
+				/>
+			</TabBar>
+			<View class="gap-2">
 				<If when={!props.pair}>
 					<View class="flex-row">
 						<Picker
@@ -170,14 +170,7 @@ export function OutputComparison(props: {
 						? "The agent captured these from the app, without its change and with it. Looking records nothing."
 						: "Before and After are saved outputs of this result. Looking records nothing."}
 				</Caption>
-			</TabPane>
+			</View>
 		</View>
 	);
-}
-
-// LIBRARY GAP: Tabs attach only to a Panel's top edge, and TabRow (tabs that switch one pane inside a section) is
-// deprecated. Before and After switch one pane inside a result, so this draws the pane the tabs sit on: a hairline
-// under the tabs, as a Panel's top edge. The library should offer tabs for a pane inside a section.
-function TabPane(props: { children?: JSX.Element }) {
-	return <View class="-mt-2 gap-2 border-t border-border pt-3">{props.children}</View>;
 }

@@ -2,9 +2,9 @@
 // its body and a foot. A row is the one list item of the app, with five slots: mark, title, meta, state and
 // trailing. Settings, missions, requests and working chats all use the same row.
 import { type JSX, Text, View, type ViewRef } from "nsh";
-import { Button as BaseButton } from "nsh/base";
+import { Button as BaseButton, Collapsible } from "nsh/base";
 import { type AgentMark, useAgent } from "./agent";
-import { FOCUS_RING, Link } from "./button";
+import { FOCUS_RING, Link, Pressable } from "./button";
 import { Mark, type MarkKind, Pill, STATE_FILL } from "./state";
 import { Heading, TONE, type Tone, TYPE } from "./text";
 
@@ -96,10 +96,14 @@ export function RowGroup(props: { label: string; testID?: string }) {
 	);
 }
 
-/** A list of `Row`s, split by hairlines that start at the row's text. The first row draws no hairline. */
-export function Rows(props: { testID?: string; children?: JSX.Element }) {
+/**
+ * A list of `Row`s, split by hairlines that start at the row's content (16 points in). The first row draws no
+ * hairline. `flush` is for rows inside a `Question` or a `Block`: they reach out to the section's edges, so they
+ * line up with the section's other rows instead of indenting twice.
+ */
+export function Rows(props: { testID?: string; flush?: boolean; children?: JSX.Element }) {
 	return (
-		<View testID={props.testID} class="overflow-hidden">
+		<View testID={props.testID} class={`overflow-hidden ${props.flush ? "-mx-4" : ""}`}>
 			<View class="-mt-px">{props.children}</View>
 		</View>
 	);
@@ -117,6 +121,11 @@ const ROW_TONE: Record<RowTone, Tone> = { needs: "needs", failed: "failed", ok: 
  * With `onPress` the whole row is the press target and opens what it names; its trailing slot then holds no
  * button. `detail` holds what a row must show under its meta, wrapped in a `RowDetail`: its own Continue and
  * Dismiss, a quote. It stays outside the press target. Use it rarely.
+ *
+ * A row that opens in place takes `open` and `onToggle` instead of `onPress`: pressing it shows `content` under it
+ * (screen readers hear it expanded or collapsed), and `onFocus`/`onBlur` report the keyboard focus. `aside` sits
+ * at the right outside the press target (its chat link), and `detail` is a line that always shows. Rule: opening
+ * only shows what is already read; it sends, saves and changes nothing.
  */
 export function Row(props: {
 	title: string;
@@ -126,32 +135,54 @@ export function Row(props: {
 	stateTone?: RowTone;
 	trailing?: JSX.Element;
 	detail?: JSX.Element;
+	/** Beside the row, outside its press target: a link or a small button of its own. */
+	aside?: JSX.Element;
 	/** The title may wrap instead of cutting off: for sentences, such as a result's words. */
 	wrap?: boolean;
 	/** The chosen row of a list. */
 	selected?: boolean;
 	testID?: string;
+	/** The title's own test ID. */
+	titleTestID?: string;
+	/** The meta line's own test ID. */
+	metaTestID?: string;
 	/** What screen readers say for a pressable row: its title, state and what pressing does. */
 	accessibilityLabel?: string;
 	anchor?: (node: ViewRef) => void;
 	agent?: AgentMark;
 	selectable?: boolean;
 	onPress?: () => void;
+	/** Whether a row that opens in place shows its `content` (with `onToggle`). */
+	open?: boolean;
+	/** Opens or closes the row in place. The page owns `open`. */
+	onToggle?: () => void;
+	/** What shows under a row that opens in place while it is open. */
+	content?: JSX.Element;
+	/** The press target took or lost the keyboard focus (a row that opens in place). */
+	onFocus?: () => void;
+	onBlur?: () => void;
 }) {
 	const content = () => (
 		<>
-			<View class="absolute left-4 right-0 top-0 h-px bg-border" />
 			<If when={props.mark}>
 				<View class="h-4.5 w-3.5 items-center justify-center">
 					<Mark kind={props.mark as MarkKind} />
 				</View>
 			</If>
 			<View class="min-w-0 flex-1" selectable={props.selectable}>
-				<Text class={`text-foreground ${props.wrap ? "" : "truncate"}`} style={TYPE.bodyStrong}>
+				<Text
+					testID={props.titleTestID}
+					class={`text-foreground ${props.wrap ? "" : "truncate"}`}
+					style={TYPE.bodyStrong}
+				>
 					{props.title}
 				</Text>
 				<If when={props.meta}>
-					<Text class={`pt-px text-faint ${props.wrap ? "" : "truncate"}`} style={TYPE.caption}>
+					<Text
+						testID={props.metaTestID}
+						class={`pt-px text-faint ${props.wrap ? "" : "truncate"}`}
+						style={TYPE.caption}
+					>
 						{props.meta ?? ""}
 					</Text>
 				</If>
@@ -168,23 +199,66 @@ export function Row(props: {
 			<View class="shrink-0 flex-row items-center gap-2 self-center">{props.trailing}</View>
 		</>
 	);
-	const look = () => `relative flex-row items-start gap-2.5 px-4 py-1.5 ${props.selected ? "bg-selection" : ""}`;
-	return (
-		<View testID={props.onPress ? undefined : props.testID}>
-			<If when={props.onPress} else={<View class={look()}>{content()}</View>}>
-				<PressRow
-					testID={props.testID}
-					label={props.accessibilityLabel ?? props.title}
-					anchor={props.anchor}
-					agent={props.agent}
-					selected={props.selected}
-					class={look()}
-					onPress={() => props.onPress?.()}
-				>
-					{content()}
-				</PressRow>
+	const look = () =>
+		`flex-row items-start gap-2.5 py-1.5 pl-4 ${props.aside ? "min-w-0 flex-1 pr-2" : "pr-4"} ${props.selected ? "bg-selection" : ""}`;
+	const line = () => (
+		<If
+			when={props.onToggle}
+			else={
+				<If when={props.onPress} else={<View class={look()}>{content()}</View>}>
+					<PressRow
+						testID={props.testID}
+						label={props.accessibilityLabel ?? props.title}
+						anchor={props.anchor}
+						agent={props.agent}
+						selected={props.selected}
+						class={look()}
+						onPress={() => props.onPress?.()}
+					>
+						{content()}
+					</PressRow>
+				</If>
+			}
+		>
+			<Pressable
+				testID={props.testID}
+				accessibilityLabel={props.accessibilityLabel ?? props.title}
+				anchor={props.anchor}
+				agent={props.agent}
+				expanded={props.open === true}
+				onFocus={props.onFocus}
+				onBlur={props.onBlur}
+				onPress={() => props.onToggle?.()}
+				class={`${look()} hover:bg-accent active:bg-accent`}
+			>
+				{content()}
+			</Pressable>
+		</If>
+	);
+	const pressable = () => !!props.onPress || !!props.onToggle;
+	const inset = () => (props.mark ? "pl-10 pr-4" : "px-4");
+	const body = () => (
+		<>
+			<If when={props.aside} else={line()}>
+				<View class="flex-row items-start">
+					{line()}
+					<View class="shrink-0 flex-row items-center gap-2 self-center pr-4">{props.aside}</View>
+				</View>
 			</If>
-			<View class={props.mark ? "pl-10 pr-4" : "px-4"}>{props.detail}</View>
+			<View class={inset()}>{props.detail}</View>
+		</>
+	);
+	return (
+		<View testID={pressable() ? undefined : props.testID} class="relative">
+			<If when={props.onToggle} else={body()}>
+				<Collapsible
+					open={props.open === true}
+					content={<View class={`gap-1.5 pb-2.5 pt-1 ${inset()}`}>{props.content}</View>}
+				>
+					{body()}
+				</Collapsible>
+			</If>
+			<View class="absolute left-4 right-0 top-0 h-px bg-border" />
 		</View>
 	);
 }

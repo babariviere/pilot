@@ -1,10 +1,10 @@
 // Headless fixture only: the mock topic interview with notes and questions offered. Sends are
 // counted, and a question gets a canned answer at once. Mock data.
-import { type JSX, mount, Scroll, signal, View } from "nsh";
+import { mount, Scroll, signal } from "nsh";
 import type { PlanPage } from "pilot-day/native";
 import { InterviewDoc } from "./InterviewDoc";
 import { openPlanning } from "./mockFeeds";
-import { Column, GridBackdrop, Page, PageFoot, Panel, Section } from "./ui";
+import { Column, Page, PageFoot, Panel, Section, WindowCanvas } from "./ui";
 
 const plans = openPlanning("wayfinder");
 const source = plans.feed;
@@ -57,19 +57,8 @@ const feed = Object.assign(Object.create(Object.getPrototypeOf(source)), source,
 	},
 });
 plans.feed = feed;
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Scroll class="flex-1">
 			<Page>
 				<Panel>
@@ -82,5 +71,5 @@ mount(() => (
 				<PageFoot testID="sent" text={`Sent: ${JSON.stringify(sent())}`} />
 			</Page>
 		</Scroll>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

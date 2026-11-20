@@ -73,7 +73,7 @@ export function DiagnosisStatus(props: { controls: DiagnosisControls }) {
 			<Each of={props.controls.operations().filter((o) => o.pending)} key={(o) => o.operationId}>
 				{(o) => (
 					<Notice
-						kind="needs"
+						kind="unconfirmed"
 						placement="section"
 						text="Unconfirmed diagnostics action. Do not send it again."
 						action={

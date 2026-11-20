@@ -1,24 +1,23 @@
 // State: one mark and one word per state, the same on every screen. Marks are built from squares (the Forge
 // skin): a filled square needs you, a broken square failed, a checked square is ready to merge, a hollow square
-// works, two bars pause, a small square is new and a tick is done. Colour is only amber, red and green; the
-// word and the accessible name always carry the state, so colour is never the only signal.
+// works, a hollow amber square is unconfirmed, two bars pause, a small square is new and a tick is done. Colour is
+// only amber, red and green; the word and the accessible name always carry the state, so colour is never the only
+// signal.
 // Progress is a row of squares and a count; a Pill is a count.
 import { Image, type JSX, Text, View } from "nsh";
-import markCheck from "../icons/mark-check.svg";
-import markReady from "../icons/mark-ready.svg";
-import { Icon } from "./icon";
+import { iconSource } from "./icon";
 import { TONE, type Tone, TYPE } from "./text";
 
-/** The seven states. Every screen uses these words: Needs you, Failed, Ready to merge, Working, Paused, New, Done. */
-export type StateKind = "needs" | "failed" | "ready" | "working" | "paused" | "new" | "done";
-
 /**
- * A mark's kind: one of the seven states, or an older kind kept while screens move.
- * @deprecated kinds `unknown` (a needs-you that is not confirmed: hollow amber square), `moving` (use
- * `working`), `still` (a quiet, waiting item: small faint square), `unreported` (no current report: thin hollow
- * square) and `oldReport` (a document icon). New code uses the seven states.
+ * The eight states. Every screen uses these words: Needs you, Failed, Ready to merge, Working, Unconfirmed, Paused,
+ * New, Done. `needs` is only for what waits on the user. `unconfirmed`: Pilot could not read or confirm it (a
+ * lost reply, an unread report, an unknown result). It does not ask for you by itself, so its words stay neutral and
+ * only its hollow mark is amber.
  */
-export type MarkKind = StateKind | "unknown" | "moving" | "still" | "unreported" | "oldReport";
+export type StateKind = "needs" | "failed" | "ready" | "working" | "unconfirmed" | "paused" | "new" | "done";
+
+/** A mark's kind: one of the eight states. */
+export type MarkKind = StateKind;
 
 /** Each state's one word. */
 export const STATE_WORDS: Record<StateKind, string> = {
@@ -26,14 +25,15 @@ export const STATE_WORDS: Record<StateKind, string> = {
 	failed: "Failed",
 	ready: "Ready to merge",
 	working: "Working",
+	unconfirmed: "Unconfirmed",
 	paused: "Paused",
 	new: "New",
 	done: "Done",
 };
 
-/** The word tone of a mark's kind: amber, red and green only for those three states. */
+/** The word tone of a mark's kind: amber, red and green only for Needs you, Failed and Ready. */
 export function markTone(kind: MarkKind): Tone {
-	if (kind === "needs" || kind === "unknown") return "needs";
+	if (kind === "needs") return "needs";
 	if (kind === "failed") return "failed";
 	if (kind === "ready") return "ok";
 	return "muted";
@@ -55,17 +55,13 @@ const SQUARES: Record<MarkKind, Square[]> = {
 	],
 	ready: [{ x: 2, y: 2, w: 10, fill: "bg-ok" }],
 	working: [{ ...HOLLOW, fill: "border-muted-foreground", hollow: 1.75 }],
-	moving: [{ ...HOLLOW, fill: "border-muted-foreground", hollow: 1.75 }],
-	unknown: [{ ...HOLLOW, fill: "border-needs", hollow: 1.75 }],
-	unreported: [{ ...HOLLOW, fill: "border-faint", hollow: 1 }],
+	unconfirmed: [{ ...HOLLOW, fill: "border-needs", hollow: 1.75 }],
 	paused: [
 		{ x: 4, y: 3.5, w: 2, h: 7, fill: "bg-muted-foreground" },
 		{ x: 8, y: 3.5, w: 2, h: 7, fill: "bg-muted-foreground" },
 	],
 	new: [{ x: 5, y: 5, w: 4, fill: "bg-faint" }],
-	still: [{ x: 5.5, y: 5.5, w: 3, fill: "bg-faint" }],
 	done: [],
-	oldReport: [],
 };
 
 /**
@@ -95,15 +91,20 @@ export function Mark(props: { kind: MarkKind; label?: string }) {
 				)}
 			</Each>
 			<If when={props.kind === "ready"}>
-				<Image src={markReady} accessible={false} fadeDuration={0} class="absolute inset-0 size-3.5 tint-card" />
+				<Image
+					src={iconSource("mark-ready")}
+					accessible={false}
+					fadeDuration={0}
+					class="absolute inset-0 size-3.5 tint-card"
+				/>
 			</If>
 			<If when={props.kind === "done"}>
-				<Image src={markCheck} accessible={false} fadeDuration={0} class="absolute inset-0 size-3.5 tint-faint" />
-			</If>
-			<If when={props.kind === "oldReport"}>
-				<View class="absolute -inset-px">
-					<Icon name="document" tint="tint-faint" />
-				</View>
+				<Image
+					src={iconSource("mark-check")}
+					accessible={false}
+					fadeDuration={0}
+					class="absolute inset-0 size-3.5 tint-faint"
+				/>
 			</If>
 		</View>
 	);
@@ -119,11 +120,14 @@ export const STATE_FILL: Record<Tone, string> = {
 	ok: "bg-ok-soft",
 	accent: "bg-muted",
 	onAccent: "bg-muted",
+	added: "bg-muted",
+	removed: "bg-muted",
 };
 
 /**
  * A state as its mark and word in a soft pill: "Needs you", "Failed", "Ready to merge", or the screen's more exact
- * word for the same state ("Did not confirm", "Pausing"). `plain` drops the pill, for a meta line.
+ * word for the same state ("Did not confirm", "Pausing"). `plain` drops the pill, for a meta line. Amber, red and
+ * green fills only for Needs you, Failed and Ready; every other state's pill is muted.
  */
 export function State(props: { kind: MarkKind; label?: string; plain?: boolean; testID?: string }) {
 	const word = () => props.label ?? (STATE_WORDS as Record<string, string>)[props.kind] ?? "";
@@ -215,18 +219,35 @@ export function Pill(props: { count: number | string; tone?: "quiet" | "needs"; 
 }
 
 /**
- * A mark beside content that may wrap: the mark sits on the first line.
- * @deprecated Use `Row` for a list item or `Notice` for one problem. Kept while screens move.
+ * A marked sentence inside a `Block` or a `RowDetail`: a state mark on the first line of words that may wrap
+ * (`text`, Body role), an optional `action` at the right (a `Link` or a small `Button`) and what belongs under
+ * the words (`children`: captions, a quote). Rule: use it for one step or one fact inside content that is not a
+ * list; a list item is a `Row`, one problem is a `Notice`.
  */
-export function MarkLine(props: { kind: MarkKind; testID?: string; selectable?: boolean; children?: JSX.Element }) {
+export function MarkedLine(props: {
+	kind: MarkKind;
+	text: string;
+	/** The words' tone (default `default`). */
+	tone?: Tone;
+	testID?: string;
+	/** The words' own test ID. */
+	textTestID?: string;
+	selectable?: boolean;
+	action?: JSX.Element;
+	children?: JSX.Element;
+}) {
 	return (
 		<View testID={props.testID} class="flex-row items-start gap-2.5">
-			<View class="py-0.5">
+			<View class="h-4.5 w-3.5 items-center justify-center">
 				<Mark kind={props.kind} />
 			</View>
 			<View selectable={props.selectable} class="min-w-0 flex-1 gap-0.5">
+				<Text testID={props.textTestID} class={TONE[props.tone ?? "default"]} style={TYPE.body}>
+					{props.text}
+				</Text>
 				{props.children}
 			</View>
+			<View class="shrink-0 flex-row items-center gap-3">{props.action}</View>
 		</View>
 	);
 }

@@ -1,10 +1,10 @@
 // Synthetic attention only. No daemon, filesystem or retry authority: Continue
 // and Dismiss go to a script that counts them and drops the row, as the next
 // read would.
-import { type JSX, keymap, mount, signal, View } from "nsh";
+import { keymap, mount, signal } from "nsh";
 import { MockDayScreen, openDay, openMockChat } from "./mockFeeds";
 import { mirrorSessionChat, type SessionChatSource } from "./sessionChat";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const sends = signal<string[]>([]);
 const base = openMockChat().source;
@@ -103,19 +103,8 @@ day.today.update((t) => ({
 	],
 }));
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<MockDayScreen day={day} />
 		<Block>
 			<Buttons>
@@ -131,5 +120,5 @@ mount(() => (
 				<Caption tone="faint">{`Synthetic read. Sent: ${sends().join(", ") || "nothing"}`}</Caption>
 			</Buttons>
 		</Block>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

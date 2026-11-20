@@ -5,7 +5,7 @@
 // choose a project. Commands that act stay on their screens, behind their
 // own confirmation. Escape clears the search, then closes the palette, and
 // the keyboard focus goes back where it was.
-import { cleanup, computed, effect, Keyboard, keymap, signal, Text, untracked, View } from "nsh";
+import { cleanup, computed, effect, Keyboard, keymap, signal, untracked, View } from "nsh";
 import { Command, type CommandItem, type CommandRef, Dialog } from "nsh/base";
 import { openChat } from "./chatView";
 import { deliveryRoute, openCodeReview, openDelivery, reviewableCode } from "./deliveryView";
@@ -14,9 +14,9 @@ import {
 	goChanges,
 	goFeedback,
 	goHome,
+	goInsights,
 	goLinear,
 	goMission,
-	goInsights,
 	goNew,
 	goPlan,
 	goSchedules,
@@ -30,11 +30,11 @@ import { stageMark, stageWord } from "./PlanScreen";
 import { offered, openRitual, openStandup, ritualEntry } from "./ritualView";
 import { screenAgentAvailable, screenAgentOpen } from "./screenAgentOpen";
 import { updateLabel } from "./UpdateScreen";
-import { Action, KeyCap, KeyHint, Mark, type MarkKind, Picker, SearchButton } from "./ui";
+import { Body, Caption, KeyCap, KeyHint, Link, Mark, type MarkKind, Picker, SearchButton } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
 import { route } from "./view";
 import { stateMark, stateWord } from "./words";
-import { destinationProject, searchDetail, type SearchHit, type WorkSearchPage } from "./workSearch";
+import { destinationProject, type SearchHit, searchDetail, type WorkSearchPage } from "./workSearch";
 
 /** One row: the command, a quiet word or mark beside it, and where it goes. */
 type Entry = { item: CommandItem; title?: string; hint?: string; mark?: MarkKind; project?: string; run?: () => void };
@@ -329,7 +329,7 @@ function Open(props: {
 			class="overflow-hidden rounded-xl border border-border bg-popover shadow-md"
 			searchBarClass="flex-row items-center border-b border-border px-3.5"
 			searchClass="h-11 flex-1 text-sm text-foreground placeholder:text-faint"
-			searchSuffix={<Action label="Close search" onPress={props.onClose} />}
+			searchSuffix={<Link label="Close search" tone="faint" onPress={props.onClose} />}
 			listClass="max-h-80 p-1"
 			groupClass="px-2.5 pb-1 pt-2 text-xs text-faint"
 			separatorClass="mx-1.5 my-1 h-px bg-border"
@@ -339,17 +339,19 @@ function Open(props: {
 					<If when={find(entry.id)?.mark}>
 						<Mark kind={find(entry.id)?.mark as MarkKind} />
 					</If>
-					<Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground">
+					<Body grow truncate>
 						{find(entry.id)?.title ?? entry.label}
-					</Text>
+					</Body>
 					<If when={find(entry.id)?.project}>
-						<Text class="max-w-32 truncate text-xs text-muted-foreground">{find(entry.id)?.project ?? ""}</Text>
+						<View class="max-w-32">
+							<Caption truncate>{find(entry.id)?.project ?? ""}</Caption>
+						</View>
 					</If>
 					<If when={find(entry.id)?.hint}>
-						<Text class="shrink-0 text-xs text-faint">{find(entry.id)?.hint ?? ""}</Text>
+						<Caption tone="faint">{find(entry.id)?.hint ?? ""}</Caption>
 					</If>
 					<If when={entry.checked}>
-						<Text class="shrink-0 text-xs text-faint">Shown now</Text>
+						<Caption tone="faint">Shown now</Caption>
 					</If>
 					<If when={entry.shortcutLabel}>
 						<KeyCap label={entry.shortcutLabel ?? ""} />
@@ -357,15 +359,15 @@ function Open(props: {
 				</View>
 			)}
 			empty={
-				<View testID="palette-empty" class="gap-1 px-3 py-6">
-					<Text class="text-center text-sm text-muted-foreground">
+				<View testID="palette-empty" class="items-center gap-1 px-3 py-6">
+					<Body tone="muted">
 						{failed() || page()?.partial || page()?.more
 							? "No matches from the work Pilot could read."
 							: `Nothing matches “${query()}”.`}
-					</Text>
-					<Text class="text-center text-xs text-faint">
+					</Body>
+					<Caption tone="faint">
 						{source ? "Try another title or project." : "The palette finds places and the missions Today lists."}
-					</Text>
+					</Caption>
 				</View>
 			}
 			footer={
@@ -386,7 +388,7 @@ function Open(props: {
 									project.set(value === "all" ? null : value);
 								}}
 							/>
-							<Text class="flex-1 text-xs text-muted-foreground">
+							<Caption grow>
 								{reading()
 									? "Searching…"
 									: failed()
@@ -396,12 +398,12 @@ function Open(props: {
 											: page()?.more
 												? "More work may match. Narrow your search."
 												: ""}
-							</Text>
+							</Caption>
 							<If when={failed()}>
-								<Action label="Try again" onPress={() => retry.update((n) => n + 1)} />
+								<Link label="Try again" onPress={() => retry.update((n) => n + 1)} />
 							</If>
 							<If when={page()?.nextCursor}>
-								<Action label="Search more" onPress={() => cursor.set(page()?.nextCursor ?? undefined)} />
+								<Link label="Search more" onPress={() => cursor.set(page()?.nextCursor ?? undefined)} />
 							</If>
 						</View>
 					</If>

@@ -25,6 +25,7 @@ import { openChat } from "./chatView";
 import type { Day } from "./day";
 import { fundingAmount } from "./FundingSettings";
 import { keepRead } from "./freshness";
+import { findingGoal, findingWork, restoreOtherDraft } from "./insightsWork";
 import { keepField, keepScroll } from "./kept";
 import {
 	backToFeedback,
@@ -33,9 +34,8 @@ import {
 	linkedConfirm,
 	replaceOtherDraft,
 } from "./linkedMission";
-import { jumpBack } from "./nav";
 import { newFundingDraft } from "./modelSettingsDraft";
-import { findingGoal, findingWork, restoreOtherDraft } from "./insightsWork";
+import { jumpBack } from "./nav";
 import { OpenChatAction } from "./OpenChatAction";
 import { stageMark, stageWord } from "./PlanScreen";
 import { checkCreation, planMission } from "./planCommands";
@@ -359,6 +359,7 @@ function Unconfirmed(props: { plans: Plans }) {
 				<Notice
 					testID={`chat-unknown-${o().operationId}`}
 					placement="section"
+					kind="unconfirmed"
 					text={`A new chat in ${projectName(view(), o().projectId)} is not confirmed.`}
 					detail="Pilot will not send it again. Check only reads its saved answer. Another new chat waits until then."
 					action={
@@ -483,17 +484,17 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 	return (
 		<Scroll class="flex-1" contentOffset={scroll.contentOffset} scrollEventThrottle={100} onScroll={scroll.onScroll}>
 			<Page width="form">
-				<PageHead title={title()}>
-					{/* LIBRARY GAP: PageHead's text takes no test ID, and tests find the linked draft's line by one. The
-					    line is a muted Body under the title, as PageHead draws its text. */}
-					<Body testID={linked() ? "linked-from" : undefined} tone="muted" measure>
-						{linked()
+				<PageHead
+					title={title()}
+					textTestID={linked() ? "linked-from" : undefined}
+					text={
+						linked()
 							? `From Feedback: “${linked()?.title ?? ""}”. Plan links the feedback to the mission. Edit the goal first.`
 							: findingWork()
 								? `From Insights: “${findingWork()?.title}”. The finding and its source references stay linked when you edit the goal.`
-								: "Say it in your own words. A mission starts with questions to clarify what you want."}
-					</Body>
-				</PageHead>
+								: "Say it in your own words. A mission starts with questions to clarify what you want."
+					}
+				/>
 				<Panel
 					testID="new-panel"
 					notice={
@@ -574,6 +575,7 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 								{(c) => (
 									<Notice
 										placement="section"
+										kind="unconfirmed"
 										text="Mission creation is not confirmed"
 										detail={`“${c().goal}”. Project: ${projectName(chatView(), c().projectId)}. Check only reads its saved result. Other drafts stay available.`}
 										action={

@@ -2,11 +2,11 @@
 // storage. A scripted artifact source with the connected rules: rows name an
 // exact revision, one press reads that revision once, and a refusal shows
 // nothing earlier. The project page and one mission's section share rows.
-import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
+import { keymap, mount, Scroll, signal, View } from "nsh";
 import { createShelf, FullArtifact, MissionArtifacts } from "./ArtifactShelf";
 import { ArtifactsScreen } from "./ArtifactsScreen";
 import { type ArtifactRow, type ArtifactSource, type ListResult, type ReadResult, readRefused } from "./artifactReads";
-import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, Panel } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel, WindowCanvas } from "./ui";
 
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
 const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
@@ -103,22 +103,11 @@ function reopenEmpty() {
 	opened.update((n) => n + 1);
 }
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => {
 	// The full window is a dialog over every control here, so tests reach the page by key.
 	keymap.bind("mod+shift+e", reopenEmpty, { when: "always" });
 	return (
-		<FixtureWindow>
+		<WindowCanvas>
 			<View class="flex-1">
 				<If
 					when={page() === "mission"}
@@ -166,6 +155,6 @@ mount(() => {
 					/>
 				</Buttons>
 			</Block>
-		</FixtureWindow>
+		</WindowCanvas>
 	);
 });

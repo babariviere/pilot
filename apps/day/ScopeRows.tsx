@@ -6,21 +6,21 @@
 // nothing starts or is sent. What Pilot could not read stays unknown.
 import { effect, lifecycle, untracked, View } from "nsh";
 import type { Decision, HumanAction, MissionRow, Planning } from "pilot-day/native";
+import { openChat } from "./chatView";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
-import { openChat } from "./chatView";
 import { openDelivery, waitsForCheck } from "./deliveryView";
-import { jump } from "./nav";
 import { openRequestIn } from "./Incoming";
+import { jump } from "./nav";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
+import { scopedQuestion } from "./ScopedQuestion";
 import { type ScopeCount, type ScopeProject, todayProject } from "./todayScope";
 import { Block, Button, Caption, EmptyLine, Link, Notice, Picker, Progress, Row, RowGroup, Rows } from "./ui";
 import { drafts, openMission, picks, placeRow, replies, reports } from "./view";
 import { rowLine, stateMark, stateTone, stateWord } from "./words";
 import { destinationProject } from "./workSearch";
-import { scopedQuestion } from "./ScopedQuestion";
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
 
@@ -248,7 +248,7 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 				<Caption>{shows()}</Caption>
 				<If when={elsewhere()}>
 					<Notice
-						kind={snapshot()?.outsideNeedsYou.count ? "needs" : snapshot() ? "done" : "unknown"}
+						kind={snapshot()?.outsideNeedsYou.count ? "needs" : snapshot() ? "done" : "unconfirmed"}
 						text={elsewhere()}
 						testID="scope-elsewhere"
 						action={<Link label="Show all projects" testID="scope-all" onPress={() => todayProject.set("all")} />}
@@ -557,7 +557,7 @@ export function OtherToCheck(props: { ctx: TodayScope; day: Day; nested?: boolea
 								<Each of={rows(p())} key={(i) => i.snapshot?.targetId ?? JSON.stringify(i.subject)}>
 									{(i) => (
 										<Row
-											mark={i().unsettled || i().snapshot?.pendingOperationId ? "unknown" : "needs"}
+											mark={i().unsettled || i().snapshot?.pendingOperationId ? "unconfirmed" : "needs"}
 											title={i().title}
 											state={
 												i().unsettled || i().snapshot?.pendingOperationId

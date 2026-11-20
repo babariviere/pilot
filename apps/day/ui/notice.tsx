@@ -6,20 +6,22 @@ import { TYPE } from "./text";
 
 /**
  * Where a notice sits. `panel`: full width at the top of a `Panel` (its `notice` prop), square, with a hairline
- * under it. `section`: inside a section, inset to its rows. `flow` (default): in page flow, for screens that have
- * not moved to a Panel yet.
+ * under it. `section`: inside a section, inset to its rows. `flow` (default): in a PageHead, a Block, a chat or a
+ * floating card, where nothing insets it.
  */
 export type NoticePlacement = "panel" | "section" | "flow";
 
 /**
- * One problem and one way out: a mark, the words, a quieter `detail` line and at most one `action` (a `Link` or a
- * small `Button`) at the end. Amber when the user can act (`needs`, the default), red when something failed
- * (`failed`). Rule: one problem per notice; it never blanks what is shown, and a read that failed says so here
- * rather than showing an empty list.
+ * One problem and one way out: a mark, the words, a quieter `detail` line and one `action` (a `Link` or a small
+ * `Button`) at the end. Amber when the user can act (`needs`, the default), red when something failed (`failed`),
+ * neutral with a hollow amber mark when Pilot could not confirm something (`unconfirmed`), and neutral for a state
+ * that only informs (`working`, `paused`). `otherAction` is for a choice between two ways out (keep this draft or
+ * open the other); it sits before `action`. Rule: one problem per notice; it never blanks what is shown, and a read
+ * that failed says so here rather than showing an empty list.
  */
 export function Notice(props: {
 	text: string;
-	/** The mark: `needs` (default) or `failed`. Older kinds are accepted while screens move. */
+	/** The mark and fill: `needs` (default), `failed`, `unconfirmed`, or a quiet state. */
 	kind?: MarkKind;
 	detail?: string;
 	testID?: string;
@@ -27,11 +29,9 @@ export function Notice(props: {
 	role?: "alert";
 	/** The one way out: a `Link` ("Try now", "Sign in") or a small `Button`. */
 	action?: JSX.Element;
+	/** The other way out of a two-way choice: a `Link`. */
+	otherAction?: JSX.Element;
 	placement?: NoticePlacement;
-	/** @deprecated Layout classes from older screens. A placement replaces them. */
-	class?: string;
-	/** @deprecated Anything below the detail. A notice holds one problem and one way out; move the rest out. */
-	children?: JSX.Element;
 }) {
 	const agent = useAgent({
 		component: "status",
@@ -40,7 +40,7 @@ export function Notice(props: {
 		text: () => props.detail,
 		actions: {},
 	});
-	const kind = (): MarkKind => (props.kind === "unknown" || !props.kind ? "needs" : props.kind);
+	const kind = (): MarkKind => props.kind ?? "needs";
 	const fill = () => (kind() === "failed" ? "bg-failed-soft" : kind() === "needs" ? "bg-needs-soft" : "bg-muted");
 	const frame = () => {
 		if (props.placement === "panel") return "border-b border-border px-4 py-2.5";
@@ -48,10 +48,10 @@ export function Notice(props: {
 		return "rounded-xl px-3.5 py-2.5";
 	};
 	return (
-		<View ref={agent.anchor} testID={props.testID} class={`${fill()} ${frame()} ${props.class ?? ""}`}>
+		<View ref={agent.anchor} testID={props.testID} class={`${fill()} ${frame()}`}>
 			<View class="flex-row items-start gap-2.5">
 				<View class="h-4.5 w-3.5 items-center justify-center">
-					<Mark kind={props.kind ?? "unknown"} />
+					<Mark kind={kind()} />
 				</View>
 				<View class="min-w-0 flex-1">
 					<Text role={props.role} class="text-foreground" style={TYPE.body}>
@@ -63,9 +63,11 @@ export function Notice(props: {
 						</Text>
 					</If>
 				</View>
-				<View class="shrink-0 flex-row items-center self-center">{props.action}</View>
+				<View class="shrink-0 flex-row items-center gap-3 self-center">
+					{props.otherAction}
+					{props.action}
+				</View>
 			</View>
-			<View class="gap-1.5 pl-6">{props.children}</View>
 		</View>
 	);
 }

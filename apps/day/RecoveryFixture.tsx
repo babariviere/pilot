@@ -1,10 +1,10 @@
 // Synthetic recovery UI only. No daemon, credentials, processes or filesystem.
-import { host, type JSX, mount, signal, View } from "nsh";
+import { host, mount, signal } from "nsh";
 import { ChatScreen } from "./ChatScreen";
 import type { Day } from "./day";
 import { restoreRecoveryNotes, savedRecoveryNotes } from "./recoveryDraft";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 const sends = signal(0);
 const checks = signal(0);
@@ -103,19 +103,8 @@ const source: SessionChatSource = {
 	},
 };
 const day = { chat: mirrorSessionChat(source) } as Day;
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<Block>
 			<Buttons>
 				<Caption tone="faint">Mock data</Caption>
@@ -156,5 +145,5 @@ mount(() => (
 		<If when={shown()}>
 			<ChatScreen day={day} sessionId="recovery-chat" />
 		</If>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

@@ -2,7 +2,7 @@
 // Today with a scripted project scope, where Today's own read names its
 // project as the native root's does. Switching projects must never show the
 // previous project's read, even when its answer comes late.
-import { type JSX, mount, Scroll, View } from "nsh";
+import { mount, Scroll, View } from "nsh";
 import { PlanFeed, type Today, TodayFeed } from "pilot-day/native";
 import { ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
@@ -10,10 +10,10 @@ import { mirrorDay } from "./day";
 import type { DayFeed } from "./feeds";
 import { MockDayScreen } from "./mockFeeds";
 import { mirrorPlanning } from "./planning";
-import { ScriptedScope } from "./scopeDemo";
 import { todayScope } from "./ScopeRows";
+import { ScriptedScope } from "./scopeDemo";
 import { mirrorScope } from "./todayScope";
-import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
+import { Block, Button, Buttons, Caption, WindowCanvas } from "./ui";
 
 // Today's own read: pilot's, from the decisions world.
 const real = new TodayFeed("decisions");
@@ -61,19 +61,8 @@ function Others() {
 	);
 }
 
-// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
-// a screen or a control without DayScreen. This local root does what DayScreen's root does.
-function FixtureWindow(props: { children?: JSX.Element }) {
-	return (
-		<View class="flex-1 bg-background">
-			<GridBackdrop />
-			{props.children}
-		</View>
-	);
-}
-
 mount(() => (
-	<FixtureWindow>
+	<WindowCanvas>
 		<View class="flex-1">
 			<MockDayScreen day={day} plans={plans} />
 		</View>
@@ -96,5 +85,5 @@ mount(() => (
 				</Buttons>
 			</Block>
 		</Scroll>
-	</FixtureWindow>
+	</WindowCanvas>
 ));

@@ -9,7 +9,7 @@
 // its result. Leaving, closing or updating keeps the draft (windowState.ts).
 // Settings is one form page: one panel with one tab per part (AI, Project, Local projects, Tool connections,
 // Allowances, Diagnostics & privacy). A tab shows only when this window has its controls.
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, untracked, View, type ViewRef } from "nsh";
+import { effect, keymap, Scroll, type ScrollRef, signal, untracked, View, type ViewRef } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
@@ -241,6 +241,20 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 					placement="section"
 					text="You have unsaved preferences for another project."
 					detail={`This window saves only ${name()}'s preferences. They stay unsaved until you discard them.`}
+					otherAction={
+						<If when={discardAsk()}>
+							<Button
+								small
+								kind="destructive"
+								label="Discard for good"
+								testID="preferences-elsewhere-confirm"
+								onPress={() => {
+									discardAsk.set(false);
+									preferencesDraft.set(null);
+								}}
+							/>
+						</If>
+					}
 					action={
 						<If
 							when={discardAsk()}
@@ -252,24 +266,12 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 								/>
 							}
 						>
-							<Buttons>
-								<Button
-									small
-									kind="destructive"
-									label="Discard for good"
-									testID="preferences-elsewhere-confirm"
-									onPress={() => {
-										discardAsk.set(false);
-										preferencesDraft.set(null);
-									}}
-								/>
-								<Button
-									small
-									label="Keep them"
-									testID="preferences-elsewhere-keep"
-									onPress={() => discardAsk.set(false)}
-								/>
-							</Buttons>
+							<Button
+								small
+								label="Keep them"
+								testID="preferences-elsewhere-keep"
+								onPress={() => discardAsk.set(false)}
+							/>
 						</If>
 					}
 				/>
@@ -583,17 +585,6 @@ const TABS: { id: SettingsTab; label: string }[] = [
 /** The tab the user chose, kept while the window is open. Null shows the first tab this window has. */
 const settingsTab = signal<SettingsTab | null>(null);
 
-// LIBRARY GAP: Tabs neither wrap nor scroll. Settings has up to six tabs, which overflow a narrow window and hide
-// the last ones from the pointer. The library's Tabs should scroll sideways (or wrap) when they do not fit; until
-// then Settings puts them in a sideways Scroll without a bar.
-function SidewaysTabs(props: { children?: JSX.Element }) {
-	return (
-		<Scroll horizontal scrollbar={false}>
-			{props.children}
-		</Scroll>
-	);
-}
-
 /** Settings over the window's preferences. Opening it only reads. */
 export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean }) {
 	const mirror = props.day.preferences as PreferencesMirror;
@@ -679,23 +670,21 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 							<Panel
 								testID="settings-panel"
 								tabs={
-									<SidewaysTabs>
-										<Tabs>
-											<Each of={tabs()} key={(t) => t.id}>
-												{(t) => (
-													<Tab
-														label={t().label}
-														testID={`settings-tab-${t().id}`}
-														selected={tab() === t().id}
-														onPress={() => {
-															glide();
-															settingsTab.set(t().id);
-														}}
-													/>
-												)}
-											</Each>
-										</Tabs>
-									</SidewaysTabs>
+									<Tabs>
+										<Each of={tabs()} key={(t) => t.id}>
+											{(t) => (
+												<Tab
+													label={t().label}
+													testID={`settings-tab-${t().id}`}
+													selected={tab() === t().id}
+													onPress={() => {
+														glide();
+														settingsTab.set(t().id);
+													}}
+												/>
+											)}
+										</Each>
+									</Tabs>
 								}
 							>
 								<Column>

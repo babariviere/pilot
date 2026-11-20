@@ -303,20 +303,16 @@ function Detail(
 					</Block>
 					<If when={replace()}>
 						{(kind) => (
-							// LIBRARY GAP: Notice takes one way out, and this choice has two (keep the other draft, or
-							// open this one). Both are Links in Notice's action slot until it offers a pair.
 							<Notice
 								placement="section"
 								text="Your other New draft stays saved. Opening this finding does not start work."
+								otherAction={<Link label="Keep existing draft" onPress={() => replace.set(null)} />}
 								action={
-									<>
-										<Link label="Keep existing draft" onPress={() => replace.set(null)} />
-										<Link
-											label="Open finding draft"
-											disabled={props.locked || !props.openWork?.available()}
-											onPress={() => props.openWork?.draft(kind(), d(), true)}
-										/>
-									</>
+									<Link
+										label="Open finding draft"
+										disabled={props.locked || !props.openWork?.available()}
+										onPress={() => props.openWork?.draft(kind(), d(), true)}
+									/>
 								}
 							/>
 						)}
@@ -372,17 +368,11 @@ function Settings(props: {
 	return (
 		<>
 			<If when={staleDraft()}>
-				{/* LIBRARY GAP: Notice takes one way out, and this choice has two (use the saved settings, or keep the
-				    draft). Both are Links in Notice's action slot until it offers a pair. */}
 				<Notice
 					placement="section"
 					text="Settings changed elsewhere. Your draft is kept."
-					action={
-						<>
-							<Link label="Use saved settings" onPress={() => insightsDraft.set(null)} />
-							<Link label="Keep my draft" onPress={() => patch({ binding: s().draftBinding })} />
-						</>
-					}
+					otherAction={<Link label="Use saved settings" onPress={() => insightsDraft.set(null)} />}
+					action={<Link label="Keep my draft" onPress={() => patch({ binding: s().draftBinding })} />}
 				/>
 			</If>
 			<Section title="Source projects">
