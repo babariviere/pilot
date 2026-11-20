@@ -134,12 +134,7 @@ export default pi => {
 		);
 		return { stop, log: () => log };
 	}
-	await mkdir(home, { mode: 0o700 });
-	const retired = join(home, "memory", "deleted-project");
-	await mkdir(retired, { recursive: true });
-	await writeFile(join(retired, "log"), "old project note");
 	const first = await start();
-	await assert.rejects(access(join(home, "memory")), { code: "ENOENT" });
 	const helloResponse = await fetch(`${base}/hello`);
 	assert.equal(helloResponse.status, 200);
 	const hello = (await helloResponse.json()) as DaemonHello;

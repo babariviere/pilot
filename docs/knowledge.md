@@ -5,8 +5,10 @@
 Open Settings (⌘,), then **Knowledge → Open library** for the selected project.
 Search saved project understanding and inspect its sources and revision history.
 
-On upgrade, Pilot removes the retired project memory archive (old notes and
-summaries). It does not remove Knowledge, project preferences or chat history.
+Project memory is no longer available. If an older installation still has an
+archive under `$PILOT_HOME/memory` (by default `~/.local/share/pilot/memory`),
+you can remove that directory manually after stopping Pilot and its daemon.
+Knowledge, project preferences and chat history are stored separately.
 
 **Edit this revision** prepares an unsaved correction. Give a reason and select
 **Save new revision** to append it. Earlier revisions and sources stay readable.

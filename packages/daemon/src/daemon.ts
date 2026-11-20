@@ -42,7 +42,6 @@ import { detectPlatformCapabilities } from "./runtime/platform/platform.ts";
 import { PowerService } from "./runtime/power/power.ts";
 import { KnowledgeService } from "./projects/knowledge/project-knowledge.ts";
 import { ProjectStore } from "./projects/projects.ts";
-import { removeRetiredProjectMemory } from "./projects/remove-retired-project-memory.ts";
 import { RuntimeBackground } from "./runtime/lifecycle/runtime-background.ts";
 import { runtimeOwner } from "./runtime-bootstrap.ts";
 import { ScheduleDetection } from "./schedules/schedule-detection.ts";
@@ -68,9 +67,6 @@ import { UsageHistoryStore } from "./models/usage/usage-history.ts";
 
 const config = loadConfig();
 if (!runtimeOwner) throw new Error("Daemon profile owner is required");
-await removeRetiredProjectMemory(config.home).catch((error: unknown) =>
-	console.warn("pilotd: could not remove retired project memory; will retry at next start", error),
-);
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
 const credentials = new CredentialBroker(await realpath(config.agentDir ?? getAgentDir()));
 await credentials.start();
