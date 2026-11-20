@@ -71,7 +71,7 @@ test("passive preference is durable and preserves all task fields, notices, phas
 			},
 			{ ...before, preferredModel: undefined, preferredThinking: undefined, preferredModelSetBy: undefined },
 		);
-		assert.deepEqual(changes, [[m.id, true, true]]);
+		assert.deepEqual(changes, [[m.id, "preference"]]);
 		assert.deepEqual(memberChanges, []);
 		assert.deepEqual(store.members(m.id), members);
 		assert.deepEqual(store.phases(m.id), phases);

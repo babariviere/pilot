@@ -12,6 +12,7 @@ import {
 	ToolTask,
 } from "@earendil-works/pi-durable";
 import { canonicalJSON } from "./canonical-json.ts";
+import { PLANNING_INPUT_ENTRY } from "./entry-kinds.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import type { PlanningInput, PlanningRound, PlanningWorkerBinding } from "./planning-worker.ts";
 
@@ -109,7 +110,7 @@ export async function admitPlanningInput(
 		)
 			throw new Error("Planning admission is held or busy");
 		const entry = await tx.appendEntry(conversation.id, {
-			kind: "pilot.planning-input",
+			kind: PLANNING_INPUT_ENTRY,
 			data: { operation: JSON.stringify(input.operation) },
 			model: [{ role: "user", content: input.content, timestamp: Date.now() }],
 		});

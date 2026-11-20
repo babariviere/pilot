@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocket, WebSocketServer } from "ws";
+import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
 import { nativeIntakeFixture } from "../native-intake.fixture.ts";
 import { SourceSignInRequired } from "../source-tool-rules.ts";
 
@@ -60,7 +61,6 @@ const proxy = createServer(async (req, res) => {
 		const chunks = [];
 		for await (const c of req) chunks.push(c);
 		const bytes = Buffer.concat(chunks);
-		// Passive synthetic chat histories for native cross-project navigation checks.
 		if (req.method === "GET" && req.url?.startsWith("/api/sessions/working-")) {
 			const id = req.url.split("/")[3]!;
 			const project = id === "working-two" ? f.other : f.project;
@@ -116,7 +116,7 @@ const proxy = createServer(async (req, res) => {
 			method: req.method,
 			headers: {
 				"content-type": "application/json",
-				"x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? ""),
+				[PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? ""),
 			},
 			...(bytes.length ? { body: bytes } : {}),
 		});

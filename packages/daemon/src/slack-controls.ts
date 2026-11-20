@@ -1,13 +1,19 @@
 /** Native Slack settings and explicit imports. Reads never poll or call a provider. */
 import type { DurableOperation, ProjectTrackingConfig, TrackedItem } from "@pilot/protocol";
+import { canonicalJSON, payloadHash } from "./canonical.ts";
 import { NotFound } from "./errors.ts";
-import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
+import { parseIntent, SerialAdmissions } from "./native-intent.ts";
+import { type OperationJournal, OperationRejected } from "./operation-journal.ts";
+import type { ControlOperation } from "./operations.ts";
 import { type ProjectStore, validateTrackingConfig } from "./projects.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import { slackChannelProgress } from "./slack-source.ts";
-import { SlackImportRefused, type SourceRegistry } from "./sources.ts";
+import { SlackImportRefused } from "./slack-tracking.ts";
+import { sourceId } from "./source-kinds.ts";
+import type { SourceRegistry } from "./sources.ts";
 
 export const SLACK_CONTROLS = "slack-controls";
+const OUTCOME_UNKNOWN = "Slack outcome unknown; lookup only";
 /** Do not save credentials, arbitrary query strings or fragments in either command journal. */
 export function safeSlackLink(value: unknown): value is string {
 	return (
@@ -21,7 +27,7 @@ export function safeSlackLink(value: unknown): value is string {
 }
 
 export class SlackControls {
-	private pending: Promise<unknown> = Promise.resolve();
+	private readonly admissions = new SerialAdmissions(OUTCOME_UNKNOWN);
 	private readonly projects: ProjectStore;
 	private readonly tracking: SourceRegistry;
 	constructor(projects: ProjectStore, tracking: SourceRegistry) {
@@ -31,7 +37,7 @@ export class SlackControls {
 	async read(projectId: string, offset = 0) {
 		const project = this.projects.require(projectId);
 		const config = project.tracking ?? { slackChannels: [] };
-		const source = this.tracking.require(`${projectId}:slack`);
+		const source = this.tracking.require(sourceId(projectId, "slack"));
 		const checkpoint = this.tracking.items.checkpoint(source.id);
 		// A fresh binding fences other project edits too. Coverage changes alone do not invalidate a form.
 		const binding = payloadHash(canonicalJSON(project));
@@ -58,28 +64,18 @@ export class SlackControls {
 		};
 	}
 	admit(op: DurableOperation, journal: OperationJournal, firstEntry: boolean): Promise<unknown> {
-		if (!firstEntry) return Promise.reject(new Error("Slack outcome unknown; lookup only"));
-		const work = this.pending.then(() => this.apply(op, journal));
-		this.pending = work.catch(() => undefined);
-		return work;
+		return this.admissions.admit(firstEntry, () => this.apply(op, journal));
 	}
 	private async apply(op: DurableOperation, journal: OperationJournal) {
-		let p: { purpose: string; projectId: string; binding: string; action: string; value: unknown };
-		try {
-			p = JSON.parse(op.payload);
-			if (
-				!p ||
-				Object.keys(p).sort().join() !== "action,binding,projectId,purpose,value" ||
-				p.purpose !== SLACK_CONTROLS ||
-				op.kind !== SLACK_CONTROLS ||
-				op.targetId !== p.projectId ||
-				op.bindingGeneration !== 1 ||
-				!sameHost(op.origin, journal.destination)
-			)
-				throw new Error();
-		} catch {
+		const p = parseIntent(
+			op,
+			journal.destination,
+			SLACK_CONTROLS,
+			["action", "binding", "projectId", "purpose", "value"],
+			"Invalid Slack intent",
+		) as { purpose: string; projectId: string; binding: string; action: string; value: unknown };
+		if (op.targetId !== p.projectId || op.bindingGeneration !== 1)
 			throw new OperationRejected("Invalid Slack intent");
-		}
 		let current: Awaited<ReturnType<SlackControls["read"]>>;
 		try {
 			current = await this.read(p.projectId);
@@ -140,7 +136,7 @@ export class SlackControls {
 			// From here, failures may follow provider use or a durable item save. Never replay an entered import.
 			let item: TrackedItem;
 			try {
-				item = await this.tracking.addSlackMessage(p.projectId, v.url);
+				item = await this.tracking.slack.add(p.projectId, v.url);
 			} catch (error) {
 				if (error instanceof SlackImportRefused || error instanceof NotFound)
 					throw new OperationRejected(
@@ -153,3 +149,13 @@ export class SlackControls {
 		throw new OperationRejected("Invalid Slack action");
 	}
 }
+
+export const slackOperations = (
+	controls: SlackControls | undefined,
+	journal: OperationJournal | undefined,
+): ControlOperation => ({
+	kind: SLACK_CONTROLS,
+	unavailable: "Native Slack unavailable",
+	outcomeUnknown: OUTCOME_UNKNOWN,
+	admit: journal && controls && ((op, firstEntry) => controls.admit(op, journal, firstEntry)),
+});

@@ -5,7 +5,7 @@
 // saved cycle, counts what it does not show and never changes Linear.
 import { signal } from "nsh";
 import { type LinearSource, type LinearView, linearReason } from "./linearFeed";
-import type { SavedLinearRead, TrackedItem } from "./linearRead";
+import type { SavedLinearRead, TrackedItem } from "../../packages/protocol/src/tracking.ts";
 
 /** The mock world's project. */
 const PROJECT = "mock-project";

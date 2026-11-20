@@ -2,8 +2,9 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { KernelTelemetryConfiguration } from "@pilot/kernel";
 import type { AIUsageBudget, DaemonHello, TelemetrySettings, TelemetrySettingsPatch } from "@pilot/protocol";
-import { type NodeTelemetryOptions, validateOtlpEndpoint } from "@pilot/telemetry";
+import { localHostKind, type NodeTelemetryOptions, telemetryEnvironment, validateOtlpEndpoint } from "@pilot/telemetry";
 import { FeatureUsageStore } from "./feature-usage.ts";
 import { durableJSON } from "./operation-journal.ts";
 
@@ -22,20 +23,6 @@ interface StoredTelemetrySettings {
 	updatedAt?: string;
 	hostKey: string;
 	analyticsId: string;
-}
-
-export interface KernelTelemetrySettings {
-	enabled: boolean;
-	endpoint?: string;
-	serviceVersion: string;
-	environment: "release" | "development" | "test";
-	hostKind: "local" | "devbox";
-	hostId: string;
-	localDiagnostics: boolean;
-}
-
-function environment(): KernelTelemetrySettings["environment"] {
-	return process.env.NODE_ENV === "test" ? "test" : process.env.NODE_ENV === "production" ? "release" : "development";
 }
 
 function randomIdentifier(): string {
@@ -184,7 +171,7 @@ export class TelemetrySettingsService {
 		this.file = join(home, FILE);
 		this.hello = hello;
 		this.value = value;
-		this.hostKind = process.platform === "linux" ? "devbox" : "local";
+		this.hostKind = localHostKind();
 	}
 
 	static async open(home: string, hello: DaemonHello): Promise<TelemetrySettingsService> {
@@ -338,14 +325,14 @@ export class TelemetrySettingsService {
 			enabled: settings.remoteOperational,
 			serviceName,
 			serviceVersion: this.hello.daemonVersion,
-			environment: environment(),
+			environment: telemetryEnvironment(),
 			hostKind: this.hostKind,
 			hostId: this.hostId(),
 			...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
 		};
 	}
 
-	kernelSettings(): KernelTelemetrySettings {
+	kernelSettings(): KernelTelemetryConfiguration {
 		const options = this.nodeOptions("pilot.kernel");
 		return {
 			enabled: options.enabled,

@@ -11,7 +11,7 @@ use crate::{
         ChatLine, ControlAsk, ControlState, ControlView, Currentness, Decision, DecisionKind,
         Delivery, Freshness, FreshnessState, MemberLine, MemberState, MissionLink, MissionPage,
         MissionRow, MissionState, Movement, Output, OutputKind, Problem, Progress, ReportLine,
-        ReportedDelivery, TaskLine, TaskStatus,
+        ReportedDelivery, TaskStatus,
     },
 };
 

@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import type { SessionState } from "@pilot/protocol";
+import { applyLivePacket } from "./kernel-worker.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
@@ -32,7 +33,6 @@ test("offline is a quiet projection; clearing it cannot admit work past sleep, u
 		{
 			title: async () => undefined,
 			worker(spec, packet, exit) {
-				publish = packet;
 				specs.push(spec);
 				const worker = {
 					state: "idle" as SessionState,
@@ -60,6 +60,10 @@ test("offline is a quiet projection; clearing it cannot admit work past sleep, u
 					async close() {
 						exit(this, 0);
 					},
+				};
+				publish = (update) => {
+					applyLivePacket(worker, update);
+					packet(update);
 				};
 				queueMicrotask(() => packet({ type: "ready", working: false, model: "faux/faux-1", usage: {} }));
 				return worker;

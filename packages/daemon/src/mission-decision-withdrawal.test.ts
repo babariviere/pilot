@@ -132,13 +132,13 @@ test("failed acceptance rolls back the marker, proposal outcome and event histor
 	const before = store.detail(id);
 	let changes = 0;
 	store.onChange(() => changes++);
-	const failure = t.mock.method(store.knowledge, "invalidateMission", () => {
+	const stopFailing = store.onSourceChange(() => {
 		throw new Error("Synthetic storage failure");
 	});
 	assert.throws(() => store.resolveProposal(id, proposal.id, true), /Synthetic storage failure/);
 	assert.deepEqual(store.detail(id), before);
 	assert.equal(changes, 0);
-	failure.mock.restore();
+	stopFailing();
 	assert.equal(store.resolveProposal(id, proposal.id, true).status, "accepted");
 });
 

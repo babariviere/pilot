@@ -4,7 +4,7 @@
 // generation, and a read can be held to answer out of order.
 import { signal } from "nsh";
 import { type Today, TodayFeed } from "pilot-day/native";
-import type { Refusal } from "./bridge";
+import type { Refusal } from "./refusals";
 import type { DeliveredWork } from "./deliveryContract";
 import type { ScopeSource } from "./todayScope";
 

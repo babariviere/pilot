@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -12,7 +12,16 @@ import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
+import type {
+	HostCallPacket,
+	HostCalls,
+	KernelCommand,
+	KernelPacket,
+	KernelSubagent,
+	KernelUsage,
+} from "@pilot/kernel";
+import { openSessionStorage } from "@pilot/kernel/testing";
+import { createAskTools, SourceReader } from "@pilot/kernel/testing/runtime";
 import type {
 	AgentEvent,
 	DiagnosticContextRequest,
@@ -25,14 +34,10 @@ import type {
 	SessionCompletion,
 	SessionDiagnostics,
 	SessionPullRequest,
-	SessionState,
 	SessionSummary,
 	SessionTrackedSource,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { createAskTools } from "../../kernel/src/ask-tools.ts";
-import { SourceReader } from "../../kernel/src/source-reader.ts";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
@@ -45,18 +50,23 @@ import { payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
+import { type SessionFactories, SessionManager, type SessionManagerOptions } from "./sessions.ts";
 import {
+	applyLivePacket,
 	CommandRejected,
 	Worker as KernelWorker,
-	type SessionFactories,
-	SessionManager,
-	type SessionManagerOptions,
 	type SessionWorker,
 	WorkerUnavailable,
-} from "./sessions.ts";
+} from "./kernel-worker.ts";
 import type { SubagentWatchUpdate } from "./subagent-watches.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
+import {
+	emptySnapshot as snapshot,
+	FakeKernelProcess,
+	FakeKernelWorker,
+	type HostResult,
+} from "./testing/fake-kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" | "reloadPi" }>;
@@ -71,333 +81,6 @@ const diagnosticTarget = (
 	chatUrl: `pilot://chat/${sessionId}`,
 });
 
-class IpcProcess extends EventEmitter {
-	connected = true;
-	exitCode: number | null = null;
-	signalCode: NodeJS.Signals | null = null;
-	readonly sent: KernelCommand[] = [];
-	readonly killed: NodeJS.Signals[] = [];
-	send(command: KernelCommand, callback?: (error: Error | null) => void): boolean {
-		this.sent.push(command);
-		callback?.(null);
-		return true;
-	}
-	kill(signal: NodeJS.Signals): boolean {
-		this.killed.push(signal);
-		this.connected = false;
-		this.signalCode = signal;
-		this.emit("exit", null, signal);
-		return true;
-	}
-}
-
-function supervisedWorker(t: TestContext, commandTimeoutMs = 1_000) {
-	const child = new IpcProcess();
-	const packets: KernelPacket[] = [];
-	t.mock.timers.enable({ apis: ["setTimeout"] });
-	const worker = new KernelWorker(
-		{ sessionId: "supervision", cwd: "/unused", storageDir: "/unused" },
-		(packet) => packets.push(packet),
-		() => {},
-		undefined,
-		{ child: child as unknown as ChildProcess, startupTimeoutMs: 1_000, commandTimeoutMs },
-	);
-	t.after(() => child.emit("exit", 0, null));
-	const ready = () => {
-		child.emit("message", { type: "ready", model: "test/model", working: false, usage: {} });
-		const watch = child.sent.findLast((command) => command.type === "watch");
-		assert.ok(watch?.type === "watch");
-		child.emit("message", { type: "events", watchId: watch.watchId, events: [snapshot] });
-	};
-	return { child, worker, ready, packets };
-}
-
-test("todo counts arrive on readiness and committed mutations without starting extra work", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t);
-	ready();
-	await worker.ready;
-	child.emit("message", { type: "ready", model: "test/model", working: false, usage: {}, openTodoCount: 7 });
-	assert.equal(worker.openTodoCount, 7);
-	const sent = child.sent.length;
-	child.emit("message", { type: "todos.changed", openCount: 6 });
-	assert.equal(worker.openTodoCount, 6);
-	assert.equal(child.sent.length, sent);
-	assert.equal(worker.state, "idle");
-});
-
-test("worker acquisition and IPC serialization timings do not capture command content", (t) => {
-	const tracker = new DaemonOperations();
-	t.mock.method(operations, "time", <T>(label: string | (() => string), run: () => T) => tracker.time(label, run, 0));
-	const { worker, ready } = supervisedWorker(t);
-	ready();
-	worker.send({ type: "input", requestId: "private-request", content: "private-command-content", mode: "followUp" });
-	const labels = tracker.snapshot().slowByKind.map((entry) => entry.label);
-	assert.ok(labels.includes("worker.acquire"));
-	assert.ok(labels.includes("worker.send"));
-	assert.doesNotMatch(JSON.stringify(tracker.snapshot()), /private-request|private-command-content|unused/);
-});
-
-test("unexpected disconnect still fails an idle worker", async (t) => {
-	const { child, worker, ready, packets } = supervisedWorker(t);
-	ready();
-	child.connected = false;
-	child.emit("disconnect");
-	assert.equal(worker.state, "failed");
-	assert.equal(worker.transportUnavailable, true);
-	assert.deepEqual(packets.at(-1), { type: "error", message: "Kernel IPC disconnected" });
-	assert.deepEqual(child.killed, ["SIGTERM"]);
-});
-
-test("the disconnect after a kernel startup failure keeps the kernel's reason", async (t) => {
-	const { child, worker, packets } = supervisedWorker(t);
-	const reason = "Kernel failed to start: Required upstream interview skill unavailable or shadowed: /x/SKILL.md";
-	child.emit("message", { type: "error", message: reason });
-	child.connected = false;
-	child.emit("disconnect");
-	await assert.rejects(worker.ready, new RegExp(reason));
-	assert.equal(worker.state, "failed");
-	assert.equal(worker.error, reason);
-	assert.equal(worker.transportUnavailable, true);
-	assert.deepEqual(packets.filter((packet) => packet.type === "error").at(-1), { type: "error", message: reason });
-	assert.deepEqual(child.killed, ["SIGTERM"]);
-});
-
-test("intentional close ignores disconnect but waits for confirmed exit", async (t) => {
-	const { child, worker, ready, packets } = supervisedWorker(t);
-	ready();
-	const send = child.send.bind(child);
-	child.send = (command, callback) => {
-		if (command.type === "shutdown") {
-			child.connected = false;
-			child.emit("disconnect");
-			callback?.(new Error("IPC channel closed"));
-			return true;
-		}
-		return send(command, callback);
-	};
-	let closed = false;
-	const closing = worker.close().then(() => {
-		closed = true;
-	});
-	await Promise.resolve();
-	assert.equal(closed, false);
-	assert.equal(worker.state, "idle");
-	assert.equal(worker.error, undefined);
-	assert.equal(worker.transportUnavailable, false);
-	assert.ok(packets.every((packet) => packet.type !== "error"));
-	assert.deepEqual(child.killed, []);
-	t.mock.timers.tick(8_000);
-	await closing;
-	assert.deepEqual(child.killed, ["SIGKILL"], "close retains its shutdown deadline");
-});
-
-test("startup tolerates starvation while the IPC channel and process remain alive", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t);
-	t.mock.timers.tick(120_000);
-	assert.deepEqual(child.killed, []);
-	assert.equal(worker.state, "starting");
-	assert.equal(worker.busy, true);
-	assert.equal(worker.transportUnavailable, false);
-	ready();
-	await worker.ready;
-	t.mock.timers.tick(120_000);
-	assert.equal(worker.state, "idle");
-	assert.deepEqual(child.killed, []);
-});
-
-test("command acknowledgements tolerate starvation without clearing uncertain admissions", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t);
-	ready();
-	await worker.ready;
-	const input = worker.request({ type: "input", requestId: "stable-id", content: "work", mode: "followUp" });
-	const abort = worker.request({ type: "abort", requestId: "abort-id" });
-	t.mock.timers.tick(120_000);
-	assert.deepEqual(child.killed, []);
-	assert.equal(worker["pending"].size, 2);
-	assert.equal(worker.busy, true, "a slow acknowledgement must still block idle-only work");
-	child.emit("message", { type: "accepted", requestId: "stable-id" });
-	child.emit("message", { type: "aborted", requestId: "abort-id" });
-	await Promise.all([input, abort]);
-	assert.equal(worker["pending"].size, 0);
-});
-
-test("a dead channel rejects readiness and every uncertain command", async (t) => {
-	const { child, worker } = supervisedWorker(t);
-	const input = worker.request({ type: "input", requestId: "stable-id", content: "work", mode: "followUp" });
-	const rejected = Promise.all([
-		assert.rejects(worker.ready, WorkerUnavailable),
-		assert.rejects(input, WorkerUnavailable),
-	]);
-	child.connected = false; // Also covered by the periodic check if a disconnect event was missed.
-	t.mock.timers.tick(1_000);
-	await rejected;
-	assert.deepEqual(child.killed, ["SIGTERM"]);
-	assert.equal(worker.state, "failed");
-	assert.equal(worker["pending"].size, 0);
-	assert.equal(worker["killTimer"], undefined);
-	child.emit("message", { type: "ready", model: "late/model", working: false, usage: {} });
-	assert.equal(worker.state, "failed");
-});
-
-test("process exit without a disconnect rejects startup as recoverable transport loss", async (t) => {
-	const { child, worker } = supervisedWorker(t);
-	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
-	child.emit("exit", 1, null);
-	await rejected;
-	await assert.rejects(worker.request({ type: "abort", requestId: "after-exit" }), WorkerUnavailable);
-	t.mock.timers.tick(120_000);
-	assert.deepEqual(child.killed, [], "an exited process does not need a kill deadline");
-});
-
-test("inspection deadline protects the worker without killing it or clearing unrelated admissions", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t, 60_000);
-	ready();
-	await worker.ready;
-	const input = worker.request({ type: "input", requestId: "unrelated", content: "work", mode: "followUp" });
-	const children = worker.hasChildren();
-	t.mock.timers.tick(10_000);
-	assert.equal(await children, true);
-	assert.deepEqual(child.killed, []);
-	assert.equal(worker["pending"].has("unrelated"), true);
-	assert.equal(worker["pending"].size, 1);
-	child.emit("message", { type: "accepted", requestId: "unrelated" });
-	await input;
-	assert.equal(worker["pending"].size, 0);
-});
-
-test("jobs reads coalesce, correlate replies and release snapshots without activity updates", async (t) => {
-	const { child, worker, ready, packets } = supervisedWorker(t);
-	ready();
-	await worker.ready;
-	const before = packets.length;
-	const first = worker.jobs();
-	assert.equal(worker.jobs(), first);
-	const command = child.sent.find((item) => item.type === "inspectJobs")!;
-	assert.ok(command.type === "inspectJobs");
-	const jobs = [{ id: "one", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }];
-	child.emit("message", { type: "jobs", requestId: "unrelated", jobs: [] });
-	assert.equal(worker["pending"].has(command.requestId), true);
-	child.emit("message", { type: "jobs", requestId: command.requestId, jobs });
-	assert.deepEqual(await first, jobs);
-	assert.equal(worker["jobResults"].size, 0);
-	assert.equal(packets.length, before, "read results never broadcast session updates");
-	const second = worker.jobs();
-	const next = child.sent.filter((item) => item.type === "inspectJobs").at(-1)!;
-	assert.notEqual(next.requestId, command.requestId);
-	child.emit("message", { type: "jobs", requestId: next.requestId, jobs: [] });
-	assert.deepEqual(await second, []);
-});
-
-test("jobs failures and deadlines do not fail or stop the worker, including late errors", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t, 60_000);
-	ready();
-	await worker.ready;
-	const read = worker.jobs();
-	const command = child.sent.find((item) => item.type === "inspectJobs")!;
-	assert.ok(command.type === "inspectJobs");
-	const rejected = assert.rejects(read, /timed out/);
-	t.mock.timers.tick(10_000);
-	await rejected;
-	child.emit("message", { type: "error", requestId: command.requestId, message: "Late read error" });
-	assert.equal(worker.error, undefined);
-	assert.equal(worker.state, "idle");
-	assert.deepEqual(child.killed, []);
-	const retry = worker.jobs();
-	const next = child.sent.filter((item) => item.type === "inspectJobs").at(-1)!;
-	const failed = assert.rejects(retry, /Registry unavailable/);
-	child.emit("message", { type: "error", requestId: next.requestId, message: "Registry unavailable" });
-	await failed;
-	assert.equal(worker.error, undefined);
-	assert.equal(worker["jobResults"].size, 0);
-});
-
-test("job stop commands correlate replies and never fail the worker", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t, 60_000);
-	ready();
-	await worker.ready;
-	const stop = worker.stopJob("tests");
-	const command = child.sent.find((item) => item.type === "stopJob")!;
-	assert.ok(command.type === "stopJob");
-	assert.equal(command.jobId, "tests");
-	child.emit("message", { type: "accepted", requestId: command.requestId });
-	await stop;
-	const missing = assert.rejects(worker.stopJob("gone"), /No running job gone/);
-	const next = child.sent.filter((item) => item.type === "stopJob").at(-1)!;
-	child.emit("message", { type: "error", requestId: next.requestId, message: "No running job gone" });
-	await missing;
-	const slow = assert.rejects(worker.stopJob("slow"), /timed out/);
-	t.mock.timers.tick(10_000);
-	await slow;
-	assert.equal(worker.error, undefined, "a job command never becomes the session's error");
-	assert.equal(worker.state, "idle");
-	assert.deepEqual(child.killed, []);
-});
-
-test("transport retirement sends SIGTERM first, escalates once after eight seconds, and waits for confirmed exit", async (t) => {
-	const { child, worker } = supervisedWorker(t);
-	child.kill = (signal) => {
-		child.killed.push(signal);
-		return true;
-	};
-	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
-	child.connected = false;
-	child.emit("disconnect");
-	await rejected;
-	assert.deepEqual(child.killed, ["SIGTERM"]);
-	let closed = false;
-	const closing = worker.close().then(() => {
-		closed = true;
-	});
-	t.mock.timers.tick(7_999);
-	assert.deepEqual(child.killed, ["SIGTERM"]);
-	t.mock.timers.tick(1);
-	assert.deepEqual(child.killed, ["SIGTERM", "SIGKILL"]);
-	await Promise.resolve();
-	assert.equal(closed, false, "sending SIGKILL is not proof that the writer lease has been released");
-	child.emit("exit", null, "SIGKILL");
-	await closing;
-	assert.equal(worker["killTimer"], undefined);
-	t.mock.timers.tick(10_000);
-	assert.deepEqual(child.killed, ["SIGTERM", "SIGKILL"], "retirement has only one shared fallback timer");
-});
-
-test("acknowledged commands cancel their deadline and idle-child inspection does not reset activity", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t);
-	ready();
-	const inspection = worker.hasChildren();
-	const command = child.sent.at(-1)!;
-	assert.equal(command.type, "inspectChildren");
-	assert.ok("requestId" in command);
-	child.emit("message", { type: "children", requestId: command.requestId, hasChildren: false });
-	assert.equal(await inspection, false);
-	t.mock.timers.tick(5_000);
-	assert.deepEqual(child.killed, []);
-	assert.equal(worker.busy, false);
-});
-
-test("automatic idle-guard rejection does not leave a visible worker error", async (t) => {
-	const { child, worker, ready } = supervisedWorker(t);
-	ready();
-	const input = worker.request({
-		type: "input",
-		requestId: "automatic",
-		content: "Check the PR",
-		mode: "followUp",
-		onlyIfIdle: true,
-	});
-	const rejected = assert.rejects(input, CommandRejected);
-	child.emit("message", { type: "error", requestId: "automatic", message: "Conversation is busy", code: "busy" });
-	await rejected;
-	assert.equal(worker.error, undefined);
-	assert.equal(worker.state, "idle");
-	assert.equal(worker.busy, false);
-	// Ordinary rejected user commands still expose their error.
-	const user = worker.request({ type: "input", requestId: "user", content: "User work", mode: "followUp" });
-	const userRejected = assert.rejects(user, CommandRejected);
-	child.emit("message", { type: "error", requestId: "user", message: "User input failed", code: "busy" });
-	await userRejected;
-	assert.equal(worker.error, "User input failed");
-});
 function deferred() {
 	let resolve!: () => void;
 	let reject!: (error: Error) => void;
@@ -417,12 +100,12 @@ for (const phase of ["startup", "ack"] as const) {
 			let executions = 0;
 			const committed = new Set<string>();
 			const blocked = deferred();
-			let firstChild!: IpcProcess;
+			let firstChild!: FakeKernelProcess;
 			const sessions = await f.manager(
 				{
 					worker: (spec, onPacket, onExit) => {
 						const attempt = ++attempts;
-						const child = new IpcProcess();
+						const child = new FakeKernelProcess();
 						if (attempt === 1) {
 							firstChild = child;
 							// Model the gap between SIGTERM and OS-confirmed exit/storage lease release.
@@ -513,108 +196,33 @@ async function waitFor(promise: Promise<void>, signal?: AbortSignal): Promise<vo
 		signal?.removeEventListener("abort", abort);
 	}
 }
-const snapshot: AgentEvent = {
-	type: "snapshot",
-	entries: [],
-	tools: [],
-	nestedTools: [],
-	compactions: [],
-	inbox: [],
-	agent: {},
-	usage: { models: {}, tools: {} },
-};
 
-class FakeWorker implements SessionWorker {
-	readonly gate = deferred();
-	readonly ready = this.gate.promise;
-	state: SessionState = "starting";
-	usage?: KernelUsage;
-	error?: string;
-	readonly sent: KernelCommand[] = [];
-	readonly requests: Command[] = [];
+class FakeWorker extends FakeKernelWorker<Command> {
 	readonly subagentRequests: Extract<KernelCommand, { type: "subagent" }>[] = [];
-	children = false;
-	closed = false;
-	closeGate?: Promise<void>;
-
-	get busy(): boolean {
-		return this.state === "starting" || this.state === "working";
-	}
-
-	readonly spec: Spec;
-	private readonly onPacket: (packet: KernelPacket) => void;
-	private readonly onExit: (worker: SessionWorker, code: number | null) => void;
-	private readonly admit: (command: Command) => Promise<void>;
-
-	constructor(
-		spec: Spec,
-		onPacket: (packet: KernelPacket) => void,
-		onExit: (worker: SessionWorker, code: number | null) => void,
-		admit: (command: Command) => Promise<void> = async () => {},
-	) {
-		this.spec = spec;
-		this.onPacket = onPacket;
-		this.onExit = onExit;
-		this.admit = admit;
-		this.ready.catch(() => undefined);
-	}
-
-	open(): void {
-		this.state = "idle";
-		this.onPacket({ type: "ready", model: "test/model", working: false, usage: this.usage ?? {} });
-		this.gate.resolve();
-	}
 
 	reportUsage(usage: KernelUsage): void {
 		this.usage = usage;
-		this.onPacket({ type: "usage", usage });
+		this.deliver({ type: "usage", usage });
 	}
 
 	reportSubagents(subagents: KernelSubagent[]): void {
-		this.onPacket({ type: "subagents", subagents });
+		this.deliver({ type: "subagents", subagents });
 	}
 
-	publishRepairProposal(
-		callId: string,
-		proposal: Extract<KernelPacket, { type: "diagnostics.proposal" }>["proposal"],
-	): void {
-		this.onPacket({ type: "diagnostics.proposal", callId, proposal });
+	publishRepairProposal(callId: string, proposal: HostCalls["diagnostics.proposal"]["args"]["proposal"]): void {
+		this.deliver({ type: "host.call", method: "diagnostics.proposal", callId, args: { proposal } });
 	}
 
-	readDiagnosticLogs(
-		callId: string,
-		request: Extract<KernelPacket, { type: "diagnostics.logs.call" }>["request"],
-	): void {
-		this.onPacket({ type: "diagnostics.logs.call", callId, request });
+	readDiagnosticLogs(callId: string, request: HostCalls["diagnostics.logs"]["args"]["request"]): void {
+		this.deliver({ type: "host.call", method: "diagnostics.logs", callId, args: { request } });
 	}
 
-	finish(completion?: SessionCompletion): void {
-		this.state = "idle";
-		this.onPacket({ type: "working", working: false, ...(completion ? { completion } : {}) });
-	}
-
-	send(command: KernelCommand): void {
-		this.sent.push(command);
-		if (command.type === "watch") this.onPacket({ type: "events", watchId: command.watchId, events: [snapshot] });
-	}
-
-	async request(command: Command | Extract<KernelCommand, { type: "subagent" }>): Promise<void> {
+	override async request(command: Command | Extract<KernelCommand, { type: "subagent" }>): Promise<void> {
 		if (command.type === "subagent") {
 			this.subagentRequests.push(command);
 			return;
 		}
-		this.requests.push(command);
-		await this.admit(command);
-		if (command.type === "reloadPi") {
-			this.onPacket({ type: "piReloaded", requestId: command.requestId, commands: [] });
-			return;
-		}
-		this.state = command.type === "input" ? "working" : "idle";
-		this.onPacket({ type: "working", working: this.state === "working" });
-	}
-
-	async hasChildren(): Promise<boolean> {
-		return this.children;
+		await super.request(command);
 	}
 
 	async jobs() {
@@ -625,20 +233,6 @@ class FakeWorker implements SessionWorker {
 	async stopJob(jobId: string) {
 		this.stoppedJobs.push(jobId);
 		if (jobId === "ended") throw new CommandRejected("No running job ended");
-	}
-
-	async close(): Promise<void> {
-		this.closed = true;
-		await this.closeGate;
-		this.gate.reject(new Error("closed"));
-		this.onExit(this, 0);
-	}
-
-	crash(): void {
-		this.state = "failed";
-		this.error = "IPC connection failed";
-		this.gate.reject(new Error(this.error));
-		this.onExit(this, 1);
 	}
 }
 
@@ -875,101 +469,6 @@ test("latest user submission is exposed and persists independently of worker and
 	await sessions.shutdown();
 	const reopened = await f.manager();
 	assert.equal(reopened.get(created.id)?.lastUserMessageAt, userAt);
-});
-
-test("PR observers receive persisted full chat heads and startup baselines, never streaming summaries", async (t) => {
-	const f = await fixture(t);
-	const releaseInspection = deferred();
-	const inspectionStarted = deferred();
-	let holdInspection = false;
-	const commands: { file: string; args: string[]; cwd: string }[] = [];
-	const runner: NonNullable<ConstructorParameters<typeof SessionManager>[4]>["runner"] = async (file, args, cwd) => {
-		commands.push({ file, args, cwd });
-		if (holdInspection) {
-			inspectionStarted.resolve();
-			await releaseInspection.promise;
-		}
-		throw new Error("Synthetic observer fixture has no Git origin");
-	};
-	// Bound PRs make the background scheduler eligible, even with a fake kernel. Never let
-	// this observer/persistence test launch a real Git/gh subprocess that shutdown must drain.
-	const sessions = await f.manager({}, {}, { runner });
-	const created = await sessions.spawn({ cwd: f.source, message: "sample" });
-	await until(() => sessions.get(created.id)?.state === "working");
-	await sessions.stop(created.id);
-	const meta = sessions["metas"].get(created.id)!;
-	meta.projectId = f.project.id;
-	const observed: import("./tracked-items-disk.ts").SlackPullRequestObservation[] = [];
-	sessions.setPullRequestObserver(async (observation) => {
-		assert.equal((await f.stored(created.id)).pullRequest?.state, observation.prs[0]?.state);
-		observed.push(observation);
-	});
-	const pr: SessionPullRequest = {
-		number: 42,
-		url: "https://github.com/example/sample/pull/42",
-		title: "Sample",
-		state: "open",
-		checkedAt: 10,
-	};
-	const earlier: SessionPullRequest = { ...pr, number: 41, url: "https://github.com/example/sample/pull/41" };
-	meta.agentPullRequests = [pr.url, earlier.url];
-	await sessions["applyPullRequest"](meta, { pullRequest: pr, others: [earlier] });
-	assert.equal(observed.length, 1);
-	assert.equal(observed[0]?.prs.length, 2);
-	for (let i = 0; i < 100; i++) sessions["emit"](meta);
-	assert.equal(observed.length, 1, "streaming/activity updates do not query tracking storage");
-	meta.boundPullRequests = [pr.url, earlier.url, "https://github.com/example/sample/pull/43"];
-	await sessions["applyPullRequest"](meta, { pullRequest: { ...pr, state: "merged", checkedAt: 20 } });
-	assert.equal(observed.at(-1)?.pending, true);
-	assert.equal(observed.at(-1)?.prs.find((head) => head.number === 41)?.state, "open");
-	await sessions.shutdown();
-	holdInspection = true;
-	const reopened = new SessionManager(
-		f.home,
-		f.projects,
-		undefined,
-		{ worker: f.workerFactory(), title: async () => undefined },
-		{ runner },
-		offlineSessionOptions(),
-	);
-	t.after(() => reopened.shutdown());
-	const recovered: typeof observed = [];
-	const baselineStarted = deferred();
-	const releaseBaseline = deferred();
-	reopened.setPullRequestObserver(async (observation) => {
-		recovered.push(observation);
-		baselineStarted.resolve();
-		await releaseBaseline.promise;
-	});
-	try {
-		const loading = reopened.load();
-		await baselineStarted.promise;
-		assert.deepEqual(commands, [], "startup baselines do not need Git or GitHub");
-		assert.equal(reopened["pullRequests"]["started"], false, "baseline delivery precedes the scheduler");
-		releaseBaseline.resolve();
-		await loading;
-		// Exercise the formerly timing-dependent overlap: startup baseline publication must
-		// finish before background inspection, and shutdown owns the in-flight inspection.
-		await inspectionStarted.promise;
-		assert.equal(recovered[0]?.prs.find((head) => head.number === 42)?.state, "merged");
-		assert.equal(recovered[0]?.pending, true);
-		let closed = false;
-		const closing = reopened.shutdown().then(() => {
-			closed = true;
-		});
-		await new Promise<void>((resolve) => setImmediate(resolve));
-		assert.equal(closed, false, "shutdown must drain the owned background inspection");
-		releaseInspection.resolve();
-		await closing;
-		assert.equal(closed, true);
-		assert.equal(recovered.length, 1, "draining inspection cannot replace the persisted startup baseline");
-		assert.ok(commands.length > 0);
-		for (const command of commands)
-			assert.deepEqual(command, { file: "git", args: ["remote", "get-url", "origin"], cwd: f.source });
-	} finally {
-		releaseBaseline.resolve();
-		releaseInspection.resolve();
-	}
 });
 
 test("title waits for a completed turn, uses the thread and generates only once", async (t) => {
@@ -1654,12 +1153,13 @@ test("Insights review dispatch places one bounded input, persists a partial repo
 	assert.ok(input.type === "input" && input.onlyIfIdle);
 	await assert.rejects(f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }), /bounded review_context/);
 	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
-		type: "insights.backlog.call",
+		type: "host.call",
+		method: "insights.backlog",
 		callId: "context",
-		request: { action: "review_context" },
+		args: { request: { action: "review_context" } },
 	});
-	await until(() => f.worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "context"));
-	const context = f.worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "context")!;
+	await until(() => f.worker.sent.some((p) => p.type === "host.result" && p.callId === "context"));
+	const context = f.worker.sent.find((p) => p.type === "host.result" && p.callId === "context")!;
 	assert.ok("result" in context);
 	assert.match(JSON.stringify(context), /Synthetic correction/);
 	await f.store.insights.call(f.sessions.insightsAdmission(f.id, f.worker), {
@@ -1755,13 +1255,14 @@ test("Insights weekly schedule uses admitted profile and mission, saves bounded 
 		const call = async (request: unknown): Promise<unknown> => {
 			const callId = randomUUID();
 			sessions["onPacket"](sessions["metas"].get(f.id)!, worker, {
-				type: "insights.backlog.call",
+				type: "host.call",
+				method: "insights.backlog",
 				callId,
-				request,
+				args: { request },
 			});
-			await until(() => worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === callId));
-			const reply = worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === callId)!;
-			assert.ok(reply.type === "insights.backlog.result");
+			await until(() => worker.sent.some((p) => p.type === "host.result" && p.callId === callId));
+			const reply = worker.sent.find((p) => p.type === "host.result" && p.callId === callId)!;
+			assert.ok(reply.type === "host.result");
 			assert.equal(reply.error, undefined);
 			return reply.result;
 		};
@@ -2045,22 +1546,24 @@ test("Insights backlog IPC derives scope and rejects ordinary workers and forged
 	] as const) {
 		const callId = randomUUID();
 		f.sessions["onPacket"](f.sessions["metas"].get(id)!, worker, {
-			type: "insights.backlog.call",
+			type: "host.call",
+			method: "insights.backlog",
 			callId,
-			request: input,
+			args: { request: input },
 		});
-		await until(() => worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === callId));
-		const reply = worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === callId)!;
+		await until(() => worker.sent.some((p) => p.type === "host.result" && p.callId === callId));
+		const reply = worker.sent.find((p) => p.type === "host.result" && p.callId === callId)!;
 		assert.ok("error" in reply && reply.error);
 		assert.equal("result" in reply, false);
 	}
 	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
-		type: "insights.backlog.call",
+		type: "host.call",
+		method: "insights.backlog",
 		callId: "valid-list",
-		request,
+		args: { request },
 	});
-	await until(() => f.worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "valid-list"));
-	const reply = f.worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "valid-list")!;
+	await until(() => f.worker.sent.some((p) => p.type === "host.result" && p.callId === "valid-list"));
+	const reply = f.worker.sent.find((p) => p.type === "host.result" && p.callId === "valid-list")!;
 	assert.ok("result" in reply);
 	assert.deepEqual(reply.result, { items: [], nextCursor: null });
 	assert.equal(f.broadCalls(), 0);
@@ -2084,21 +1587,24 @@ for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
 		const key = randomUUID(),
 			operationId = randomUUID();
 		f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
-			type: "insights.backlog.call",
+			type: "host.call",
+			method: "insights.backlog",
 			callId: "held-write",
-			request: {
-				action: "save_report",
-				key,
-				expectedRevision: 0,
-				operationId,
-				record: {
-					status: "partial",
-					windowStart: "2026-01-01T00:00:00.000Z",
-					windowEnd: "2026-01-02T00:00:00.000Z",
-					markdown: "Synthetic bounded report, not coverage proof.",
-					checkpoints: [],
-					findingKeys: [],
-					gaps: ["Synthetic sample"],
+			args: {
+				request: {
+					action: "save_report",
+					key,
+					expectedRevision: 0,
+					operationId,
+					record: {
+						status: "partial",
+						windowStart: "2026-01-01T00:00:00.000Z",
+						windowEnd: "2026-01-02T00:00:00.000Z",
+						markdown: "Synthetic bounded report, not coverage proof.",
+						checkpoints: [],
+						findingKeys: [],
+						gaps: ["Synthetic sample"],
+					},
 				},
 			},
 		});
@@ -2120,9 +1626,8 @@ for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
 		}
 		gate.resolve();
 		await drain;
-		await until(() => f.sessions["insightsBacklogCalls"] === 0);
 		assert.equal(
-			f.worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "held-write" && "result" in p),
+			f.worker.sent.some((p) => p.type === "host.result" && p.callId === "held-write" && "result" in p),
 			false,
 		);
 		if (invalidation === "revocation") {
@@ -2137,12 +1642,13 @@ for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
 		const worker = (await reloaded["ensureWorker"](f.id)) as FakeWorker;
 		assert.notEqual(worker, f.worker);
 		reloaded["onPacket"](reloaded["metas"].get(f.id)!, worker, {
-			type: "insights.backlog.call",
+			type: "host.call",
+			method: "insights.backlog",
 			callId: "lookup",
-			request: { action: "receipt", operationId },
+			args: { request: { action: "receipt", operationId } },
 		});
-		await until(() => worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "lookup"));
-		const reply = worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "lookup")!;
+		await until(() => worker.sent.some((p) => p.type === "host.result" && p.callId === "lookup"));
+		const reply = worker.sent.find((p) => p.type === "host.result" && p.callId === "lookup")!;
 		assert.ok("result" in reply);
 		assert.deepEqual(reply.result, {
 			state: "committed",
@@ -2157,13 +1663,14 @@ test("Stop fences a queued Insights backlog call before its transaction", async 
 	const f = await insightsFixture(t, {}, store);
 	t.after(() => store.close());
 	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
-		type: "insights.backlog.call",
+		type: "host.call",
+		method: "insights.backlog",
 		callId: "queued-before-stop",
-		request: { action: "list", kind: "finding" },
+		args: { request: { action: "list", kind: "finding" } },
 	});
 	await f.sessions.stop(f.id);
-	await until(() => f.sessions["insightsBacklogCalls"] === 0);
-	const reply = f.worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "queued-before-stop");
+	await until(() => f.worker.sent.some((p) => p.type === "host.result" && p.callId === "queued-before-stop"));
+	const reply = f.worker.sent.find((p) => p.type === "host.result" && p.callId === "queued-before-stop");
 	assert.ok(reply && "error" in reply && reply.error);
 	assert.equal("result" in reply, false);
 });
@@ -2390,12 +1897,13 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 		return result;
 	};
 	sessions["onPacket"](meta, worker, {
-		type: "diagnostics.context.call",
+		type: "host.call",
+		method: "diagnostics.context",
 		callId: "fenced",
-		request: { action: "chats" },
+		args: { request: { action: "chats" } },
 	});
-	await until(() => worker.sent.some((p) => p.type === "diagnostics.context.result" && p.callId === "fenced"));
-	const result = worker.sent.find((p) => p.type === "diagnostics.context.result" && p.callId === "fenced");
+	await until(() => worker.sent.some((p) => p.type === "host.result" && p.callId === "fenced"));
+	const result = worker.sent.find((p) => p.type === "host.result" && p.callId === "fenced");
 	assert.ok(result && "error" in result && result.error);
 	assert.equal("result" in result, false);
 });
@@ -2564,7 +2072,7 @@ test("Insights cannot continue, recover into ordinary chats, or acquire coordina
 	assert.equal(f.sessions.get(target.id), undefined);
 	f.promoted.add(f.id);
 	f.sessions.missionChanged(f.id);
-	await f.sessions["prepareCoordinatorRole"](f.id);
+	await f.sessions.prepareCoordinatorRole(f.id);
 	assert.equal(meta.insightsGrant?.enabled, false);
 	assert.equal(meta.coordinatorView, undefined);
 	assert.equal(meta.workspace, undefined);
@@ -2594,8 +2102,13 @@ test("Insights forged accounting is confined to its grant and revoked writes are
 		attribution: { chatId: randomUUID(), projectId: randomUUID() },
 		parent: { sourceId: randomUUID(), operationId: "other" },
 	};
-	f.sessions["onPacket"](meta, f.worker, { type: "usage-history", callId: "first", row });
-	await until(() => f.worker.sent.some((v) => v.type === "usage-history.result" && v.callId === "first"));
+	f.sessions["onPacket"](meta, f.worker, {
+		type: "host.call",
+		method: "usage-history",
+		callId: "first",
+		args: { row },
+	});
+	await until(() => f.worker.sent.some((v) => v.type === "host.result" && v.callId === "first"));
 	assert.equal(rows.length, 1);
 	assert.equal(rows[0]!.sourceId, meta.insightsGrant!.grantId);
 	assert.match(rows[0]!.operationId, /^[a-f0-9]{64}$/);
@@ -2603,8 +2116,13 @@ test("Insights forged accounting is confined to its grant and revoked writes are
 	assert.equal(rows[0]!.scope, "direct");
 	assert.equal(rows[0]!.parent, undefined);
 	await f.sessions.revokeInsights(f.id, 1);
-	f.sessions["onPacket"](meta, f.worker, { type: "usage-history", callId: "revoked", row });
-	await until(() => f.worker.sent.some((v) => v.type === "usage-history.result" && v.callId === "revoked"));
+	f.sessions["onPacket"](meta, f.worker, {
+		type: "host.call",
+		method: "usage-history",
+		callId: "revoked",
+		args: { row },
+	});
+	await until(() => f.worker.sent.some((v) => v.type === "host.result" && v.callId === "revoked"));
 	assert.equal(rows.length, 1);
 });
 
@@ -2634,7 +2152,12 @@ test("Insights revocation drains admitted real-store accounting before acknowled
 		coverage: "partial",
 		purpose: "agent",
 	};
-	f.sessions["onPacket"](meta, f.worker, { type: "usage-history", callId: "held", row });
+	f.sessions["onPacket"](meta, f.worker, {
+		type: "host.call",
+		method: "usage-history",
+		callId: "held",
+		args: { row },
+	});
 	await entered.promise;
 	let acknowledged = false;
 	const revocation = f.sessions.revokeInsights(f.id, 1).then(() => {
@@ -2658,11 +2181,12 @@ test("Insights revocation drains admitted real-store accounting before acknowled
 	assert.equal(page.rows[0]!.scope, "direct");
 	assert.equal(page.rows[0]!.parent, undefined);
 	f.sessions["onPacket"](meta, f.worker, {
-		type: "usage-history",
+		type: "host.call",
+		method: "usage-history",
 		callId: "late",
-		row: { ...row, operationId: "late" },
+		args: { row: { ...row, operationId: "late" } },
 	});
-	await until(() => f.worker.sent.some((v) => v.type === "usage-history.result" && v.callId === "late"));
+	await until(() => f.worker.sent.some((v) => v.type === "host.result" && v.callId === "late"));
 	assert.equal((await f.sessions.usageHistory.status()).retainedRows, 1);
 });
 
@@ -2702,20 +2226,23 @@ for (const change of ["removal", "promotion"] as const) {
 		});
 		const now = Date.now();
 		f.sessions["onPacket"](meta, f.worker, {
-			type: "usage-history",
+			type: "host.call",
+			method: "usage-history",
 			callId: "held",
-			row: {
-				schemaVersion: 1,
-				generation,
-				sourceId: randomUUID(),
-				operationId: "real-store",
-				revision: 1,
-				kind: "request",
-				scope: "direct",
-				observedAt: now,
-				completedAt: now,
-				coverage: "partial",
-				purpose: "agent",
+			args: {
+				row: {
+					schemaVersion: 1,
+					generation,
+					sourceId: randomUUID(),
+					operationId: "real-store",
+					revision: 1,
+					kind: "request",
+					scope: "direct",
+					observedAt: now,
+					completedAt: now,
+					coverage: "partial",
+					purpose: "agent",
+				},
 			},
 		});
 		await entered.promise;
@@ -2933,10 +2460,13 @@ for (const changed of ["project", "worker", "mission-role", "mission-coordinator
 		const worker = f.workers[0]!;
 		const meta = sessions["metas"].get(created.id)!;
 		sessions["onPacket"](meta, worker, {
-			type: "liveUpdate.propose",
+			type: "host.call",
+			method: "liveUpdate.propose",
 			callId: "delayed",
-			operationId: "delayed",
-			args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
+			args: {
+				operationId: "delayed",
+				args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
+			},
 		});
 		await checked;
 		const missions = sessions["missions"];
@@ -2953,14 +2483,14 @@ for (const changed of ["project", "worker", "mission-role", "mission-coordinator
 		assert.equal(saved, false, "changed ownership cannot persist the proposal");
 		if (changed === "worker") {
 			assert.equal(
-				worker.sent.some((packet) => packet.type === "liveUpdate.result"),
+				worker.sent.some((packet) => packet.type === "host.result"),
 				false,
 				"retired worker cannot receive the result",
 			);
 			sessions["workers"].set(created.id, worker);
 		} else {
-			await until(() => worker.sent.some((packet) => packet.type === "liveUpdate.result"));
-			assert.ok(worker.sent.find((packet) => packet.type === "liveUpdate.result")?.error);
+			await until(() => worker.sent.some((packet) => packet.type === "host.result"));
+			assert.ok(worker.sent.find((packet) => packet.type === "host.result")?.error);
 		}
 		sessions["missions"] = missions;
 	});
@@ -3007,29 +2537,32 @@ test("live update proposals use supervised scope and recheck delayed authorizati
 	assert.equal(worker.spec.liveUpdateProposals, undefined, "unscoped chats do not receive the tool");
 	const meta = sessions["metas"].get(created.id)!;
 	meta.projectId = f.project.id;
-	const packet = {
-		type: "liveUpdate.propose" as const,
+	const packet: HostCallPacket = {
+		type: "host.call",
+		method: "liveUpdate.propose",
 		callId: "call-1",
-		operationId: "operation-1",
-		args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
+		args: {
+			operationId: "operation-1",
+			args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
+		},
 	};
 	sessions["onPacket"](meta, worker, packet);
 	await called;
 	meta.mode = "ask";
 	release();
-	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	await until(() => worker.sent.some((entry) => entry.type === "host.result"));
 	assert.equal(saved, 0, "changed permission cannot persist an admitted proposal");
-	assert.ok(worker.sent.find((entry) => entry.type === "liveUpdate.result")?.error);
+	assert.ok(worker.sent.find((entry) => entry.type === "host.result")?.error);
 	assert.equal(calls, 1);
 	worker.sent.length = 0;
 	sessions["onPacket"](meta, worker, { ...packet, callId: "call-2" });
-	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	await until(() => worker.sent.some((entry) => entry.type === "host.result"));
 	assert.equal(calls, 1, "Ask cannot reach the proposal service");
 	meta.mode = "build";
 	const releaseFreeze = sessions.freezeAdmissions();
 	worker.sent.length = 0;
 	sessions["onPacket"](meta, worker, { ...packet, callId: "call-3" });
-	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	await until(() => worker.sent.some((entry) => entry.type === "host.result"));
 	assert.equal(calls, 1, "maintenance freezes also fence proposals");
 	releaseFreeze();
 	for (const [field, value] of [
@@ -3045,18 +2578,18 @@ test("live update proposals use supervised scope and recheck delayed authorizati
 		Object.assign(meta, { [field]: value });
 		worker.sent.length = 0;
 		sessions["onPacket"](meta, worker, packet);
-		await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+		await until(() => worker.sent.some((entry) => entry.type === "host.result"));
 		assert.equal(calls, 1, `${field} must fence the proposal`);
 		Object.assign(meta, { [field]: previous });
 	}
 	worker.sent.length = 0;
 	sessions["onPacket"](meta, worker, packet);
-	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	await until(() => worker.sent.some((entry) => entry.type === "host.result"));
 	assert.equal(saved, 1);
 	assert.deepEqual(
-		worker.sent.find((entry) => entry.type === "liveUpdate.result"),
+		worker.sent.find((entry) => entry.type === "host.result"),
 		{
-			type: "liveUpdate.result",
+			type: "host.result",
 			callId: "call-1",
 			result: { id: "operation-1" },
 		},
@@ -3115,17 +2648,13 @@ test("a saved chat with old database grants still loads and takes messages", asy
 	assert.match(JSON.stringify([...worker.sent, ...worker.requests]), /Continue/);
 });
 
-test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
+test("todo count uses the live cache and cold-reads without opening an agent", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
 	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
 	await sessions["starting"].get(created.id);
-	const worker = f.workers[0];
-	const meta = sessions["metas"].get(created.id)!;
-	sessions["onPacket"](meta, worker, { type: "todos.changed", openCount: 3 });
-	assert.equal(await sessions.openTodoCount(created.id), 3);
-	const retired = { ...worker } as unknown as SessionWorker;
-	sessions["onPacket"](meta, retired, { type: "todos.changed", openCount: 99 });
+	const worker = f.workers[0]!;
+	worker.deliver({ type: "todos.changed", openCount: 3 });
 	assert.equal(await sessions.openTodoCount(created.id), 3);
 	sessions["workers"].delete(created.id);
 	assert.equal(await sessions.openTodoCount(created.id), 0, "unopened durable storage has no todos");
@@ -3255,27 +2784,28 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 	const callerWorker = sessions["workers"].get(caller.id)! as FakeWorker;
 	const peerWorker = sessions["workers"].get(peer.id)! as FakeWorker;
 	sessions["onPacket"](sessions["metas"].get(peer.id)!, peerWorker, {
-		type: "diagnostics.call",
+		type: "host.call",
+		method: "diagnostics",
 		callId: "ordinary-read",
-		sessionId: peer.id,
+		args: { sessionId: peer.id },
 	});
-	await until(() => peerWorker.sent.some((command) => command.type === "diagnostics.result"));
+	await until(() => peerWorker.sent.some((command) => command.type === "host.result"));
 	const ordinary = peerWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
-			command.type === "diagnostics.result" && command.callId === "ordinary-read",
+		(command): command is HostResult<"diagnostics"> =>
+			command.type === "host.result" && command.callId === "ordinary-read",
 	);
 	assert.match(ordinary?.error ?? "", /Only an admitted diagnostics specialist/);
 	sessions["workers"].delete(peer.id);
 	sessions["onPacket"](sessions["metas"].get(caller.id)!, callerWorker, {
-		type: "diagnostics.call",
+		type: "host.call",
+		method: "diagnostics",
 		callId: "peer-read",
-		sessionId: peer.id,
-		limit: 4,
+		args: { sessionId: peer.id, limit: 4 },
 	});
-	await until(() => callerWorker.sent.some((command) => command.type === "diagnostics.result"));
+	await until(() => callerWorker.sent.some((command) => command.type === "host.result"));
 	const allowed = callerWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
-			command.type === "diagnostics.result" && command.callId === "peer-read",
+		(command): command is HostResult<"diagnostics"> =>
+			command.type === "host.result" && command.callId === "peer-read",
 	);
 	assert.ok(allowed?.result, allowed?.error ?? "Assertion failed");
 	assert.ok("sessionId" in allowed.result);
@@ -3285,16 +2815,17 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 	const other = await sessions.spawn({ projectId: f.project.id, message: "Other same-project chat" });
 	await sessions["starting"].get(other.id);
 	sessions["onPacket"](sessions["metas"].get(caller.id)!, callerWorker, {
-		type: "diagnostics.call",
+		type: "host.call",
+		method: "diagnostics",
 		callId: "cross-target",
-		sessionId: other.id,
+		args: { sessionId: other.id },
 	});
 	await until(() =>
-		callerWorker.sent.some((command) => command.type === "diagnostics.result" && command.callId === "cross-target"),
+		callerWorker.sent.some((command) => command.type === "host.result" && command.callId === "cross-target"),
 	);
 	const denied = callerWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
-			command.type === "diagnostics.result" && command.callId === "cross-target",
+		(command): command is HostResult<"diagnostics"> =>
+			command.type === "host.result" && command.callId === "cross-target",
 	);
 	assert.ok(denied?.result, denied?.error ?? "Assertion failed");
 });
@@ -3386,23 +2917,21 @@ test("diagnostic log IPC stays fixed to the persisted host and parked target", a
 	const targetWorker = sessions["workers"].get(target.id)! as FakeWorker;
 	const specialistWorker = sessions["workers"].get(specialist.id)! as FakeWorker;
 	targetWorker.readDiagnosticLogs("ordinary", { action: "inventory" });
-	await until(() => targetWorker.sent.some((command) => command.type === "diagnostics.logs.result"));
+	await until(() => targetWorker.sent.some((command) => command.type === "host.result"));
 	const ordinary = targetWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
-			command.type === "diagnostics.logs.result" && command.callId === "ordinary",
+		(command): command is HostResult<"diagnostics.logs"> =>
+			command.type === "host.result" && command.callId === "ordinary",
 	);
 	assert.match(ordinary?.error ?? "", /diagnostics specialist/);
 
 	sessions["workers"].delete(target.id);
 	specialistWorker.readDiagnosticLogs("inventory", { action: "inventory" });
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.logs.result" && command.callId === "inventory",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "inventory"),
 	);
 	const allowed = specialistWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
-			command.type === "diagnostics.logs.result" && command.callId === "inventory",
+		(command): command is HostResult<"diagnostics.logs"> =>
+			command.type === "host.result" && command.callId === "inventory",
 	);
 	assert.ok(allowed?.result, allowed?.error ?? "Assertion failed");
 	assert.equal(allowed.result.host.hostId, "selected-alias");
@@ -3414,28 +2943,24 @@ test("diagnostic log IPC stays fixed to the persisted host and parked target", a
 	targetMeta.failure = "synthetic failure";
 	specialistWorker.readDiagnosticLogs("failed-target", { action: "search", source: "daemon", q: "ready" });
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.logs.result" && command.callId === "failed-target",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "failed-target"),
 	);
 	assert.ok(
 		specialistWorker.sent.find(
-			(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
-				command.type === "diagnostics.logs.result" && command.callId === "failed-target",
+			(command): command is HostResult<"diagnostics.logs"> =>
+				command.type === "host.result" && command.callId === "failed-target",
 		)?.result,
 	);
 	delete targetMeta.failure;
 	targetMeta.archivedAt = Date.now();
 	specialistWorker.readDiagnosticLogs("archived-target", { action: "inventory" });
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.logs.result" && command.callId === "archived-target",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "archived-target"),
 	);
 	assert.ok(
 		specialistWorker.sent.find(
-			(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
-				command.type === "diagnostics.logs.result" && command.callId === "archived-target",
+			(command): command is HostResult<"diagnostics.logs"> =>
+				command.type === "host.result" && command.callId === "archived-target",
 		)?.result,
 		"failed and archived targets remain read-only readable without worker startup",
 	);
@@ -3447,13 +2972,11 @@ test("diagnostic log IPC stays fixed to the persisted host and parked target", a
 	};
 	specialistWorker.readDiagnosticLogs("wrong-host", { action: "inventory" });
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.logs.result" && command.callId === "wrong-host",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "wrong-host"),
 	);
 	const wrongHost = specialistWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
-			command.type === "diagnostics.logs.result" && command.callId === "wrong-host",
+		(command): command is HostResult<"diagnostics.logs"> =>
+			command.type === "host.result" && command.callId === "wrong-host",
 	);
 	assert.match(wrongHost?.error ?? "", /target host|does not match this daemon/);
 });
@@ -3522,18 +3045,17 @@ test("diagnostics role reads other parked histories without legacy grants and va
 
 	const noLinkWorker = sessions["workers"].get(noLink.id)! as FakeWorker;
 	sessions["onPacket"](sessions["metas"].get(noLink.id)!, noLinkWorker, {
-		type: "diagnostics.history.call",
+		type: "host.call",
+		method: "diagnostics.history",
 		callId: "no-link",
-		sessionId: target.id,
+		args: { sessionId: target.id },
 	});
 	await until(() =>
-		noLinkWorker.sent.some(
-			(command) => command.type === "diagnostics.history.result" && command.callId === "no-link",
-		),
+		noLinkWorker.sent.some((command) => command.type === "host.result" && command.callId === "no-link"),
 	);
 	const noLinkResult = noLinkWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
-			command.type === "diagnostics.history.result" && command.callId === "no-link",
+		(command): command is HostResult<"diagnostics.history"> =>
+			command.type === "host.result" && command.callId === "no-link",
 	);
 	assert.ok(noLinkResult?.result, noLinkResult?.error ?? "Assertion failed");
 	assert.equal(reads.length, 1);
@@ -3543,20 +3065,17 @@ test("diagnostics role reads other parked histories without legacy grants and va
 	const workerCount = f.workers.length;
 	const grantedWorker = sessions["workers"].get(granted.id)! as FakeWorker;
 	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
-		type: "diagnostics.history.call",
+		type: "host.call",
+		method: "diagnostics.history",
 		callId: "allowed",
-		sessionId: target.id,
-		before: 17,
-		limit: 4,
+		args: { sessionId: target.id, before: 17, limit: 4 },
 	});
 	await until(() =>
-		grantedWorker.sent.some(
-			(command) => command.type === "diagnostics.history.result" && command.callId === "allowed",
-		),
+		grantedWorker.sent.some((command) => command.type === "host.result" && command.callId === "allowed"),
 	);
 	const allowed = grantedWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
-			command.type === "diagnostics.history.result" && command.callId === "allowed",
+		(command): command is HostResult<"diagnostics.history"> =>
+			command.type === "host.result" && command.callId === "allowed",
 	);
 	assert.ok(allowed?.result, allowed?.error ?? "Assertion failed");
 	assert.deepEqual(reads, [
@@ -3574,36 +3093,35 @@ test("diagnostics role reads other parked histories without legacy grants and va
 	targetMeta.archivedAt = Date.now();
 	sessions.setConnectivity(false);
 	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
-		type: "diagnostics.history.call",
+		type: "host.call",
+		method: "diagnostics.history",
 		callId: "archived-failed-offline",
-		sessionId: target.id,
+		args: { sessionId: target.id },
 	});
 	await until(() =>
 		grantedWorker.sent.some(
-			(command) => command.type === "diagnostics.history.result" && command.callId === "archived-failed-offline",
+			(command) => command.type === "host.result" && command.callId === "archived-failed-offline",
 		),
 	);
 	const archived = grantedWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
-			command.type === "diagnostics.history.result" && command.callId === "archived-failed-offline",
+		(command): command is HostResult<"diagnostics.history"> =>
+			command.type === "host.result" && command.callId === "archived-failed-offline",
 	);
 	assert.ok(archived?.result, archived?.error ?? "Assertion failed");
 	assert.equal(reads.length, 2, "archived, failed and offline targets remain available through cold storage");
 	assert.equal(f.workers.length, workerCount);
 	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
-		type: "diagnostics.history.call",
+		type: "host.call",
+		method: "diagnostics.history",
 		callId: "wrong-lineage",
-		sessionId: target.id,
-		before: 99,
+		args: { sessionId: target.id, before: 99 },
 	});
 	await until(() =>
-		grantedWorker.sent.some(
-			(command) => command.type === "diagnostics.history.result" && command.callId === "wrong-lineage",
-		),
+		grantedWorker.sent.some((command) => command.type === "host.result" && command.callId === "wrong-lineage"),
 	);
 	const wrongLineage = grantedWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
-			command.type === "diagnostics.history.result" && command.callId === "wrong-lineage",
+		(command): command is HostResult<"diagnostics.history"> =>
+			command.type === "host.result" && command.callId === "wrong-lineage",
 	);
 	assert.match(wrongLineage?.error ?? "", /source did not match the admitted target/);
 	assert.equal(reads.length, 3);
@@ -3611,18 +3129,17 @@ test("diagnostics role reads other parked histories without legacy grants and va
 	const other = await sessions.spawn({ projectId: f.project.id, message: "Other" });
 	await sessions["starting"].get(other.id);
 	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
-		type: "diagnostics.history.call",
+		type: "host.call",
+		method: "diagnostics.history",
 		callId: "cross-target",
-		sessionId: other.id,
+		args: { sessionId: other.id },
 	});
 	await until(() =>
-		grantedWorker.sent.some(
-			(command) => command.type === "diagnostics.history.result" && command.callId === "cross-target",
-		),
+		grantedWorker.sent.some((command) => command.type === "host.result" && command.callId === "cross-target"),
 	);
 	const denied = grantedWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
-			command.type === "diagnostics.history.result" && command.callId === "cross-target",
+		(command): command is HostResult<"diagnostics.history"> =>
+			command.type === "host.result" && command.callId === "cross-target",
 	);
 	assert.ok(denied?.result, denied?.error ?? "Assertion failed");
 	assert.equal(reads.length, 4);
@@ -3701,18 +3218,13 @@ test("scoped metrics uses current mission authority and never opens histories or
 	broadRead.mock.restore();
 	await assert.rejects(f.sessions.readDiagnosticContext({ action: "scoped_metrics" }), /supervised/);
 	f.sessions["onPacket"](meta, worker, {
-		type: "diagnostics.context.call",
+		type: "host.call",
+		method: "diagnostics.context",
 		callId: "metrics",
-		request: { action: "scoped_metrics" },
+		args: { request: { action: "scoped_metrics" } },
 	});
-	await until(() =>
-		(worker as FakeWorker).sent.some((p) => p.type === "diagnostics.context.result" && p.callId === "metrics"),
-	);
-	assert.ok(
-		(worker as FakeWorker).sent.some(
-			(p) => p.type === "diagnostics.context.result" && p.callId === "metrics" && p.error,
-		),
-	);
+	await until(() => (worker as FakeWorker).sent.some((p) => p.type === "host.result" && p.callId === "metrics"));
+	assert.ok((worker as FakeWorker).sent.some((p) => p.type === "host.result" && p.callId === "metrics" && p.error));
 	f.members.delete(peer.id);
 	await assert.rejects(f.sessions.diagnosticContext(peer.id, { action: "scoped_metrics" }), /outside/);
 	assert.equal(f.workers.length, before);
@@ -3971,31 +3483,32 @@ test("app-scoped diagnostics starts without a control row, project or hidden cha
 	assert.equal(worker.spec.diagnosticTarget, undefined);
 
 	sessions["onPacket"](sessions["metas"].get(specialist.id)!, worker, {
-		type: "diagnostics.call",
+		type: "host.call",
+		method: "diagnostics",
 		callId: "app-snapshot",
+		args: {},
 	});
 	await until(() =>
-		worker.sent.some((command) => command.type === "diagnostics.result" && command.callId === "app-snapshot"),
+		worker.sent.some((command) => command.type === "host.result" && command.callId === "app-snapshot"),
 	);
 	const result = worker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
-			command.type === "diagnostics.result" && command.callId === "app-snapshot",
+		(command): command is HostResult<"diagnostics"> =>
+			command.type === "host.result" && command.callId === "app-snapshot",
 	);
 	assert.ok(result?.result && "scope" in result.result);
 	assert.equal(result.result.scope, "app");
 	assert.equal("sessionId" in result.result, false);
 
 	sessions["onPacket"](sessions["metas"].get(specialist.id)!, worker, {
-		type: "diagnostics.logs.call",
+		type: "host.call",
+		method: "diagnostics.logs",
 		callId: "app-logs",
-		request: { action: "inventory" },
+		args: { request: { action: "inventory" } },
 	});
-	await until(() =>
-		worker.sent.some((command) => command.type === "diagnostics.logs.result" && command.callId === "app-logs"),
-	);
+	await until(() => worker.sent.some((command) => command.type === "host.result" && command.callId === "app-logs"));
 	const logs = worker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
-			command.type === "diagnostics.logs.result" && command.callId === "app-logs",
+		(command): command is HostResult<"diagnostics.logs"> =>
+			command.type === "host.result" && command.callId === "app-logs",
 	);
 	assert.equal(logs?.result?.scope, "app");
 	assert.equal(logs?.result?.targetSessionId, undefined);
@@ -4172,27 +3685,23 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	};
 	specialistWorker.publishRepairProposal("invalid", { ...proposalDraft, execute: "start" } as never);
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.proposal.result" && command.callId === "invalid",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "invalid"),
 	);
 	assert.match(
 		specialistWorker.sent.find(
-			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
-				command.type === "diagnostics.proposal.result" && command.callId === "invalid",
+			(command): command is HostResult<"diagnostics.proposal"> =>
+				command.type === "host.result" && command.callId === "invalid",
 		)?.error ?? "",
 		/fields/,
 	);
 	specialistWorker.publishRepairProposal("stale", { ...proposalDraft, evidenceRefs: ["diagnostic:v1:missing"] });
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.proposal.result" && command.callId === "stale",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "stale"),
 	);
 	assert.match(
 		specialistWorker.sent.find(
-			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
-				command.type === "diagnostics.proposal.result" && command.callId === "stale",
+			(command): command is HostResult<"diagnostics.proposal"> =>
+				command.type === "host.result" && command.callId === "stale",
 		)?.error ?? "",
 		/no longer available/,
 	);
@@ -4219,13 +3728,11 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	] as const) {
 		specialistWorker.publishRepairProposal(callId, { ...proposalDraft, evidenceRefs } as never);
 		await until(() =>
-			specialistWorker.sent.some(
-				(command) => command.type === "diagnostics.proposal.result" && command.callId === callId,
-			),
+			specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === callId),
 		);
 		const rejected = specialistWorker.sent.find(
-			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
-				command.type === "diagnostics.proposal.result" && command.callId === callId,
+			(command): command is HostResult<"diagnostics.proposal"> =>
+				command.type === "host.result" && command.callId === callId,
 		);
 		assert.match(rejected?.error ?? "", expectedError, callId);
 		assert.equal(rejected?.result, undefined, callId);
@@ -4233,13 +3740,11 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	}
 	specialistWorker.publishRepairProposal("proposal", proposalDraft);
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.proposal.result" && command.callId === "proposal",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "proposal"),
 	);
 	const proposalResult = specialistWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
-			command.type === "diagnostics.proposal.result" && command.callId === "proposal",
+		(command): command is HostResult<"diagnostics.proposal"> =>
+			command.type === "host.result" && command.callId === "proposal",
 	);
 	const proposal = proposalResult?.result;
 	assert.ok(proposal);
@@ -4384,55 +3889,36 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	await sessions["pullRequests"].settled();
 	const targetBeforeReads = JSON.stringify(sessions["metas"].get(target.id));
 	const workerCountBeforeReads = f.workers.length;
-	const repairRead = async (
-		packet: Extract<
-			KernelPacket,
-			{ type: "diagnostics.call" | "diagnostics.history.call" | "diagnostics.logs.call" | "diagnostics.proposal" }
-		>,
+	const repairRead = async <
+		M extends "diagnostics" | "diagnostics.history" | "diagnostics.logs" | "diagnostics.proposal",
+	>(
+		method: M,
+		callId: string,
+		args: HostCalls[M]["args"],
 	) => {
-		sessions["onPacket"](repairMeta, repairWorker, packet);
-		await until(() => repairWorker.sent.some((command) => "callId" in command && command.callId === packet.callId));
-		return repairWorker.sent.find((command) => "callId" in command && command.callId === packet.callId) as Extract<
-			KernelCommand,
-			{
-				type:
-					| "diagnostics.result"
-					| "diagnostics.history.result"
-					| "diagnostics.logs.result"
-					| "diagnostics.proposal.result";
-			}
-		>;
+		sessions["onPacket"](repairMeta, repairWorker, { type: "host.call", method, callId, args } as HostCallPacket);
+		await until(() => repairWorker.sent.some((command) => "callId" in command && command.callId === callId));
+		return repairWorker.sent.find((command) => "callId" in command && command.callId === callId) as HostResult<M>;
 	};
-	const operational = await repairRead({ type: "diagnostics.call", callId: "repair-operational" });
+	const operational = await repairRead("diagnostics", "repair-operational", {});
 	assert.ok(operational.result, operational.error ?? "Assertion failed");
 	assert.ok("sessionId" in operational.result && operational.result.sessionId === target.id);
-	const history = await repairRead({
-		type: "diagnostics.history.call",
-		callId: "repair-history",
-		sessionId: target.id,
-		limit: 1,
-	});
+	const history = await repairRead("diagnostics.history", "repair-history", { sessionId: target.id, limit: 1 });
 	assert.ok(history.result, history.error ?? "Assertion failed");
-	const logs = await repairRead({
-		type: "diagnostics.logs.call",
-		callId: "repair-logs",
-		request: { action: "inventory" },
-	});
+	const logs = await repairRead("diagnostics.logs", "repair-logs", { request: { action: "inventory" } });
 	assert.ok(
 		logs.result && "targetSessionId" in logs.result && logs.result.targetSessionId === target.id,
 		logs.error ?? "Assertion failed",
 	);
-	for (const [type, callId] of [
-		["diagnostics.call", "repair-other-chat"],
-		["diagnostics.history.call", "repair-other-history"],
+	for (const [method, callId] of [
+		["diagnostics", "repair-other-chat"],
+		["diagnostics.history", "repair-other-history"],
 	] as const) {
-		const denied = await repairRead({ type, callId, sessionId: sibling.id });
+		const denied = await repairRead(method, callId, { sessionId: sibling.id });
 		assert.match(denied.error ?? "", /approved repair subject/);
 		assert.equal(denied.result, undefined);
 	}
-	const rejectedProposal = await repairRead({
-		type: "diagnostics.proposal",
-		callId: "repair-no-proposals",
+	const rejectedProposal = await repairRead("diagnostics.proposal", "repair-no-proposals", {
 		proposal: proposalDraft,
 	});
 	assert.match(rejectedProposal.error ?? "", /Only the live diagnostics specialist/);
@@ -4446,7 +3932,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	);
 	const originalGrant = repairMeta.repairDiagnostics!;
 	repairMeta.repairDiagnostics = { ...originalGrant, host: { ...originalGrant.host, lineageId: "changed" } };
-	const staleHost = await repairRead({ type: "diagnostics.call", callId: "repair-stale-host" });
+	const staleHost = await repairRead("diagnostics", "repair-stale-host", {});
 	assert.match(staleHost.error ?? "", /host identity changed/);
 	repairMeta.repairDiagnostics = originalGrant;
 	await assert.rejects(
@@ -4460,13 +3946,11 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		findings: "A newer diagnosis replaced the reviewed proposal.",
 	});
 	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.proposal.result" && command.callId === "replacement",
-		),
+		specialistWorker.sent.some((command) => command.type === "host.result" && command.callId === "replacement"),
 	);
 	const replacementProposal = specialistWorker.sent.find(
-		(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
-			command.type === "diagnostics.proposal.result" && command.callId === "replacement",
+		(command): command is HostResult<"diagnostics.proposal"> =>
+			command.type === "host.result" && command.callId === "replacement",
 	)?.result;
 	assert.ok(replacementProposal);
 	await assert.rejects(
@@ -4587,9 +4071,7 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 		regressionTestGuidance: "Mount the real sidebar and switch between distinct host identities.",
 	};
 	worker.publishRepairProposal("app-proposal", draft);
-	await until(() =>
-		worker.sent.some((item) => item.type === "diagnostics.proposal.result" && item.callId === "app-proposal"),
-	);
+	await until(() => worker.sent.some((item) => item.type === "host.result" && item.callId === "app-proposal"));
 	const proposal = sessions.get(app.id)!.diagnosticRepairProposal!;
 	assert.deepEqual(proposal.subject, { kind: "app", host: diagnosticHost });
 	assert.equal(proposal.targetSessionId, undefined);
@@ -4683,9 +4165,7 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 		"receipt reconciliation cannot promote an older grant",
 	);
 	worker.publishRepairProposal("app-access-proposal", draft);
-	await until(() =>
-		worker.sent.some((item) => item.type === "diagnostics.proposal.result" && item.callId === "app-access-proposal"),
-	);
+	await until(() => worker.sent.some((item) => item.type === "host.result" && item.callId === "app-access-proposal"));
 	const accessProposal = sessions.get(app.id)!.diagnosticRepairProposal!;
 	const accessRequest = {
 		...request,
@@ -4706,24 +4186,26 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 	assert.deepEqual(accessWorker.spec.repairDiagnostics, { kind: "app", host: diagnosticHost });
 	const beforeReads = f.workers.length;
 	for (const packet of [
-		{ type: "diagnostics.call", callId: "app-repair-operational" },
-		{ type: "diagnostics.call", callId: "app-repair-denied-chat", sessionId: repair.id },
-		{ type: "diagnostics.history.call", callId: "app-repair-denied-history", sessionId: repair.id },
-		{ type: "diagnostics.logs.call", callId: "app-repair-logs", request: { action: "inventory" } },
+		{ type: "host.call", method: "diagnostics", callId: "app-repair-operational", args: {} },
+		{ type: "host.call", method: "diagnostics", callId: "app-repair-denied-chat", args: { sessionId: repair.id } },
+		{
+			type: "host.call",
+			method: "diagnostics.history",
+			callId: "app-repair-denied-history",
+			args: { sessionId: repair.id },
+		},
+		{
+			type: "host.call",
+			method: "diagnostics.logs",
+			callId: "app-repair-logs",
+			args: { request: { action: "inventory" } },
+		},
 	] as const) {
 		sessions["onPacket"](accessMeta, accessWorker, packet);
 		await until(() => accessWorker.sent.some((command) => "callId" in command && command.callId === packet.callId));
 	}
 	const replies = accessWorker.sent.filter(
-		(
-			command,
-		): command is Extract<
-			KernelCommand,
-			{ type: "diagnostics.result" | "diagnostics.history.result" | "diagnostics.logs.result" }
-		> =>
-			command.type === "diagnostics.result" ||
-			command.type === "diagnostics.history.result" ||
-			command.type === "diagnostics.logs.result",
+		(command): command is HostResult<"diagnostics"> => command.type === "host.result",
 	);
 	assert.ok(
 		replies[0]?.result && "scope" in replies[0].result && replies[0].result.scope === "app",
@@ -6727,6 +6209,10 @@ test("suspected tool stalls ask for diagnosis while waits and pauses remain dist
 		const worker = fakeWorker();
 		worker.state = "working";
 		manager["workers"].set(meta.id, worker);
+		const deliver = (packet: KernelPacket) => {
+			applyLivePacket(worker, packet);
+			manager["onPacket"](meta, worker, packet);
+		};
 		const now = Date.now();
 		const stalled = {
 			enabled: true,
@@ -6744,21 +6230,21 @@ test("suspected tool stalls ask for diagnosis while waits and pauses remain dist
 				},
 			],
 		};
-		manager["onPacket"](meta, worker, { type: "tool.activity", activity: stalled });
+		deliver({ type: "tool.activity", activity: stalled });
 		assert.equal(manager.get(meta.id)?.attentionReason?.kind, "tool_stall");
 		assert.match(manager.get(meta.id)?.attentionReason?.detail ?? "", /no useful progress/);
-		manager["onPacket"](meta, worker, {
+		deliver({
 			type: "jobs.changed",
 			jobs: [{ id: "build", name: "Build", state: "running", startedAt: now - 3_700_000, outputPath: "/tmp/build" }],
 		});
 		assert.equal(manager.get(meta.id)?.attentionReason?.kind, "long_job", "known jobs keep their distinct reason");
-		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+		deliver({ type: "jobs.changed", jobs: [] });
 
 		meta.updatePaused = true;
 		assert.equal(manager.get(meta.id)?.attentionReason, undefined, "an update pause is not reported as a tool stall");
 		delete meta.updatePaused;
 
-		manager["onPacket"](meta, worker, {
+		deliver({
 			type: "tool.activity",
 			activity: {
 				...stalled,
@@ -6771,7 +6257,7 @@ test("suspected tool stalls ask for diagnosis while waits and pauses remain dist
 			"an explicit user wait stays visible only as evidence",
 		);
 
-		manager["onPacket"](meta, worker, {
+		deliver({
 			type: "tool.activity",
 			activity: {
 				...stalled,
@@ -6788,13 +6274,13 @@ test("suspected tool stalls ask for diagnosis while waits and pauses remain dist
 		});
 		assert.match(manager.get(meta.id)?.attentionReason?.detail ?? "", /cancellation was requested/);
 
-		manager["onPacket"](meta, worker, {
+		deliver({
 			type: "tool.activity",
 			activity: { ...stalled, calls: [] },
 		});
 		assert.equal(manager.get(meta.id)?.attentionReason, undefined);
 
-		manager["onPacket"](meta, worker, { type: "tool.activity", activity: stalled });
+		deliver({ type: "tool.activity", activity: stalled });
 		worker.state = "failed";
 		manager["onExit"](meta, worker, 0);
 		assert.notEqual(
@@ -7034,7 +6520,7 @@ test("ready and working completions survive restart parked, replay does not chan
 for (const shutdownError of [false, true]) {
 	test(`parking a real worker preserves completion through disconnect (shutdown error: ${shutdownError})`, async () => {
 		await outcomeFixture(async (manager, meta, home) => {
-			const child = new IpcProcess();
+			const child = new FakeKernelProcess();
 			const worker = new KernelWorker(
 				{ sessionId: meta.id, cwd: home, storageDir: home },
 				(packet) => manager["onPacket"](meta, worker, packet),
@@ -7293,11 +6779,12 @@ test("slack_status: only chats attached to a Slack triage message declare it, an
 	await until(() => linked(worker).length === 1);
 	assert.deepEqual(linked(worker), [true]);
 	sessions["onPacket"](sessions["metas"].get(created.id)!, worker, {
-		type: "slack.call",
+		type: "host.call",
+		method: "slack",
 		callId: "s1",
-		args: { status: "waiting", reason: "CSM" },
+		args: { args: { status: "waiting", reason: "CSM" } },
 	});
-	await until(() => worker.sent.some((command) => command.type === "slack.result" && command.callId === "s1"));
+	await until(() => worker.sent.some((command) => command.type === "host.result" && command.callId === "s1"));
 	assert.deepEqual(calls, [[created.id, { status: "waiting", reason: "CSM" }]]);
 
 	attached.delete(created.id);
@@ -7326,13 +6813,14 @@ test("chat_report: only job chats declare it; a call saves the report the result
 	assert.equal(plainWorker.spec.pilot?.job, undefined);
 
 	const result = (w: (typeof f.workers)[number], callId: string) =>
-		w.sent.find((command) => command.type === "chatReport.result" && command.callId === callId) as
+		w.sent.find((command) => command.type === "host.result" && command.callId === callId) as
 			| { result?: { saved: boolean }; error?: string }
 			| undefined;
 	sessions["onPacket"](sessions["metas"].get(job.id)!, worker, {
-		type: "chatReport.call",
+		type: "host.call",
+		method: "chatReport",
 		callId: "r1",
-		args: { answer: "It is a true positive.", nextStep: "Reply in the thread." },
+		args: { args: { answer: "It is a true positive.", nextStep: "Reply in the thread." } },
 	});
 	await until(() => !!result(worker, "r1"));
 	assert.equal(result(worker, "r1")?.result?.saved, true);
@@ -7341,9 +6829,10 @@ test("chat_report: only job chats declare it; a call saves the report the result
 	assert.equal(saved?.nextStep, "Reply in the thread.");
 
 	sessions["onPacket"](sessions["metas"].get(job.id)!, worker, {
-		type: "chatReport.call",
+		type: "host.call",
+		method: "chatReport",
 		callId: "r2",
-		args: { answer: "x".repeat(8_001) },
+		args: { args: { answer: "x".repeat(8_001) } },
 	});
 	await until(() => !!result(worker, "r2"));
 	assert.match(result(worker, "r2")?.error ?? "", /answer has 8,001 characters; the limit is 8,000/);
@@ -7354,9 +6843,10 @@ test("chat_report: only job chats declare it; a call saves the report the result
 	);
 
 	sessions["onPacket"](sessions["metas"].get(plain.id)!, plainWorker, {
-		type: "chatReport.call",
+		type: "host.call",
+		method: "chatReport",
 		callId: "r3",
-		args: { answer: "Forged" },
+		args: { args: { answer: "Forged" } },
 	});
 	await until(() => !!result(plainWorker, "r3"));
 	assert.match(result(plainWorker, "r3")?.error ?? "", /only for chats started from Slack, Linear or a schedule/);
@@ -7760,7 +7250,7 @@ test("feedback protected logs use saved same-project scope and revoke in-flight 
 		join(f.home, "sessions", origin.id, "lifecycle.jsonl"),
 		JSON.stringify({ kind: "execution.started", at: Date.now() }) + "\n",
 	);
-	const read = (request: import("@pilot/kernel").DiagnosticLogRequest, signal?: AbortSignal) =>
+	const read = (request: import("@pilot/protocol").DiagnosticLogRequest, signal?: AbortSignal) =>
 		sessions["diagnosticLogsCall"](meta, request, signal);
 	const inventory = await read({ action: "inventory", sessionId: origin.id });
 	assert.deepEqual(

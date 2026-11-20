@@ -9,7 +9,12 @@ fn command(f: &mut Fixture, action: &str, value: bool) -> Value {
 fn global(f: &Fixture) -> (NativeHost, Bridge) {
     let mut source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
     source.project = None;
-    let host = NativeHost::open(source, f.info["ledger"].as_str().unwrap().into()).unwrap();
+    let host = NativeHost::open_with_options(
+        source,
+        f.info["ledger"].as_str().unwrap().into(),
+        Default::default(),
+    )
+    .unwrap();
     let bridge = Bridge::new(DayRoot::new(host.clone()));
     (host, bridge)
 }
@@ -102,23 +107,17 @@ fn profile_only_explicit_choice_stale_setup_lost_ack_and_restart_are_lookup_only
     assert!(read["value"]["snapshot"]["interview"].is_object(), "{read}");
     let current = host.planning(&mission).unwrap();
     assert_eq!(current["projectId"], choice["projectId"]);
-    let interview = &current["view"]["interview"];
-    let answers: Vec<_> = interview["questions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|q| {
-            json!({
-        "questionId":q["id"],"questionDigest":current["questionDigests"][q["id"].as_str().unwrap()],
-        "selectedOption":q["options"][0],"text":""})
-        })
-        .collect();
-    let result = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-        host.write_interview(mission, current["contextDigest"].as_str().unwrap().into(), json!({
-            "purpose":"interview-save","expected":{"fence":interview["fence"],"revision":interview["revision"]},"answers":answers
-        })).recv().await.unwrap().unwrap()
-    });
-    assert_eq!(result.status, pilot_day_native::OutcomeStatus::Accepted);
+    let interview = &read["value"]["snapshot"]["interview"];
+    let q = &interview["questions"][0];
+    let result = f.call(
+        &b,
+        "day.plan.save",
+        json!({"missionId":mission,"intent":{
+            "interviewId":interview["id"],"questionSet":interview["questionSet"],
+            "questionId":q["id"],"digest":q["digest"],"choiceId":q["choices"][0]["id"],"text":""
+        }}),
+    );
+    assert_eq!(result["value"]["outcome"]["status"], "accepted", "{result}");
     let stats = f.stats("stats");
     assert_eq!(
         stats["posts"], 2,
@@ -202,51 +201,6 @@ fn legacy_enrollment_uncertainty_is_shown_and_checked_by_exact_lookup() {
         1,
         "startup never re-enters enrollment"
     );
-    close(b);
-    f.stats("close");
-    assert!(f.child.wait().unwrap().success());
-}
-
-#[test]
-fn a_dismissed_unconfirmed_creation_sends_nothing_and_lets_a_new_one_start() {
-    let mut f = Fixture::with_daemon("day-planning-enrollment.ts");
-    command(&mut f, "quiet", true);
-    let source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
-    let host = f.host_for_options(
-        source,
-        pilot_day_native::host::Options {
-            planning_model: Some("faux/faux-1".into()),
-            ..Default::default()
-        },
-    );
-    let b = Bridge::new(DayRoot::new(host.clone()));
-    let setup = prepare(&f, &b)["value"]["snapshot"].clone();
-    command(&mut f, "lost", true);
-    let lost = f.call(
-        &b,
-        "day.plan.create",
-        json!({"setup":setup["digest"],"goal":"Lost goal"}),
-    );
-    assert_eq!(lost["value"]["outcome"]["status"], "unknown", "{lost}");
-    assert_eq!(prepare(&f, &b)["value"]["snapshot"]["unconfirmed"], true);
-    let posts = f.stats("stats")["posts"].clone();
-    let dismissed = f.call(&b, "day.plan.dismissNew", json!({}));
-    assert_eq!(
-        dismissed["value"]["outcome"]["status"], "accepted",
-        "{dismissed}"
-    );
-    assert_eq!(host.planning_enrollments()[0]["state"], "dismissed");
-    assert_eq!(f.stats("stats")["posts"], posts, "dismiss sends nothing");
-    // A new creation goes through.
-    let setup = prepare(&f, &b)["value"]["snapshot"].clone();
-    assert_eq!(setup["unconfirmed"], false);
-    command(&mut f, "lost", false);
-    let made = f.call(
-        &b,
-        "day.plan.create",
-        json!({"setup":setup["digest"],"goal":"A new goal"}),
-    );
-    assert_eq!(made["value"]["outcome"]["status"], "accepted", "{made}");
     close(b);
     f.stats("close");
     assert!(f.child.wait().unwrap().success());

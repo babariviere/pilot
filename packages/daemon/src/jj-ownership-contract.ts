@@ -1,3 +1,4 @@
+import { hasExactKeys, OPAQUE_ID } from "./validate.ts";
 /** Internal only. These records prove attribution, not retained content or delivery acceptance. */
 export interface JjWorkerScope {
 	version: 1;
@@ -76,13 +77,7 @@ export const operationIdPattern = /^[a-f0-9]{128}$/;
 export const repositoryIdPattern = /^[a-f0-9]{64}$/;
 
 export function exact(value: unknown, keys: string[]): asserts value is Record<string, unknown> {
-	if (
-		!value ||
-		typeof value !== "object" ||
-		Array.isArray(value) ||
-		Object.keys(value).sort().join() !== keys.sort().join()
-	)
-		throw new Error("Invalid ownership record fields");
+	if (!hasExactKeys(value, keys)) throw new Error("Invalid ownership record fields");
 }
 
 export function identifier(value: unknown, pattern: RegExp): asserts value is string {
@@ -93,14 +88,14 @@ export function workerScope(value: unknown): asserts value is JjCaptureScope {
 	const project = !!value && typeof value === "object" && "version" in value && value.version === 2;
 	exact(value, project ? ["version", "sessionId", "projectId"] : ["version", "sessionId", "missionId", "taskIds"]);
 	if (project) {
-		for (const id of [value.sessionId, value.projectId]) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
+		for (const id of [value.sessionId, value.projectId]) identifier(id, OPAQUE_ID);
 		return;
 	}
 	if (value.version !== 1) throw new Error("Unsupported ownership version");
-	for (const id of [value.sessionId, value.missionId]) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
+	for (const id of [value.sessionId, value.missionId]) identifier(id, OPAQUE_ID);
 	if (!Array.isArray(value.taskIds) || value.taskIds.length < 1 || value.taskIds.length > 100)
 		throw new Error("Invalid ownership task scope");
-	for (const id of value.taskIds) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
+	for (const id of value.taskIds) identifier(id, OPAQUE_ID);
 	if (new Set(value.taskIds).size !== value.taskIds.length) throw new Error("Duplicate ownership tasks");
 }
 

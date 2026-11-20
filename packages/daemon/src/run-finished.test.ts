@@ -4,7 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { type RunFinished, runChangedFiles, runSnapshot } from "./run-finished.ts";
-import type { SessionWorker } from "./sessions.ts";
+import type { SessionWorker } from "./kernel-worker.ts";
 import { fixture, until } from "./testing/session-workspace.ts";
 
 test("snapshots compare each run, including untracked files, without reusing the chat's accumulated diff", async (t) => {

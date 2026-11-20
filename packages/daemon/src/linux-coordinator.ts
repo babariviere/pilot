@@ -19,7 +19,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { type CredentialEndpoint, credentialEnvironment } from "@pilot/kernel/credential-client";
+import { credentialEnvironment } from "@pilot/kernel/credential-client";
+import type { CredentialEndpoint } from "@pilot/kernel/credential-rpc";
 import { credentialRequest } from "@pilot/kernel/credential-rpc";
 import { isRegenerableDirectory } from "./workspaces.ts";
 
@@ -27,11 +28,11 @@ const guard = fileURLToPath(new URL("./linux-coordinator-guard.ts", import.meta.
 const execute = promisify(execFile);
 const guidance =
 	"Install bubblewrap (dnf install bubblewrap, or your package manager's equivalent). Permit unprivileged user, mount, PID and IPC namespaces and nested-userns disabling in the host/container/service policy. Check AppArmor/SELinux/seccomp denials and user.max_user_namespaces; do not disable host security globally. Restart pilotd after correcting the policy. Refusing an unrestricted coordinator worker.";
-export interface LinuxCoordinatorCapability {
+interface LinuxCoordinatorCapability {
 	available: boolean;
 	detail?: string;
 }
-export interface CoordinatorPaths {
+interface CoordinatorPaths {
 	scratch: string;
 	protectedPaths: string[];
 }
@@ -110,7 +111,7 @@ async function bubblewrap(): Promise<string> {
 }
 
 /** Reject broad roots, symlink roots, shared directories and pre-existing hardlink write aliases. */
-export class CoordinatorPrivateStateError extends Error {
+class CoordinatorPrivateStateError extends Error {
 	readonly path: string;
 	constructor(path: string, message: string) {
 		super(message);

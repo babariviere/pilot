@@ -12,8 +12,8 @@ import {
 	preferencesReason,
 	type SaveIntent,
 	type SaveResult,
-	UNKNOWN_SAVE,
 } from "./preferencesFeed";
+import { LOST } from "./refusals";
 
 export type PreferencesDemoMode = "saved" | "empty" | "unreadable";
 export type PreferencesDemoNext = "accept" | "stale" | "unknown" | "reject";
@@ -263,7 +263,7 @@ export class ScriptedPreferences implements PreferencesSource {
 			this.#pending = { operationId, intent };
 			this.#set(this.#commit(intent));
 			this.#publish();
-			return { status: "unknown", message: UNKNOWN_SAVE, operationId, saved: null };
+			return { status: "unknown", message: LOST, operationId, saved: null };
 		}
 		this.#set(this.#commit(intent));
 		this.#shown = this.#list;

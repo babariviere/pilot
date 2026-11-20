@@ -46,12 +46,25 @@ def prepare():
     return directory / "actionlint"
 
 
+# A job-level env cannot read the runner context. The validator must reject it.
+INVALID_JOB_ENV = """name: Invalid
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    env:
+      INVALID_TEMP: ${{ runner.temp }}
+    steps:
+      - run: echo check
+"""
+
+
 def validate(binary, paths=WORKFLOWS, source=None):
     arguments = [str(binary), "-shellcheck=", "-pyflakes=", "-no-color"]
     if source is None:
         arguments += [str(path) for path in paths]
     else:
-        arguments += ["-stdin-filename", str(ROOT / ".github/workflows/tests.yaml"), "-"]
+        arguments += ["-stdin-filename", str(ROOT / ".github/workflows/invalid.yaml"), "-"]
     return subprocess.run(arguments, cwd=ROOT, input=source, text=True,
                           capture_output=True, timeout=30)
 
@@ -62,13 +75,7 @@ def main():
     print(result.stdout + result.stderr, end="")
     if result.returncode:
         raise SystemExit(result.returncode)
-    # Mutation regression: real validator MUST catch the original fatal context.
-    source = (ROOT / ".github/workflows/tests.yaml").read_text()
-    prefix, rust = source.split("  rust:\n", 1)
-    invalid = prefix + "  rust:\n" + rust.replace("    env:\n", "    env:\n      INVALID_TEMP: ${{ runner.temp }}\n", 1)
-    if invalid == source:
-        raise RuntimeError("Missing Rust job env for context regression")
-    rejected = validate(binary, source=invalid)
+    rejected = validate(binary, source=INVALID_JOB_ENV)
     if rejected.returncode == 0 or 'context "runner" is not allowed here' not in rejected.stdout + rejected.stderr:
         raise RuntimeError("Validator failed to reject invalid job-env runner context")
     print(f"actionlint {VERSION}: CI/release/package workflows valid; original job-env context regression rejected")

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession } from "@earendil-works/pi-durable";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { openSessionStorage } from "@pilot/kernel/testing";
 import {
 	captureSessionHistory,
 	type SessionHistoryCapture,

@@ -2,7 +2,7 @@
 //! Capture/save failures never dispose the engine. Host close joins BEFORE
 //! engine disposal. No stock runner participates in the production path.
 use nsh_engine::Bundle;
-use nsh_platform_macos::{AppOptions, AppSource, run_app};
+use nsh_platform_macos::AppOptions;
 
 use crate::{
     bridge::{Bridge, restrict},
@@ -58,50 +58,6 @@ impl Closing {
 impl JoinedClose {
     pub fn result(&self) -> Result<(), Error> {
         self.result
-    }
-}
-
-/// Exact native capture after seal, host join and engine disposal. Only the
-/// owning WindowOwner can construct this, never a VM reply or stored hint.
-pub struct ClosedWindow {
-    capture: crate::host::window::SavedWindow,
-}
-impl ClosedWindow {
-    pub(crate) fn capture(&self) -> &crate::host::window::SavedWindow {
-        &self.capture
-    }
-}
-
-/// Force close in flight. Only a durably accepted exact-update loss can enter.
-#[must_use]
-pub struct ForcedClosing {
-    accepted: crate::host::update_loss::Accepted,
-    joined: async_channel::Receiver<Result<(), Error>>,
-}
-/// Joined native host, not yet a disposed UI or installer capability.
-#[must_use]
-pub struct JoinedForceClose {
-    accepted: crate::host::update_loss::Accepted,
-    result: Result<(), Error>,
-}
-impl ForcedClosing {
-    /// Join off AppKit. Cancellation/ACK cannot stand in for this result.
-    pub fn recv_blocking(self) -> Result<JoinedForceClose, Error> {
-        let result = self.joined.recv_blocking().map_err(|_| Error::Unknown)?;
-        Ok(JoinedForceClose {
-            accepted: self.accepted,
-            result,
-        })
-    }
-}
-/// Exact accepted-loss window after native host join and engine disposal.
-/// It carries no SavedWindow and claims no successful capture.
-pub struct ForcedClosedWindow {
-    accepted: crate::host::update_loss::Accepted,
-}
-impl ForcedClosedWindow {
-    pub(crate) fn into_accepted(self) -> crate::host::update_loss::Accepted {
-        self.accepted
     }
 }
 
@@ -297,55 +253,7 @@ impl WindowOwner {
         Ok(())
     }
 
-    /// Native official-update continuation. Not an exit hook: all capture and
-    /// native host work have finished before this can authorize installer entry.
-    pub fn close_for_update(&mut self, joined: JoinedClose) -> Result<ClosedWindow, Error> {
-        let capture = self.bridge.saved_capture().ok_or(Error::Storage)?;
-        capture.validate()?;
-        if capture.window != self.identity()
-            || (capture.generation, capture.save_sequence) != joined.receipt.parts()
-        {
-            return Err(Error::Stale);
-        }
-        self.dispose_joined(joined)?;
-        Ok(ClosedWindow { capture })
-    }
-
-    /// Skip preservation only after durable, exact native consent. The host's
-    /// entered writes and commands still drain before the engine is disposed.
-    pub(crate) fn begin_force_close(
-        &mut self,
-        accepted: crate::host::update_loss::Accepted,
-    ) -> Result<ForcedClosing, Error> {
-        if self.closing || self.stopped {
-            return Err(Error::Busy);
-        }
-        self.bridge.seal_loss(&accepted)?;
-        self.closing = true;
-        Ok(ForcedClosing {
-            accepted,
-            joined: self.bridge.close(),
-        })
-    }
-
-    /// Main-thread disposal only after joined close. State loss is explicit;
-    /// this never manufactures the normal capture or bypasses a host failure.
-    pub fn close_forced(&mut self, joined: JoinedForceClose) -> Result<ForcedClosedWindow, Error> {
-        if !self.closing || self.stopped || joined.accepted.window() != self.identity() {
-            return Err(Error::Stale);
-        }
-        joined.result?;
-        self.view.stop();
-        if let Some((_, capture)) = self.capture.as_mut() {
-            capture.engine_stopped();
-        }
-        self.stopped = true;
-        Ok(ForcedClosedWindow {
-            accepted: joined.accepted,
-        })
-    }
-
-    /// Compatibility for qualification callers. Still requires dispose_joined
+    /// Seals and starts the joined close. Still requires dispose_joined
     /// after receiving the result; this never stops an unjoined root.
     pub fn finish_close(&mut self, generation: u32) -> Result<Closing, Error> {
         let continuation = self.seal_close(generation)?;
@@ -366,25 +274,4 @@ pub fn options(bridge: &Bridge) -> AppOptions {
         host: bridge.channel(),
         ..AppOptions::default()
     }
-}
-
-/// Run an isolated bundle on the main thread, then join the native host.
-/// The caller owns `bridge` across this call and must not reuse it afterwards.
-/// A successful return proves only shutdown, NOT successful UI load or capture.
-/// Do not use this stock runner for production quit, reload or updates.
-pub fn run_qualification(bundle: Bundle, bridge: &Bridge) -> Result<(), Error> {
-    let preparation_error = match restrict(bundle) {
-        Ok(bundle) => {
-            let _exit = run_app(AppSource::Bundle(bundle), options(bridge));
-            None
-        }
-        Err(error) => Some(error),
-    };
-    // run_app stops its engine before returning. Also close after preparation
-    // failed, never fall back to mocks or let a partial load keep a worker.
-    let closed = bridge.close().recv_blocking().map_err(|_| Error::Unknown)?;
-    if let Some(error) = preparation_error {
-        return Err(error);
-    }
-    closed
 }

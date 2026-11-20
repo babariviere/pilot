@@ -201,13 +201,13 @@ pub(super) async fn handle(
         epoch = shared.epoch.load(Ordering::SeqCst);
         result = run(root, t, journal, shared, updates, day, epoch, &call).await;
     }
-    // Ritual progress is local, as on the native feed: its refusals stay
+    // Ritual progress is local: its refusals stay
     // with the ritual and never mark the service read or controls failed.
     if !call.command.is_ritual()
         && let Err(error @ (Error::Identity | Error::Offline | Error::Storage)) = result
     {
         // A bad item stays isolated; losing the source or journal invalidates
-        // source-wide authority just as it does for native feed requests.
+        // source-wide authority.
         super::fail(shared, error, call.name);
     }
     (call.reply)(result);
@@ -268,7 +268,7 @@ pub(super) async fn search_read(
     };
     (call.reply)(result);
 }
-/// Ritual calls share the native feed's rules: reads sample the root's clock
+/// Ritual reads sample the root's clock
 /// and write nothing, a visit or save needs the exact context and revision,
 /// and an uncertain write is Unknown, never resent. The reply carries the
 /// root's last confirmed ritual view.
@@ -680,14 +680,6 @@ async fn run(
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
     use super::updates::Command as U;
-    if let Command::UpdateForceConfirm(request) = &call.command {
-        if !super::valid_id(&request.id) {
-            return Err(Error::Invalid);
-        }
-        // This legacy selector cannot produce a native accepted-loss close.
-        // Refuse before capture, pause, cancellation or journal mutation.
-        return Err(Error::Unavailable);
-    }
     let update = match &call.command {
         Command::UpdateRead => Some(U::Read),
         Command::UpdatePrepare(r) => Some(U::Prepare(r.clone(), call.window.clone())),
@@ -958,7 +950,6 @@ async fn run(
             enrollment = Some(id.clone());
             Some(Work::CheckPlanning(id))
         }
-        Command::DismissNew => Some(Work::DismissNew),
         Command::Refresh => Some(Work::Refresh),
         Command::Attention => {
             shared.attention_wanted.store(true, Ordering::SeqCst);
@@ -1110,7 +1101,6 @@ async fn run(
         Command::UpdateRead
         | Command::UpdatePrepare(_)
         | Command::UpdateConfirm(_)
-        | Command::UpdateForceConfirm(_)
         | Command::UpdateCancel(_)
         | Command::UpdateCheck
         | Command::UpdateRestored(_) => unreachable!("handled update command"),

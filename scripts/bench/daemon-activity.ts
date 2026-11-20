@@ -9,7 +9,7 @@ import type { SessionSummary } from "../../packages/protocol/src/index.ts";
 import { loadBaseline } from "./baseline.ts";
 
 const baseline = process.argv[2];
-if (!baseline || !/^[a-f\d]{6,40}$/.test(baseline)) throw new Error("Pass a baseline commit hash");
+if (!baseline) throw new Error("Pass a baseline commit hash");
 const home = await mkdtemp(join(tmpdir(), "pilot-activity-bench-"));
 let cleanupBaseline: (() => Promise<void>) | undefined;
 try {

@@ -18,10 +18,10 @@ import { nodeTelemetry, type TelemetryAttributes } from "@pilot/telemetry";
 import { durableJSON } from "./operation-journal.ts";
 
 export const AI_USAGE_FILE = "ai-usage.json";
-export const AI_USAGE_SCHEMA_VERSION = 2 as const;
+const AI_USAGE_SCHEMA_VERSION = 2 as const;
 export const MAX_AI_USAGE_CONVERSATIONS = 32;
 export const MAX_AI_USAGE_TIMING_BOOTS = 4;
-export const MAX_AI_USAGE_FILE_BYTES = 128 * 1024;
+const MAX_AI_USAGE_FILE_BYTES = 128 * 1024;
 const CONVERSATION = /^(?:0|[1-9][0-9]{0,15})$/;
 const ACTIVITY_EPOCH = /^(?:initial|0|[1-9][0-9]{0,15})$/;
 const BOOT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -75,7 +75,7 @@ interface StoredState {
 	efficiency: StoredEfficiency;
 }
 
-export interface AIUsageStateObservation {
+interface AIUsageStateObservation {
 	working: boolean;
 	paused: boolean;
 }
@@ -312,7 +312,7 @@ function tokenCount(tokens: AIUsageTokens): number {
 	return sum([tokens.input, tokens.output, tokens.cacheRead, tokens.cacheWrite]);
 }
 
-export function combineScopes(scopes: AIUsageScope[], kind: AIUsageActivity["kind"]): AIUsageScope {
+function combineScopes(scopes: AIUsageScope[], kind: AIUsageActivity["kind"]): AIUsageScope {
 	if (!scopes.length) return zeroScope(kind);
 	const reasoningScopes = scopes.filter((scope) => scope.tokens.reasoningStatus !== "unavailable");
 	const outputScopes = scopes.filter((scope) => scope.tokens.output > 0);

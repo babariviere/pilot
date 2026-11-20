@@ -10,6 +10,7 @@ import type {
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
 import { SourceConfigurationError, SourceNotDispatched, SourceSignInRequired } from "./source-tool-rules.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
 export interface PublishTask {
 	id: string;
@@ -54,7 +55,6 @@ type Preview = {
 };
 
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
-const safeId = /^[A-Za-z0-9_-]{1,128}$/;
 const hash = (v: unknown) => payloadHash(canonicalJSON(v));
 const marker = (missionId: string, taskId: string) => `Pilot publication reference: ${hash([missionId, taskId])}`;
 const identity = ({ uuid, identifier, url }: IssueIdentity) => ({ uuid, identifier, url });
@@ -132,7 +132,7 @@ function parse(value: unknown): Intent {
 		!isPublishParentUrl(v.parentUrl) ||
 		!Array.isArray(v.taskIds) ||
 		!v.taskIds.length ||
-		!v.taskIds.every((id) => typeof id === "string" && safeId.test(id)) ||
+		!v.taskIds.every((id) => typeof id === "string" && OPAQUE_ID.test(id)) ||
 		new Set(v.taskIds).size !== v.taskIds.length
 	)
 		throw invalid();

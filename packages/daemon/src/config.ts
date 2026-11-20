@@ -1,6 +1,5 @@
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
 import { DEFAULT_PORT } from "@pilot/protocol";
+import { pilotHome } from "./workspace-environment.ts";
 
 export interface DaemonConfig {
 	home: string;
@@ -18,7 +17,6 @@ export interface DaemonConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
-	const dataHome = env.XDG_DATA_HOME || join(homedir(), ".local", "share");
 	const port = Number(env.PILOT_PORT ?? DEFAULT_PORT);
 	if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`Invalid PILOT_PORT: ${env.PILOT_PORT}`);
 	const idleParkMs = env.PILOT_IDLE_PARK_MS === undefined ? undefined : Number(env.PILOT_IDLE_PARK_MS);
@@ -35,7 +33,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
 	)
 		throw new Error(`Invalid PILOT_WORKSPACE_RETENTION_DAYS: ${env.PILOT_WORKSPACE_RETENTION_DAYS}`);
 	return {
-		home: resolve(env.PILOT_HOME || join(dataHome, "pilot")),
+		home: pilotHome(env),
 		// Loopback only until the daemon has authentication.
 		host: "127.0.0.1",
 		port,

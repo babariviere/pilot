@@ -135,8 +135,8 @@ test("the first task started marks the request started once", async (t) => {
 		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first!.id, admitted: true };
 	});
 	f.store.updateTask(f.missionId, first!.id, { status: "done" });
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(f.store.task(f.missionId, second!.id).status, "in_progress");
 	const started = fake.patches.filter((p) => p.start);
 	assert.equal(started.length, 1);

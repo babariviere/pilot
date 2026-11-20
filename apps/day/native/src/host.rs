@@ -46,7 +46,7 @@ pub(crate) mod slack_controls;
 pub(crate) mod threads;
 pub(crate) mod today_scope;
 mod transport;
-pub mod update_loss;
+mod update_loss;
 pub mod updates;
 
 use crate::{
@@ -152,7 +152,6 @@ struct Shared {
     startup_ready: AtomicBool,
     notices: Mutex<Vec<std::sync::Weak<dyn Fn() + Send + Sync>>>,
     ritual: Mutex<ritual::State>,
-    changes: Mutex<changes::State>,
     insights: Mutex<insights::Shown>,
     desk: Mutex<Desk>,
     epoch: AtomicU64,
@@ -247,7 +246,6 @@ impl Shared {
 }
 
 enum Work {
-    AcceptUpdateLoss(update_loss::Record),
     UpdateStartup,
     UpdateCommit {
         id: String,
@@ -262,7 +260,6 @@ enum Work {
     AttentionSend(serde_json::Value),
     AttentionCheck(String),
     AttentionDraft(attention::DraftKey, serde_json::Value),
-    Changes(changes::Work),
     Refresh,
     Detail(String),
     Control {
@@ -280,14 +277,8 @@ enum Work {
         request: serde_json::Value,
     },
     CheckPlanning(String),
-    /// Marks unconfirmed New creations as dismissed. Sends nothing.
-    DismissNew,
     PreparePlanning,
     EnrollPlanning(crate::plan::NewIntent),
-    PlanningChat {
-        mission: String,
-        older: bool,
-    },
     StopReplanning {
         mission: String,
         successor: String,
@@ -313,8 +304,6 @@ struct Request {
 #[derive(Clone)]
 pub struct NativeHost(Arc<Handle>);
 struct Handle {
-    source: Source,
-    ledger: PathBuf,
     shared: Arc<Shared>,
     requests: Sender<Request>,
     /// The user's own sends (answers, clarifications, action requests, their checks). The worker takes
@@ -337,15 +326,6 @@ impl Drop for Handle {
 }
 
 impl NativeHost {
-    pub(crate) fn loss_binding(&self, source: &Source, ledger: &std::path::Path) -> bool {
-        self.0.source == *source && self.0.ledger == ledger
-    }
-    fn accept_update_loss(
-        &self,
-        record: update_loss::Record,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::AcceptUpdateLoss(record))
-    }
     /// Passive exact-source capture, including New's unsent text. Reading it
     /// restores, acknowledges, replays and resumes nothing.
     pub fn saved_window(&self) -> Option<window::SavedWindow> {
@@ -408,7 +388,11 @@ impl NativeHost {
             work: Work::Bridge(call),
             reply: tx,
         };
-        let queue = if urgent { &self.0.writes } else { &self.0.requests };
+        let queue = if urgent {
+            &self.0.writes
+        } else {
+            &self.0.requests
+        };
         if let Err(e) = queue.try_send(request)
             && let Work::Bridge(call) = e.into_inner().work
         {
@@ -418,38 +402,6 @@ impl NativeHost {
                 Error::Busy
             }));
         }
-    }
-    /// Start only for an explicit native selection. No environment or home fallback.
-    /// File/network work runs off the UI thread. The default mock app never calls this.
-    pub fn open(source: Source, ledger: PathBuf) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, None, None, None)
-    }
-
-    /// Native root supplies explicit URL navigation authority, never the screen VM.
-    pub fn open_with_navigation(
-        source: Source,
-        ledger: PathBuf,
-        opener: attention::UrlOpener,
-    ) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, Some(opener), None, None)
-    }
-
-    /// Native-only selection of a model for new planning. No live profile is enabled.
-    /// The owner must close and join this host before replacing its selection.
-    pub fn open_planning(source: Source, ledger: PathBuf, model: String) -> Result<Self, Error> {
-        if model.trim().is_empty() || model.len() > 256 {
-            return Err(Error::Invalid);
-        }
-        Self::open_selected(source, ledger, Some(model), None, None, None)
-    }
-
-    /// Native root selects a current clock and the exact OS user. No live activation.
-    pub fn open_day(
-        source: Source,
-        ledger: PathBuf,
-        day: ritual::DaySource,
-    ) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, None, Some(day), None)
     }
 
     /// Compose native bindings without opening competing hosts on one ledger.
@@ -506,7 +458,6 @@ impl NativeHost {
             startup_ready: AtomicBool::new(false),
             notices: Mutex::default(),
             ritual: Mutex::new(ritual::State::default()),
-            changes: Mutex::new(changes::State::default()),
             insights: Mutex::default(),
             desk: Mutex::new(Desk::native()),
             epoch: AtomicU64::new(0),
@@ -542,8 +493,6 @@ impl NativeHost {
         });
         let (requests, rx) = async_channel::bounded(16);
         let (writes, writes_rx) = async_channel::bounded(16);
-        let owner_source = source.clone();
-        let owner_ledger = ledger.clone();
         let state = shared.clone();
         let worker = std::thread::Builder::new()
             .name("day-host".into())
@@ -556,7 +505,15 @@ impl NativeHost {
                         .enable_all()
                         .build()
                         .map_err(|_| Error::Unavailable)?;
-                    rt.block_on(run(transport, journal, state.clone(), rx, writes_rx, day, updates))
+                    rt.block_on(run(
+                        transport,
+                        journal,
+                        state.clone(),
+                        rx,
+                        writes_rx,
+                        day,
+                        updates,
+                    ))
                 })();
                 if let Err(e) = result {
                     fail(&state, e, "startup");
@@ -565,8 +522,6 @@ impl NativeHost {
             })
             .map_err(|_| Error::Unavailable)?;
         Ok(Self(Arc::new(Handle {
-            source: owner_source,
-            ledger: owner_ledger,
             shared,
             requests,
             writes,
@@ -624,15 +579,7 @@ impl NativeHost {
         today
     }
 
-    pub fn update_snapshot(&self) -> crate::update::ServiceView {
-        self.0
-            .shared
-            .updates
-            .lock()
-            .expect("native updates poisoned")
-            .clone()
-    }
-    /// Exact mission projection, if already read. `read_mission` fetches it.
+    /// Exact mission projection, if already read.
     pub fn mission(&self, id: &str) -> Option<MissionPage> {
         self.0
             .shared
@@ -671,88 +618,12 @@ impl NativeHost {
         }
         rx
     }
-    /// Fresh authoritative reads. Never sends a control.
+    /// Passive refresh for the native read-only diagnostic example.
     pub fn refresh(&self) -> Receiver<Result<IntentOutcome, Error>> {
         self.request(Work::Refresh)
     }
-    /// Fetch exact detail, not a catalog/WS body.
-    pub fn read_mission(&self, id: String) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::Detail(id))
-    }
-    /// Explicit new user intent, bound to the displayed control revision.
-    pub fn pause(&self, id: String, revision: u32) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::Control {
-            mission: id,
-            revision,
-            action: ControlAction::Pause,
-            pause: None,
-        })
-    }
-    /// Resume only the named Pause. The daemon preserves later Stop/other holds.
-    pub fn resume(
-        &self,
-        id: String,
-        revision: u32,
-        pause: String,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::Control {
-            mission: id,
-            revision,
-            action: ControlAction::Resume,
-            pause: Some(pause),
-        })
-    }
-    /// Exact saved-operation GET only. Missing records stay Unknown.
-    pub fn check(&self, id: String) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::Check(id))
-    }
-    /// Explicit user intent naming the new mission the page showed.
-    pub fn stop_replanning(
-        &self,
-        intent: crate::model::StopReplanningIntent,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::StopReplanning {
-            mission: intent.mission_id,
-            successor: intent.successor_id,
-        })
-    }
-    /// Archive or reopen once, or with `check` only read the status again.
-    pub fn lifecycle(
-        &self,
-        intent: crate::model::LifecycleIntent,
-        action: crate::model::LifecycleAction,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::Lifecycle {
-            mission: intent.mission_id,
-            action,
-            check: intent.check,
-        })
-    }
-    /// Rename once, or with `check` only read the title again.
-    pub fn rename(
-        &self,
-        intent: crate::model::RenameIntent,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::Rename {
-            mission: intent.mission_id,
-            title: intent.title,
-            check: intent.check,
-        })
-    }
-    /// Read the complete saved interview and planning proposal. Never starts a worker.
-    pub fn read_planning(&self, mission: String) -> Receiver<Result<IntentOutcome, Error>> {
-        if valid_id(&mission) && self.0.shared.open().is_ok() {
-            self.0.shared.planning_shown.store(true, Ordering::SeqCst);
-            *self
-                .0
-                .shared
-                .planning_mission
-                .lock()
-                .expect("native planning selection poisoned") = Some(mission.clone());
-        }
-        self.request(Work::ReadPlanning(mission))
-    }
-    /// Full existing protocol records. The native feed maps them to its typed UI model.
+
+    /// Full existing protocol records. The bridge maps them to the UI model.
     pub fn planning(&self, mission: &str) -> Option<serde_json::Value> {
         self.0
             .shared
@@ -783,28 +654,6 @@ impl NativeHost {
             .filter(|r| r["missionId"] == mission)
             .cloned()
             .collect()
-    }
-    /// Explicit human save or complete submission, bound to the displayed context and CAS.
-    pub fn write_interview(
-        &self,
-        mission: String,
-        digest: String,
-        request: serde_json::Value,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::WriteInterview {
-            mission,
-            digest,
-            request,
-        })
-    }
-    /// Passive lookup of one retained exact operation. Never resends a human action.
-    pub fn check_planning(&self, operation_id: String) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::CheckPlanning(operation_id))
-    }
-    /// Passive authenticated profile discovery for a fresh New screen. No enrollment.
-    /// Keeps uncertain intents for exact lookup; never replaces or replays them.
-    pub fn prepare_planning(&self) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::PreparePlanning)
     }
     /// Display-only selection. No home, profile, owner or transport crosses the VM.
     pub fn planning_setup(&self) -> Option<crate::plan::Setup> {
@@ -839,22 +688,6 @@ impl NativeHost {
             .cloned()
             .collect()
     }
-    /// Explicit human New intent. All identities come from the native prepared selection.
-    pub fn enroll_planning(
-        &self,
-        intent: crate::plan::NewIntent,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::EnrollPlanning(intent))
-    }
-    /// Opens `mission`'s planning chat and reads its newest rows, or the
-    /// rows before what shows. Passive: it sends nothing to the agent.
-    pub fn read_planning_chat(
-        &self,
-        mission: String,
-        older: bool,
-    ) -> Receiver<Result<IntentOutcome, Error>> {
-        self.request(Work::PlanningChat { mission, older })
-    }
     /// The open planning chat of `mission`, as read. None when it is not open.
     pub fn planning_chat(&self, mission: &str) -> Option<serde_json::Value> {
         self.0
@@ -867,7 +700,7 @@ impl NativeHost {
             .map(planning_chat::ChatState::view)
     }
     /// Closes the planning chat: it is no longer read or kept.
-    pub fn close_planning_chat(&self) {
+    pub(crate) fn close_planning_chat(&self) {
         *self
             .0
             .shared
@@ -887,7 +720,7 @@ impl NativeHost {
             .map(session_chat::ChatState::view)
     }
     /// Closes chat `session` when it is open: it is no longer read or kept.
-    pub fn close_session_chat(&self, session: &str) {
+    pub(crate) fn close_session_chat(&self, session: &str) {
         let mut chat = self
             .0
             .shared
@@ -900,7 +733,7 @@ impl NativeHost {
     }
     /// `mission`'s planning page closed: activity notices stop reading it,
     /// and its chat closes. Another mission's page, opened since, stays.
-    pub fn leave_planning(&self, mission: &str) {
+    pub(crate) fn leave_planning(&self, mission: &str) {
         let shared = &self.0.shared;
         let current = shared
             .planning_mission
@@ -1289,7 +1122,6 @@ fn sync_focus(
         .lock()
         .expect("attention drafts poisoned")
         .clear();
-    *shared.changes.lock().expect("native Changes poisoned") = changes::State::default();
     *shared
         .planning_inventory
         .lock()
@@ -1329,7 +1161,6 @@ fn restore_project(journal: &Journal, shared: &Shared, source: &Source) -> Resul
                 draft.value.clone(),
             );
     }
-    changes::restore(journal, source, shared);
     if let Some(cache) = journal.cached(source) {
         let day = ritual::local_day(shared);
         shared.change(|desk| {
@@ -1556,7 +1387,6 @@ async fn run(
                     }
                     Work::UpdateStartup => updates::handle(&root, &mut journal, &shared, &mut updates, updates::Command::Startup).await,
                     Work::RitualResults => ritual::read_results(&root, day.as_ref(), &mut journal, &shared, request.epoch).await,
-                    Work::AcceptUpdateLoss(record) => handle(&root, &mut journal, &shared, request.epoch, Work::AcceptUpdateLoss(record)).await,
                     work => handle(t, &mut journal, &shared, request.epoch, work).await,
                 };
                 if local_ritual || (preparing && matches!(result, Err(Error::Unavailable))) {
@@ -1740,7 +1570,7 @@ async fn handle(
     // Start from the latest epoch; every GET and the final publication still requalify it.
     let epoch = if matches!(
         &work,
-        Work::Detail(_) | Work::PlanningInventory | Work::PlanningChat { .. } | Work::Refresh
+        Work::Detail(_) | Work::PlanningInventory | Work::Refresh
     ) {
         shared.open()?;
         shared.epoch.load(Ordering::SeqCst)
@@ -1756,11 +1586,9 @@ async fn handle(
         &work,
         Work::Check(_)
             | Work::CheckPlanning(_)
-            | Work::DismissNew
             | Work::EnrollPlanning(_)
             | Work::PreparePlanning
             | Work::AttentionCheck(_)
-            | Work::Changes(changes::Work::Check(_))
             // Its own tries check the read fence, so one moved before it starts is retried too.
             | Work::WriteInterview { .. }
     ) {
@@ -1769,12 +1597,6 @@ async fn handle(
         shared.current(epoch)?;
     }
     match work {
-        Work::AcceptUpdateLoss(record) => {
-            if record.source != t.source {
-                return Err(Error::Identity);
-            }
-            update_loss::save(journal, record)?;
-        }
         Work::Bridge(_) => return Err(Error::Invalid),
         Work::UpdateCommit { .. } | Work::UpdateStartup => return Err(Error::Invalid),
         Work::Ritual(_) => return Err(Error::Invalid),
@@ -1785,7 +1607,6 @@ async fn handle(
         | Work::AttentionDraft(_, _)) => {
             return attention::handle(t, journal, shared, epoch, work).await;
         }
-        Work::Changes(work) => return changes::handle(t, journal, shared, epoch, work).await,
         Work::PreparePlanning => return enrollment::prepare(t, journal, shared, epoch).await,
         Work::PlanningInventory => {
             shared
@@ -1795,11 +1616,6 @@ async fn handle(
         }
         Work::EnrollPlanning(intent) => {
             return enrollment::send(t, journal, shared, epoch, intent).await;
-        }
-        Work::PlanningChat { mission, older } => {
-            // Passive. A failed read keeps what shows; the chat says why.
-            let _ = planning_chat::read(t, shared, &mission, older).await;
-            return Ok(shared.outcome(OutcomeStatus::Accepted, ""));
         }
         Work::ReadPlanning(mission) => {
             let result = read_planning(t, shared, epoch, &mission).await;
@@ -1886,24 +1702,6 @@ async fn handle(
                 planning_status(&record),
                 "Exact saved operation lookup only.",
             ));
-        }
-        Work::DismissNew => {
-            let dismissed: Vec<_> = journal
-                .planning
-                .values()
-                .filter(|r| {
-                    planning::in_scope(&r.source, &t.source)
-                        && r.operation["kind"] == "planning-enroll"
-                        && r.pending()
-                })
-                .cloned()
-                .collect();
-            for mut record in dismissed {
-                record.dismissed = true;
-                journal.save_planning(record.clone())?;
-                publish_planning(shared, &record);
-            }
-            return Ok(shared.outcome(OutcomeStatus::Accepted, "Dismissed. Nothing was sent."));
         }
         Work::Refresh => refresh(t, journal, shared, epoch, None).await?,
         Work::Lifecycle {

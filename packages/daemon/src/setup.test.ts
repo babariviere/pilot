@@ -18,7 +18,7 @@ import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
 const worker = new URL("./setup-worker.ts", import.meta.url).href;
-const clientModule = new URL("../../kernel/src/credential-client.ts", import.meta.url).href;
+const clientModule = import.meta.resolve("@pilot/kernel/credential-client");
 const fakeNetwork = `
 globalThis.fetch=async(input)=>{
  const url=String(input);

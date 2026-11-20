@@ -1,7 +1,8 @@
 // Inert wire view only. Do not import the daemon's Node/provider type graph into NSH.
 
 import { isSavedArtifactKind, validImageSource } from "./artifactReads";
-import { call, type Refusal } from "./bridge";
+import { call } from "./bridge";
+import type { Refusal } from "./refusals";
 import type { ArtifactSelection, CapturedArtifact } from "./deliveryArtifactContract";
 import type { DeliveredWork } from "./deliveryContract";
 

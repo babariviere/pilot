@@ -183,12 +183,16 @@ impl Fixture {
             restored: false,
             manifest: Some(manifest),
         };
-        let mut journal = Journal::open(dir.path().join("journal")).unwrap();
+        let path = dir.path().join("journal");
+        let mut journal = Journal::open(path.clone()).unwrap();
         if force {
+            // Production never wrote a loss line; the reader must still accept a stored one.
             let mut open = loss.clone();
             open.closed = false;
-            journal.save_loss(open).unwrap();
-            journal.save_loss(loss).unwrap();
+            journal.test_append(&open).unwrap();
+            journal.test_append(&loss).unwrap();
+            drop(journal);
+            journal = Journal::open(path).unwrap();
         } else {
             journal.save_window(capture.clone()).unwrap();
         }

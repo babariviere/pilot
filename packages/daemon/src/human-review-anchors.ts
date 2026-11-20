@@ -2,8 +2,9 @@ import { createHash } from "node:crypto";
 import type { HumanReviewAnchor, HumanReviewFeedback, HumanReviewLineRange } from "@pilot/protocol";
 import { exact, identifier, repositoryIdPattern } from "./jj-ownership-contract.ts";
 import { type ReviewSourceRef, reviewPath } from "./review-snapshot-contract.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
-const localId = (v: unknown) => identifier(v, /^[A-Za-z0-9_-]{1,128}$/);
+const localId = (v: unknown) => identifier(v, OPAQUE_ID);
 const text = (v: unknown, max = 8192) => {
 	if (typeof v !== "string" || !v.trim() || Buffer.byteLength(v) > max) throw new Error("Invalid review text");
 };

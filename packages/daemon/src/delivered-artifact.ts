@@ -21,8 +21,9 @@ import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { UserVerifications } from "./user-verification.ts";
+import { OPAQUE_ID } from "./validate.ts";
 
-const id = (s: unknown): s is string => typeof s === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(s);
+const id = (s: unknown): s is string => typeof s === "string" && OPAQUE_ID.test(s);
 const hash = (s: unknown): s is string => typeof s === "string" && /^[a-f0-9]{64}$/.test(s);
 const uuid = (s: unknown): s is string =>
 	typeof s === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(s);

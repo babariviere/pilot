@@ -10,6 +10,7 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { pilotPrompt } from "./policy.ts";
 import { createScreenTools, SCREEN_TOOL_NAMES } from "./screen-tools.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 test("screen tools send one operation each and return the window's answer, picture or refusal", async () => {
 	const calls: ScreenOperation[] = [];
@@ -112,11 +113,13 @@ test("only a screen agent chat lists the ui_* tools and diagnostic_context", { t
 			},
 			{
 				onWorking: () => {},
-				callScreen: async (operation) => {
-					screenCalls.push(operation);
-					return { entries: [] };
-				},
-				callDiagnosticContext: async () => ({}) as never,
+				call: fakeHostCall({
+					screen: async ({ operation }) => {
+						screenCalls.push(operation);
+						return { entries: [] };
+					},
+					"diagnostics.context": async () => ({}) as never,
+				}),
 			},
 		);
 		const names = native.session.getAllTools().map((tool) => tool.name);

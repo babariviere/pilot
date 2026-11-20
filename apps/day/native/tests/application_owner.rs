@@ -292,13 +292,23 @@ mount(()=><View class="flex-1"><Input multiline value={text()} onChange={({value
         .saved_window()
         .expect("ordinary Close durably saved its view");
     assert_eq!(saved.view["goal"], changed);
-    let reopened = NativeHost::open(saved.source.clone(), f.directory.join("journal")).unwrap();
+    let reopened = NativeHost::open_with_options(
+        saved.source.clone(),
+        f.directory.join("journal"),
+        Default::default(),
+    )
+    .unwrap();
     pump(|| reopened.saved_window().is_some());
     assert_eq!(reopened.saved_window(), Some(saved.clone()));
     assert_eq!(reopened.close().recv_blocking().unwrap(), Ok(()));
     let mut other_source = saved.source;
     other_source.profile = f.directory.join("another-profile");
-    let other = NativeHost::open(other_source, f.directory.join("journal")).unwrap();
+    let other = NativeHost::open_with_options(
+        other_source,
+        f.directory.join("journal"),
+        Default::default(),
+    )
+    .unwrap();
     pump(|| other.snapshot().freshness.state == pilot_day_native::FreshnessState::Unavailable);
     assert!(
         other.saved_window().is_none(),

@@ -15,7 +15,12 @@ fn preferences_follow_the_explicit_project_not_window_focus() {
     let mut global = fixed.clone();
     global.project = None;
     let global_bridge = |f: &Fixture, source: Source| {
-        let host = NativeHost::open(source, f.info["ledger"].as_str().unwrap().into()).unwrap();
+        let host = NativeHost::open_with_options(
+            source,
+            f.info["ledger"].as_str().unwrap().into(),
+            Default::default(),
+        )
+        .unwrap();
         Bridge::new(DayRoot::new(host))
     };
     let bridge = global_bridge(&f, global.clone());

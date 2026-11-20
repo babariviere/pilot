@@ -1,9 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
 	DashboardScheduledItem,
-	InsightsReviewDispatch,
-	InsightsReviewRun,
-	InsightsStatus,
 	ScheduledItem,
 	ScheduleHome,
 	SchedulePatch,
@@ -14,7 +11,8 @@ import type {
 	SpawnRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound, ScheduleInputHeld, ServiceUnavailable } from "./errors.ts";
-import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
+import { parseScheduleRequestId, scheduleRequestId } from "./input-requests.ts";
+import { InsightsSchedule, type InsightsScheduleDispatch } from "./insights-schedule.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -43,7 +41,8 @@ export interface ScheduleClock {
 	now(): number;
 	setTimeout(callback: () => void, delayMs: number): () => void;
 }
-const clock: ScheduleClock = {
+/** Real time. Its timers never keep the daemon alive. */
+export const systemClock: ScheduleClock = {
 	now: Date.now,
 	setTimeout(callback, ms) {
 		const timer = setTimeout(callback, ms);
@@ -51,12 +50,14 @@ const clock: ScheduleClock = {
 		return () => clearTimeout(timer);
 	},
 };
+/** A run admitted more than five minutes after its due time is shown as late. */
+const LATE_MS = 300_000;
 function companionReceipt(run: ScheduleRun, due: number, count = run.count): ScheduleRun {
 	const admission = run.admission;
 	return {
 		...run,
 		due,
-		late: (run.admittedAt ?? run.at) - due > 300000 ? true : undefined,
+		late: (run.admittedAt ?? run.at) - due > LATE_MS ? true : undefined,
 		count,
 		admission: admission
 			? {
@@ -83,7 +84,7 @@ export interface ScheduleInputGate {
 	acceptedAt(sessionId: string, requestId: string, content?: string): number | undefined;
 	now(): number;
 }
-export interface ScheduleDispatch {
+interface ScheduleDispatch {
 	setScheduleAdmission?(gate: ScheduleInputGate): void;
 	resumeScheduled?(): void | Promise<void>;
 	pendingScheduled?(): boolean;
@@ -108,30 +109,9 @@ export interface ScheduleDispatch {
 				role?: string;
 		  }
 		| undefined;
-	insightsStatus?(id: string): InsightsStatus | undefined;
-	insightsOwnerStatus?(
-		id: string,
-	): { owner: import("@pilot/protocol").InsightsWorkspaceOwner; available: boolean } | undefined;
-	insightsOwnerScheduleBounds?(
-		id: string,
-		revision: number,
-		recurrence?: ScheduleRecurrence,
-	): InsightsReviewDispatch["bounds"];
-	dayInsightsScheduleReady?(id: string, revision: number): boolean;
-	dispatchInsightsOwnerReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
-	insightsOwnerReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
-	insightsReplacementTarget?(id: string): void;
-	dispatchInsightsReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
-	insightsReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
-	onInsightsReviewChange?(listener: () => void): () => void;
-	insightsScheduleBounds?(
-		id: string,
-		revision?: number,
-		recurrence?: ScheduleRecurrence,
-	): InsightsReviewDispatch["bounds"];
 }
-export interface ScheduleServiceDeps {
-	sessions: ScheduleDispatch;
+interface ScheduleServiceDeps {
+	sessions: ScheduleDispatch & Partial<InsightsScheduleDispatch>;
 	projects: Pick<ProjectStore, "require">;
 	missions?: Pick<MissionStore, "require"> & Partial<Pick<MissionStore, "controls" | "onChange">>;
 	trackedItems?: Pick<TrackedItemStore, "require" | "patch">;
@@ -169,11 +149,23 @@ export class ScheduleService {
 	private disposers: Array<() => void> = [];
 	private acknowledgements = new Map<string, { id: string; at: number }>();
 	readonly store: ScheduleStore;
+	readonly insights: InsightsSchedule;
 	private readonly deps: ScheduleServiceDeps;
 	constructor(store: ScheduleStore, deps: ScheduleServiceDeps) {
 		this.store = store;
 		this.deps = deps;
-		this.time = deps.clock ?? clock;
+		this.time = deps.clock ?? systemClock;
+		this.insights = new InsightsSchedule({
+			store,
+			sessions: deps.sessions,
+			run: (task, work) => this.runtime.run(task, work),
+			now: () => this.time.now(),
+			assertOpen: () => this.assertOpen(),
+			checkHome: (expected, recurring) => this.checkHome(expected, recurring),
+			automationsEnabled: () => !!this.deps.automationsEnabled?.(),
+			inventoryLoaded: () => this.inventoryLoaded,
+			validate: (request, owner) => this.validate(request, owner),
+		});
 		deps.sessions.setScheduleAdmission?.({
 			check: (id, req, content) => this.inputAdmission(id, req, content),
 			denied: (id, req, reason) => this.inputDenied(id, req, reason),
@@ -183,7 +175,7 @@ export class ScheduleService {
 		});
 	}
 	private acceptedAt(id: string, requestId: string, content?: string): number | undefined {
-		const key = /^schedule:([^:]+)(?::\d+)?$/.exec(requestId)?.[1];
+		const key = parseScheduleRequestId(requestId)?.scheduleId;
 		if (!key) return;
 		let row: ScheduledItem;
 		try {
@@ -201,7 +193,7 @@ export class ScheduleService {
 	}
 	private async inputAccepted(id: string, requestId: string, at: number): Promise<void> {
 		this.assertOpen();
-		const key = /^schedule:([^:]+)(?::\d+)?$/.exec(requestId)?.[1];
+		const key = parseScheduleRequestId(requestId)?.scheduleId;
 		if (!key) return;
 		let row: ScheduledItem;
 		try {
@@ -220,7 +212,7 @@ export class ScheduleService {
 			const run: ScheduleRun = {
 				...previous,
 				admittedAt: at,
-				...(at - previous.due > 300000 ? { late: true } : {}),
+				...(at - previous.due > LATE_MS ? { late: true } : {}),
 			};
 			if (previous.admittedAt !== at)
 				row = await this.store.replace(row, {
@@ -239,7 +231,7 @@ export class ScheduleService {
 				const prior = related.runs?.find((r) => r.admission?.requestId === requestId);
 				if (!prior || prior.admittedAt === at) continue;
 				const next = companionReceipt(
-					{ ...prior, admittedAt: at, ...(at - prior.due > 300000 ? { late: true } : {}) },
+					{ ...prior, admittedAt: at, ...(at - prior.due > LATE_MS ? { late: true } : {}) },
 					prior.due,
 				);
 				await this.store.replace(related, {
@@ -252,7 +244,7 @@ export class ScheduleService {
 		});
 	}
 	private requestFor(item: ScheduledItem, due?: number): string {
-		return `schedule:${item.id}${due === undefined ? "" : `:${due}`}`;
+		return scheduleRequestId(item.id, due);
 	}
 	private chatFor(requestId: string): string {
 		const h = createHash("sha256").update(requestId).digest("hex");
@@ -297,11 +289,11 @@ export class ScheduleService {
 		content: string,
 	): "ready" | "held" | "expired" | "invalid" | "stale_input" {
 		if (!this.inventoryLoaded || this.stopped || this.runtime.frozen) return "held";
-		const parts = /^schedule:([^:]+)(?::(\d+))?$/.exec(requestId);
+		const parts = parseScheduleRequestId(requestId);
 		if (!parts) return "invalid";
 		let row: ScheduledItem;
 		try {
-			row = this.store.require(parts[1]!);
+			row = this.store.require(parts.scheduleId);
 		} catch {
 			return "invalid";
 		}
@@ -338,10 +330,10 @@ export class ScheduleService {
 		}
 		if (!this.validCheckIn(row) || target?.archivedAt !== undefined) return "invalid";
 		if (row.trigger === "at") {
-			if (parts[2] || !["dispatching", "fired"].includes(row.state)) return "invalid";
+			if (parts.due !== undefined || !["dispatching", "fired"].includes(row.state)) return "invalid";
 			if (row.expiresAt !== undefined && row.expiresAt <= this.time.now()) return "expired";
 		} else if (row.trigger === "recurring") {
-			const due = Number(parts[2]);
+			const due = parts.due ?? Number.NaN;
 			if (!Number.isSafeInteger(due) || !["dispatching", "pending"].includes(row.state) || row.handledThrough! < due)
 				return "invalid";
 			if (this.time.now() >= new RecurrenceCalendar(row.recurrence!).periodEnd(due)) return "expired";
@@ -375,11 +367,11 @@ export class ScheduleService {
 		requestId: string,
 		reason: "expired" | "invalid" | "unknown" | "stale_input",
 	): Promise<void> {
-		const parts = /^schedule:([^:]+)(?::(\d+))?$/.exec(requestId);
+		const parts = parseScheduleRequestId(requestId);
 		if (!parts) return;
 		let row: ScheduledItem;
 		try {
-			row = this.store.require(parts[1]!);
+			row = this.store.require(parts.scheduleId);
 		} catch {
 			return;
 		}
@@ -392,7 +384,7 @@ export class ScheduleService {
 					: reason === "expired"
 						? "Expired before input admission"
 						: "Schedule agreement or target changed before input admission";
-		const due = parts[2] === undefined ? row.at! : Number(parts[2]);
+		const due = parts.due ?? row.at!;
 		const run: ScheduleRun = {
 			due,
 			at: this.time.now(),
@@ -557,8 +549,8 @@ export class ScheduleService {
 			);
 		if (this.deps.subscribeAdmission) this.disposers.push(this.deps.subscribeAdmission(() => this.requestSweep()));
 		if (this.deps.missions?.onChange) this.disposers.push(this.deps.missions.onChange(() => this.requestSweep()));
-		if (this.deps.sessions.onInsightsReviewChange)
-			this.disposers.push(this.deps.sessions.onInsightsReviewChange(() => this.requestSweep()));
+		const stopInsights = this.insights.onChange(() => this.requestSweep());
+		if (stopInsights) this.disposers.push(stopInsights);
 		this.requestSweep();
 	}
 	private enqueue(work: () => Promise<void>): Promise<void> {
@@ -610,14 +602,7 @@ export class ScheduleService {
 		if (this.deps.automationsEnabled?.() === false) return [];
 		return this.store.pendingItems().filter(({ id }) => {
 			const item = this.store.require(id);
-			return (
-				!this.missionHeld(item) &&
-				(!item.insightsOwnerDestination ||
-					this.deps.sessions.dayInsightsScheduleReady?.(
-						item.insightsOwnerDestination.reportSessionId,
-						item.insightsSettingsRevision ?? 0,
-					) !== false)
-			);
+			return !this.missionHeld(item) && this.insights.ready(item);
 		});
 	}
 	private missionId(item: ScheduledItem): string | undefined {
@@ -662,7 +647,7 @@ export class ScheduleService {
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
 		// Passive terminal lookup also runs while dispatch is paused/offline/disabled.
-		await this.reconcileReviews(this.recoveryPending);
+		await this.insights.reconcile(this.recoveryPending);
 		this.recoveryPending = false;
 		for (const expiry of this.store.expiringItems()) {
 			if (expiry.expiresAt! <= this.time.now()) {
@@ -783,6 +768,8 @@ export class ScheduleService {
 					this.requestSweep();
 				},
 				Math.min(
+					// Linux monotonic timers don't count time spent suspended. Recheck the wall-clock deadline
+					// periodically so a wake without a detection event can't leave overdue work waiting for hours.
 					this.deps.platform === "linux" || (!this.deps.platform && process.platform === "linux")
 						? 900_000
 						: 2_147_483_647,
@@ -829,67 +816,9 @@ export class ScheduleService {
 			return;
 		}
 		// Reserve the identity in the occurrence CAS, before any review preparation or input placement.
-		// Destination role is host-owned. Message text cannot select/mint Insights authority.
-		const insights =
-			item.target.kind === "message" ? this.deps.sessions.insightsStatus?.(item.target.sessionId) : undefined;
-		const ownerDestination = item.insightsOwnerDestination;
-		if (
-			ownerDestination &&
-			this.deps.sessions.dayInsightsScheduleReady?.(
-				ownerDestination.reportSessionId,
-				item.insightsSettingsRevision ?? 0,
-			) === false
-		)
-			return;
-		const destination =
-			item.insightsDestination ??
-			(insights
-				? {
-						sessionId: insights.sessionId,
-						projectId: insights.projectId,
-						missionId: insights.missionId,
-					}
-				: undefined);
-		let bounds: InsightsReviewDispatch["bounds"] = { ...INSIGHTS_INITIAL_DEFAULTS.bounds };
-		let settingsReady = true;
-		if (ownerDestination) {
-			try {
-				if (!this.deps.sessions.insightsOwnerScheduleBounds) throw new Conflict("Owner execution unsupported");
-				bounds = this.deps.sessions.insightsOwnerScheduleBounds(
-					ownerDestination.reportSessionId,
-					item.insightsSettingsRevision ?? 0,
-					item.recurrence,
-				);
-			} catch {
-				settingsReady = false;
-			}
-		} else if (destination) {
-			try {
-				bounds =
-					this.deps.sessions.insightsScheduleBounds?.(
-						destination.sessionId,
-						item.insightsSettingsRevision,
-						item.recurrence,
-					) ?? bounds;
-			} catch {
-				settingsReady = false;
-			}
-		}
-		const review =
-			(destination || ownerDestination) && item.target.kind === "message"
-				? {
-						sessionId: item.target.sessionId,
-						request: {
-							runId: randomUUID(),
-							windowStart: new Date(calendar.latest(due - 1)).toISOString(),
-							windowEnd: new Date(due).toISOString(),
-							bounds,
-							...(item.insightsSettingsRevision === undefined
-								? {}
-								: { settingsRevision: item.insightsSettingsRevision }),
-						},
-					}
-				: undefined;
+		const insights = this.insights.prepare(item, due, calendar);
+		if (!insights) return;
+		const { destination, review } = insights;
 		let claimed: ScheduledItem;
 		try {
 			claimed = await this.store.replace(item, {
@@ -958,7 +887,7 @@ export class ScheduleService {
 				delete run.insightsReview; // No review was admitted for a skipped occurrence.
 			} else {
 				run.at = this.time.now();
-				const late = run.at - due > 300_000;
+				const late = run.at - due > LATE_MS;
 				const prefix = late ? lateScheduleLine(claimed.title, due, run.at, calendar) + "\n" : "";
 				if (!review && claimed.admission && prefix) {
 					const content =
@@ -1002,36 +931,7 @@ export class ScheduleService {
 				} else {
 					run.sessionId = claimed.target.sessionId;
 					if (claimed.insightsReview) {
-						const { sessionId, request } = claimed.insightsReview;
-						run.insightsReview = { runId: request.runId, state: "unresolved" };
-						if (ownerDestination) {
-							const current = this.deps.sessions.insightsOwnerStatus?.(sessionId);
-							if (
-								!settingsReady ||
-								!current?.available ||
-								canonicalJSON(current.owner) !== canonicalJSON(ownerDestination) ||
-								claimed.projectId !== current.owner.projectId ||
-								!this.deps.sessions.dispatchInsightsOwnerReview
-							)
-								throw new Conflict("Owner authority unavailable; review not sent");
-							this.applyReviewStatus(
-								run,
-								await this.deps.sessions.dispatchInsightsOwnerReview(sessionId, request),
-							);
-						} else {
-							if (
-								!settingsReady ||
-								!insights?.available ||
-								insights.projectId !== claimed.projectId ||
-								insights.projectId !== destination?.projectId ||
-								insights.sessionId !== destination?.sessionId ||
-								insights.missionId !== destination?.missionId ||
-								!this.deps.sessions.dispatchInsightsReview
-							)
-								throw new Conflict("Insights authority unavailable; review not sent");
-							const status = await this.deps.sessions.dispatchInsightsReview(sessionId, request);
-							this.applyReviewStatus(run, status);
-						}
+						await this.insights.dispatch(insights, claimed, run);
 					} else {
 						if (this.deps.sessions.sendScheduled)
 							await this.deps.sessions.sendScheduled(
@@ -1044,7 +944,7 @@ export class ScheduleService {
 								run.sessionId,
 								prefix + claimed.target.message,
 								"followUp",
-								`schedule:${claimed.id}:${due}`,
+								this.requestFor(claimed, due),
 							);
 						run.outcome = "sent";
 					}
@@ -1070,13 +970,12 @@ export class ScheduleService {
 				run.outcome = "unknown";
 				run.error = `Input admission is unknown; nothing will be resent. ${run.error ?? ""}`.slice(0, 1000);
 			}
-			// A lost dispatch ACK is lookup-only. Never call dispatch again for this occurrence.
-			if (run.insightsReview) await this.lookupReview(run);
+			if (run.insightsReview) await this.insights.lookup(run);
 		}
 		const acknowledged = this.acknowledgements.get(this.requestFor(claimed, due));
 		if (acknowledged) {
 			run.admittedAt = acknowledged.at;
-			if (acknowledged.at - due > 300000) run.late = true;
+			if (acknowledged.at - due > LATE_MS) run.late = true;
 			if (run.outcome === "unknown") {
 				run.outcome = claimed.target.kind === "chat" ? "started" : "sent";
 				run.error = "Input acknowledged; schedule bookkeeping needs inspection";
@@ -1088,72 +987,6 @@ export class ScheduleService {
 		if (this.store.require(claimed.id).revision === claimed.revision)
 			await this.finishOccurrence(claimed, run, permanentlyMissing || run.outcome === "unknown");
 		this.acknowledgements.delete(this.requestFor(claimed, due));
-	}
-	private applyReviewStatus(run: ScheduleRun, status: InsightsReviewRun | null): void {
-		if (!run.insightsReview) return;
-		if (!status || status.runId !== run.insightsReview.runId) {
-			run.insightsReview.state = "unresolved";
-			run.outcome = "failed";
-			run.error = "Insights review outcome unresolved; never replay this occurrence. Check the chat.";
-			return;
-		}
-		run.insightsReview.state = status.state;
-		if (status.state === "partial" || status.state === "sent") {
-			run.outcome = "sent"; // Placement/persistence only, never completed review or delivery proof.
-			delete run.error;
-		} else {
-			run.outcome = "failed";
-			run.error = `Insights review ${status.state}; never replay this occurrence. ${status.detail}`.slice(0, 1000);
-		}
-	}
-	private async lookupReview(run: ScheduleRun): Promise<void> {
-		try {
-			const status = this.deps.sessions.insightsOwnerStatus?.(run.sessionId!)
-				? await this.deps.sessions.insightsOwnerReviewStatus?.(run.sessionId!, run.insightsReview!.runId)
-				: await this.deps.sessions.insightsReviewStatus?.(run.sessionId!, run.insightsReview!.runId);
-			this.applyReviewStatus(run, status ?? null);
-			if (status?.state === "sent" && !this.deps.sessions.get(run.sessionId!)?.working) {
-				run.outcome = "failed";
-				run.error =
-					"Insights input placed, but no bounded report persisted and chat is idle; outcome unresolved. Never replay this occurrence.";
-			}
-		} catch {
-			this.applyReviewStatus(run, null);
-		}
-	}
-	private async reconcileReviews(includeUnresolved = false): Promise<void> {
-		for (const item of this.store.reviewItems(includeUnresolved)) {
-			const runs = structuredClone(item.runs!);
-			let notice = item.notice;
-			for (const run of runs) {
-				if (
-					!run.insightsReview ||
-					(!["preparing", "ready", "sent"].includes(run.insightsReview.state) &&
-						!(includeUnresolved && run.insightsReview.state === "unresolved"))
-				)
-					continue;
-				await this.lookupReview(run);
-				// Do not replace a newer occurrence's notice or resurrect a dismissed old notice.
-				if (notice?.due === run.due) notice = run.outcome === "sent" && !run.late ? undefined : run;
-				else if (
-					run === runs.at(-1) &&
-					run.outcome === "failed" &&
-					item.runs!.at(-1)!.outcome !== "failed" &&
-					!notice
-				)
-					notice = run;
-			}
-			if (
-				JSON.stringify(runs) === JSON.stringify(item.runs) &&
-				JSON.stringify(notice) === JSON.stringify(item.notice)
-			)
-				continue;
-			try {
-				await this.store.replace(item, { ...item, runs, notice, updatedAt: this.time.now() });
-			} catch (error) {
-				if (!(error instanceof Conflict || error instanceof NotFound)) throw error;
-			}
-		}
 	}
 	private expire(item: ScheduledItem): Promise<ScheduledItem> {
 		return this.store.replace(item, {
@@ -1280,7 +1113,7 @@ export class ScheduleService {
 				const messages = [claimed, ...group].map((r) => (r.target.kind === "message" ? r.target.message : ""));
 				if (this.deps.sessions.sendScheduled)
 					await this.deps.sessions.sendScheduled(sessionId, messages.join("\n\n"), this.requestFor(claimed));
-				else await this.deps.sessions.send(sessionId, messages.join("\n\n"), "followUp", `schedule:${claimed.id}`);
+				else await this.deps.sessions.send(sessionId, messages.join("\n\n"), "followUp", this.requestFor(claimed));
 			}
 			const run: ScheduleRun = {
 				admission: claimed.admission,
@@ -1288,7 +1121,7 @@ export class ScheduleService {
 				at: this.time.now(),
 				outcome: claimed.target.kind === "chat" ? "started" : "sent",
 				sessionId,
-				...(this.time.now() - claimed.at! > 300_000 ? { late: true } : {}),
+				...(this.time.now() - claimed.at! > LATE_MS ? { late: true } : {}),
 			};
 			next = {
 				...claimed,
@@ -1364,7 +1197,7 @@ export class ScheduleService {
 				admittedAt: acknowledged.at,
 				outcome: claimed.target.kind === "chat" ? "started" : "sent",
 				sessionId: sessionId ?? claimed.sessionId,
-				...(acknowledged.at - claimed.at! > 300000 ? { late: true } : {}),
+				...(acknowledged.at - claimed.at! > LATE_MS ? { late: true } : {}),
 				...(next.error ? { error: next.error } : {}),
 			};
 			if (next.error?.startsWith("Input admission is unknown")) {
@@ -1494,7 +1327,7 @@ export class ScheduleService {
 		const data = await this.validate(request);
 		const now = this.time.now();
 		this.checkHome(request.expectedHome, data.trigger === "recurring");
-		if (data.target.kind === "message") this.deps.sessions.insightsReplacementTarget?.(data.target.sessionId);
+		if (data.target.kind === "message") this.insights.replacementTarget(data.target.sessionId);
 		return this.store.create({
 			...data,
 			id: randomUUID(),
@@ -1503,222 +1336,6 @@ export class ScheduleService {
 			...(data.trigger === "recurring" ? { handledThrough: now, runs: [] } : {}),
 			createdAt: now,
 			updatedAt: now,
-		});
-	}
-	/** Native-confirmed orchestration only. Stable ID and atomic overlap guard close lost-ACK races. */
-	createInsights(
-		request: ScheduleRequest,
-		id: string,
-		operationId: string,
-		revalidate: () => void,
-		settingsRevision?: number,
-	): Promise<ScheduledItem> {
-		return this.runtime.run("create", async () => {
-			this.assertOpen();
-			const data = await this.validate(request);
-			if (!data.insightsDestination || data.trigger !== "recurring")
-				throw new Conflict("Insights schedule requires admitted fixed chat");
-			this.checkHome(request.expectedHome, true);
-			if (!this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
-			revalidate();
-			const now = this.time.now();
-			return this.store.create({
-				...data,
-				id,
-				revision: 1,
-				state: "pending",
-				handledThrough: now,
-				runs: [],
-				createdAt: now,
-				updatedAt: now,
-				insightsEnableOperationId: operationId,
-				...(settingsRevision === undefined ? {} : { insightsSettingsRevision: settingsRevision }),
-			});
-		});
-	}
-	/** Trusted owner bridge only. The ordinary request parser cannot supply this destination. */
-	createOwnerInsights(
-		request: ScheduleRequest,
-		owner: import("@pilot/protocol").InsightsWorkspaceOwner,
-		operationId: string,
-		settingsRevision: number,
-		revalidate: () => void,
-	): Promise<ScheduledItem> {
-		return this.runtime.run("create", async () => {
-			this.assertOpen();
-			const data = await this.validate(request, owner);
-			this.checkHome(request.expectedHome, true);
-			if (!this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
-			revalidate();
-			if (
-				data.trigger !== "recurring" ||
-				data.target.kind !== "message" ||
-				data.target.sessionId !== owner.reportSessionId ||
-				data.projectId !== owner.projectId ||
-				data.insightsDestination
-			)
-				throw new Conflict("Exact owner schedule required");
-			const now = this.time.now();
-			return this.store.create({
-				...data,
-				id: owner.scheduleId,
-				revision: 1,
-				state: "pending",
-				handledThrough: now,
-				runs: [],
-				createdAt: now,
-				updatedAt: now,
-				insightsOwnerDestination: owner,
-				insightsEnableOperationId: operationId,
-				insightsSettingsRevision: settingsRevision,
-			});
-		});
-	}
-
-	insightsEnableAvailable(expectedHome: ScheduleHome): void {
-		this.assertOpen();
-		if (!this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
-		this.checkHome(expectedHome, true);
-	}
-	/** Fresh native Apply re-arms one exact cancelled row, preserving occurrence history. */
-	rearmOwnerInsights(
-		expected: ScheduledItem,
-		owner: import("@pilot/protocol").InsightsWorkspaceOwner,
-		operationId: string,
-		settings: import("@pilot/protocol").InsightsSettingsRecord,
-		guard: () => void,
-	): Promise<ScheduledItem> {
-		return this.runtime.run("update", async () => {
-			this.insightsEnableAvailable(owner.expectedHome);
-			const current = this.store.require(owner.scheduleId);
-			if (
-				current.state !== "cancelled" ||
-				current.target.kind !== "message" ||
-				current.target.sessionId !== owner.reportSessionId ||
-				canonicalJSON(current.insightsOwnerDestination) !== canonicalJSON(owner) ||
-				canonicalJSON(current) !== canonicalJSON(expected)
-			)
-				throw new Conflict("owner_apply_cancelled_rule_changed");
-			guard();
-			const now = this.time.now();
-			return this.store.replace(current, {
-				...current,
-				state: "pending",
-				paused: undefined,
-				claimedAt: undefined,
-				at: new RecurrenceCalendar(settings.settings.recurrence).next(now),
-				recurrence: settings.settings.recurrence,
-				handledThrough: now,
-				updatedAt: now,
-				insightsSettingsRevision: settings.revision,
-				insightsEnableOperationId: operationId,
-			});
-		});
-	}
-	insightsReplacementAvailable(expectedHome: ScheduleHome): void {
-		this.insightsEnableAvailable(expectedHome);
-		this.store.assertSettled();
-	}
-	/** Passive reservation fence, independent of the global Automations opt-in. */
-	assertNoLegacyInsights(expectedHome: ScheduleHome): void {
-		this.assertOpen();
-		this.checkHome(expectedHome, false);
-		this.store.assertSettled();
-		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
-		if (this.store.hasInsightsIntent()) throw new Conflict("legacy_transition_required");
-	}
-	assertNoLegacyOwnerExecution(expectedHome: ScheduleHome): void {
-		this.assertOpen();
-		this.checkHome(expectedHome, false);
-		this.store.assertSettled();
-		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
-		if (this.store.hasLegacyInsightsIntent()) throw new Conflict("legacy_transition_required");
-	}
-	assertLegacyDayQuiescent(expectedHome: ScheduleHome): void {
-		this.assertOpen();
-		this.checkHome(expectedHome, false);
-		this.store.assertSettled();
-		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
-		for (const rule of this.store.list())
-			if (
-				!rule.insightsOwnerDestination &&
-				(rule.insightsDestination || rule.insightsEnableOperationId || rule.insightsReview) &&
-				!["cancelled", "completed"].includes(rule.state)
-			)
-				throw new Conflict("legacy_schedule_not_quiescent");
-	}
-	assertTransferredLegacy(expectedHome: ScheduleHome, acknowledged: ScheduledItem[], oldId: string): void {
-		this.assertOpen();
-		this.checkHome(expectedHome, false);
-		this.store.assertSettled();
-		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
-		for (const rule of this.store.legacyInsightsItems(oldId)) {
-			if (!acknowledged.some((ack) => ack.state === "cancelled" && canonicalJSON(ack) === canonicalJSON(rule)))
-				throw new Conflict("legacy_rule_not_exactly_acknowledged");
-		}
-	}
-	/** Confirmed transfer may deny an exact old rule even while global Automations is off. */
-	cancelLegacyForTransfer(
-		expected: ScheduledItem,
-		selector: import("@pilot/protocol").InsightsLegacySelector,
-		guard: () => void,
-	): Promise<ScheduledItem> {
-		return this.runtime.run("remove", async () => {
-			this.assertOpen();
-			this.checkHome(selector.expectedHome, false);
-			this.store.assertSettled();
-			const old = this.store.require(expected.id);
-			if (
-				!old.insightsEnableOperationId ||
-				old.insightsOwnerDestination ||
-				old.state !== "pending" ||
-				canonicalJSON(old) !== canonicalJSON(expected) ||
-				canonicalJSON(old.insightsDestination) !==
-					canonicalJSON({
-						sessionId: selector.reportSessionId,
-						projectId: selector.projectId,
-						missionId: selector.missionId,
-					})
-			)
-				throw new Conflict("legacy_rule_changed_or_cancellation_unknown");
-			guard();
-			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
-		});
-	}
-	/** Exact previewed integration-owned rule only; never dismiss a terminal/manual row. */
-	cancelInsights(expected: ScheduledItem, expectedHome: ScheduleHome, revalidate: () => void): Promise<ScheduledItem> {
-		return this.runtime.run("remove", async () => {
-			this.insightsEnableAvailable(expectedHome);
-			const old = this.store.require(expected.id);
-			if (
-				!old.insightsEnableOperationId ||
-				old.state !== "pending" ||
-				canonicalJSON(old) !== canonicalJSON(expected)
-			)
-				throw new Conflict("Previewed Insights rule changed");
-			revalidate();
-			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
-		});
-	}
-	/** Denial must still work with global Automations disabled. Exact CAS/ACK, never GET equality. */
-	cancelOwnerInsights(
-		expected: ScheduledItem,
-		owner: import("@pilot/protocol").InsightsWorkspaceOwner,
-		revalidate: () => void,
-	): Promise<ScheduledItem> {
-		return this.runtime.run("remove", async () => {
-			this.assertOpen();
-			this.checkHome(owner.expectedHome, false);
-			const old = this.store.require(owner.scheduleId);
-			if (
-				!old.insightsEnableOperationId ||
-				old.state !== "pending" ||
-				canonicalJSON(old) !== canonicalJSON(expected) ||
-				canonicalJSON(old.insightsOwnerDestination) !== canonicalJSON(owner)
-			)
-				throw new Conflict("Owner rule changed or cancellation unknown");
-			revalidate();
-			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
 		});
 	}
 	update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
@@ -1777,7 +1394,7 @@ export class ScheduleService {
 			at: trigger === "at" ? (patch.at ?? old.at!) : undefined,
 			target: patch.target ?? old.target,
 		});
-		if (data.target.kind === "message") this.deps.sessions.insightsReplacementTarget?.(data.target.sessionId);
+		if (data.target.kind === "message") this.insights.replacementTarget(data.target.sessionId);
 		const recurrenceChanged = canonicalJSON(data.recurrence ?? null) !== canonicalJSON(old.recurrence ?? null);
 		return this.store.replace(old, {
 			...old,
@@ -2023,9 +1640,7 @@ export class ScheduleService {
 			if ("trackedItemId" in raw) throw new Error("trackedItemId is only valid for a chat target");
 			if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) throw new Error("sessionId is required");
 			const session = this.deps.sessions.get(raw.sessionId);
-			const ownerStatus = this.deps.sessions.insightsOwnerStatus?.(raw.sessionId);
-			if (ownerStatus && canonicalJSON(ownerStatus.owner) !== canonicalJSON(owner))
-				throw new Conflict("Owner schedules require exact native admission");
+			this.insights.assertOwnerAdmission(raw.sessionId, owner);
 			if (!session) throw new NotFound("Unknown target chat");
 			sessionId = raw.sessionId;
 			projectId = session.projectId;
@@ -2038,20 +1653,10 @@ export class ScheduleService {
 		}
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		if (Buffer.byteLength(JSON.stringify(target)) > 16_384) throw new Error("Schedule target exceeds 16 KiB");
-		const insights =
-			trigger === "recurring" && target.kind === "message"
-				? this.deps.sessions.insightsStatus?.(target.sessionId)
-				: undefined;
+		const insightsDestination =
+			trigger === "recurring" && target.kind === "message" ? this.insights.destination(target.sessionId) : undefined;
 		return {
-			...(insights
-				? {
-						insightsDestination: {
-							sessionId: insights.sessionId,
-							projectId: insights.projectId,
-							missionId: insights.missionId,
-						},
-					}
-				: {}),
+			...(insightsDestination ? { insightsDestination } : {}),
 			title:
 				request.title?.trim() ??
 				(target.kind === "chat" ? target.spawn.title?.trim().slice(0, 200) : undefined) ??

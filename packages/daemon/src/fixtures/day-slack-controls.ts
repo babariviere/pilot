@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { serveCommands } from "./commands.ts";
 import { nativeIntakeFixture } from "../native-intake.fixture.ts";
 
 const f = await nativeIntakeFixture();
@@ -22,7 +22,7 @@ f.server.on("request", (req, res) => {
 	}
 	for (const handle of handlers) handle(req, res);
 });
-f.tracking.slackAdder = async (_context, link) => {
+f.setSlackAdder(async (_context, link) => {
 	assert((await readFile(ledger, "utf8")).includes('"kind":"slack-controls"'), "native journal precedes effect");
 	imports++;
 	return {
@@ -34,9 +34,9 @@ f.tracking.slackAdder = async (_context, link) => {
 		updatedAt: Date.now(),
 		slack: { type: "bug", label: null, severity: "medium", status: "open", overrides: {} },
 	};
-};
-const add = f.tracking.addSlackMessage.bind(f.tracking);
-f.tracking.addSlackMessage = async (...args) => {
+});
+const add = f.tracking.slack.add.bind(f.tracking.slack);
+f.tracking.slack.add = async (...args) => {
 	const item = await add(...args);
 	if (lost) {
 		lost = false;
@@ -56,9 +56,7 @@ console.log(
 		ledger,
 	}),
 );
-for await (const line of createInterface({ input: process.stdin })) {
-	const c = JSON.parse(line);
-	if (c.action === "quit") break;
+await serveCommands(async (c) => {
 	if (c.action === "lost") lost = true;
 	if (c.action === "drop") drop = true;
 	if (c.action === "change") await f.projects.update(f.project.id, { name: "Changed project" });
@@ -79,14 +77,11 @@ for await (const line of createInterface({ input: process.stdin })) {
 				updatedAt: Date.now() - n,
 			})),
 		);
-	console.log(
-		JSON.stringify({
-			imports,
-			external: f.stats().external,
-			tracking: f.projects.require(f.project.id).tracking,
-			intake: await f.tracking.intakeSources(f.project.id),
-		}),
-	);
-}
-process.stdin.destroy();
+	return {
+		imports,
+		external: f.stats().external,
+		tracking: f.projects.require(f.project.id).tracking,
+		intake: await f.tracking.intakeSources(f.project.id),
+	};
+});
 await f.close();

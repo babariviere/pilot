@@ -35,7 +35,7 @@ export interface ProbeHost {
 	excluded: string[];
 }
 
-export interface ProbeRun {
+interface ProbeRun {
 	code: number | null;
 	output: string;
 	timedOut: boolean;
@@ -94,14 +94,14 @@ export const probeDeps: ProbeDeps = {
 	},
 };
 
-export interface ProbeResult {
+interface ProbeResult {
 	path: string;
 	version?: string;
 	/** "timed out", "exit 1", "no version in output". */
 	error?: string;
 }
 
-export interface InstallerProbe {
+interface InstallerProbe {
 	mise?: string;
 	homebrew?: string;
 	system?: "apt-get" | "dnf" | "yum";
@@ -109,7 +109,7 @@ export interface InstallerProbe {
 }
 
 /** What mise reports as installed, by tool name as mise lists it ("go", "aqua:owner/repo"). */
-export type MiseInstalls = Record<string, { version: string; path: string }[]>;
+type MiseInstalls = Record<string, { version: string; path: string }[]>;
 
 export interface EnvironmentProbes {
 	/** Versions in mise's install records, for the profile's tools. */
@@ -128,7 +128,7 @@ function homebrewBins(host: Pick<ProbeHost, "platform" | "home">): string[] {
 }
 
 /** Variables for probes: no inherited environment, no project config, no downloads. */
-export function probeEnvironment(host: ProbeHost, executable: string): NodeJS.ProcessEnv {
+function probeEnvironment(host: ProbeHost, executable: string): NodeJS.ProcessEnv {
 	return {
 		PATH: [dirname(executable), "/usr/bin", "/bin"].join(delimiter),
 		HOME: host.home,
@@ -259,7 +259,7 @@ export function miseInstallDir(tool: string): string {
  * mise's install records for these tools: real version directories with a bin directory, without running mise.
  * Alias links (such as installs/node/20 → 20.11.1) are skipped; the versions they point to are listed themselves.
  */
-export async function miseInstalls(
+async function miseInstalls(
 	host: Pick<ProbeHost, "miseDataDir">,
 	tools: string[],
 	deps: ProbeDeps = probeDeps,
@@ -302,9 +302,9 @@ export async function miseRegistry(
 	return { mise, tools: result?.code === 0 ? parseMiseRegistry(result.output) : [] };
 }
 
-export const POSTGRES_PATTERN = /\(PostgreSQL\)\s+(\d+(?:\.\d+)?)/;
+const POSTGRES_PATTERN = /\(PostgreSQL\)\s+(\d+(?:\.\d+)?)/;
 
-export function postgresDirs(host: Pick<ProbeHost, "platform" | "home">, major: string): string[] {
+function postgresDirs(host: Pick<ProbeHost, "platform" | "home">, major: string): string[] {
 	return [
 		...homebrewBins(host).map((bin) => join(dirname(bin), "opt", `postgresql@${major}`, "bin")),
 		`/usr/lib/postgresql/${major}/bin`,

@@ -13,7 +13,7 @@ import { loadBaseline } from "./baseline.ts";
 
 const baseline = process.argv[2];
 const rounds = Number(process.argv[3] ?? 3);
-if (!baseline || !/^[a-f\d]{6,40}$/.test(baseline)) throw new Error("Pass a baseline commit hash");
+if (!baseline) throw new Error("Pass a baseline commit hash");
 if (!Number.isInteger(rounds) || rounds < 1 || rounds > 10) throw new Error("Samples must be between 1 and 10");
 const home = await mkdtemp(join(tmpdir(), "pilot-recovery-bench-"));
 let cleanupBaseline: (() => Promise<void>) | undefined;

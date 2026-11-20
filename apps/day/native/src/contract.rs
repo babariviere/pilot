@@ -875,16 +875,6 @@ pub fn check_overview(overview: &DayOverview) -> Result<(), ReadError> {
     Ok(())
 }
 
-/// Reads a `MissionControlOperation` v1 receipt.
-pub fn read_operation(json: &str) -> Result<ControlOperation, ReadError> {
-    let operation: ControlOperation =
-        serde_json::from_str(json).map_err(|e| ReadError::Shape(e.to_string()))?;
-    if operation.version != 1 {
-        return Err(ReadError::Version(operation.version));
-    }
-    Ok(operation)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

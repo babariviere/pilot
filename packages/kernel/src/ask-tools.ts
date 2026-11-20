@@ -5,8 +5,13 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { createReadToolDefinition, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ARTIFACT_SKILL_FILES } from "./artifact-skill.ts";
+import { CHAT_REPORT_TOOL } from "./chat-report-tool.ts";
+import { DIAGNOSTIC_LOG_TOOL } from "./diagnostic-log-tool.ts";
 import { createExplorationTools, EXPLORATION_TOOL_NAMES } from "./exploration-tools.ts";
+import { MISSION_TOOL } from "./mission-tools.ts";
 import type { AskContext } from "./policy.ts";
+import { QUESTION_TOOL } from "./question-tool.ts";
+import { SCOPED_METRICS_TOOL } from "./scoped-metrics-tool.ts";
 import { contained, ReadLimitError, readLocal, SourceReader } from "./source-reader.ts";
 
 const MAX_OUTPUT_BYTES = 50 * 1024;
@@ -20,14 +25,15 @@ export const ASK_TOOL_NAMES = [
 	"ls",
 	"codemode",
 	"artifact",
-	"mission",
-	"ask_user",
+	MISSION_TOOL,
+	QUESTION_TOOL,
 	"interview",
 	"web",
 	// Declared only in job chats; it saves a report, never a file.
-	"chat_report",
-	"scoped_metrics",
-	"diagnostic_logs",
+	CHAT_REPORT_TOOL,
+	SCOPED_METRICS_TOOL,
+	DIAGNOSTIC_LOG_TOOL,
+	// A literal: reference-sources.ts imports this module.
 	"reference_sources",
 	...EXPLORATION_TOOL_NAMES,
 ];

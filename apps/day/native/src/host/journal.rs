@@ -772,25 +772,6 @@ impl Journal {
             + self.attention_drafts.len()
     }
 
-    pub fn save_loss(&mut self, record: super::update_loss::Record) -> Result<(), Error> {
-        record.validate()?;
-        if self
-            .losses
-            .get(&record.operation)
-            .map_or(record.closed, |prior| !record.follows(prior))
-        {
-            return Err(Error::Stale);
-        }
-        if !self.losses.contains_key(&record.operation)
-            && (self.losses.len() >= 256 || self.count() >= MAX_OPERATIONS)
-        {
-            return Err(Error::Capacity);
-        }
-        self.append(&record)?;
-        self.losses.insert(record.operation.clone(), record);
-        Ok(())
-    }
-
     pub fn save_window(&mut self, record: super::window::SavedWindow) -> Result<(), Error> {
         record.validate()?;
         let key = super::window::SavedWindow::key(&record.source)?;
@@ -832,16 +813,6 @@ impl Journal {
         }
         self.append(&record)?;
         self.updates.insert(record.id.clone(), record);
-        Ok(())
-    }
-
-    pub fn save_changes(&mut self, record: super::changes::Record) -> Result<(), Error> {
-        record.validate()?;
-        if !self.changes.contains_key(record.id()) && self.count() >= MAX_OPERATIONS {
-            return Err(Error::Storage);
-        }
-        self.append(&record)?;
-        self.changes.insert(record.id().to_owned(), record);
         Ok(())
     }
 
@@ -899,6 +870,66 @@ fn sync_parent(path: &Path) -> Result<(), Error> {
     File::open(path.parent().ok_or(Error::Storage)?)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Storage)
+}
+
+#[cfg(test)]
+mod stored_lines_tests {
+    use super::*;
+
+    // Literal stored wire shapes, independent of the current serializers. Feature
+    // tests exercise validation; this pins untagged discrimination and spelling.
+    #[test]
+    fn stored_lines_keep_their_untagged_variants() {
+        use Entry::*;
+        let lines: Vec<_> = include_str!("journal-lines.jsonl").lines().collect();
+        assert_eq!(lines.len(), 12);
+        for (index, line) in lines.iter().enumerate() {
+            let entry: Entry = serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("stored line {}: {error}", index + 1));
+            assert!(
+                matches!(
+                    (index, &entry),
+                    (0, Insights(_))
+                        | (1, ResultReview(_))
+                        | (2, Knowledge(_))
+                        | (3, Loss(_))
+                        | (4, Window(_))
+                        | (5, Update(_))
+                        | (6, Ritual(_))
+                        | (7, Attention(_))
+                        | (8, Draft(_))
+                        | (9, Changes(_))
+                        | (10, Control(_))
+                        | (11, Planning(_))
+                ),
+                "wrong variant for stored line {}",
+                index + 1
+            );
+            let stored: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(serde_json::to_value(entry).unwrap(), stored);
+        }
+    }
+
+    #[test]
+    fn journal_reopens_with_legacy_loss_and_saved_view() {
+        let path = std::env::temp_dir().join(format!("day-old-ledger-{}", uuid::Uuid::new_v4()));
+        let lines: Vec<_> = include_str!("journal-lines.jsonl").lines().collect();
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        writeln!(file, "{}\n{}", lines[3], lines[4]).unwrap();
+        drop(file);
+        let journal = Journal::open(path.clone()).unwrap();
+        assert_eq!(journal.losses.len(), 1);
+        let saved = journal.windows.values().next().unwrap();
+        assert_eq!(saved.view["goal"], "  unsent\n💬  ");
+        assert_eq!(saved.view["databaseSettings"], "kept old field");
+        drop(journal);
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 #[cfg(test)]

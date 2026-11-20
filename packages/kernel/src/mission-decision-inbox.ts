@@ -2,7 +2,9 @@
 import { randomUUID } from "node:crypto";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { type Conversation, defineDoc, type Harness, InboxDoc, type InboxItem } from "@earendil-works/pi-durable";
-import { deferQuestionWrite, HeldInputsDoc } from "./held-inputs.ts";
+import { ACTIVITY_ENTRY } from "./entry-kinds.ts";
+import { deferQuestionWrite } from "./held-inputs.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { type AcknowledgedDecision, decisionNotice } from "./mission-decisions.ts";
 import type { MissionContext } from "./policy.ts";
 
@@ -71,7 +73,7 @@ export class DecisionInbox {
 				const inbox = await tx.doc(InboxDoc, this.conversation.id);
 				const quarantine: Extract<InboxItem, { mode: "write" }>[] = [];
 				const keep = (item: InboxItem): boolean => {
-					if (item.mode !== "write" || item.entry.kind !== "pilot.activity") return true;
+					if (item.mode !== "write" || item.entry.kind !== ACTIVITY_ENTRY) return true;
 					const data = item.entry.data as
 						| { event?: { kind?: string }; missionDecisionBodyIds?: string[] }
 						| undefined;
@@ -191,7 +193,7 @@ export class DecisionInbox {
 			}, context);
 			if (!frozen) return;
 			const entry = {
-				kind: "pilot.activity",
+				kind: ACTIVITY_ENTRY,
 				data: {
 					text: frozen.detail,
 					event: { kind: "mission_decisions_changed", text: frozen.summary },

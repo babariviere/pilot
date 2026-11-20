@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { MissionControls } from "./mission-controls.ts";
 import { MissionStore } from "./missions.ts";
 import { publishedPlanningFixture } from "./published-planning.fixture.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 test("native migration binds old and published successor; archives only after exact safe Pause", async (t) => {
 	const f = await publishedPlanningFixture(t);
@@ -32,10 +33,13 @@ test("native migration binds old and published successor; archives only after ex
 			p.oldSource,
 		);
 	assert.equal((await f.execute(intent(before))).state, "rejected", "idle is not checkpoint proof");
-	const controls = new MissionControls(f.store, {
-		checkpointMission: async () => "paused",
-		resumeMission: async () => "resumed",
-	});
+	const controls = new MissionControls(
+		f.store,
+		pauseParticipants({
+			checkpointMission: async () => "paused",
+			resumeMission: async () => "resumed",
+		}),
+	);
 	controls.setScheduleDrain(async () => {});
 	const control = f.store.controls.current(old.id);
 	const pause = await controls.execute(old.id, {

@@ -6,7 +6,13 @@ import type { RemoteBranchList } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import type { SharedWorkspace } from "./shared-workspaces.ts";
 import { subprocesses } from "./subprocess.ts";
-import { authenticationHint, workspaceCommandEnvironment } from "./workspace-environment.ts";
+import {
+	authenticationHint,
+	MISE_LOCAL_CONFIGS,
+	MISE_PROJECT_CONFIGS,
+	NO_GIT_MAINTENANCE,
+	workspaceCommandEnvironment,
+} from "./workspace-environment.ts";
 
 export interface Workspace {
 	path: string;
@@ -100,26 +106,10 @@ export async function listRemoteBranches(cwd: string, runner: Runner = run): Pro
 	};
 }
 
-// Deliberately bounded: ignored dependency trees, build output and unrelated secrets are not workspace inputs.
-export const localConfigs = [
-	"mise.local.toml",
-	".mise.local.toml",
-	"mise/config.local.toml",
-	".mise/config.local.toml",
-];
-
 /** Persist trust for workspace-local configs so terminals and setup hooks inherit it too. */
 export async function trustWorkspaceMise(cwd: string, runner: Runner = run): Promise<void> {
 	const root = await realpath(cwd);
-	const configs = [
-		"mise.toml",
-		".mise.toml",
-		"mise/config.toml",
-		".mise/config.toml",
-		".config/mise.toml",
-		".config/mise/config.toml",
-		...localConfigs,
-	];
+	const configs = [...MISE_PROJECT_CONFIGS, ...MISE_LOCAL_CONFIGS];
 	for (const config of configs) {
 		const path = join(root, config);
 		const stat = await lstat(path).catch((error: NodeJS.ErrnoException) => {
@@ -147,7 +137,7 @@ async function statIfExists(path: string) {
 }
 
 /** Ignored dependency and build output directories that tracked inputs can regenerate. */
-export const regenerableDirectories: ReadonlySet<string> = new Set([
+const regenerableDirectories: ReadonlySet<string> = new Set([
 	"node_modules",
 	"dist",
 	"build",
@@ -244,12 +234,14 @@ export async function pruneRegenerable(cwd: string, runner: Runner = run): Promi
 export async function copyLocalConfigs(source: string, destination: string, runner: Runner): Promise<void> {
 	const ignored = await runner(
 		"git",
-		["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...localConfigs],
+		["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...MISE_LOCAL_CONFIGS],
 		source,
 	);
-	const tracked = new Set((await runner("git", ["ls-files", "-z", "--", ...localConfigs], destination)).split("\0"));
+	const tracked = new Set(
+		(await runner("git", ["ls-files", "-z", "--", ...MISE_LOCAL_CONFIGS], destination)).split("\0"),
+	);
 	const copied: string[] = [];
-	for (const path of ignored.split("\0").filter((path) => localConfigs.includes(path))) {
+	for (const path of ignored.split("\0").filter((path) => MISE_LOCAL_CONFIGS.includes(path))) {
 		const from = join(source, path);
 		const to = join(destination, path);
 		// Never replace checked-out files or follow a checked-out directory symlink.
@@ -347,7 +339,7 @@ export async function createWorkspace(
 		await runner(
 			"git",
 			[
-				...noMaintenance,
+				...NO_GIT_MAINTENANCE,
 				"fetch",
 				"--quiet",
 				"--no-tags",
@@ -365,7 +357,7 @@ export async function createWorkspace(
 			await runner(
 				"git",
 				[
-					...noMaintenance,
+					...NO_GIT_MAINTENANCE,
 					"fetch",
 					"--quiet",
 					"--no-tags",
@@ -382,7 +374,7 @@ export async function createWorkspace(
 		base = `origin/${baseBranch}`;
 	} else if (upstream) {
 		// Offline is fine: fall back to what the source already knows about its remote.
-		await attempt(runner, "git", [...noMaintenance, "fetch", "--quiet", "origin"], destination);
+		await attempt(runner, "git", [...NO_GIT_MAINTENANCE, "fetch", "--quiet", "origin"], destination);
 		// Recent Git records the remote HEAD during fetch. Otherwise ask the source, which has the same remote.
 		const head =
 			(await attempt(
@@ -423,9 +415,6 @@ export async function createWorkspace(
 	return { path: destination, base, ...(upstream ? { upstream } : {}), jj };
 }
 
-// Background maintenance would write commit-graphs that index borrowed commits the clone may not keep.
-const noMaintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false"];
-
 /** Whether the workspace still borrows objects from its source project. */
 export function workspaceBorrowsObjects(path: string): boolean {
 	return existsSync(join(path, ".git", "objects", "info", "alternates"));
@@ -452,7 +441,7 @@ export async function dissociateWorkspace(path: string, providedRunner: Runner =
 	let before = await refs();
 	for (let round = 0; round < 5; round++) {
 		// Without --local, repack copies borrowed objects reachable from HEAD, refs, reflogs and the index.
-		await runner("git", [...noMaintenance, "repack", "-a", "-d", "--quiet"], path, 60 * 60_000);
+		await runner("git", [...NO_GIT_MAINTENANCE, "repack", "-a", "-d", "--quiet"], path, 60 * 60_000);
 		const after = await refs();
 		if (after === before) {
 			signal?.throwIfAborted();

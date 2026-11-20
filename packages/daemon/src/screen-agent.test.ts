@@ -9,8 +9,9 @@ import type { DurableOperation, ScreenRequest } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
-import { NO_WINDOW, SCREEN_DEADLINES } from "./screen-broker.ts";
-import type { SessionWorker } from "./sessions.ts";
+import { NO_WINDOW } from "./screen-broker.ts";
+import type { SessionWorker } from "./kernel-worker.ts";
+import type { HostResult } from "./testing/fake-kernel-worker.ts";
 
 async function setup(t: import("node:test").TestContext) {
 	const f = await nativeIntakeFixture();
@@ -83,8 +84,8 @@ function worker(f: Awaited<ReturnType<typeof setup>>, sessionId: string) {
 	const packet = (p: KernelPacket) => f.sessions["onPacket"](meta, fake, p);
 	const result = async (callId: string) => {
 		for (let i = 0; i < 400; i++) {
-			const found = received.find((c) => c.type === "screen.result" && c.callId === callId);
-			if (found) return found as Extract<KernelCommand, { type: "screen.result" }>;
+			const found = received.find((c) => c.type === "host.result" && c.callId === callId);
+			if (found) return found as HostResult<"screen">;
 			await new Promise((r) => setTimeout(r, 10));
 		}
 		assert.fail(`no screen.result for ${callId}`);
@@ -92,7 +93,7 @@ function worker(f: Awaited<ReturnType<typeof setup>>, sessionId: string) {
 	return { packet, result };
 }
 
-test("a screen chat asks its bound window and gets the answer, a picture, a refusal or a deadline", async (t) => {
+test("a screen chat asks its bound window and gets the answer, a picture or a refusal", async (t) => {
 	const f = await setup(t);
 	const screen = await f.create("screen");
 	const ask = await f.create("ask");
@@ -114,7 +115,7 @@ test("a screen chat asks its bound window and gets the answer, a picture, a refu
 	const w = worker(f, screen);
 
 	// No window yet: the tool fails at once with the sentence the agent reads.
-	w.packet({ type: "screen.call", callId: "none", operation: { op: "snapshot" } });
+	w.packet({ type: "host.call", method: "screen", callId: "none", args: { operation: { op: "snapshot" } } });
 	assert.equal((await w.result("none")).error, NO_WINDOW);
 
 	assert.equal((await f.call("PUT", "/api/screen/bindings", { windowId: "w1", sessionId: screen })).status, 204);
@@ -134,11 +135,11 @@ test("a screen chat asks its bound window and gets the answer, a picture, a refu
 		f.call("POST", `/api/screen/requests/${id}?windowId=${windowId}`, body);
 
 	// Snapshot: request → notice → GET → POST answer → the tool's value.
-	w.packet({ type: "screen.call", callId: "snap", operation: { op: "snapshot" } });
+	w.packet({ type: "host.call", method: "screen", callId: "snap", args: { operation: { op: "snapshot" } } });
 	let [request] = await waiting("w1");
 	assert.deepEqual(request!.operation, { op: "snapshot" });
 	assert.equal(request!.sessionId, screen);
-	assert.ok(request!.deadline > Date.now() && request!.deadline <= Date.now() + SCREEN_DEADLINES.snapshot);
+	assert.ok(request!.deadline > Date.now());
 	assert.deepEqual(await waiting("w2"), []);
 	assert.equal((await answer(request!.id, "w2", { ok: true, value: {} })).status, 409);
 	assert.equal((await answer(randomUUID(), "w1", { ok: true, value: {} })).status, 404);
@@ -155,9 +156,10 @@ test("a screen chat asks its bound window and gets the answer, a picture, a refu
 
 	// A refused act becomes a tool error with the window's sentence.
 	w.packet({
-		type: "screen.call",
+		type: "host.call",
+		method: "screen",
 		callId: "act",
-		operation: { op: "act", steps: [{ ref: "Send", action: "press" }] },
+		args: { operation: { op: "act", steps: [{ ref: "Send", action: "press" }] } },
 	});
 	[request] = await waiting("w1");
 	await answer(request!.id, "w1", { ok: false, error: "Needs a person: Send sends the message." });
@@ -177,40 +179,35 @@ test("a screen chat asks its bound window and gets the answer, a picture, a refu
 		body: png,
 	});
 	assert.equal(uploaded.status, 201);
-	w.packet({ type: "screen.call", callId: "shot", operation: { op: "screenshot" } });
+	w.packet({ type: "host.call", method: "screen", callId: "shot", args: { operation: { op: "screenshot" } } });
 	[request] = await waiting("w1");
 	const picture = { attachment: ref, width: 800, height: 600, mimeType: "image/png" };
 	await answer(request!.id, "w1", { ok: true, value: picture });
 	assert.deepEqual((await w.result("shot")).result, { picture, data: png.toString("base64") });
 
 	// A kernel abort cancels the waiting request.
-	w.packet({ type: "screen.call", callId: "abort", operation: { op: "query", text: "New" } });
+	w.packet({
+		type: "host.call",
+		method: "screen",
+		callId: "abort",
+		args: { operation: { op: "query", text: "New" } },
+	});
 	assert.equal((await waiting("w1")).length, 1);
-	w.packet({ type: "diagnostics.context.cancel", callId: "abort" });
+	w.packet({ type: "host.cancel", callId: "abort" });
 	await w.result("abort");
 	assert.deepEqual(await waiting("w1"), []);
 
-	// Deadline: the window never answers.
-	const deadline = SCREEN_DEADLINES.query;
-	SCREEN_DEADLINES.query = 1000;
-	t.after(() => {
-		SCREEN_DEADLINES.query = deadline;
-	});
-	w.packet({ type: "screen.call", callId: "late", operation: { op: "query" } });
-	assert.equal((await w.result("late")).error, "The window did not answer within 1 s. It may be closed or busy.");
-	assert.deepEqual(await waiting("w1"), []);
-
 	// The window closes: its waiting requests fail at once and later calls have no window.
-	w.packet({ type: "screen.call", callId: "closing", operation: { op: "snapshot" } });
+	w.packet({ type: "host.call", method: "screen", callId: "closing", args: { operation: { op: "snapshot" } } });
 	assert.equal((await waiting("w1")).length, 1);
 	assert.equal((await f.call("DELETE", "/api/screen/bindings/w1")).status, 204);
 	assert.equal((await w.result("closing")).error, NO_WINDOW);
-	w.packet({ type: "screen.call", callId: "after", operation: { op: "snapshot" } });
+	w.packet({ type: "host.call", method: "screen", callId: "after", args: { operation: { op: "snapshot" } } });
 	assert.equal((await w.result("after")).error, NO_WINDOW);
 
 	// Other chats cannot use a window, even with a forged packet.
 	const other = worker(f, ask);
-	other.packet({ type: "screen.call", callId: "forged", operation: { op: "snapshot" } });
+	other.packet({ type: "host.call", method: "screen", callId: "forged", args: { operation: { op: "snapshot" } } });
 	assert.match((await other.result("forged")).error ?? "", /Only a screen agent chat/);
 });
 

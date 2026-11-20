@@ -2,8 +2,9 @@ import { execFile } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { access } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appBundleHelper } from "./app-bundle.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import type { SystemEventsHelperFactory } from "./system-events-detection.ts";
 import { parseSystemPowerState } from "./system-power.ts";
@@ -16,8 +17,7 @@ export function systemEventsHelperPath(): string {
 }
 
 export function packagedSystemEventsHelperPath(source: string): string | undefined {
-	if (source.includes("/Contents/Resources/runtime/"))
-		return resolve(source.split("/Contents/Resources/runtime/")[0], "Contents/Helpers/PilotSystemEvents.app");
+	return appBundleHelper(source, "PilotSystemEvents.app");
 }
 
 /** LaunchServices gives the helper an independent application lifetime from pilotd. */

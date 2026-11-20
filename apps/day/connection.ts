@@ -6,7 +6,11 @@
 import { host, signal } from "nsh";
 import type { RitualSnapshot, SavedView, Setup, Today } from "pilot-day/native";
 import { ConnectedArtifacts } from "./artifactReads";
-import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
+import { call, windowId } from "./bridge";
+import { canReadAgain, type Refusal, readReason } from "./refusals";
+import { ConnectedToday } from "./todayFeed";
+import { ConnectedPlans } from "./planFeed";
+import { ConnectedRituals } from "./ritualFeed";
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
 import { connectedConnectionControls } from "./connectionControls";
@@ -16,7 +20,7 @@ import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubjec
 import { deliveryTitles } from "./deliveryView";
 import { connectedDiagnosisControls } from "./diagnosisControls";
 import { ConnectedFeedback, mirrorFeedback } from "./feedbackFeed";
-import { autoRead, FAILED_TRIES, retryDelay } from "./freshness";
+import { autoRead, FAILED_TRIES, readRetry } from "./freshness";
 import { connectInsights } from "./insightsControls";
 import { ConnectedIntake, type IntakeMirror, mirrorIntake } from "./intakeFeed";
 import { ConnectedLinear, mirrorLinear } from "./linearFeed";
@@ -31,11 +35,13 @@ import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import { connectedScheduleControls } from "./scheduleControls";
 import { ConnectedSessionChat, mirrorSessionChat } from "./sessionChat";
 import { connectedSlackControls } from "./slackControls";
+import { coalesce } from "./source";
 import { ConnectedThreads, mirrorThreads } from "./threadFeed";
 import { refreshOpenThread } from "./threadView";
 import { ConnectedScope, mirrorScope, todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
 import { captureView, restoreView, saveForms } from "./windowState";
+import { connectedWorkSearch } from "./workSearch";
 
 /** Whether this window has its feeds yet, and which. */
 export type Connection =
@@ -50,20 +56,14 @@ export const connection = signal<Connection>({ state: "opening" });
 
 /** Why the first read failed, in one calm sentence. */
 function unreadable(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service. Nothing is shown rather than a guess.";
-		case "denied":
-			return "This window may not read Pilot's service. Nothing is shown rather than examples.";
-		case "identity":
-			return "The Pilot service this window was opened for changed. Open Pilot again.";
-		case "closed":
-			return "This Pilot window is closing. Nothing more was read.";
-		case "busy":
-			return "Pilot is saving this window before a close or an update. Nothing more was read.";
-		default:
-			return "Pilot could not read its service. Nothing is shown rather than a guess.";
-	}
+	return readReason(
+		refusal,
+		{
+			denied: "This window may not read Pilot's service. Nothing is shown rather than examples.",
+			other: "Pilot could not read its service. Nothing is shown rather than a guess.",
+		},
+		"Nothing is shown rather than a guess.",
+	);
 }
 
 /** The window's own envelope field, checked on every event. */
@@ -110,10 +110,8 @@ let feedbackFeed: ConnectedFeedback | null = null;
 let connectedFeeds: OpeningFeeds | null = null;
 let pendingFlush: number | null = null;
 /** The next automatic read after a passing failure, and how many failed in a row. */
-let retryTimer: ReturnType<typeof setTimeout> | undefined;
+const retry = readRetry(() => void read());
 let retries = 0;
-let scopeReading = false;
-let scopeAgain = false;
 
 // Before admission the attempt owns partial construction. After admission the
 // window keeps the same owner. Mirrors take ownership of their source exactly once.
@@ -137,6 +135,11 @@ class OpeningFeeds {
 		this.closed = true;
 		if (this.day) this.day.close();
 		this.day?.insights?.dispose();
+		this.day?.models?.close?.();
+		this.day?.diagnosis?.close?.();
+		this.day?.schedules?.close?.();
+		this.day?.connections?.close?.();
+		this.day?.slack?.close?.();
 		if (!this.day) {
 			this.today.dispose();
 			this.intake?.close();
@@ -148,27 +151,28 @@ class OpeningFeeds {
 	}
 }
 
-/** Coalesce stream invalidations. No timer or service polling. */
-async function refreshScope() {
+const readScope = coalesce(
+	async () => {
+		const open = connection();
+		if (open.state === "open" && current()) await open.day.scope?.read(todayProject());
+	},
+	() => connection().state !== "open",
+);
+
+/** Invalidate now so an overlapping reply cannot mark the scope current. */
+function refreshScope() {
 	const open = connection();
 	if (open.state === "open") open.day.scope?.invalidate();
-	scopeAgain = true;
-	if (scopeReading) return;
-	scopeReading = true;
-	try {
-		while (scopeAgain) {
-			scopeAgain = false;
-			const open = connection();
-			if (open.state !== "open" || !current()) return;
-			await open.day.scope?.read(todayProject());
-		}
-	} finally {
-		scopeReading = false;
-	}
+	return readScope();
 }
 
 function current(): boolean {
 	if (window && windowId() === window) return true;
+	retry.cancel();
+	if (refreshTimer !== undefined) clearTimeout(refreshTimer);
+	refreshTimer = undefined;
+	if (!connectedFeeds) ritualFeed?.dispose();
+	ritualFeed = null;
 	connectedFeeds?.close();
 	connection.set({ state: "none", reason: unreadable("identity"), canRead: false });
 	return false;
@@ -185,6 +189,8 @@ let refreshTimer: ReturnType<typeof setTimeout> | undefined;
  * answer the user sent waited behind them. The last notice in a burst still gets its read.
  */
 function refreshSoon() {
+	// Admission reads every cached view once more, including notices received while opening.
+	if (!current() || connection().state !== "open") return;
 	if (refreshTimer !== undefined) return;
 	const wait = Math.max(0, refreshedAt + REFRESH_GAP_MS - Date.now());
 	refreshTimer = setTimeout(() => {
@@ -297,7 +303,7 @@ async function connect() {
 		connection.set({
 			state: "none",
 			reason: unreadable(first.refusal),
-			canRead: !["denied", "identity", "closed", "busy"].includes(first.refusal),
+			canRead: canReadAgain(first.refusal),
 		});
 		return;
 	}
@@ -404,8 +410,6 @@ async function connect() {
 		day.slack = connectedSlackControls(window, () => void intakeFeed.read());
 		const plans = mirrorPlanning(plan, mirrorChats(new ConnectedChats(window)));
 		feeds.plans = plans;
-		const rituals = mirrorRituals(ritualFeed, rootRecap);
-		feeds.rituals = rituals;
 		const update = await connectedUpdates(window);
 		feeds.update = update;
 		if (!current()) return;
@@ -422,12 +426,15 @@ async function connect() {
 				connection.set({
 					state: "none",
 					reason: unreadable(saved.refusal),
-					canRead: !["denied", "identity", "closed", "busy"].includes(saved.refusal),
+					canRead: canReadAgain(saved.refusal),
 				});
 				return;
 			}
 			if (saved.snapshot) restoreView(saved.snapshot, undefined, day.today(), !!day.linear, !!day.preferences);
 		}
+		// The startup ritual source outlives refused attempts. The mirror takes ownership only on admission.
+		const rituals = mirrorRituals(ritualFeed, rootRecap);
+		feeds.rituals = rituals;
 		connectedFeeds = feeds;
 		todayFeed = today;
 		planFeed = plan;
@@ -457,14 +464,8 @@ function retryLater() {
 		if (now.state === "open") retries = 0;
 		return;
 	}
-	const delay = retryDelay(retries);
-	retries += 1;
+	retry.wait(retries++);
 	if (retries <= FAILED_TRIES) connection.set({ state: "waiting" });
-	if (retryTimer !== undefined) clearTimeout(retryTimer);
-	retryTimer = setTimeout(() => {
-		retryTimer = undefined;
-		void read();
-	}, delay);
 }
 
 function read(): Promise<void> {
@@ -493,11 +494,8 @@ function read(): Promise<void> {
 export function readAgain(): Promise<void> {
 	const now = connection();
 	if (now.state !== "waiting" && (now.state !== "none" || !now.canRead)) return opening ?? Promise.resolve();
-	if (retryTimer !== undefined) clearTimeout(retryTimer);
-	retryTimer = undefined;
+	retry.cancel();
 	return read();
 }
 
 void read();
-
-import { connectedWorkSearch } from "./workSearch";

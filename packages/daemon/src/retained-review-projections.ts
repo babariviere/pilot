@@ -1,7 +1,7 @@
 /** Lossless completion REFERENCES only, not MissionReviewResult, Pass or gate evidence. */
-import type { SQLInputValue } from "node:sqlite";
 import { canonicalJSON } from "./operation-journal.ts";
 import type { RetainedReviewProducerClaim, RetainedReviewTargetClaim } from "./retained-review-linkage-contract.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const RETAINED_PROJECTION_SCHEMA = `CREATE TABLE IF NOT EXISTS retained_review_projections (
  operation_id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, record TEXT NOT NULL
@@ -14,15 +14,9 @@ export interface RetainedRunProjection {
 	producer: RetainedReviewProducerClaim;
 	consentOperationId: string;
 }
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(action: () => T): T;
-	durable(): Promise<void>;
-}
 export class RetainedReviewProjections {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	async record(value: RetainedRunProjection, revalidate: () => void): Promise<RetainedRunProjection> {

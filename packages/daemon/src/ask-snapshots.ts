@@ -2,28 +2,10 @@
 import { lstat, mkdir } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import type { AskContext } from "@pilot/kernel";
-import { run, type Runner, validateBaseBranch } from "./workspaces.ts";
+import { daemonGitEnvironment, NO_GIT_MAINTENANCE } from "./workspace-environment.ts";
+import { type Runner, run, validateBaseBranch } from "./workspaces.ts";
 
 const snapshotRef = "refs/pilot/ask-source";
-
-/** Keep network authentication, but never inherit repository/config/object-store redirection. */
-function snapshotEnvironment(): NodeJS.ProcessEnv {
-	const network = new Set([
-		"GIT_ASKPASS",
-		"GIT_SSH",
-		"GIT_SSH_COMMAND",
-		"GIT_SSH_VARIANT",
-		"GIT_TERMINAL_PROMPT",
-		"GIT_SSL_CAINFO",
-		"GIT_SSL_CAPATH",
-		"GIT_SSL_NO_VERIFY",
-		"GIT_PROXY_COMMAND",
-		"GIT_HTTP_USER_AGENT",
-	]);
-	return Object.fromEntries(
-		Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_") || network.has(key)),
-	);
-}
 
 export async function prepareAskSnapshot(
 	ask: AskContext,
@@ -39,7 +21,7 @@ export async function prepareAskSnapshot(
 			cwd,
 			timeoutMs,
 			signal,
-			snapshotEnvironment(),
+			daemonGitEnvironment(process.env, { preserveSnapshotCredentials: true }),
 		);
 	};
 	await validateBaseBranch(ask.branch, ask.source, runner);
@@ -67,12 +49,7 @@ export async function prepareAskSnapshot(
 		const remote = !isAbsolute(upstream) && !upstream.includes(":") ? resolve(ask.source, upstream) : upstream;
 		try {
 			await git([
-				"-c",
-				"maintenance.auto=false",
-				"-c",
-				"gc.auto=0",
-				"-c",
-				"fetch.writeCommitGraph=false",
+				...NO_GIT_MAINTENANCE,
 				"fetch",
 				"--quiet",
 				"--depth=1",

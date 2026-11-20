@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appBundleHelper } from "./app-bundle.ts";
 import { ServiceUnavailable } from "./errors.ts";
 
 /** Private newline-delimited frames on inherited pipes, not a network service. */
@@ -74,8 +75,7 @@ export function powerHelperPath(platform: string = process.platform): string {
 }
 
 export function packagedPowerHelperPath(source: string, platform: string): string | undefined {
-	if (platform === "darwin" && source.includes("/Contents/Resources/runtime/"))
-		return resolve(source.split("/Contents/Resources/runtime/")[0]!, "Contents/Helpers/PilotPower");
+	if (platform === "darwin") return appBundleHelper(source, "PilotPower");
 	if (platform === "linux" && source.endsWith("/runtime/packages/daemon/src"))
 		return resolve(source, "../../..", "bin/PilotPower");
 }

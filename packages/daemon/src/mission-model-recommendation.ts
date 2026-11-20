@@ -10,13 +10,13 @@ export type ModelNeed =
 	| "specialist-review"
 	| "native-ui";
 /** Per-call, explicitly attributed opinion, not verified model capability or a product mapping. */
-export interface ModelSuitabilityAssessment {
+interface ModelSuitabilityAssessment {
 	model: string;
 	needs: ModelNeed[];
 	provenance: string;
 	reason: string;
 }
-export interface ModelAvailabilityObservation {
+interface ModelAvailabilityObservation {
 	model: string;
 	status: "available" | "unavailable" | "unknown";
 	/** Authentication/catalog/usage alone never establishes provider availability. */

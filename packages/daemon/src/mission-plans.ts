@@ -139,7 +139,7 @@ function graph(nodes: { id: string; dependsOn: string[] }[]): void {
 	}
 }
 /** Spec stays in the existing brief record. Fog is explicit, not a made-up agreement or blocker. */
-export function planMarkdown(plan: MissionPlan): string {
+function planMarkdown(plan: MissionPlan): string {
 	if (!plan.spec) throw new Conflict("Spec proposal required");
 	const s = plan.spec;
 	return [

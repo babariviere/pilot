@@ -1,7 +1,7 @@
 /** Real isolated inventory ingress, saved SQLite across restart. No worker/provider. */
 
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { serveCommands } from "./commands.ts";
 import { nativePlanningFixture } from "../native-mission-planning.fixture.ts";
 
 const f = await nativePlanningFixture({ native: process.argv[2] !== "unavailable" });
@@ -20,9 +20,7 @@ const info = () => ({
 });
 console.log(JSON.stringify(info()));
 const owner = f.coordinator;
-for await (const line of createInterface({ input: process.stdin })) {
-	const cmd = JSON.parse(line);
-	if (cmd.action === "quit") break;
+await serveCommands(async (cmd) => {
 	if (cmd.action === "restart") await f.restart();
 	if (cmd.action === "revoke") f.coordinator = cmd.value ? undefined : owner;
 	if (cmd.action === "create") await f.createPlanning("New invalidation-only mission");
@@ -31,8 +29,6 @@ for await (const line of createInterface({ input: process.stdin })) {
 			await f.createPlanning(`Capacity mission ${count}`);
 	if (cmd.action === "empty")
 		for (const mission of f.store.list(f.project.id)) f.store.update(mission.id, { status: "archived" });
-	console.log(JSON.stringify(info()));
-}
+	return info();
+});
 await f.close();
-// The native parent can keep its pipe open while waiting for orderly process exit.
-process.stdin.destroy();

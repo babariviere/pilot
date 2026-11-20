@@ -14,6 +14,7 @@ import { changeIdPattern } from "./jj-ownership-contract.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import type { WorkflowConfirmationRecord } from "./workflow-confirmation-store.ts";
+import { hasExactKeys, OPAQUE_ID } from "./validate.ts";
 
 const KINDS: readonly string[] = [
 	"workflow-approve",
@@ -24,17 +25,10 @@ const KINDS: readonly string[] = [
 ];
 export const isWorkflowOperation = (kind: string): kind is WorkflowOperationKind => KINDS.includes(kind);
 const digest = (value: unknown) => payloadHash(canonicalJSON(value));
-const id = (value: unknown) => typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const id = (value: unknown) => typeof value === "string" && OPAQUE_ID.test(value);
 const hash = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 function exact(value: unknown, keys: string[]): asserts value is Record<string, unknown> {
-	if (
-		!value ||
-		typeof value !== "object" ||
-		Array.isArray(value) ||
-		Object.keys(value).length !== keys.length ||
-		keys.some((key) => !Object.hasOwn(value, key))
-	)
-		throw new OperationRejected("Expected exact confirmation fields");
+	if (!hasExactKeys(value, keys)) throw new OperationRejected("Expected exact confirmation fields");
 }
 
 /** #60 owns durable feedback, request/authority fences and annotation history. No second store here.

@@ -6,11 +6,11 @@ import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { revisionPauseOwnershipMatches } from "./revision-work-pause.ts";
 
 export interface MissionPauseParticipants {
-	get?(sessionId: string): { projectId?: string; createdAt: number } | undefined;
-	missionWorkOwner?(sessionId: string): string;
-	missionWorkMission?(sessionId: string): string | undefined;
-	missionWorkSessions?(missionId: string): string[];
-	missionWorkBelongs?(sessionId: string, missionId: string): boolean;
+	get(sessionId: string): { projectId?: string; createdAt: number } | undefined;
+	missionWorkOwner(sessionId: string): string;
+	missionWorkMission(sessionId: string): string | undefined;
+	missionWorkSessions(missionId: string): string[];
+	missionWorkBelongs(sessionId: string, missionId: string): boolean;
 	checkpointMission(sessionId: string, operationId: string, fence: MissionResumeFence): Promise<"paused" | "held">;
 	resumeMission(
 		sessionId: string,
@@ -102,14 +102,14 @@ export class MissionControls {
 	}
 	private inventory(missionId: string): string[] {
 		return [
-			...new Set([...this.store.members(missionId), ...(this.participants.missionWorkSessions?.(missionId) ?? [])]),
+			...new Set([...this.store.members(missionId), ...this.participants.missionWorkSessions(missionId)]),
 		].sort();
 	}
 	/** A released Resume may wait for another owner's quota/sleep/input hold. No new input. */
 	resumeAuthorized(sessionId: string, pauseOperationId: string): boolean {
 		try {
 			const membership = this.store.membership(sessionId);
-			const missionId = membership?.missionId ?? this.participants.missionWorkMission?.(sessionId);
+			const missionId = membership?.missionId ?? this.participants.missionWorkMission(sessionId);
 			if (!missionId || this.store.require(missionId).status !== "active") return false;
 			const current = this.store.controls.fenceCurrent(missionId);
 			const selected = this.store.controls.revisionPause(pauseOperationId);
@@ -119,9 +119,7 @@ export class MissionControls {
 				revisionPauseOwnershipMatches(this.store, this.participants, selected) &&
 				selected.resumeSource === this.store.revisions.source(missionId) &&
 				selected.resumeOwners?.some(
-					(m) =>
-						m.sessionId === sessionId &&
-						m.ownerId === (this.participants.missionWorkOwner?.(sessionId) ?? sessionId),
+					(m) => m.sessionId === sessionId && m.ownerId === this.participants.missionWorkOwner(sessionId),
 				) &&
 				!current.held &&
 				selected.fence.pauseGeneration === current.pauseGeneration &&
@@ -267,7 +265,7 @@ export class MissionControls {
 				owner();
 				if (
 					this.store.missionOf(member.sessionId) !== missionId &&
-					!this.participants.missionWorkBelongs?.(member.sessionId, missionId)
+					!this.participants.missionWorkBelongs(member.sessionId, missionId)
 				)
 					throw new Conflict("Mission member moved");
 				member.state = "entered";

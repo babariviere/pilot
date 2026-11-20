@@ -1,4 +1,3 @@
-/** Host-only Day seam. No production routes, legacy enrollment or dispatch adapter is installed. */
 import type {
 	AgreementAdmission,
 	DurableOperation,
@@ -26,7 +25,7 @@ export const isInterviewOperation = (kind: string): boolean =>
 	].includes(kind);
 
 type EffectRequest = InterviewContinuation | AgreementAdmission | SmallAskAdmission;
-export interface FlowAdmissionReceipt {
+interface FlowAdmissionReceipt {
 	admissionId: string;
 }
 export interface QualifiedMissionFlowAdapter {

@@ -141,7 +141,7 @@ export class InsightsOwner {
 		const guard = () => {
 			journal();
 			this.deps.sessions.assertNoLegacyInsights();
-			this.deps.schedules.assertNoLegacyOwnerExecution(this.deps.journal.destination);
+			this.deps.schedules.insights.assertNoLegacyOwnerExecution(this.deps.journal.destination);
 			if (this.deps.workspace.hasLegacyRecords()) throw new Conflict("legacy_transition_required");
 		};
 		guard();
@@ -171,7 +171,7 @@ export class InsightsOwner {
 		const model = catalog.models.find((m) => m.id === configured.model);
 		if (!model || (configured.thinking !== undefined && !model.thinkingLevels?.includes(configured.thinking)))
 			throw new Conflict("owner_exact_model_unavailable");
-		this.deps.schedules.insightsEnableAvailable(owner.expectedHome);
+		this.deps.schedules.insights.insightsEnableAvailable(owner.expectedHome);
 		return {
 			schemaVersion: 2 as const,
 			admissionEpoch: this.deps.sessions.insightsAdmissionEpoch,
@@ -238,7 +238,7 @@ export class InsightsOwner {
 			const report = this.deps.sessions.insightsOwnerControl(a.owner.reportSessionId, op.operationId);
 			lease.revalidate();
 			legacy();
-			await this.deps.schedules.createOwnerInsights(
+			await this.deps.schedules.insights.createOwnerInsights(
 				{
 					title: "Weekly Insights",
 					trigger: "recurring",
@@ -309,7 +309,7 @@ export class InsightsOwner {
 		const model = catalog.models.find((m) => m.id === desired.model);
 		if (!model || (chat.thinking !== undefined && !model.thinkingLevels?.includes(chat.thinking)))
 			throw new Conflict("owner_exact_model_unavailable");
-		this.deps.schedules.insightsEnableAvailable(owner.expectedHome);
+		this.deps.schedules.insights.insightsEnableAvailable(owner.expectedHome);
 		return {
 			schemaVersion: 2 as const,
 			admissionEpoch: this.deps.sessions.insightsAdmissionEpoch,
@@ -369,7 +369,7 @@ export class InsightsOwner {
 			const cancelled =
 				p.rule.state === "cancelled"
 					? p.rule
-					: await this.deps.schedules.cancelOwnerInsights(p.rule, a.owner, () => guard());
+					: await this.deps.schedules.insights.cancelOwnerInsights(p.rule, a.owner, () => guard());
 			let generation = p.chat.reportInputGeneration;
 			if (p.chat.model !== p.record.model) {
 				await this.deps.sessions.configureInsightsOwnerModel(
@@ -386,7 +386,7 @@ export class InsightsOwner {
 			guard(generation);
 			await this.deps.store.stageApply(lease, op, p.record);
 			guard(generation);
-			await this.deps.schedules.rearmOwnerInsights(cancelled, a.owner, op.operationId, p.record, () =>
+			await this.deps.schedules.insights.rearmOwnerInsights(cancelled, a.owner, op.operationId, p.record, () =>
 				guard(generation),
 			);
 			guard(generation);
@@ -445,7 +445,7 @@ export class InsightsOwner {
 		report.revalidate();
 		try {
 			if (!cancellationAcknowledged)
-				await this.deps.schedules.cancelOwnerInsights(rule, a.owner, () => {
+				await this.deps.schedules.insights.cancelOwnerInsights(rule, a.owner, () => {
 					lease.revalidate();
 					report.revalidate();
 				});

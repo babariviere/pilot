@@ -45,12 +45,8 @@ export function subscriptionUsageReadings(
 	return { anthropic: read("anthropic"), openai: read("openai") };
 }
 
-/** pi providers whose subscription windows are reported. Virtual routers resolve to these first. */
-export function subscriptionProvider(piProvider: string | undefined): SubscriptionProvider | undefined {
-	if (piProvider === "anthropic") return "anthropic";
-	if (piProvider === "openai-codex") return "openai";
-	return undefined;
-}
+/** Virtual routers resolve to a real pi provider before this mapping applies. */
+export { subscriptionProvider } from "@pilot/kernel/subscription-provider";
 
 /** pi provider of a `provider/model` reference. */
 export function modelProvider(model: string | undefined): string | undefined {

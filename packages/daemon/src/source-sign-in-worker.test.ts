@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { approve, oauthFixture } from "./mcp-test-fixtures.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceSignInFailed } from "./source-sign-in.ts";
+import { approve, oauthFixture } from "./testing/mcp-test-fixtures.ts";
 
 test("pinned SDK sign-in runs pi's OAuth flow, stores tokens like pi mcp login and signs in again safely", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-mcp-sign-in-"));

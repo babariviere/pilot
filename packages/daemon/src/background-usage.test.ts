@@ -18,6 +18,7 @@ import {
 import { compactMemory } from "./memory-compaction.ts";
 import { MemoryDisk } from "./memory-disk.ts";
 import { generateChatTitle, ModelCatalog } from "./models.ts";
+import { slackClassifier } from "./slack-classifier.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import { parseGuide, workerTriage } from "./triage-grooming.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
@@ -160,9 +161,9 @@ test("title and classifier capture survives malformed output and cancellation af
 	const catalog = new ModelCatalog(f.home);
 	catalog.setBackgroundUsage(f.usage);
 	assert.equal(await catalog.generateTitle(f.home, "private prompt"), "not JSON");
-	await assert.rejects(catalog.classifySlack(f.home, "private slack", controller.signal));
+	await assert.rejects(slackClassifier(catalog).classifySlack("private slack", controller.signal));
 	cancel = true;
-	await assert.rejects(catalog.classifySlack(f.home, "private slack", controller.signal));
+	await assert.rejects(slackClassifier(catalog).classifySlack("private slack", controller.signal));
 	const rows = await f.page();
 	assert.equal(rows.length, 3);
 	assert.equal(rows.filter((r) => r.purpose === "classification").length, 2);

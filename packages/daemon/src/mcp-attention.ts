@@ -1,15 +1,11 @@
 import type { McpServerStatus, McpStatus, NeedsYouReason } from "@pilot/protocol";
+import { mcpNamespace } from "./mcp-setup-projection.ts";
 
 /** What chat attention needs of the shared MCP status. */
 export interface McpStatusSource {
 	status(): McpStatus;
 	check(server?: string): unknown;
 	onChange(listener: (status: McpStatus) => void): () => void;
-}
-
-/** Chats reach servers as `mcp__<name>` with dashes as underscores, like pi's mcpNamespace. */
-export function mcpNamespace(server: string): string {
-	return server.replace(/-/g, "_");
 }
 
 const MAX_CHATS = 1_000;

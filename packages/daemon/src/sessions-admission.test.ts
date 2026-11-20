@@ -11,8 +11,9 @@ import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
-import type { SessionWorker } from "./sessions.ts";
-import { SessionManager, Worker } from "./sessions.ts";
+import type { SessionWorker } from "./kernel-worker.ts";
+import { SessionManager } from "./sessions.ts";
+import { Worker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 test("update reservation accepts idle or drained sessions and never drains workers itself", async (t) => {

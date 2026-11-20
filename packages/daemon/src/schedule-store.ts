@@ -70,43 +70,22 @@ export class ScheduleStore {
 			if (item.id === ruleId || (item.target.kind === "message" && item.target.sessionId === reportId)) return true;
 		return false;
 	}
-	/** Do not clone unrelated user prompts into a small native transfer preview. */
-	legacyInsightsItems(oldId: string): ScheduledItem[] {
+	matching(predicate: (item: ScheduledItem) => boolean, limit?: { count: number; conflict: string }): ScheduledItem[] {
 		const items: ScheduledItem[] = [];
-		const retired = oldId.toLowerCase();
 		for (const item of this.items.values()) {
-			if (
-				item.insightsOwnerDestination ||
-				!(
-					item.insightsDestination ||
-					item.insightsEnableOperationId ||
-					item.insightsReview ||
-					(item.target.kind === "message" && item.target.sessionId.toLowerCase() === retired)
-				)
-			)
-				continue;
-			if (items.length === 8) throw new Conflict("legacy_rule_snapshot_capacity");
+			if (!predicate(item)) continue;
+			if (limit && items.length === limit.count) throw new Conflict(limit.conflict);
 			items.push(structuredClone(item));
 		}
 		return items;
 	}
+	some(predicate: (item: ScheduledItem) => boolean): boolean {
+		for (const item of this.items.values()) if (predicate(item)) return true;
+		return false;
+	}
 	assertSettled(): void {
 		if (this.closed || this.broken || this.pending.size)
 			throw new Conflict("Schedule storage busy or unavailable; refresh before replacement");
-	}
-	hasInsightsIntent(): boolean {
-		for (const item of this.items.values())
-			if (item.insightsDestination || item.insightsEnableOperationId || item.insightsReview) return true;
-		return false;
-	}
-	hasLegacyInsightsIntent(): boolean {
-		for (const item of this.items.values())
-			if (
-				!item.insightsOwnerDestination &&
-				(item.insightsDestination || item.insightsEnableOperationId || item.insightsReview)
-			)
-				return true;
-		return false;
 	}
 	/** Large HTTP/WS indexes are encoded off the daemon event loop. */
 	snapshot(projectId?: string, ws = false): Promise<string> {
@@ -127,19 +106,6 @@ export class ScheduleStore {
 		return [...this.items.values()]
 			.filter((item) => item.state === "pending" && item.trigger === "at" && item.expiresAt !== undefined)
 			.map(({ id, revision, expiresAt }) => ({ id, revision, expiresAt }));
-	}
-	/** Copy only rows needing passive review reconciliation, not every saved prompt on session events. */
-	reviewItems(includeUnresolved = false): ScheduledItem[] {
-		return [...this.items.values()]
-			.filter((item) =>
-				item.runs?.some(
-					(run) =>
-						run.insightsReview &&
-						(["preparing", "ready", "sent"].includes(run.insightsReview.state) ||
-							(includeUnresolved && run.insightsReview.state === "unresolved")),
-				),
-			)
-			.map((item) => structuredClone(item));
 	}
 	/** Lightweight projection: dashboard builds never copy stored prompt payloads. */
 	dashboard(projectId: string, held?: (item: ScheduledItem) => boolean): DashboardScheduledItem[] {

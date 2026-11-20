@@ -2,8 +2,6 @@
 //!
 //! The app's native owner opens one [`NativeHost`] for an explicit selection.
 //! [`crate::bridge::Bridge`] binds that same root to one released macOS channel.
-//! Native embedding/headless owners can also use [`DayRoot::context`]; the
-//! stock released macOS AppView cannot inject EngineConfig::context.
 //! Screen code cannot select a profile, port, path or credential.
 //!
 //! The root owns the host's lifetime. Before disposal, the lifecycle owner
@@ -15,7 +13,6 @@
 //! a new root. Emergency/headless engine loss still joins all entered work.
 
 use async_channel::Receiver;
-use nsh_core::element::{EngineContext, engine_context};
 
 use crate::host::{Error, NativeHost};
 
@@ -32,12 +29,6 @@ impl DayRoot {
         Self { host }
     }
 
-    /// The engine context that binds this root to one engine: set it as
-    /// `EngineConfig::context` when building that engine.
-    pub fn context(&self) -> EngineContext {
-        EngineContext::default().with(self.clone())
-    }
-
     /// The selected host, for the root's own Rust code.
     pub fn host(&self) -> &NativeHost {
         &self.host
@@ -50,10 +41,4 @@ impl DayRoot {
     pub fn close(&self) -> Receiver<Result<(), Error>> {
         self.host.close()
     }
-}
-
-/// The host the engine running this code was given, if any. Read in a JS
-/// call or task on the engine's thread.
-pub fn current_host() -> Option<NativeHost> {
-    engine_context::<DayRoot>().map(|root| root.host.clone())
 }

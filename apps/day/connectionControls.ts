@@ -1,5 +1,6 @@
 // Window-local presentation mirror. Native code owns configuration and command identities.
 import { signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call } from "./bridge";
 
 export type ConnectionSnapshot = {
@@ -35,6 +36,8 @@ export interface ConnectionControls {
 	probe(): Promise<void>;
 	write(action: "add" | "sign-in" | "cancel", value: unknown, binding?: string): Promise<boolean>;
 	check(id: string): Promise<void>;
+	/** Stops the automatic lookups. */
+	close?(): void;
 }
 export function connectedConnectionControls(window: string): ConnectionControls {
 	const snapshot = signal<ConnectionSnapshot | null>(null);
@@ -42,6 +45,11 @@ export function connectedConnectionControls(window: string): ConnectionControls 
 	const message = signal("");
 	const unknown = signal<{ operationId: string }[]>([]);
 	let again = false;
+	// Unknown actions are looked up by their receipt automatically; Check is the fallback.
+	const auto = new AutoCheck(
+		(operationId) => request("check", { operationId }).then(() => undefined),
+		() => {},
+	);
 	async function request(name: string, args: unknown): Promise<boolean> {
 		if (busy()) {
 			if (name === "read") again = true;
@@ -66,6 +74,7 @@ export function connectedConnectionControls(window: string): ConnectionControls 
 			}
 			if (r.snapshot) snapshot.set(r.snapshot);
 			unknown.set((r.value.operations ?? []) as { operationId: string }[]);
+			auto.watch(unknown().map((o) => o.operationId));
 			const outcome = r.value.outcome as { state?: string } | undefined;
 			if (name === "read") message.set("");
 			if (name !== "read")
@@ -108,5 +117,6 @@ export function connectedConnectionControls(window: string): ConnectionControls 
 		check: async (operationId) => {
 			await request("check", { operationId });
 		},
+		close: () => auto.close(),
 	};
 }

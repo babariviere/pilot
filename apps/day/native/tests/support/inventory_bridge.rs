@@ -197,7 +197,9 @@ impl InventoryFixture {
             thread: Some(thread),
             port,
         };
-        let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+        let _ = fixture
+            .f
+            .run("return await call('day.plan.inventory');", Fixture::caps());
         fixture.wait(|read| read.availability == PlanAvailability::Live);
         fixture
     }
@@ -280,7 +282,7 @@ fn unknown_feedback_holds_only_its_payload_and_images_and_check_never_resends() 
     assert_eq!(other["value"]["outcome"]["state"], "accepted");
     assert_eq!(other["value"]["operations"].as_array().unwrap().len(), 1);
     assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
-    fixture.f.host = NativeHost::open(
+    fixture.f.host = NativeHost::open_with_options(
         Source {
             profile: fixture.f.path.join("missing-profile"),
             port: fixture.port,
@@ -294,10 +296,13 @@ fn unknown_feedback_holds_only_its_payload_and_images_and_check_never_resends() 
             }),
         },
         fixture.f.path.join("journal"),
+        Default::default(),
     )
     .unwrap();
     fixture.f.bridge = Bridge::new(DayRoot::new(fixture.f.host.clone()));
-    let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+    let _ = fixture
+        .f
+        .run("return await call('day.plan.inventory');", Fixture::caps());
     fixture.wait(|p| p.availability == PlanAvailability::Live);
     let restored = fixture
         .f
@@ -334,7 +339,7 @@ fn unknown_feedback_retains_its_original_investigation_and_starts_it_once_after_
         .to_owned();
     assert_eq!(fixture.state.lock().unwrap().feedback_posts, 1);
     assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
-    fixture.f.host = NativeHost::open(
+    fixture.f.host = NativeHost::open_with_options(
         Source {
             profile: fixture.f.path.join("missing-profile"),
             port: fixture.port,
@@ -348,10 +353,13 @@ fn unknown_feedback_retains_its_original_investigation_and_starts_it_once_after_
             }),
         },
         fixture.f.path.join("journal"),
+        Default::default(),
     )
     .unwrap();
     fixture.f.bridge = Bridge::new(DayRoot::new(fixture.f.host.clone()));
-    let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+    let _ = fixture
+        .f
+        .run("return await call('day.plan.inventory');", Fixture::caps());
     fixture.wait(|p| p.availability == PlanAvailability::Live);
     fixture
         .f
@@ -402,7 +410,7 @@ fn correction_lost_reply_reopens_and_checks_without_another_send() {
     let blocked = fixture.f.run(&format!("return await call('day.feedback.step', {{action:'correct',feedbackId:'f1',triageSessionId:'triage-1',proposalDigest:'{digest}',message:'Other correction'}});"), Fixture::caps());
     assert_eq!(blocked["error"], "unknown");
     assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
-    fixture.f.host = NativeHost::open(
+    fixture.f.host = NativeHost::open_with_options(
         Source {
             profile: fixture.f.path.join("missing-profile"),
             port: fixture.port,
@@ -416,10 +424,13 @@ fn correction_lost_reply_reopens_and_checks_without_another_send() {
             }),
         },
         fixture.f.path.join("journal"),
+        Default::default(),
     )
     .unwrap();
     fixture.f.bridge = Bridge::new(DayRoot::new(fixture.f.host.clone()));
-    let _ = fixture.f.host.read_planning_inventory().recv_blocking();
+    let _ = fixture
+        .f
+        .run("return await call('day.plan.inventory');", Fixture::caps());
     fixture.wait(|p| p.availability == PlanAvailability::Live);
     let checked = fixture.f.run(
         &format!("return await call('day.feedback.check', {{operationId:'{id}'}});"),

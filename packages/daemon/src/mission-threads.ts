@@ -1,11 +1,15 @@
 /** Authenticated user topics. No pre-mission conversations, copied transcripts or generic send. */
-import type { DurableOperation, OperationReceipt, SessionHistoryPage } from "@pilot/protocol";
+
+import { PLANNING_INPUT_ENTRY } from "@pilot/kernel";
 import type {
+	DurableOperation,
 	MissionThread,
 	MissionThreadHistory,
 	MissionThreadsView,
 	MissionThreadWrite,
-} from "../../protocol/src/mission-thread.ts";
+	OperationReceipt,
+	SessionHistoryPage,
+} from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { interviewExact, interviewId } from "./mission-interview-contract.ts";
 import { revisionText } from "./mission-revisions.ts";
@@ -626,7 +630,7 @@ export class MissionThreads {
 		let replying = false;
 		for (const entry of entries) {
 			const record = entry as unknown as Record<string, any>;
-			if (record.kind === "pilot.planning-input") {
+			if (record.kind === PLANNING_INPUT_ENTRY) {
 				const op = JSON.parse(String(record.data?.operation ?? "{}")) as { operationId?: string; payload?: string };
 				const carried =
 					op.operationId && sent.has(op.operationId)

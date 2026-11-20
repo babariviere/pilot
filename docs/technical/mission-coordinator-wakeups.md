@@ -48,7 +48,7 @@ Existing event-driven notices and kernel recovery supply the occasions to reconc
 does not add wakes, scheduling, model calls, worker admission or authority. Future wake work should
 reuse the same coordinator guidance, not create a second planning loop.
 
-Regression tests in `policy.test.ts` and `mission-tools.test.ts` check trigger/coverage/authority
+Regression tests in `policy.fast.test.ts` and `mission-tools.test.ts` check trigger/coverage/authority
 guidance and its coordinator-only refresh across membership changes and adapter reload. The
 scripted journey in `mission-service.test.ts` exercises existing planning APIs for interview
 coverage, a research prerequisite/blocker, delivery/review criterion updates, repeated coverage
@@ -74,7 +74,7 @@ These are source-inspection anchors, not evidence that the proposed lifecycle al
 | [Subscription policy](../../packages/daemon/src/subscription-policy.ts), [native admission](../../packages/kernel/src/native-adapter.ts), [limit recovery](../../packages/kernel/src/subscription-limit.ts) | Pause at reported 99%; reset or fresh valid lower readings can release usage hold. Unknown/stale/error readings cannot thaw a known hold. Force work is provider-scoped. Tools already executing drain before the display becomes paused; model/tool admission respects the gate | A wake must not fetch provider usage to poll readiness, select another model, enable Force or replay native tools. A usage reset is not explicit post-Stop resume |
 | [Tool stall observer](../../packages/daemon/src/tool-stalls.ts) and [long-job observer](../../packages/daemon/src/long-jobs.ts) | Cheap deadline-driven suspected-stall/long-job attention, not coordinator turns. Tool classifier distinguishes pause/user/child/background waits; stale liveness 60 seconds, delayed cancellation 30 seconds; category no-progress thresholds 5 to 60 minutes. Long jobs get live-only attention at one hour | Suspicion is not proof of deadlock, abandonment or safe termination. Snapshots are bounded/live, not durable mission disposition. Long-job attention explicitly does not create a coordinator notice |
 
-[Notice tests](../../packages/daemon/src/mission-notices.test.ts) cover frozen-ID restart recovery,
+[Notice tests](../../packages/daemon/src/mission-notices.fast.test.ts) cover frozen-ID restart recovery,
 high-water marks, busy-member settlement, the 30-minute valve, cap boundaries and overflow.
 They do **not** prove the future reason/disposition/watchdog contract. In particular, a generic
 `mission get`, opening activity or a successful send is not proof that a coordinator processed it.

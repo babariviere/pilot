@@ -1,6 +1,6 @@
 /** Async funding owner. SQLite and fsync run only on its worker. */
 import { Worker } from "node:worker_threads";
-import type { FundingOwner, FundingQuote, FundingTokens, FundingView } from "../../protocol/src/funding.ts";
+import type { FundingOwner, FundingQuote, FundingTokens, FundingView } from "@pilot/protocol";
 import { FundingRefused } from "./funding-errors.ts";
 export class Funding {
 	private readonly worker: Worker;

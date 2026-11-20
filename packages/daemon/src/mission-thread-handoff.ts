@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { MissionThreadHandoff } from "../../protocol/src/mission-thread.ts";
+import type { MissionThreadHandoff } from "@pilot/protocol";
 
 /**
  * Tasks in one handoff, at most. A thread is one topic: more tasks than this is several topics, and the planner reads

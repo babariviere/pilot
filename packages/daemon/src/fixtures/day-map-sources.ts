@@ -3,7 +3,8 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
+import { serveCommands } from "./commands.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { mapSourceFixture } from "../map-source.fixture.ts";
 
@@ -30,7 +31,7 @@ const proxy = createServer(async (req, res) => {
 			method: req.method,
 			headers: {
 				"content-type": "application/json",
-				"x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? ""),
+				[PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? ""),
 			},
 			...(bytes.length ? { body: bytes } : {}),
 		});
@@ -93,9 +94,8 @@ console.log(
 		knowledge: knowledge.entry.id,
 	}),
 );
-for await (const line of createInterface({ input: process.stdin })) {
-	const command = JSON.parse(line);
-	if (command.action === "race") race = command.value;
+await serveCommands(async (command) => {
+	if (command.action === "race") race = command.value as string;
 	if (command.action === "append") await records.append();
 	if (command.action === "fill-summary") await records.fillSummary();
 	if (command.action === "replace") await records.replace();
@@ -106,10 +106,9 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (command.action === "access") f.coordinator = { ...f.coordinator!, mode: "ask" };
 	if (command.action === "archive") f.store.update(f.missionId, { status: "archived" });
 	if (command.action === "restart") await f.restart();
-	if (command.action === "quit") break;
 	await f.store.durable();
-	console.log(JSON.stringify({ gets, posts }));
-}
+	return { gets, posts };
+});
 for (const upstream of upstreams) upstream.close();
 for (const client of wss.clients) client.close();
 wss.close();

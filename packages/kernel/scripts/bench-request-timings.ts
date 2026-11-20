@@ -5,18 +5,13 @@ import { join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import {
-	fauxAssistantMessage,
-	fauxProvider,
-	fauxToolCall,
-	InMemoryCredentialStore,
-	InMemoryModelsStore,
-} from "@earendil-works/pi-ai";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness, MemoryStorage, UserEntry } from "@earendil-works/pi-durable";
 import { Type } from "typebox";
 import { NativeAdapter } from "../src/native-adapter.ts";
 import { PerformanceLog } from "../src/performance.ts";
+import { offlineModels } from "../src/testing/offline-models.ts";
 
 globalThis.fetch = async () => {
 	throw new Error("Offline benchmark must not access the network");
@@ -36,19 +31,11 @@ for (const history of [100, 1000]) {
 		let toolCalls = 0;
 		const timingLog = enabled ? new PerformanceLog(join(home, "performance.jsonl")) : undefined;
 		try {
-			const models = await ModelRuntime.create({
-				credentials: new InMemoryCredentialStore(),
-				modelsPath: null,
-				modelsStore: new InMemoryModelsStore(),
-				allowModelNetwork: false,
-				refreshOnCreate: false,
-			});
-			const faux = fauxProvider({
+			const { models, faux } = await offlineModels({
 				provider: "offline-timings",
 				models: [{ id: "fixture", contextWindow: 2_000_000 }],
 				tokenSize: { min: 4, max: 4 },
 			});
-			models.registerNativeProvider(faux.provider);
 			const agentDir = join(home, "agent");
 			adapter = await NativeAdapter.open({
 				cwd: home,

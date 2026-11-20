@@ -4,10 +4,11 @@
 // context shown; Rust saves the operation and sends it once. A write whose
 // answer is lost stays Unknown, also after reopening: Check reads that one
 // operation's saved receipt and never sends again (docs/technical/day-intake.md).
-import { type Signal, signal } from "nsh";
+import type { Signal } from "nsh";
 import type { Intake, Request } from "pilot-day/native";
-import { call, type Refusal, type Reply } from "./bridge";
-import { glide } from "./ui";
+import { call, type Reply } from "./bridge";
+import { LOST, OPEN_LOST, type Refusal, readReason, writeRefusal } from "./refusals";
+import { CallOrder, Feed, mirror } from "./source";
 
 /** The user's triage of a request. Separate from any Slack or Linear status. */
 export type Triage = "new" | "later" | "discarded";
@@ -49,7 +50,7 @@ export type IntakeView = {
 	fresh: IntakeRow[];
 	later: IntakeRow[];
 	discarded: IntakeRow[];
-	/** Writes whose result is not known. Only Check settles them. */
+	/** Writes whose result is not known. Pilot looks them up by itself; Check is the fallback. */
 	unsettled: IntakeOp[];
 	/** Writes settled while this window was open, oldest first. */
 	settled: IntakeOp[];
@@ -150,86 +151,46 @@ function summariesOf(x: unknown): Summary[] | null {
 
 /** Why requests could not be read, in one calm sentence. */
 export function intakeReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see them.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-			return "Pilot does not have access to read new requests here.";
-		case "unavailable":
-			return "Pilot could not read new requests right now.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read new requests.";
-	}
+	return readReason(refusal, {
+		denied: "Pilot does not have access to read new requests here.",
+		unavailable: "Pilot could not read new requests right now.",
+		other: "Pilot could not read new requests.",
+	});
 }
-
-/** Unknown words for a lost answer: the same promise everywhere. */
-const UNKNOWN = "Pilot sent this but heard nothing back. It will not send it again; Check only reads.";
 
 /** What a refused open means. Only an open whose answer is lost may have shown the message. */
 function refusedOpen(refusal: Refusal): IntakeResult {
-	const r = (status: IntakeResult["status"], message: string): IntakeResult => ({
-		status,
-		message,
-		operationId: null,
-	});
-	switch (refusal) {
-		case "lost":
-		case "unknown":
-			return r(
-				"unknown",
-				"Pilot asked your browser to open it but did not hear back. It will not try again by itself.",
-			);
-		case "stale":
-			return r("stale", "This request changed since Pilot read it. Nothing opened. Look again first.");
-		case "busy":
-		case "closed":
-			return r("rejected", "Pilot is closing. Nothing opened.");
-		case "offline":
-			return r("rejected", "Pilot could not reach its service to check this link. Nothing opened.");
-		case "invalid":
-			return r("rejected", "Pilot only opens Slack message links. Nothing opened.");
-		case "denied":
-		case "unavailable":
-			return r("rejected", "Pilot cannot open links in this window. Nothing opened.");
-		default:
-			return r("rejected", "Pilot could not open this link. Nothing opened.");
-	}
+	const unavailable = "Pilot cannot open links in this window. Nothing opened.";
+	const message = writeRefusal(
+		refusal,
+		{
+			lost: OPEN_LOST,
+			unknown: OPEN_LOST,
+			stale: "This request changed since Pilot read it. Nothing opened. Look again first.",
+			offline: "Pilot could not reach its service to check this link. Nothing opened.",
+			invalid: "Pilot only opens Slack message links. Nothing opened.",
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not open this link. Nothing opened.",
+		},
+		"Nothing opened.",
+	);
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "rejected";
+	return { status, message, operationId: null };
 }
 
 /** What a refused write means, before anything was saved or sent. */
 function refused(refusal: Refusal): IntakeResult {
-	const r = (status: IntakeResult["status"], message: string): IntakeResult => ({
-		status,
-		message,
-		operationId: null,
+	const unavailable = "This is not available here yet. Nothing was sent.";
+	const message = writeRefusal(refusal, {
+		unknown: LOST,
+		stale: "This request changed since Pilot read it. Nothing was sent. Look again first.",
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not send this. Nothing was sent.",
 	});
-	switch (refusal) {
-		case "lost":
-		case "unknown":
-			return r("unknown", UNKNOWN);
-		case "stale":
-			return r("stale", "This request changed since Pilot read it. Nothing was sent. Look again first.");
-		case "busy":
-			return r("rejected", "Pilot is saving this window before it closes. Nothing was sent.");
-		case "closed":
-			return r("rejected", "Pilot is closing. Nothing was sent.");
-		case "offline":
-			return r("rejected", "Pilot could not reach its service. Nothing was sent.");
-		case "identity":
-			return r("rejected", "The Pilot service changed. Open Pilot again. Nothing was sent.");
-		case "denied":
-		case "unavailable":
-			return r("rejected", "This is not available here yet. Nothing was sent.");
-		default:
-			return r("rejected", "Pilot could not send this. Nothing was sent.");
-	}
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "rejected";
+	return { status, message, operationId: null };
 }
 
 /** The New section over this window's native root. */
@@ -238,20 +199,21 @@ export class ConnectedIntake implements IntakeSource {
 	#snapshot: Snapshot | null = null;
 	#refusal: Refusal | null = null;
 	#ops: Summary[] = [];
-	/** Call order: an answer to an older call never replaces a newer one's read. */
-	#sent = 0;
-	#applied = 0;
-	#reading: Promise<void> | null = null;
-	#again = false;
+	#order = new CallOrder();
 	#sending = new Set<string>();
 	#checking = new Set<string>();
 	/** Operations this window sent or checked, so their settled result can show. */
 	#mine: string[] = [];
 	/** Titles from every read in this window, for writes whose request left the read. */
 	#titles = new Map<string, string>();
-	#listeners = new Map<number, (view: IntakeView) => void>();
-	#next = 0;
-	#closed = false;
+	#feed = new Feed(
+		() => this.view(),
+		(id) => this.#lookUp(id),
+	);
+	#reads = this.#feed.coalesce(async () => {
+		await this.#call("day.intake.read", {});
+		this.#feed.publish();
+	});
 
 	constructor(window: string) {
 		this.#window = window;
@@ -279,7 +241,7 @@ export class ConnectedIntake implements IntakeSource {
 			delivery:
 				o.state === "accepted" || o.state === "rejected"
 					? o.state
-					: this.#checking.has(o.operationId)
+					: this.#checking.has(o.operationId) || this.#feed.checking(o.operationId)
 						? "checking"
 						: "unknown",
 			title: this.#titles.get(o.itemId) ?? "",
@@ -316,27 +278,20 @@ export class ConnectedIntake implements IntakeSource {
 	}
 
 	onChange(listener: (view: IntakeView) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#publish() {
-		if (this.#closed) return;
-		const view = this.view();
-		for (const listener of this.#listeners.values()) listener(view);
+		return this.#feed.onChange(listener);
 	}
 
 	/** One exact call. Only the newest call's answer replaces what is shown. */
 	async #call(name: string, args: unknown) {
-		const order = ++this.#sent;
+		const order = this.#order.next();
 		const r = await call<unknown>(this.#window, name, args);
-		if (r.ok && order > this.#applied) {
+		if (this.#feed.closed) return r;
+		if (r.ok && this.#order.apply(order)) {
 			const snapshot = snapshotOf(r.snapshot);
 			const ops = summariesOf(r.value.operations);
 			if (snapshot) {
+				// Back from a refused read: Pilot looks every Unknown write up again.
+				if (this.#refusal) this.#feed.restart();
 				this.#snapshot = snapshot;
 				this.#refusal = null;
 				for (const intake of [snapshot.intake, snapshot.later, snapshot.discarded, snapshot.claimed]) {
@@ -345,30 +300,25 @@ export class ConnectedIntake implements IntakeSource {
 			} else if (name === "day.intake.read") {
 				this.#refusal = "invalid";
 			}
-			if (ops) this.#ops = ops;
-			this.#applied = order;
-		} else if (!r.ok && name === "day.intake.read" && order > this.#applied) {
+			if (ops) {
+				this.#ops = ops;
+				this.#feed.watch(this.view().unsettled.map((o) => o.operationId));
+			}
+		} else if (!r.ok && name === "day.intake.read" && this.#order.apply(order)) {
 			this.#refusal = r.refusal;
-			this.#applied = order;
 		}
 		return r;
 	}
 
 	read(): Promise<void> {
-		if (this.#reading) {
-			this.#again = true;
-			return this.#reading;
-		}
-		this.#reading = (async () => {
-			do {
-				this.#again = false;
-				await this.#call("day.intake.read", {});
-				this.#publish();
-			} while (this.#again && !this.#closed);
-		})().finally(() => {
-			this.#reading = null;
-		});
-		return this.#reading;
+		return this.#reads();
+	}
+
+	/** One automatic Check: a receipt read only. It never sends the write again. */
+	async #lookUp(operationId: string): Promise<void> {
+		const r = await this.#call("day.intake.check", { operationId });
+		if (r.ok && !this.#mine.includes(operationId)) this.#mine.push(operationId);
+		this.#feed.publish();
 	}
 
 	/** Sends one write for `itemId` once. A request with a write on its way or unsettled takes no other. */
@@ -382,7 +332,7 @@ export class ConnectedIntake implements IntakeSource {
 			};
 		}
 		this.#sending.add(itemId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call(name, args);
@@ -392,7 +342,7 @@ export class ConnectedIntake implements IntakeSource {
 		if (!r.ok) {
 			// A lost answer may hide a saved operation: the read lists it as Unknown.
 			void this.read();
-			this.#publish();
+			this.#feed.publish();
 			return refused(r.refusal);
 		}
 		const outcome = r.value.outcome as {
@@ -404,7 +354,7 @@ export class ConnectedIntake implements IntakeSource {
 		if (id) this.#mine.push(id);
 		// A write whose answer came without a fresh read keeps what was shown; read once more.
 		if (!snapshotOf(r.snapshot)) void this.read();
-		this.#publish();
+		this.#feed.publish();
 		if (outcome?.state === "accepted") return { status: "accepted", message: "", operationId: id };
 		if (outcome?.state === "rejected") {
 			const reason = typeof outcome.receipt?.reason === "string" ? outcome.receipt.reason : "";
@@ -414,7 +364,7 @@ export class ConnectedIntake implements IntakeSource {
 				operationId: id,
 			};
 		}
-		return { status: "unknown", message: UNKNOWN, operationId: id };
+		return { status: "unknown", message: LOST, operationId: id };
 	}
 
 	triage(intent: TriageIntent): Promise<IntakeResult> {
@@ -433,7 +383,7 @@ export class ConnectedIntake implements IntakeSource {
 	async check(operationId: string): Promise<IntakeResult> {
 		if (this.#checking.has(operationId)) return refused("busy");
 		this.#checking.add(operationId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.intake.check", { operationId });
@@ -441,7 +391,7 @@ export class ConnectedIntake implements IntakeSource {
 			this.#checking.delete(operationId);
 		}
 		if (!this.#mine.includes(operationId)) this.#mine.push(operationId);
-		this.#publish();
+		this.#feed.publish();
 		if (!r.ok) {
 			return {
 				status: "unknown",
@@ -474,8 +424,7 @@ export class ConnectedIntake implements IntakeSource {
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -486,26 +435,11 @@ export type IntakeMirror = {
 	close: () => void;
 };
 
-/** Which rows show where: what a glide follows. */
-function shape(v: IntakeView): string {
-	return [v.fresh, v.later, v.discarded, v.unsettled]
-		.map((l) => l.map((r) => ("request" in r ? r.request.id : r.operationId)).join(","))
-		.join("|");
-}
-
 /** Mirrors `source`'s view. Rows that arrive or leave glide to their places. */
 export function mirrorIntake(source: IntakeSource): IntakeMirror {
-	const view = signal(source.view());
-	const stop = source.onChange((next) => {
-		if (shape(next) !== shape(view())) glide();
-		view.set(next);
-	});
-	return {
-		source,
-		view,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	const shape = (v: IntakeView) =>
+		[v.fresh, v.later, v.discarded, v.unsettled]
+			.map((l) => l.map((r) => ("request" in r ? r.request.id : r.operationId)).join(","))
+			.join("|");
+	return { source, ...mirror(source, source.view(), shape) };
 }

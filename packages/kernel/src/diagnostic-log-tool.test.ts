@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { DiagnosticLogRequest, DiagnosticLogResult } from "@pilot/protocol";
 import { createDiagnosticLogTool, DIAGNOSTIC_LOG_TOOL } from "./diagnostic-log-tool.ts";
-import type { DiagnosticLogRequest, DiagnosticLogResult } from "./protocol.ts";
 
 const target = {
 	host: { hostId: "remote-box", daemonId: "daemon", lineageId: "lineage" },

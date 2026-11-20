@@ -59,7 +59,7 @@ test("passive completion follows finished-task semantics and atomically rejects 
 		let completions = 0;
 		store.onCompleted(() => completions++);
 		const changes: boolean[] = [];
-		store.onChange((_, passive) => changes.push(!!passive));
+		store.onChange((_, kind) => changes.push(kind !== "full"));
 		const done = store.lifecycle(m.id, "project", "active", "complete");
 		assert.equal(done.status, "done");
 		assert.equal(done.passiveLifecycle, true);
@@ -119,7 +119,7 @@ test("passive lifecycle is durable, status-only, and never reconciles tasks or d
 		const brief = store.brief(m.id);
 		const events = store.events(m.id);
 		const changes: boolean[] = [];
-		store.onChange((_, passive) => changes.push(!!passive));
+		store.onChange((_, kind) => changes.push(kind !== "full"));
 		const archived = store.lifecycle(m.id, "project", "active", "archive");
 		assert.equal(archived.passiveLifecycle, true);
 		assert.equal(archived.title, m.title);

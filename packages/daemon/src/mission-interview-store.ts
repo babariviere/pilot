@@ -1,4 +1,3 @@
-import type { SQLInputValue } from "node:sqlite";
 import type {
 	DurableOperation,
 	InterviewAgreementBinding,
@@ -17,6 +16,7 @@ import {
 	validateQuestions,
 } from "./mission-interview-contract.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const MISSION_INTERVIEW_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_interviews (
@@ -29,12 +29,7 @@ CREATE TABLE IF NOT EXISTS mission_flow_entries (
  domain_key TEXT PRIMARY KEY, operation_id TEXT NOT NULL UNIQUE, operation TEXT NOT NULL
 );
 `;
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
+interface Port extends MissionDbPort {
 	/** Only creates a fresh planningVersion 1 mission. No existing ID is accepted. */
 	create(input: { projectId: string; title: string }, ownerSessionId: string): string;
 	ownerFence(missionId: string, ownerSessionId: string): MissionInterview["ownerFence"];
@@ -42,12 +37,12 @@ interface Port {
 	currentBriefRevision(missionId: string): number;
 	/** Published native plans can only open inert Revisit rounds, never creation again. */
 	hasPublication(missionId: string): boolean;
-	publishedAgreement?(
+	publishedAgreement(
 		missionId: string,
 		brief: { revision: number; markdown: string },
 		submissionDigest: string,
 	): { revision: number; digest: string } | undefined;
-	submitted?(state: MissionInterview, op: DurableOperation): void;
+	submitted(state: MissionInterview, op: DurableOperation): void;
 }
 
 /** Append-only snapshots share missions.sqlite's transaction/replica. No wake or worker side effects. */
@@ -126,9 +121,6 @@ export class MissionInterviewStore {
 		);
 		return row ? JSON.parse(String(row.state)) : undefined;
 	}
-	/** Original submitted snapshots in append order, not later drafts carrying old answers.
-	 * Context is the immutable plan snapshot that opened that question set, never today's plan.
-	 * Callers must check current owner/project access and durability before exposing these records. */
 	/**
 	 * One submitted round of this mission by its submission ID, and its round number as the map counts it (1 plus the
 	 * rounds submitted before it). Reads two indexed rows, not the whole history.
@@ -148,6 +140,9 @@ export class MissionInterviewStore {
 		);
 		return { round: 1 + Number(before?.n ?? 0), submission };
 	}
+	/** Original submitted snapshots in append order, not later drafts carrying old answers.
+	 * Context is the immutable plan snapshot that opened that question set, never today's plan.
+	 * Callers must check current owner/project access and durability before exposing these records. */
 	history(missionId: string): { interview: MissionInterview; plan: MissionPlan | null }[] {
 		return this.port
 			.all(
@@ -249,7 +244,7 @@ export class MissionInterviewStore {
 			}
 			state.revision++;
 			this.insert(state, op);
-			if (request.purpose === "interview-submit") this.port.submitted?.(state, op);
+			if (request.purpose === "interview-submit") this.port.submitted(state, op);
 			changed = true;
 			return state;
 		});
@@ -262,7 +257,7 @@ export class MissionInterviewStore {
 		if (!state) return undefined;
 		if (state.kind === "revisit") throw new Conflict("Revisit answers are not an agreement or build approval");
 		const s = state.submission;
-		const planning = s ? this.port.publishedAgreement?.(missionId, brief, s.digest) : undefined;
+		const planning = s ? this.port.publishedAgreement(missionId, brief, s.digest) : undefined;
 		if (
 			!s ||
 			(!planning && (brief.revision !== s.briefRevision || brief.markdown !== s.agreementMarkdown)) ||

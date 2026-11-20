@@ -56,7 +56,7 @@ test("continuation atomically retains multi-task claims, coordinator role, PR li
 	store.linkAutomaticPullRequests("new", [removed]);
 	assert.ok(!store.detail(mission.id).resources.some((resource) => resource.url === removed));
 	// biome-ignore lint/complexity/useLiteralKeys: Inspect durable negative binding tombstones.
-	const binding = store["db"]
+	const binding = store["database"]
 		.prepare("SELECT session_id, url, bound, task_id FROM pull_request_bindings WHERE session_id = ? ORDER BY url")
 		.all("new");
 	assert.equal(binding.length, 2);

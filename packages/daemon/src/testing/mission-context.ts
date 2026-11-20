@@ -33,6 +33,7 @@ export function missionContextFixture(taskCount = 480, memberCount = 400) {
 		onChange: () => () => {},
 		refreshMissionPullRequests: () => {},
 		requestMainRefresh: () => {},
+		codingCapacityChanged: () => {},
 		missionChanged: (member: string, context: MissionContext | undefined) => delivered.set(member, context),
 	} as unknown as SessionManager;
 	const service = new MissionService(store, sessions, {} as ProjectStore);

@@ -3,11 +3,11 @@
 // the cycle its last sync read. It is a copy Pilot saved, not a live view of
 // Linear, not the team's issues and not other cycles. Reading only reads: it
 // asks Linear nothing, starts nothing and writes nothing anywhere.
-import { type Signal, signal } from "nsh";
-import type { Refusal } from "./bridge";
+import type { Signal } from "nsh";
+import type { SavedLinearRead } from "../../packages/protocol/src/tracking.ts";
 import { call } from "./bridge";
-import { readSavedLinear, type SavedLinearRead } from "./linearRead";
-import { glide } from "./ui";
+import { type Refusal, readReason } from "./refusals";
+import { Feed, mirror } from "./source";
 
 /** What the Linear page shows. */
 export type LinearView = {
@@ -33,22 +33,12 @@ export interface LinearSource {
 
 /** Why the saved issues could not be read, in one calm sentence. */
 export function linearReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see them.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot show Linear issues here yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read your saved Linear issues.";
-	}
+	const unavailable = "This Pilot service cannot show Linear issues here yet.";
+	return readReason(refusal, {
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not read your saved Linear issues.",
+	});
 }
 
 /** A read the page can show: the exact scope it promises, and nothing else. */
@@ -65,12 +55,17 @@ export class ConnectedLinear implements LinearSource {
 	#window: string;
 	#read: SavedLinearRead | null = null;
 	#refusal: Refusal | null = null;
-	#reading: Promise<void> | null = null;
-	#again = false;
 	#asked = false;
-	#listeners = new Map<number, (view: LinearView) => void>();
-	#next = 0;
-	#closed = false;
+	#feed = new Feed(() => this.view());
+	#reads = this.#feed.coalesce(async () => {
+		const r = await call<SavedLinearRead>(this.#window, "day.linear.read", {});
+		if (this.#feed.closed) return;
+		const read = r.ok ? readOf(r.snapshot) : null;
+		if (read) {
+			this.#read = read;
+			this.#refusal = null;
+		} else this.#refusal = r.ok ? "invalid" : r.refusal;
+	});
 
 	constructor(window: string) {
 		this.#window = window;
@@ -91,55 +86,23 @@ export class ConnectedLinear implements LinearSource {
 			availability: this.#read ? "live" : this.#refusal ? "unavailable" : this.#asked ? "reading" : "idle",
 			reason,
 			read: this.#read,
-			reading: this.#reading !== null,
+			reading: this.#reads.busy(),
 		};
 	}
 
 	onChange(listener: (view: LinearView) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
+		return this.#feed.onChange(listener);
 	}
 
-	#publish() {
-		if (this.#closed) return;
-		const view = this.view();
-		for (const listener of this.#listeners.values()) listener(view);
-	}
-
-	/** One read at a time; a read asked for meanwhile runs once after it, so the newest answer shows. */
 	read(): Promise<void> {
-		if (this.#reading) {
-			this.#again = true;
-			return this.#reading;
-		}
 		this.#asked = true;
-		this.#reading = (async () => {
-			do {
-				this.#again = false;
-				const r = await readSavedLinear(this.#window);
-				if (this.#closed) return;
-				if (r.ok) {
-					const read = readOf(r.snapshot);
-					if (read) {
-						this.#read = read;
-						this.#refusal = null;
-					} else this.#refusal = "invalid";
-				} else this.#refusal = r.refusal;
-			} while (this.#again && !this.#closed);
-		})().finally(() => {
-			this.#reading = null;
-			this.#publish();
-		});
-		this.#publish();
-		return this.#reading;
+		const reading = this.#reads().finally(() => this.#feed.publish());
+		this.#feed.publish();
+		return reading;
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -150,24 +113,9 @@ export type LinearMirror = {
 	close: () => void;
 };
 
-/** Which rows show: what a glide follows. */
-function shape(v: LinearView): string {
-	return (v.read?.items ?? []).map((i) => `${i.id}/${i.metadata.statusType ?? ""}`).join(",");
-}
-
 /** Mirrors `source`'s view. Rows that arrive, leave or change group glide to their places. */
 export function mirrorLinear(source: LinearSource): LinearMirror {
-	const view = signal(source.view());
-	const stop = source.onChange((next) => {
-		if (shape(next) !== shape(view())) glide();
-		view.set(next);
-	});
-	return {
-		source,
-		view,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	const shape = (v: LinearView) =>
+		(v.read?.items ?? []).map((i) => `${i.id}/${i.metadata.statusType ?? ""}`).join(",");
+	return { source, ...mirror(source, source.view(), shape) };
 }

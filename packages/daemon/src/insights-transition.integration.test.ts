@@ -8,8 +8,8 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { openSessionStorage } from "@pilot/kernel/testing";
 import type { DurableOperation, InsightsLegacySelector, ModelOption } from "@pilot/protocol";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { Conflict } from "./errors.ts";
 import { InsightsEnable } from "./insights-enable.ts";
 import { admitInsightsOperation } from "./insights-native.ts";
@@ -325,8 +325,8 @@ test("concurrent native confirmations choose one tracking transaction and one ex
 		{ op, payload } = await f.prepare();
 	const second = f.operation(op.kind, payload, op.targetId);
 	let cancellations = 0;
-	const cancel = f.schedules.cancelLegacyForTransfer.bind(f.schedules);
-	t.mock.method(f.schedules, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
+	const cancel = f.schedules.insights.cancelLegacyForTransfer.bind(f.schedules.insights);
+	t.mock.method(f.schedules.insights, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
 		cancellations++;
 		return cancel(...args);
 	});
@@ -340,9 +340,9 @@ test("concurrent native confirmations choose one tracking transaction and one ex
 test("unknown cancellation stays entered across exact retries and fresh-ID attempts", async (t) => {
 	const f = await fixture(t),
 		{ op } = await f.prepare();
-	const cancel = f.schedules.cancelLegacyForTransfer.bind(f.schedules);
+	const cancel = f.schedules.insights.cancelLegacyForTransfer.bind(f.schedules.insights);
 	let cancellations = 0;
-	t.mock.method(f.schedules, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
+	t.mock.method(f.schedules.insights, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
 		cancellations++;
 		await cancel(...args);
 		throw new Error("Synthetic lost cancellation ACK");
@@ -425,8 +425,8 @@ test("bounded native capture never clones unrelated scheduled prompt bodies", as
 test("Stop after the exact rule ACK blocks tracking commit and never resumes entered effects", async (t) => {
 	const f = await fixture(t),
 		{ op } = await f.prepare();
-	const cancel = f.schedules.cancelLegacyForTransfer.bind(f.schedules);
-	t.mock.method(f.schedules, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
+	const cancel = f.schedules.insights.cancelLegacyForTransfer.bind(f.schedules.insights);
+	t.mock.method(f.schedules.insights, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
 		const ack = await cancel(...args);
 		await f.sessions.stop(f.legacy.reportSessionId);
 		return ack;
@@ -454,7 +454,7 @@ test("active authority and deleted reports require old exact-ID recovery, never 
 		journal: f.journal,
 		legacyGuard: () => {
 			f.sessions.assertNoLegacyInsights();
-			f.schedules.assertNoLegacyInsights(host);
+			f.schedules.insights.assertNoLegacyInsights(host);
 		},
 	});
 	assert.equal((await fresh.preflight(f.project.id, model.id, "high")).state, "blocked");
@@ -549,8 +549,8 @@ for (const committed of [false, true])
 		const f = await fixture(t),
 			{ op, payload } = await f.prepare();
 		if (!committed) {
-			const cancel = f.schedules.cancelLegacyForTransfer.bind(f.schedules);
-			t.mock.method(f.schedules, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
+			const cancel = f.schedules.insights.cancelLegacyForTransfer.bind(f.schedules.insights);
+			t.mock.method(f.schedules.insights, "cancelLegacyForTransfer", async (...args: Parameters<typeof cancel>) => {
 				await cancel(...args);
 				throw new Error("Synthetic lost cancellation ACK");
 			});

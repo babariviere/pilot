@@ -1,54 +1,44 @@
 # Testing and test speed
 
-For packaged SSH workflow coverage, the shared-context/credential fault matrix and manual-only
-deployment gaps, see [devbox verification](devbox-verification.md).
-
-Node 24 strips our erasable TypeScript directly. Tests still use `node:test`, isolated processes, and
-fresh temporary state. Model tests use faux providers, never user accounts. `tsx` remains available for
-runner comparisons and the existing reopen benchmark, but is not needed by the default runner.
+Node 24 strips our erasable TypeScript directly. Tests use `node:test`, isolated processes, and
+fresh temporary state. Model tests use faux providers, never user accounts.
 
 ## Commands
 
-| Command                        | Scope                                                                         |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| `pnpm test:fast`               | Explicitly selected unit and offline service tests for quick feedback         |
-| `pnpm test:integration`        | Real repository, process, persistence, transport and kernel integration tests |
-| `pnpm test:stress`             | Large-file diff budgets, fan-out and 10,000-event notice regression tests     |
-| `pnpm test`                    | Every group, including runner/helper tests, on the current host               |
-| `pnpm test -- --lane=portable` | Broad Linux CI gate, excluding native-only integration files                  |
-| `pnpm test -- --lane=macos`    | Native-only integration plus explicit Darwin smoke coverage                   |
-| `pnpm test:timings`            | Full gate plus the slowest reported test-file execution times                 |
+| Command                     | Scope                                                                 |
+| --------------------------- | --------------------------------------------------------------------- |
+| `pnpm test:fast`            | `*.fast.test.ts`: unit and offline service tests for quick feedback   |
+| `pnpm test:integration`     | Every other test: repository, process, persistence and kernel tests   |
+| `pnpm test:stress`          | `*.stress.test.ts`: large diffs, fan-out and 10,000-event regressions |
+| `pnpm test`                 | Every suite on the current host                                       |
+| `pnpm test -- --lane=macos` | The OS-sensitive files that CI repeats on macOS                       |
+| `pnpm test:timings`         | Every suite plus the slowest test-file execution times                |
 
-New tests default to integration unless explicitly admitted to the fast list in `scripts/test-suites.ts`.
-`*.stress.test.ts` belongs to stress. No group is silently dropped by the full command.
-`pnpm test -- --list` lists the full selection; each group also accepts `--list`. Native Node test flags
-can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
+A test's file name decides its suite (`scripts/test-suites.ts`): `*.fast.test.ts` is fast,
+`*.stress.test.ts` is stress, and every other test, including `*.integration.test.ts`, is integration.
+The runner finds `*.test.ts` under `packages/*/src`, in `apps/day/node-tests` (Day modules run under Node
+with a stubbed NSH) and directly in `scripts/`. `--list` prints a selection without running it. Native Node
+test flags can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
 
-CI runs the portable lane and typechecking on Ubuntu x86-64. A smaller macOS arm64 lane retains
-the real coordinator sandbox, Ask NSH/image publication, wake sampling, PTYs, runtime
-environment and bundled-extension coverage, plus packaging and relocated production-runtime checks.
-These jobs live in `tests.yaml`, which `pr.yaml` and `main.yaml` share. PRs also build and validate the
-Linux production package. Tests are informational: `release.yaml` never waits for them.
+CI ([tests.yaml](../../.github/workflows/tests.yaml), shared by `pr.yaml` and `main.yaml`) runs every
+suite and the typecheck on Ubuntu x86-64. The macOS arm64 job repeats the `macos` lane, a list of
+OS-sensitive files in `scripts/test-suites.ts` that also run on Linux, plus packaging and relocated
+production-runtime checks. PRs also build and validate the Linux production package. Tests are
+informational: `release.yaml` never waits for them. Running the macOS lane on another OS fails
+(listing it is allowed). The runner fails when a macOS lane path or a scheduling weight pattern in
+`scripts/test-suites.ts` names no discovered file.
 
-Lane selection is explicit in `scripts/test-suites.ts`: new files default to the portable lane; no
-artifact integration requires a native compiler or browser preview host. Ask coverage runs in both lanes.
-OS-sensitive files intentionally run in both lanes. `--lane` intersects `--suite`, supports `--list`,
-and never changes plain `pnpm test` into a host-dependent subset. Running the macOS lane on another OS
-fails instead of silently losing native coverage (listing it is allowed). Artifact preview retirement tests
-run portably without browser or Swift toolchain probes.
+Concurrency and the per-test deadline come from `testLimits` in `scripts/test-suites.ts`
+(`PILOT_TEST_CONCURRENCY`, `PILOT_TEST_TIMEOUT_MS`); the Linux CI job sets its own concurrency.
+More Git/jj and compiler processes can make individual tests slower on a busy machine. The runner starts
+known expensive workspace groups early to avoid a long tail. Reported file durations exclude
+imports/startup and overlap, so do not sum them as wall time. Tests with explicit timeouts keep their
+own limits.
 
-The default is two test files concurrently. The Linux `node` CI job uses four, matching its runner's
-cores; the macOS lane keeps the default. `PILOT_TEST_CONCURRENCY=4 pnpm test`
-is useful on an otherwise quiet machine with headroom, but more Git/jj and compiler processes can make
-individual tests slower. The runner starts known expensive workspace groups early to avoid a long tail.
-Reported file durations exclude imports/startup and overlap, so do not sum them as wall time.
-The per-test deadline remains two minutes, configurable with `PILOT_TEST_TIMEOUT_MS`. Tests with explicit
-timeouts keep their own limits; the runner rejects invalid concurrency or timeout values.
-
-To run just affected files without importing every file in a group:
+To run just affected files without importing every file in a suite:
 
 ```sh
-node --test --test-force-exit --test-concurrency=2 packages/daemon/src/github.test.ts
+node --test --test-force-exit --test-concurrency=2 packages/daemon/src/github.fast.test.ts
 ```
 
 ### Managed manual Review proof
@@ -111,9 +101,8 @@ The baseline used a temporary snapshot of main with the same installed dependenc
 test state. The original audit's 323.86s and an early verification overlapping a cold Swift build are
 not suitable isolated comparisons. Swift CI cache savings require a subsequent Actions cache hit.
 
-For a runner comparison, alternate `pnpm test:timings` and `pnpm test:timings -- --tsx` on the same quiet
-machine, with the same concurrency, installed renderers and dependency cache. Record wall time, failures
-and skips. Do not benchmark a full suite concurrently with a Swift build or another suite.
+The runner's `--tsx` option used for that comparison has since been removed. Do not benchmark a full
+suite concurrently with a Swift build or another suite.
 
 ## Bundled extension verification
 
@@ -122,8 +111,9 @@ providers and mocked transport responses. It checks the default profile, reload,
 of package/symlink duplicates, unrelated personal extensions, direct/nested jobs, a real child worker's
 inherited profile/auth and repeated IPC input/stop, static model configuration and API-key/OAuth request
 shaping. Ask tests ensure personal, project and inline extension factories never execute.
-`apps/day/macos/scripts/check-runtime.sh` also exercises parent/child profile loading, Ask web and daemon
-auth from the isolated production install, both before and after ZIP extraction.
+The shared runtime smoke (`packages/daemon/scripts/runtime-smoke.mjs`, run by both runtime checks) also
+exercises parent/child profile loading, Ask web and daemon auth from the isolated production install, both
+before and after relocation.
 
 To compare profile overhead on synthetic large history and streaming, without account access:
 
@@ -232,7 +222,7 @@ with a 5 ms heartbeat, event-loop histogram and unrelated loopback HTTP requests
 All three maximum-delay budgets are 200 ms. It checks unchanged results/order and requires both heartbeat
 and HTTP activity. The watchdog reports CPU stalls, waiting and likely sleep separately; sleep makes the
 measurement inconclusive and skips the latency assertions, never counting as a CPU regression or a repair success.
-`event-loop-watchdog.test.ts` also checks equal-duration CPU and sleep pauses using deterministic clocks.
+`event-loop-watchdog.fast.test.ts` also checks equal-duration CPU and sleep pauses using deterministic clocks.
 
 An offline macOS arm64/Node 24.21.0 reproduction on 2026-10-19 recorded six CPU stalls before the fix,
 with maximum heartbeat/HTTP/event-loop delays of 1,604/1,604/1,604 ms (8,163 ms total main-thread CPU).
@@ -286,7 +276,7 @@ services or user state are opened. On 2026-10-16, macOS arm64/Node 24.21.0, thre
 
 Recovery still reconciles every member/hand-linked PR and completion. One transaction now publishes
 final contexts once per affected mission after phase reconciliation, instead of rebuilding all member
-contexts after each recovered PR. `mission-notices.test.ts` guards final task/phase/cache state and
+contexts after each recovered PR. `mission-notices.fast.test.ts` guards final task/phase/cache state and
 notification fan-out; `missions.test.ts` guards nested batching, membership and rollback. This isolates
 synchronous recovery cost, not full daemon launch time, provider startup or live GUI responsiveness.
 
@@ -475,7 +465,7 @@ Each record held 100 children with the working child last. Median wall time was 
 provider streaming, GUI rendering or cold database recovery. No polling, history reads or child
 process inspection were added to the activity path.
 
-`packages/daemon/src/worker-starts.test.ts` and `sessions.test.ts` cover a 150-session recovery burst,
+`packages/daemon/src/worker-starts.fast.test.ts` and `sessions.test.ts` cover a 150-session recovery burst,
 two concurrent cold starts, FIFO admission, per-session coalescing, failure release, queued Stop,
 role changes, archival, sleep and shutdown. The limit lasts through worker readiness, not the agent's
 run. Memory wake failure or its 1.2-second deadline remains nonfatal; the kernel integration fixture
@@ -534,7 +524,7 @@ operation even when an assertion fails. Polling helpers should use monotonic tim
 ## Offline API cassettes
 
 `packages/daemon/src/testing/cassette.ts` is a replay-only helper. Examples for GitHub, Linear and Slack
-live under `packages/daemon/src/fixtures/cassettes`, and `service-cassettes.test.ts` drives the real
+live under `packages/daemon/src/fixtures/cassettes`, and `service-cassettes.fast.test.ts` drives the real
 adapters and parsers through them. The versioned JSON format is:
 
 ```json

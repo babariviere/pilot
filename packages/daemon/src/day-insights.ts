@@ -142,7 +142,7 @@ export class DayInsights {
 			return !!source && this.sourceAllowed(source, cutoff) && this.sourceAllowed(source, Date.now());
 		});
 	}
-	async backlog(id: string, input: unknown, worker?: import("./sessions.ts").SessionWorker): Promise<unknown> {
+	async backlog(id: string, input: unknown, worker?: import("./kernel-worker.ts").SessionWorker): Promise<unknown> {
 		const request = (await import("./insights-backlog.ts")).parseInsightsBacklog(input);
 		const run = this.deps.sessions!.dayInsightsRunId(id);
 		const admission = this.deps.sessions!.insightsOwnerAdmission(id, worker);

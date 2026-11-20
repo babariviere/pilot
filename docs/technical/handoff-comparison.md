@@ -1,6 +1,10 @@
 # Ordinary-chat handoff comparison
 
-This is an offline evaluation harness, not an auto-handoff implementation or rollout.
+The harness, `context-digest.ts` and their tests were removed from the checkout after
+[Posthorse](posthorse.md) replaced the digest. This page keeps the method and results for history;
+the commands below need an older revision.
+
+This was an offline evaluation harness, not an auto-handoff implementation or rollout.
 At the time of the experiment, production compaction, the deterministic-digest opt-in and
 coordinator OptChat-inspired memory were unchanged. They are now replaced by [Posthorse](posthorse.md).
 The harness itself makes no model requests, authenticates no

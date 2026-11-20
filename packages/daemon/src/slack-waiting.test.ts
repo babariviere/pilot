@@ -6,7 +6,7 @@ import { type TestContext, test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { parseSlackThreadReplies } from "./slack-format.ts";
 import { createSlackWaitingWatcher } from "./slack-waiting.ts";
-import type { SourcePollContext } from "./sources.ts";
+import type { SourcePollContext } from "./source-poll.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 const parent = "1780000000.123456";
@@ -158,14 +158,14 @@ test("a reply from someone else resumes the waiting chat; the user's own replies
 	);
 
 	f.reply(thread(reply(1, 1, "Me <me@example.test> (UME)", later(5), "Asked the CSM.")));
-	assert.equal(await watch(f.context), false);
+	await watch(f.context);
 	assert.equal(resumed.length, 0);
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
 	assert.equal(f.calls.find((call) => call.tool === "thread")?.args.oldest, after);
 
 	// Checks are spaced out per message.
 	f.calls.length = 0;
-	assert.equal(await watch(f.context), false);
+	await watch(f.context);
 	assert.equal(f.calls.length, 0);
 
 	clock += 11 * 60_000;
@@ -197,17 +197,7 @@ test("a reply without an eligible chat keeps the message waiting", async (t) => 
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
 });
 
-test("a check in Slack never finishes a waiting message", async (t) => {
-	const f = await fixture(t);
-	await f.items.patch(f.item.id, { sessionId: "chat-1", start: true });
-	await f.items.agentSlackStatus("chat-1", "waiting");
-	const { reads } = await f.items.reserveSlackReactions(f.project.id, Date.now());
-	assert.equal(reads.length, 1);
-	await f.items.recordSlackReaction(f.item.id, true, reads[0]!.version);
-	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
-});
-
-test("ordinary and forced waiting reads have no hourly cap and keep recheck limits", async (t) => {
+test("waiting reads have no hourly cap and keep recheck limits", async (t) => {
 	const f = await fixture(t);
 	await f.items.patch(f.item.id, { slack: { status: "waiting" } });
 	const clock = Date.now() + 3_600_000;
@@ -217,14 +207,14 @@ test("ordinary and forced waiting reads have no hourly cap and keep recheck limi
 		async () => false,
 		() => clock,
 	);
-	assert.equal(await watch(f.context), false);
-	assert.equal(await watch({ ...f.context, force: true }), false);
+	await watch(f.context);
+	await watch(f.context);
 	assert.deepEqual(
 		f.calls.map(({ tool }) => tool),
 		["profile", "thread"],
 	);
 
-	assert.equal((await f.items.reserveSlackWaiting(f.project.id, clock, true)).reads.length, 0);
+	assert.equal((await f.items.reserveSlackWaiting(f.project.id, clock)).reads.length, 0);
 });
 
 test("a user action while reading a thread prevents stale resume", async (t) => {
@@ -272,7 +262,7 @@ test("held linked work stays waiting and retries the same reply on a later check
 	);
 	await watch(f.context);
 	clock += 11 * 60_000;
-	await watch({ ...f.context, force: true });
+	await watch(f.context);
 	assert.equal((await f.items.require(f.item.id)).slack?.status, "waiting");
 	assert.equal(requests.length, 2);
 	assert.equal(requests[0], requests[1]);

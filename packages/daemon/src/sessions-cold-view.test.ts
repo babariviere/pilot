@@ -10,11 +10,11 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, PersistedSessionView } from "@pilot/kernel";
+import { AttentionDoc, openSessionStorage } from "@pilot/kernel/testing";
 import type { AgentEvent, SessionCompletion, SessionSummary } from "@pilot/protocol";
-import { AttentionDoc } from "../../kernel/src/attention.ts";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { ProjectStore } from "./projects.ts";
-import { type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
+import { type SessionFactories, SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const cold: AgentEvent = {

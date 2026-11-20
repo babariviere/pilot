@@ -7,7 +7,7 @@
 // settles a command: only the command's own matching receipts do.
 import { type Signal, signal } from "nsh";
 import { AutoCheck } from "./autoCheck";
-import type { Refusal } from "./bridge";
+import { LOST, OPEN_LOST, type Refusal, readReason, writeRefusal } from "./refusals";
 import { type ArtifactLink, artifactSelection, type CapturedArtifact, readDeliveryArtifact } from "./deliveryArtifact";
 import {
 	type AgentWork,
@@ -151,141 +151,81 @@ export interface DeliverySource {
 	dispose(): void;
 }
 
-/** Unknown words for a lost answer: the same promise everywhere. */
-export const UNKNOWN = "Pilot sent this but heard nothing back. It will not send it again; Check only reads.";
-
 /** Why a result could not be read, in one calm sentence. */
-export function deliveryReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see it.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot show delivered results here.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read this result.";
-	}
+function deliveryReason(refusal: Refusal): string {
+	const unavailable = "This Pilot service cannot show delivered results here.";
+	return readReason(refusal, { denied: unavailable, unavailable, other: "Pilot could not read this result." });
 }
 
 /** What a refused command means. Only a lost answer may hide a sent command. */
-export function refusedResult(refusal: Refusal): DeliveryResult {
-	const r = (status: DeliveryResult["status"], message: string): DeliveryResult => ({
-		status,
-		message,
-		operationId: null,
+function refusedResult(refusal: Refusal): DeliveryResult {
+	const unavailable = "This is not available here. Nothing was sent.";
+	const message = writeRefusal(refusal, {
+		unknown: "An earlier check of this result is not confirmed. Check it first; nothing was sent.",
+		stale: "This result changed since you opened it. Nothing was sent. Look at it again.",
+		denied: unavailable,
+		unavailable,
+		capacity: "Pilot cannot save another command here. Nothing was sent.",
+		storage: "Pilot could not save it, so nothing was sent.",
+		other: "Pilot could not send this. Nothing was sent.",
 	});
-	switch (refusal) {
-		case "lost":
-			return r("unknown", UNKNOWN);
-		case "unknown":
-			return r("unknown", "An earlier check of this result is not confirmed. Check it first; nothing was sent.");
-		case "stale":
-			return r("stale", "This result changed since you opened it. Nothing was sent. Look at it again.");
-		case "busy":
-			return r("rejected", "Pilot is saving this window before it closes. Nothing was sent.");
-		case "closed":
-			return r("rejected", "Pilot is closing. Nothing was sent.");
-		case "offline":
-			return r("rejected", "Pilot could not reach its service. Nothing was sent.");
-		case "identity":
-			return r("rejected", "The Pilot service changed. Open Pilot again. Nothing was sent.");
-		case "denied":
-		case "unavailable":
-			return r("rejected", "This is not available here. Nothing was sent.");
-		case "capacity":
-			return r("rejected", "Pilot cannot save another command here. Nothing was sent.");
-		case "storage":
-			return r("rejected", "Pilot could not save it, so nothing was sent.");
-		default:
-			return r("rejected", "Pilot could not send this. Nothing was sent.");
-	}
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "rejected";
+	return { status, message, operationId: null };
 }
 
 /** What a refused open means. Only an attempt whose answer is lost may have opened. */
 export function refusedOpen(refusal: Refusal): OpenResult {
-	const r = (message: string): OpenResult => ({ status: "refused", message });
-	switch (refusal) {
-		case "lost":
-		case "unknown":
-			return {
-				status: "unknown",
-				message: "Pilot asked your browser to open it but did not hear back. It will not try again by itself.",
-			};
-		case "stale":
-			return r("This link changed since Pilot read the result. Nothing opened. Look at it again.");
-		case "busy":
-		case "closed":
-			return r("Pilot is closing. Nothing opened.");
-		case "offline":
-			return r("Pilot could not reach its service to check this link. Nothing opened.");
-		case "identity":
-			return r("The Pilot service changed. Open Pilot again. Nothing opened.");
-		case "invalid":
-			return r("Pilot only opens web links. Nothing opened.");
-		case "denied":
-		case "unavailable":
-			return r("Pilot cannot open links in this window. Nothing opened.");
-		default:
-			return r("Pilot could not open this link. Nothing opened.");
-	}
+	const unavailable = "Pilot cannot open links in this window. Nothing opened.";
+	const message = writeRefusal(
+		refusal,
+		{
+			lost: OPEN_LOST,
+			unknown: OPEN_LOST,
+			stale: "This link changed since Pilot read the result. Nothing opened. Look at it again.",
+			offline: "Pilot could not reach its service to check this link. Nothing opened.",
+			invalid: "Pilot only opens web links. Nothing opened.",
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not open this link. Nothing opened.",
+		},
+		"Nothing opened.",
+	);
+	return { status: refusal === "lost" || refusal === "unknown" ? "unknown" : "refused", message };
 }
 
 /** What a refused source read means. A read changes nothing, so no answer is Unknown. */
 export function refusedInspect(refusal: Refusal): InspectResult {
-	const r = (message: string): InspectResult => ({ status: "refused", message });
-	switch (refusal) {
-		case "stale":
-			return r(
-				"This result or its artifact changed since Pilot read it, or the artifact is no longer part of this mission. Nothing is shown.",
-			);
-		case "busy":
-		case "closed":
-			return r("Pilot is closing. Nothing is shown.");
-		case "offline":
-			return r("Pilot could not reach its service. Nothing is shown.");
-		case "identity":
-			return r("The Pilot service changed. Open Pilot again. Nothing is shown.");
-		case "invalid":
-			return r("Pilot's service answered in a way this app does not understand. Nothing is shown.");
-		case "lost":
-		case "unknown":
-			return r("Pilot did not hear back. Nothing is shown, and nothing changed.");
-		case "denied":
-		case "unavailable":
-			return r("Pilot cannot show saved sources in this window.");
-		default:
-			return r("Pilot could not read this source. Nothing is shown.");
-	}
+	const lost = "Pilot did not hear back. Nothing is shown, and nothing changed.";
+	const unavailable = "Pilot cannot show saved sources in this window.";
+	const message = readReason(
+		refusal,
+		{
+			stale: "This result or its artifact changed since Pilot read it, or the artifact is no longer part of this mission. Nothing is shown.",
+			lost,
+			unknown: lost,
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not read this source. Nothing is shown.",
+		},
+		"Nothing is shown.",
+	);
+	return { status: "refused", message };
 }
 
 /** What a refused Agent work read means. A read changes nothing, so no answer is Unknown. */
 export function refusedAgentWork(refusal: Refusal): AgentWorkResult {
-	const r = (message: string): AgentWorkResult => ({ status: "refused", message });
-	switch (refusal) {
-		case "stale":
-			return r("This result changed since Pilot read it. Look at it again.");
-		case "busy":
-		case "closed":
-			return r("Pilot is closing. Nothing is shown.");
-		case "offline":
-			return r("Pilot could not reach its service. Nothing is shown.");
-		case "identity":
-			return r("The Pilot service changed. Open Pilot again. Nothing is shown.");
-		case "invalid":
-			return r("Pilot's service answered in a way this app does not understand. Nothing is shown.");
-		case "denied":
-		case "unavailable":
-			return r("This Pilot service cannot show agent work here.");
-		default:
-			return r("Pilot could not read the agent's work. Nothing is shown, and nothing changed.");
-	}
+	const unavailable = "This Pilot service cannot show agent work here.";
+	const message = readReason(
+		refusal,
+		{
+			stale: "This result changed since Pilot read it. Look at it again.",
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not read the agent's work. Nothing is shown, and nothing changed.",
+		},
+		"Nothing is shown.",
+	);
+	return { status: "refused", message };
 }
 
 /** Whether `work` is about exactly the result `shown`. */
@@ -365,7 +305,7 @@ function outcomeResult(op: DeliveryOperation | null): DeliveryResult {
 			operationId: id,
 		};
 	}
-	return { status: "unknown", message: UNKNOWN, operationId: id };
+	return { status: "unknown", message: LOST, operationId: id };
 }
 
 /** The results over this window's native root. */

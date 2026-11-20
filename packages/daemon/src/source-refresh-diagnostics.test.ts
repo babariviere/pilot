@@ -8,7 +8,7 @@ import { ProjectStore } from "./projects.ts";
 import { createSlackPoller } from "./slack-source.ts";
 import { refreshAssessment, SourceRefreshDiagnostics } from "./source-refresh-diagnostics.ts";
 import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-tool-rules.ts";
-import { SourceRegistry } from "./sources.ts";
+import { SourceRegistry, type SourceRegistryOptions } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
 const time = Date.UTC(2026, 9, 19, 12);
@@ -66,7 +66,7 @@ test("refresh observations remain bounded, cloned, content-free and independentl
 	assert.equal(observations.read("ignored", "key"), undefined);
 });
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, options: SourceRegistryOptions = {}) {
 	const home = await realpath(await mkdtemp(join(tmpdir(), "refresh-health-")));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -91,7 +91,7 @@ async function fixture(t: TestContext) {
 			return { issues: [] };
 		},
 	};
-	const registry = new SourceRegistry(projects, items, mcp);
+	const registry = new SourceRegistry(projects, items, mcp, options);
 	t.after(async () => {
 		await registry.stop();
 		await items.close();
@@ -161,7 +161,7 @@ test("production source history survives restart separately from liveness, fence
 
 test("manual discovery health is host-scoped and observing never calls or retries integrations", async (t) => {
 	const f = await fixture(t);
-	await f.registry.linearTeams();
+	await f.registry.linear.teams();
 	const calls = f.calls();
 	const read = () => f.registry.refreshHealth({ projectId: f.project.id, kind: "linear" });
 	let job = read().hostJobs![0]!;
@@ -171,7 +171,7 @@ test("manual discovery health is host-scoped and observing never calls or retrie
 	for (let i = 0; i < 5; i++) read();
 	assert.equal(f.calls(), calls);
 	f.mode("sign_in");
-	await f.registry.linearTeams();
+	await f.registry.linear.teams();
 	job = read().hostJobs![0]!;
 	assert.equal(job.state, "failure");
 	assert.equal(job.observation?.reason, "sign_in");
@@ -299,16 +299,17 @@ test("shared-slot queue, deadline uncertainty and deleted configuration are read
 	assert.equal(f.calls(), 0);
 });
 
-test("waiting-reply failures stay separate from discovery; legacy read budgets are ignored", async (t) => {
+test("waiting-reply failures stay separate from discovery", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: time });
-	const f = await fixture(t);
+	const f = await fixture(t, {
+		slack: {
+			waiting: async (context) => {
+				context.observe?.({ stage: "waiting_replies", phase: "partial", reason: "read_failed" });
+				context.observe?.({ stage: "waiting_replies", phase: "completed", outcome: "success", count: 1 });
+			},
+		},
+	});
 	f.registry.register("slack", async () => ({ items: [] }));
-	f.registry.slackWaiting = async (context) => {
-		context.observe?.({ stage: "waiting_replies", phase: "partial", reason: "read_failed" });
-		context.observe?.({ stage: "waiting_replies", phase: "completed", outcome: "success", count: 1 });
-		return false;
-	};
-	t.mock.method(f.items, "reserveSlackReactions", async () => ({ reads: [], budget: true }));
 	f.registry.startPolling("slack");
 	await f.registry.poll(`${f.project.id}:slack`);
 	const calls = f.calls();
@@ -316,9 +317,11 @@ test("waiting-reply failures stay separate from discovery; legacy read budgets a
 	assert.equal(row.live?.outcome, "partial");
 	assert.equal(row.live?.stages.find((s) => s.stage === "discovery")?.outcome, "success");
 	assert.equal(row.live?.stages.find((s) => s.stage === "waiting_replies")?.outcome, "partial");
-	assert.equal(row.live?.stages.find((s) => s.stage === "reaction_reads")?.outcome, "success");
-	assert.equal(row.live?.stages.find((s) => s.stage === "reaction_reads")?.reason, undefined);
-	assert.equal(row.backoff, undefined, "reaction limits do not pause message discovery");
+	assert.deepEqual(
+		row.stageCoverage.map((s) => s.stage),
+		["discovery", "classification", "commit", "waiting_replies"],
+	);
+	assert.equal(row.backoff, undefined);
 	assert.equal(row.scheduler.nextDueAt, time + 300_000);
 	assert.equal(f.calls(), calls);
 });

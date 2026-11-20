@@ -1,9 +1,9 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { PlanningRound, PlanningWorkerBinding } from "@pilot/kernel";
 import type { DurableOperation, MissionInterview } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { trace } from "./trace.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const PLANNING_WORKER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS planning_workers (mission_id TEXT PRIMARY KEY, enrollment_id TEXT NOT NULL UNIQUE, record TEXT NOT NULL);
@@ -144,8 +144,6 @@ export interface PlanningResearch {
 	/** The prototype of the attempt before, which the next chat starts from. */
 	earlier?: { sessionId: string; artifactId: string; revision: number };
 }
-/** Limits of a builder's task prototype: request text and prototypes per task. No time limit. */
-export const TASK_PROTOTYPE = { question: 4000, attempts: 3 } as const;
 /** One prototype a builder asked for its task. */
 export interface TaskPrototype {
 	/** The builder's own ID for this request. The same ID again reads it; nothing starts twice. */
@@ -173,15 +171,9 @@ export interface TaskPrototype {
 	/** The prototype of the request before, which the next chat starts from. */
 	earlier?: { sessionId: string; artifactId: string; revision: number };
 }
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	changed(missionId: string): void;
-}
 export class PlanningWorkerStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	missionIds(): string[] {
@@ -191,6 +183,15 @@ export class PlanningWorkerStore {
 	get(missionId: string): PlanningWorkerState | undefined {
 		const row = this.port.one("SELECT record FROM planning_workers WHERE mission_id=?", missionId);
 		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+	/** The mission's coordinator is its planning chat. */
+	coordinatedByPlanner(missionId: string): boolean {
+		// One indexed read, no record parse: this runs on every mission event and context read.
+		return !!this.port.one(
+			`SELECT 1 FROM missions m JOIN planning_workers p ON p.mission_id = m.id
+			WHERE m.id = ? AND m.coordinator_session_id = json_extract(p.record, '$.binding.ownerSessionId')`,
+			missionId,
+		);
 	}
 	enrollment(id: string): PlanningWorkerState | undefined {
 		const row = this.port.one("SELECT record FROM planning_workers WHERE enrollment_id=?", id);
@@ -219,7 +220,7 @@ export class PlanningWorkerStore {
 			this.port.run("UPDATE planning_workers SET record=? WHERE mission_id=?", canonicalJSON(state), missionId);
 			return state;
 		});
-		this.port.changed(missionId);
+		this.port.changed(missionId, "readModel");
 		if (before !== result.phase) trace(`pilotd: planning ${missionId} phase ${before} -> ${result.phase}`);
 		return result;
 	}

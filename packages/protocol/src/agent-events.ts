@@ -131,3 +131,7 @@ export type ToolEventCall = {
 	parentToolCallId?: string;
 	parentTaskId?: TaskId;
 };
+
+export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+export type { EntryRecord, ToolSlot } from "@earendil-works/pi-durable";
+export type { AgentEvent as BaseAgentEvent };

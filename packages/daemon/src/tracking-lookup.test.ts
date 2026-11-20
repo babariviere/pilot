@@ -144,25 +144,25 @@ test("registry lookups map sign-in and limits to quiet states, and the latest se
 		if (mode === "slow") await gate;
 		return tool === "teams" ? { teams: [], hasNextPage: true } : search;
 	});
-	assert.deepEqual(await r.linearTeams(), { status: "ok", items: [], more: true });
+	assert.deepEqual(await r.linear.teams(), { status: "ok", items: [], more: true });
 	mode = "signin";
-	assert.deepEqual(await r.slackChannelOptions("bugs"), {
+	assert.deepEqual(await r.slack.channelOptions("bugs"), {
 		status: "sign_in_required",
 		items: [],
 		error: "Sign in required",
 		signInCommand: "pi mcp login slack",
 	});
 	mode = "limited";
-	assert.match((await r.linearTeams()).error!, /rate limiting/);
+	assert.match((await r.linear.teams()).error!, /rate limiting/);
 	mode = "broken";
-	const broken = await r.linearTeams();
+	const broken = await r.linear.teams();
 	assert.equal(broken.status, "error");
 	assert.doesNotMatch(broken.error!, /secret/);
 	mode = "slow";
-	const first = r.slackChannelOptions("bu");
+	const first = r.slack.channelOptions("bu");
 	await new Promise((resolve) => setImmediate(resolve));
 	mode = "ok";
-	const second = r.slackChannelOptions("bugs");
+	const second = r.slack.channelOptions("bugs");
 	assert.equal((await first).status, "error", "superseded");
 	assert.equal((await second).items.length, 2);
 	release();

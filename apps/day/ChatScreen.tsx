@@ -8,7 +8,13 @@ import type { Day } from "./day";
 import { LinkedFeedback } from "./LinkedFeedback";
 import { LiveChanges } from "./LiveChanges";
 import { RECOVERY_INPUT_BYTES, recoveryBytes, recoveryNote, setRecoveryNote } from "./recoveryDraft";
-import type { ContinueResult, SessionChat, SessionChatMirror, SessionChatSource } from "./sessionChat";
+import {
+	type ContinueResult,
+	type SessionChat,
+	type SessionChatMirror,
+	type SessionChatSource,
+	settle,
+} from "./sessionChat";
 import {
 	Block,
 	Body,
@@ -67,11 +73,8 @@ function FixHandoffRow(props: { mirror: SessionChatMirror; sessionId: string }) 
 		const submitted = note();
 		sending.set(true);
 		try {
-			let r = await props.mirror.source.handoffChat!(props.sessionId, submitted);
-			// Lost writes are looked up automatically, never submitted again.
-			for (let attempt = 0; r.status === "unknown" && r.operationId && attempt < 3; attempt++)
-				r = await props.mirror.source.checkContinue(r.operationId);
-			accept(r, submitted);
+			const source = props.mirror.source;
+			accept(await settle(source, await source.handoffChat!(props.sessionId, submitted)), submitted);
 		} finally {
 			sending.set(false);
 		}
@@ -155,7 +158,8 @@ function RecoveryRow(props: { mirror: SessionChatMirror; sessionId: string; rest
 		submitted = message;
 		sending.set(true);
 		try {
-			const r = await props.mirror.source.recoverChat!(props.sessionId, message);
+			const source = props.mirror.source;
+			const r = await settle(source, await source.recoverChat!(props.sessionId, message));
 			submitted = r.submittedText ?? message;
 			result.set(r);
 			if (r.status === "accepted" && text() === submitted) setRecoveryNote(props.sessionId, "");
@@ -284,7 +288,7 @@ export function ContinueRow(props: {
 	const unknown = () => (result()?.status === "unknown" ? (result()?.operationId ?? null) : null);
 	const go = async () => {
 		sending.set(true);
-		const r = await props.source.continueChat(props.sessionId);
+		const r = await settle(props.source, await props.source.continueChat(props.sessionId));
 		result.set(r);
 		sending.set(false);
 		if (r.status === "accepted") props.onSent?.();

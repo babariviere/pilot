@@ -477,7 +477,7 @@ test("planning idle admission wakes on a late tool-drain packet without ordinary
 }, async (t) => {
 	const f = await heldFixture(t);
 	const worker = f.kernels[0]!;
-	worker.toolsRunning = true;
+	worker.child.emit("message", { type: "tools.running", running: true });
 	let summaries = 0;
 	const off = f.sessions.onChange(() => {
 		summaries++;
@@ -485,11 +485,7 @@ test("planning idle admission wakes on a late tool-drain packet without ordinary
 	t.after(off);
 	const waiting = f.sessions.planningIdle(f.binding.ownerSessionId, () => {}, new AbortController().signal);
 	// This packet normally has no summary event. The previous idle notification arrived first.
-	// biome-ignore lint/complexity/useLiteralKeys: Exercise the production IPC boundary and its private owner metadata.
-	f.sessions["onPacket"](f.sessions["require"](f.binding.ownerSessionId), worker, {
-		type: "tools.running",
-		running: false,
-	});
+	worker.child.emit("message", { type: "tools.running", running: false });
 	await waiting;
 	assert.equal(summaries, 0);
 });

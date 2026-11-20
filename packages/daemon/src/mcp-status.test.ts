@@ -14,8 +14,8 @@ import {
 	SignInUnavailable,
 	workerProbe,
 } from "./mcp-status.ts";
-import { approve, oauthFixture } from "./mcp-test-fixtures.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
+import { approve, oauthFixture } from "./testing/mcp-test-fixtures.ts";
 
 /** Resolves when `predicate` holds for a published status. */
 function until(service: McpStatusService, predicate: (status: McpStatus) => boolean): Promise<McpStatus> {

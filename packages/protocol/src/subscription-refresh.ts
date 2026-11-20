@@ -1,4 +1,4 @@
-import type { SubscriptionUsage } from "./index.ts";
+import type { SubscriptionUsage } from "./usage.ts";
 
 /** Account-wide provider limits, independent of Local historical token aggregates. */
 export interface SubscriptionRefreshProvider {

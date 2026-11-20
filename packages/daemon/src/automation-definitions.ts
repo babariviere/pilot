@@ -9,7 +9,11 @@ import type {
 import { validateFlowItems } from "./flows.ts";
 
 export const AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT = 3;
-const triggers = new Set(["workspace.created", "workspace.restored", "run.finished"]);
+const triggers: ReadonlySet<string> = new Set([
+	"workspace.created",
+	"workspace.restored",
+	"run.finished",
+] satisfies AutomationTrigger[]);
 
 function record(value: unknown, field: string, keys: string[]): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${field} must be an object`);

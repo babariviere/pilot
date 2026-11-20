@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { run } from "./workspaces.ts";
 import {
 	authenticationHint,
+	daemonGitEnvironment,
 	gitPromptlessEnvironment,
 	pilotHome,
 	toolTrustEnvironment,
@@ -47,6 +48,35 @@ test("the workspace command environment keeps the host environment and adds both
 	assert.equal(env.GIT_TERMINAL_PROMPT, "0");
 	assert.equal(env.PATH, "/usr/bin");
 	assert.equal(env.HOME, "/home/me");
+});
+
+test("shared workspace and Ask snapshot git keep their own credential policies without git redirection", () => {
+	const env = {
+		GIT_ASKPASS: "/fake/askpass",
+		SSH_ASKPASS: "/fake/ssh-askpass",
+		GIT_TERMINAL_PROMPT: "1",
+		GIT_SSH_COMMAND: "ssh -i fake-key",
+		GIT_DIR: "/fake/git-dir",
+		GIT_CONFIG_COUNT: "1",
+		GIT_OBJECT_DIRECTORY: "/fake/objects",
+		MISE_TRUSTED_CONFIG_PATHS: "/tmp/mine",
+		PILOT_HOME: "/tmp/pilot-home",
+	};
+	const shared = daemonGitEnvironment(env);
+	assert.deepEqual(shared, {
+		GIT_TERMINAL_PROMPT: "0",
+		GIT_SSH_COMMAND: env.GIT_SSH_COMMAND,
+		MISE_TRUSTED_CONFIG_PATHS: "/tmp/mine:/tmp/pilot-home",
+		PILOT_HOME: env.PILOT_HOME,
+	});
+	assert.deepEqual(daemonGitEnvironment(env, { preserveSnapshotCredentials: true }), {
+		GIT_ASKPASS: env.GIT_ASKPASS,
+		SSH_ASKPASS: env.SSH_ASKPASS,
+		GIT_TERMINAL_PROMPT: env.GIT_TERMINAL_PROMPT,
+		GIT_SSH_COMMAND: env.GIT_SSH_COMMAND,
+		MISE_TRUSTED_CONFIG_PATHS: env.MISE_TRUSTED_CONFIG_PATHS,
+		PILOT_HOME: env.PILOT_HOME,
+	});
 });
 
 test("only an authentication failure is reported as a missing credential", () => {

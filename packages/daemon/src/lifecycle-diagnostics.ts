@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { open, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { SessionState } from "@pilot/protocol";
+import { localHostKind, type TelemetryHostKind } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
 
 export const LIFECYCLE_SCHEMA_VERSION = 1 as const;
@@ -51,7 +52,7 @@ export interface LifecycleEvent {
 	at: string;
 	source: "daemon";
 	release: string;
-	hostKind: "local" | "devbox";
+	hostKind: TelemetryHostKind;
 	kind: LifecycleKind;
 	reason: LifecycleReason;
 	state: LifecycleEventState;
@@ -213,7 +214,7 @@ export class LifecycleDiagnostics {
 			1,
 			Math.min(MAX_LIFECYCLE_PENDING_PER_SESSION, options.maxPendingPerSession ?? MAX_LIFECYCLE_PENDING_PER_SESSION),
 		);
-		this.hostKind = options.hostKind ?? (process.platform === "linux" ? "devbox" : "local");
+		this.hostKind = options.hostKind ?? localHostKind();
 		this.release = options.release ?? release.version;
 		this.now = options.now ?? (() => new Date());
 	}

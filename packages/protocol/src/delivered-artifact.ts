@@ -1,4 +1,4 @@
-import type { ArtifactKind } from "./index.ts";
+import type { ArtifactKind } from "./artifacts.ts";
 import type { VerificationSubject } from "./user-verification.ts";
 
 /** Exact displayed output selection. This is not a path, revision catalogue or execution intent. */

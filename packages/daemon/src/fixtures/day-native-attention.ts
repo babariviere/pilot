@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocket, WebSocketServer } from "ws";
+import { PILOT_CAPABILITY_HEADER } from "../native-app-capability.ts";
 import { nativeAttentionFixture } from "../native-attention.fixture.ts";
 
 const f = await nativeAttentionFixture();
@@ -78,7 +79,7 @@ const proxy = createServer(async (req, res) => {
 			method: req.method,
 			headers: {
 				"content-type": "application/json",
-				"x-pilot-github-capability": String(req.headers["x-pilot-github-capability"] ?? ""),
+				[PILOT_CAPABILITY_HEADER]: String(req.headers[PILOT_CAPABILITY_HEADER] ?? ""),
 			},
 			...(body.length ? { body } : {}),
 		});
@@ -131,7 +132,6 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (cmd.action === "calm") churn = 0;
 	if (cmd.action === "notice") notice = cmd.value ? "fence" : null;
 	if (cmd.action === "catalog") notice = cmd.value ? "catalog" : null;
-	// Answers reach the chat: the input executor takes them.
 	if (cmd.action === "deliver")
 		f.sessions.sendDurable = async () => {
 			delivered++;
@@ -144,7 +144,6 @@ for await (const line of createInterface({ input: process.stdin })) {
 		f.session = { ...f.session, inputGeneration: (f.session.inputGeneration ?? 0) + 1, outcome: "stopped" };
 	if (cmd.action === "restart") await f.restart();
 	if (cmd.action === "multi")
-		// A new question from the same chat that takes several answers.
 		f.question = {
 			id: 13,
 			kind: "pilot.question",

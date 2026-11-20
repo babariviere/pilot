@@ -5,7 +5,7 @@ import { PublishedStartRefused } from "./errors.ts";
 import { interviewDigest } from "./mission-interview-contract.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { planningWorkerFixture } from "./planning-workers.fixture.ts";
-import { Worker } from "./sessions.ts";
+import { Worker } from "./kernel-worker.ts";
 
 async function published(
 	t: Parameters<typeof planningWorkerFixture>[0],

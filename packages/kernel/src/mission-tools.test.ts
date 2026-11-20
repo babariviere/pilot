@@ -20,6 +20,7 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { PosthorseDoc } from "./posthorse.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 
 test("only coordinator start schema exposes worker roles, never coordinator self-selection", () => {
 	const tool = createMissionTool(async () => ({}), true);
@@ -337,10 +338,12 @@ for (const [coordinator, busy] of [
 			},
 			{
 				onWorking: () => {},
-				callMission: async (action, args) => {
-					calls.push([action, args]);
-					return {};
-				},
+				call: fakeHostCall({
+					mission: async ({ action, args }) => {
+						calls.push([action, args]);
+						return {};
+					},
+				}),
 			},
 		);
 		f.cleanup.push(() => session.close());
@@ -459,7 +462,7 @@ test("routine decision routing reaches the live passive channel at its fixed dea
 	};
 	const session = await KernelSession.open(
 		{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
-		{ onWorking: () => {}, callMission: async () => ({}) },
+		{ onWorking: () => {}, call: fakeHostCall({ mission: async () => ({}) }) },
 	);
 	f.cleanup.push(() => session.close());
 	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
@@ -526,11 +529,13 @@ test("coordinator decision acknowledgements suppress only exact own additions", 
 		{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
 		{
 			onWorking: () => {},
-			callMission: async () =>
-				new Promise((yes, no) => {
-					resolve = yes;
-					reject = no;
-				}),
+			call: fakeHostCall({
+				mission: async () =>
+					new Promise((yes, no) => {
+						resolve = yes;
+						reject = no;
+					}),
+			}),
 		},
 	);
 	f.cleanup.push(() => session.close());
@@ -627,12 +632,14 @@ for (const origin of ["own", "external", "lost acknowledgement"] as const) {
 			{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
 			{
 				onWorking: () => {},
-				callMission: async () =>
-					new Promise((yes, no) => {
-						resolve = yes;
-						reject = no;
-						reached();
-					}),
+				call: fakeHostCall({
+					mission: async () =>
+						new Promise((yes, no) => {
+							resolve = yes;
+							reject = no;
+							reached();
+						}),
+				}),
 			},
 		);
 		f.cleanup.push(() => session.close());
@@ -736,11 +743,13 @@ for (const lostAcknowledgement of [false, true]) {
 			{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
 			{
 				onWorking: () => {},
-				callMission: async () => {
-					calls++;
-					if (lostAcknowledgement) throw new Error("Unknown proposal outcome");
-					return { id: "proposal", decisionId: old.id, kind: "withdraw", status: "pending" };
-				},
+				call: fakeHostCall({
+					mission: async () => {
+						calls++;
+						if (lostAcknowledgement) throw new Error("Unknown proposal outcome");
+						return { id: "proposal", decisionId: old.id, kind: "withdraw", status: "pending" };
+					},
+				}),
 			},
 		);
 		f.cleanup.push(() => session.close());
@@ -1386,10 +1395,12 @@ for (const ask of [false, true]) {
 				},
 				{
 					onWorking: () => {},
-					callMission: async () => {
-						admitted++;
-						return { ok: true };
-					},
+					call: fakeHostCall({
+						mission: async () => {
+							admitted++;
+							return { ok: true };
+						},
+					}),
 				},
 			);
 			f.cleanup.push(() => session.close());

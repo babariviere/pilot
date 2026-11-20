@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { resolveCallGraph } from "./call-graph.ts";
 import { type CallModule, callSyntax, GraphLimit } from "./call-path-syntax.ts";
 import type { SourceHit } from "./exploration-contract.ts";
-import { node, parseSource, type SyntaxNode, supportedSyntax } from "./exploration-parser.ts";
+import { EXCLUDED_DIRECTORIES, node, parseSource, type SyntaxNode, supportedSyntax } from "./exploration-parser.ts";
 import { positions } from "./exploration-scan.ts";
 import type {
 	RetainedCallable,
@@ -18,7 +18,7 @@ import type {
 } from "./retained-call-contract.ts";
 
 const ENGINE = "retained-calls-v1/babel-8.1.0/shared-lexical-graph-v1";
-const EXCLUDED = new Set([".git", ".jj", "node_modules", "target", "dist", ".next", ".cache"]);
+const EXCLUDED = new Set<string>(EXCLUDED_DIRECTORIES);
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const key = (path: string, name: string, kind: string) => JSON.stringify([path, name, kind]);
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);

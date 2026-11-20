@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, MemoryStorage } from "@earendil-works/pi-durable";
-import { chatEventEntries, chatEvents, CompactionStatsDoc } from "./chat-events.ts";
+import { CompactionStatsDoc, chatEventEntries, chatEvents } from "./chat-events.ts";
 
 test("compaction metadata is presentation-only, survives reads, and retains the summary", async () => {
 	const session = createSession(new MemoryStorage());

@@ -1,11 +1,13 @@
+import type { ArtifactSummary } from "./artifacts.ts";
 import type {
 	AssistanceRequest,
 	AssistanceScope,
 	HumanActionCommand,
 	HumanActionRecord,
 } from "./decision-assistance.ts";
-import type { AgentQuestion, ArtifactSummary, SessionSummary } from "./index.ts";
 import type { OperationHost } from "./operations.ts";
+import type { AgentQuestion } from "./questions.ts";
+import type { SessionSummary } from "./session.ts";
 
 /** Sent only over the authenticated native boundary. An actor field cannot authenticate a caller. */
 export interface NativeAttentionEnvelope {

@@ -12,6 +12,7 @@ import {
 	resumeRevisionWork,
 	revisionPauseOwnershipMatches,
 } from "./revision-work-pause.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 test("revision checkpoints affected owners and dependents only; explicit Resume is separate", async (t) => {
 	const store = new MissionStore(":memory:");
@@ -38,7 +39,7 @@ test("revision checkpoints affected owners and dependents only; explicit Resume 
 	);
 	const calls: string[] = [],
 		resumes: string[] = [];
-	const participants = {
+	const participants = pauseParticipants({
 		checkpointMission: async (sessionId: string) => {
 			calls.push(sessionId);
 			return "paused" as const;
@@ -47,7 +48,7 @@ test("revision checkpoints affected owners and dependents only; explicit Resume 
 			resumes.push(sessionId);
 			return "resumed" as const;
 		},
-	};
+	});
 	const controls = new MissionControls(store, participants);
 	const input = { operationId: randomUUID(), proposalId: p.id, digest: p.digest, source };
 	await assert.rejects(store.revisions.confirm(id, p.id, { digest: p.digest, humanSource: "human" }), /Pause/);
@@ -90,13 +91,13 @@ test("unknown selective checkpoint is lookup-only, never safe application or glo
 		{},
 	);
 	let calls = 0;
-	const participants = {
+	const participants = pauseParticipants({
 		checkpointMission: async () => {
 			calls++;
 			throw new Error("Lost checkpoint reply");
 		},
 		resumeMission: async () => "resumed" as const,
-	};
+	});
 	const input = { operationId: randomUUID(), proposalId: p.id, digest: p.digest, source };
 	const pause = await pauseRevisionWork(store, participants, id, input);
 	assert.equal(pause.state, "unknown");
@@ -141,7 +142,7 @@ for (const change of ["source", "archive", "membership"] as const) {
 			});
 		let calls = 0,
 			admitted = 0;
-		const participants = {
+		const participants = pauseParticipants({
 			checkpointMission: async () => "paused" as const,
 			resumeMission: async (_id: string, _op: string, _fence: unknown, guard?: () => void) => {
 				calls++;
@@ -151,7 +152,7 @@ for (const change of ["source", "archive", "membership"] as const) {
 				admitted++;
 				return "resumed" as const;
 			},
-		};
+		});
 		const pause = await pauseRevisionWork(store, participants, id, {
 			operationId: randomUUID(),
 			proposalId: p.id,
@@ -187,13 +188,13 @@ for (const stage of ["resuming", "resumed"] as const) {
 			{},
 		);
 		let calls = 0;
-		const participants = {
+		const participants = pauseParticipants({
 			checkpointMission: async () => "paused" as const,
 			resumeMission: async () => {
 				calls++;
 				return "resumed" as const;
 			},
-		};
+		});
 		const pause = await pauseRevisionWork(store, participants, id, {
 			operationId: randomUUID(),
 			proposalId: p.id,
@@ -231,10 +232,10 @@ test("a separately held member's delayed release still needs its exact Resume so
 		{ operationId: randomUUID(), source, summary: "Global", delta: { goal: "Reviewed" } },
 		{},
 	);
-	const participants = {
+	const participants = pauseParticipants({
 		checkpointMission: async () => "paused" as const,
 		resumeMission: async () => "held" as const,
-	};
+	});
 	const controls = new MissionControls(store, participants);
 	const pause = await pauseRevisionWork(store, participants, id, {
 		operationId: randomUUID(),
@@ -263,7 +264,7 @@ for (const change of ["reassign", "drop", "project", "flow-root", "ownership-ABA
 		let projectId = "p",
 			root = "a",
 			calls = 0;
-		const participants = {
+		const participants = pauseParticipants({
 			get: () => ({ projectId, createdAt: 1 }),
 			missionWorkSessions: () => ["flow"],
 			missionWorkOwner: (id: string) => (id === "flow" ? root : id),
@@ -272,7 +273,7 @@ for (const change of ["reassign", "drop", "project", "flow-root", "ownership-ABA
 				calls++;
 				return "resumed" as const;
 			},
-		};
+		});
 		const source = store.revisions.source(id);
 		const p = await store.revisions.propose(
 			id,
@@ -322,13 +323,13 @@ for (const change of ["reassign", "drop", "project", "flow-root"] as const) {
 		store.updateTask(id, "1", { sessionId: "a" });
 		let projectId = "p",
 			root = "a";
-		const participants = {
+		const participants = pauseParticipants({
 			get: () => ({ projectId, createdAt: 1 }),
 			missionWorkSessions: () => ["flow"],
 			missionWorkOwner: (id: string) => (id === "flow" ? root : id),
 			checkpointMission: async () => "paused" as const,
 			resumeMission: async () => "held" as const,
-		};
+		});
 		const source = store.revisions.source(id);
 		const p = await store.revisions.propose(
 			id,

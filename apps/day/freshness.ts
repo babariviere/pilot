@@ -1,7 +1,6 @@
 // One rule for when Pilot warns that data on screen is old, and the
-// automatic reads that keep it current. Screens use this; they keep no
-// timers of their own. A normal refresh shows nothing: the last good data
-// stays and updates in place.
+// automatic reads that keep it current. A normal refresh shows nothing:
+// the last good data stays and updates in place.
 import { type Accessor, cleanup, effect, lifecycle, signal, untracked } from "nsh";
 import type { Freshness } from "pilot-day/native";
 import { freshnessLine } from "./words";
@@ -103,6 +102,24 @@ const SYSTEM: Clock = {
 	clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
 };
 
+/** At most one pending retry. Its owner decides what to read and which failures count. */
+export function readRetry(run: () => void, clock: Clock = SYSTEM) {
+	let pending: unknown = null;
+	return {
+		wait(failures: number) {
+			if (pending !== null) return;
+			pending = clock.setTimeout(() => {
+				pending = null;
+				run();
+			}, retryDelay(failures));
+		},
+		cancel() {
+			if (pending !== null) clock.clearTimeout(pending);
+			pending = null;
+		},
+	};
+}
+
 /**
  * Keeps one source current: `read` asks for a fresh read. At most one read
  * runs at a time, bursts become one more read, and failures back off.
@@ -112,7 +129,7 @@ export function autoRead(read: () => Promise<ReadResult>, readAt: number | null,
 	const health: ReadHealth = { readAt, failures: 0 };
 	const stale = signal(false);
 	const warn = signal(false);
-	let retry: unknown = null;
+	const retry = readRetry(() => void attempt(), clock);
 	let warnAt: unknown = null;
 	let running: Promise<void> | null = null;
 	let again = false;
@@ -130,16 +147,8 @@ export function autoRead(read: () => Promise<ReadResult>, readAt: number | null,
 		if (health.readAt !== null && health.failures >= FAILED_TRIES && !stale())
 			warnAt = clock.setTimeout(judge, health.readAt + STALE_AFTER_MS + 1 - now);
 	};
-	const stopRetry = () => {
-		if (retry !== null) clock.clearTimeout(retry);
-		retry = null;
-	};
 	const schedule = () => {
-		if (disposed || retry !== null || running) return;
-		retry = clock.setTimeout(() => {
-			retry = null;
-			void attempt();
-		}, retryDelay(health.failures));
+		if (!disposed && !running) retry.wait(health.failures);
 	};
 	const attempt = (): Promise<void> => {
 		if (disposed) return Promise.resolve();
@@ -147,7 +156,7 @@ export function autoRead(read: () => Promise<ReadResult>, readAt: number | null,
 			again = true;
 			return running;
 		}
-		stopRetry();
+		retry.cancel();
 		startedAt = clock.now();
 		running = (async () => {
 			let result: ReadResult;
@@ -171,7 +180,7 @@ export function autoRead(read: () => Promise<ReadResult>, readAt: number | null,
 		return running;
 	};
 	const ok = () => {
-		stopRetry();
+		retry.cancel();
 		health.readAt = clock.now();
 		health.failures = 0;
 		judge();
@@ -196,7 +205,7 @@ export function autoRead(read: () => Promise<ReadResult>, readAt: number | null,
 		},
 		dispose: () => {
 			disposed = true;
-			stopRetry();
+			retry.cancel();
 			if (warnAt !== null) clock.clearTimeout(warnAt);
 			warnAt = null;
 		},

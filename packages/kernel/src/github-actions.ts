@@ -2,8 +2,8 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { defineDoc, type Extension } from "@earendil-works/pi-durable";
 import type { GitHubAction, PublicationSource } from "@pilot/protocol";
-import { commandArguments } from "./policy.ts";
 import { createdPullRequest } from "./pull-request-provenance.ts";
+import { commandArguments } from "./tool-policy.ts";
 
 export const GITHUB_ACTION_LIMIT = 200;
 export const GitHubActionsDoc = defineDoc<{ actions: GitHubAction[] }>({

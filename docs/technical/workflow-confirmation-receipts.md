@@ -110,5 +110,5 @@ faux host configuration only.
 The desktop sheets for the four workflow purposes are described in
 [apps/desktop/docs/workflow-confirmations.md](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/workflow-confirmations.md).
 They send the prepared package verbatim, save the envelope before one POST, and use only the
-passive receipt lookup for Check. `packages/daemon/src/testing/workflow-host.ts` runs these routes
-for the native journeys in a temporary home. Review dispositions have no native producer here.
+passive receipt lookup for Check. The manual workflow host that ran these routes in a temporary home was
+removed with the desktop. Review dispositions have no native producer here.

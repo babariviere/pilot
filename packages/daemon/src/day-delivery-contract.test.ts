@@ -1,39 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { DeliveredWork, DeliveredWorkList, UserVerificationLookup, VerificationSubject } from "@pilot/protocol";
-import type {
-	DeliveryList,
-	UserVerificationLookup as NativeLookup,
-	VerificationSubject as NativeSubject,
-	DeliveredWork as NativeView,
-} from "../../../apps/day/deliveryContract.ts";
+import type { DeliveredArtifact, DeliveredArtifactRequest, DeliveredWork, DeliveredWorkList } from "@pilot/protocol";
+import type { ArtifactSelection, CapturedArtifact } from "../../../apps/day/deliveryArtifactContract.ts";
+import type { DeliveryList, DeliveredWork as NativeView } from "../../../apps/day/deliveryContract.ts";
 
 // These assignments are checked by tsgo without loading NSH or its platform VM.
-// Core identity/receipt shapes must stay exact; the output view can be narrower.
-const subject: (v: VerificationSubject) => NativeSubject = (v) => v;
-const canonicalSubject: (v: NativeSubject) => VerificationSubject = (v) => v;
-const lookup: (v: UserVerificationLookup) => NativeLookup = (v) => v;
-const canonicalLookup: (v: NativeLookup) => UserVerificationLookup = (v) => v;
+// Day's display projection can be narrower than the canonical wire data.
 const view: (v: DeliveredWork) => NativeView = (v) => v;
 type Fields = Exclude<keyof DeliveredWork, "pullRequests" | "artifacts">;
 const canonicalFields: (v: NativeView) => Pick<DeliveredWork, Fields> = (v) => v;
 const list: (v: DeliveredWorkList) => DeliveryList = (v) => v;
 const listFields: (v: DeliveryList) => Omit<DeliveredWorkList, "items" | "selected"> = (v) => v;
 
-test("Day wire view keeps canonical identities, assessments and receipt pairs", () => {
-	const v: VerificationSubject = { kind: "chat", projectId: "project", sessionId: "session" };
-	assert.equal(canonicalSubject(subject(v)), v);
-	const unknown: UserVerificationLookup = { receipt: { state: "unknown" }, verificationReceipt: null };
-	assert.equal(canonicalLookup(lookup(unknown)), unknown);
+test("Day wire view accepts canonical delivery and assessment fields", () => {
 	// Keep the projection signatures referenced without inventing domain fixtures.
 	assert.equal(typeof view, "function");
 	assert.equal(typeof canonicalFields, "function");
 	assert.equal(typeof list, "function");
 	assert.equal(typeof listFields, "function");
 });
-
-import type { DeliveredArtifact, DeliveredArtifactRequest } from "@pilot/protocol";
-import type { ArtifactSelection, CapturedArtifact } from "../../../apps/day/deliveryArtifactContract.ts";
 
 const artifactSelectionCompatible: (v: ArtifactSelection) => DeliveredArtifactRequest = (v) => v;
 const capturedArtifactCompatible: (v: DeliveredArtifact) => CapturedArtifact = (v) => v;

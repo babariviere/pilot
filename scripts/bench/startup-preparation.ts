@@ -5,7 +5,7 @@ import { loadBaseline } from "./baseline.ts";
 
 const baseline = process.argv[2];
 const pairs = Number(process.argv[3] ?? 3);
-if (!baseline || !/^[a-f\d]{6,40}$/.test(baseline) || !Number.isSafeInteger(pairs) || pairs < 1 || pairs > 10)
+if (!baseline || !Number.isSafeInteger(pairs) || pairs < 1 || pairs > 10)
 	throw new Error("Pass a baseline SHA and 1-10 sample pairs");
 const loaded = await loadBaseline<{ SessionManager: typeof SessionManager }>(
 	baseline,

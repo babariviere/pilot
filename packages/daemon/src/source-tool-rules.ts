@@ -1,6 +1,9 @@
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 import { isSlackChannelId, isSlackTimestamp } from "./slack-ids.ts";
 
+/** Logical tools that change state at the provider. Source reads may never call them. */
+export const SOURCE_WRITE_TOOLS: ReadonlySet<string> = new Set(["startIssue", "publishIssueWrite", "startSlack"]);
+
 /** Fixed dedicated tools. Linear start/synchronization writes change state only; the Slack write is the start reaction. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
 	if (kind === "linear" && tool === "issues") return "list_issues";
@@ -18,7 +21,6 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	if (kind === "slack" && tool === "mentionsPrivate") return "slack_search_public_and_private";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
 	if (kind === "slack" && tool === "startSlack") return "slack_add_reaction";
-	if (kind === "slack" && tool === "reactions") return "slack_get_reactions";
 	if (kind === "slack" && tool === "searchChannels") return "slack_search_channels";
 	if (kind === "slack" && tool === "myChannels") return "slack_list_user_channels";
 	return undefined;
@@ -63,10 +65,10 @@ export function validSourceArguments(tool: string, args: Record<string, unknown>
 			/^in:(?:<#[CG][A-Z0-9]{1,199}>|[a-z0-9_-]{1,200})(?: with:<@[UW][A-Z0-9]{1,39}>)?$/i.test(args.filters) &&
 			args.channel_types === "public_channel,private_channel"
 		);
-	if (tool === "startSlack" || tool === "reactions")
+	if (tool === "startSlack")
 		return (
-			Object.keys(args).length === (tool === "reactions" ? 2 : 3) &&
-			(tool === "reactions" || args.emoji === "eyes") &&
+			Object.keys(args).length === 3 &&
+			args.emoji === "eyes" &&
 			isSlackChannelId(args.channel_id) &&
 			isSlackTimestamp(args.message_ts)
 		);
@@ -182,7 +184,6 @@ export function decodeMcpResult(
 	tool?: string,
 ): TrackingJson {
 	if (tool === "startSlack") return decodeSlackReaction(result);
-	if (tool === "reactions") return decodeSlackReactionRead(result);
 	if (result.isError)
 		throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error", sourceToolFailure(result));
 	const value =
@@ -211,60 +212,6 @@ export function decodeMcpResult(
 			new SourceToolError("MCP tool returned an error", sourceToolFailure({ structuredContent: value }))
 		);
 	return JSON.parse(json) as TrackingJson;
-}
-
-/** This dedicated tool returns reaction metadata only, never the message body. Discard user names/IDs. */
-function decodeSlackReactionRead(result: Parameters<typeof decodeMcpResult>[0]): TrackingJson {
-	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("Couldn't read Slack reactions");
-	const text = (result.content ?? [])
-		.filter((block) => block.type === "text")
-		.map((block) => block.text ?? "")
-		.join("\n");
-	if (Buffer.byteLength(text) > 512 * 1024) throw new SourceToolError("Invalid Slack reactions response");
-	let value = result.structuredContent;
-	if (value === undefined) {
-		try {
-			value = JSON.parse(text);
-		} catch {
-			value = text;
-		}
-	}
-	if (Buffer.byteLength(JSON.stringify(value) ?? "") > 512 * 1024)
-		throw new SourceToolError("Invalid Slack reactions response");
-	const object =
-		value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-	if (object?.error || object?.ok === false) throw new SourceToolError("Couldn't read Slack reactions");
-	// Newer servers return formatted text in "result": ":white_check_mark: × 2 — names", or "No reactions found".
-	const reactions =
-		object?.reactions ??
-		(object?.message as Record<string, unknown> | undefined)?.reactions ??
-		(typeof object?.result === "string" ? object.result : value);
-	if (Array.isArray(reactions) && reactions.length <= 50) {
-		let present = false;
-		for (const reaction of reactions) {
-			if (
-				!reaction ||
-				typeof reaction !== "object" ||
-				typeof reaction.name !== "string" ||
-				!Number.isSafeInteger(reaction.count) ||
-				reaction.count < 0
-			)
-				throw new SourceToolError("Invalid Slack reactions response");
-			if (reaction.name === "white_check_mark" && reaction.count > 0) present = true;
-		}
-		return { present };
-	}
-	if (typeof reactions === "string") {
-		// Formatted metadata from this tool, not Slack message text. Match the exact emoji and an explicit count.
-		const match =
-			/(?:^|\n)[ \t]*(?:[-*•] )?:?white_check_mark:?[ \t]*(?:\((\d+)(?: reactions?)?\)|[×x][ \t]*(\d+)(?![\d]))/.exec(
-				reactions,
-			);
-		if (match) return { present: Number(match[1] ?? match[2]) > 0 };
-		if (!/\bwhite_check_mark\b/.test(reactions) && /\bno reactions\b|^Reactions[: ]|^\w+ \(\d+\)/im.test(reactions))
-			return { present: false };
-	}
-	throw new SourceToolError("Invalid Slack reactions response");
 }
 
 /** Normalize before generic error redaction: already_reacted is success only for this fixed write.

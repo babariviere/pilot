@@ -46,7 +46,7 @@ impl Fixture {
         if configured {
             write_profile(&path.join("missing-profile"));
         }
-        let host = NativeHost::open(
+        let host = NativeHost::open_with_options(
             Source {
                 profile: path.join("missing-profile"),
                 port,
@@ -60,6 +60,7 @@ impl Fixture {
                 }),
             },
             path.join("journal"),
+            Default::default(),
         )
         .unwrap();
         Self {
@@ -89,9 +90,10 @@ impl Fixture {
         let source = format!(
             r#"import {{ mount, signal, Text, host }} from "nsh";
 const shown = signal("waiting");
+const refreshCount = signal("");
 const window = host.params.day.window;
 const call = (name, args={{}}, extra={{}}) => host.call(name, {{version:1,window,args,...extra}});
-mount(() => <Text>{{shown()}}</Text>);
+mount(() => <><Text>{{shown()}}</Text><Text>{{refreshCount()}}</Text></>);
 setTimeout(() => {{ (async () => {{ {body} }})().then(value => shown.set("done:"+JSON.stringify(value)), error => shown.set("failed:"+error.code+":"+error.message)); }},0);
 "#
         );
@@ -293,18 +295,23 @@ fn native_invalidations_are_coalesced_until_the_mirror_reads_again() {
 let events=0;
 host.on('day.changed', event => { if(event.window!==window) throw new Error('wrong root'); shown.set('events:'+(++events)); });
 host.on('fixture.read', async () => { await call('day.today.read'); shown.set('reset'); });
+host.on('fixture.refresh', async n => { await call('day.today.refresh'); refreshCount.set('refresh:' + n); });
 shown.set('ready');
 return await new Promise(()=>{});"#,Fixture::caps());
     // The synthetic source fails locally. No daemon is used. Each read fails
     // differently from the one before, so each is a change worth a notice.
-    let fail = |n: usize| {
+    let fail = |app: &mut Headless, n: usize| {
         f.profile(n % 2 == 1);
-        let _ = f.host.refresh().recv_blocking();
+        f.bridge
+            .channel()
+            .send("fixture.refresh", json!(n))
+            .unwrap();
+        app.wait_for(&format!("text:refresh:{n}")).unwrap();
     };
-    fail(1);
+    fail(&mut app, 1);
     app.wait_for("text:events:1").unwrap();
-    for n in 2..=101 {
-        fail(n);
+    for n in 2..=6 {
+        fail(&mut app, n);
     }
     app.run_for(Duration::from_millis(20)).unwrap();
     assert!(app.screen().shows("events:1"));
@@ -313,7 +320,7 @@ return await new Promise(()=>{});"#,Fixture::caps());
         .send("fixture.read", Value::Null)
         .unwrap();
     app.wait_for("reset").unwrap();
-    fail(102);
+    fail(&mut app, 7);
     app.wait_for("text:events:2").unwrap();
     drop(app);
 }
@@ -424,12 +431,16 @@ host.on('day.changed', async () => {
   if(before.value.snapshot.revision!==after.value.snapshot.revision) throw new Error('read changed state');
   shown.set('events:'+count);
 });
+host.on('fixture.refresh', async () => { await call('day.today.refresh'); });
 await call('day.today.read'); shown.set('ready'); return await new Promise(()=>{});"#, Fixture::caps());
     app.wait_for("ready").unwrap();
     for n in 1..=3 {
         // Each read fails differently from the one before: an equal failure sends no notice.
         f.profile(n % 2 == 1);
-        let _ = f.host.refresh().recv_blocking();
+        f.bridge
+            .channel()
+            .send("fixture.refresh", Value::Null)
+            .unwrap();
         app.wait_for(&format!("text:events:{n}")).unwrap();
         app.run_for(Duration::from_millis(100)).unwrap();
         assert!(

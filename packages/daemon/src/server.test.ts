@@ -17,12 +17,12 @@ import type {
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { RepositoryChanges } from "./changes.ts";
-import { Conflict, ServiceUnavailable } from "./errors.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
-import { NotFound, SessionManager } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";

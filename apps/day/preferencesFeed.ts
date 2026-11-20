@@ -4,11 +4,11 @@
 // saved write's receipt. The native root picks the project; a Save that
 // names another project is refused there. Preferences are what the user
 // chose, never permission: nothing here starts work or grants an action.
-import { type Signal, signal } from "nsh";
-import { AutoCheck } from "./autoCheck";
-import { call, type Refusal, type Reply } from "./bridge";
+import type { Signal } from "nsh";
+import { call, type Reply } from "./bridge";
+import { LOST, type Refusal, readReason, writeRefusal } from "./refusals";
 import type { ProjectPreference, ProjectPreferences } from "./preferencesContract";
-import { glide } from "./ui";
+import { CallOrder, Feed, mirror } from "./source";
 
 export type { ProjectPreference, ProjectPreferences };
 
@@ -95,73 +95,43 @@ export function utf8Bytes(text: string): number {
 
 /** Why the preferences could not be read, in one calm sentence. */
 export function preferencesReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see them.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot show project preferences here yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read this project's preferences.";
-	}
+	const unavailable = "This Pilot service cannot show project preferences here yet.";
+	return readReason(refusal, {
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not read this project's preferences.",
+	});
 }
 
 /** Why the history could not be read. It is never the same as having none. */
 export function historyReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot show preference history here yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read this project's preference history.";
-	}
+	const unavailable = "This Pilot service cannot show preference history here yet.";
+	return readReason(refusal, {
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not read this project's preference history.",
+	});
 }
-
-export const UNKNOWN_SAVE =
-	"Pilot sent your change but heard nothing back. It will not send it again; Check only reads.";
 
 /** What a refused or lost Save means. Only a lost or uncertain one may have been saved. */
 export function refusedSave(refusal: Refusal): SaveResult {
-	const r = (status: SaveResult["status"], message: string): SaveResult => ({
-		status,
-		message,
-		operationId: null,
-		saved: null,
-	});
-	switch (refusal) {
-		case "lost":
-		case "unknown":
-			return r("unknown", UNKNOWN_SAVE);
-		case "stale":
-			return r("stale", "These preferences changed since you read them. Nothing was saved; your text stays.");
-		case "busy":
-			return r("rejected", "Pilot is busy saving. Nothing was sent; try again after.");
-		case "closed":
-			return r("rejected", "Pilot is closing. Nothing was saved.");
-		case "offline":
-			return r("rejected", "Pilot could not reach its service. Nothing was saved; your text stays.");
-		case "identity":
-			return r("rejected", "The Pilot service changed. Open Pilot again. Nothing was saved.");
-		case "capacity":
-		case "invalid":
-			return r("rejected", "Pilot cannot save this list. Keep it to 16 short preferences. Nothing was saved.");
-		case "denied":
-		case "unavailable":
-			return r("rejected", "This Pilot service cannot save project preferences yet. Nothing was saved.");
-		default:
-			return r("rejected", "Pilot could not save this. Nothing was saved; your text stays.");
-	}
+	const tooMuch = "Pilot cannot save this list. Keep it to 16 short preferences. Nothing was saved.";
+	const unavailable = "This Pilot service cannot save project preferences yet. Nothing was saved.";
+	const message = writeRefusal(
+		refusal,
+		{
+			unknown: LOST,
+			stale: "These preferences changed since you read them. Nothing was saved; your text stays.",
+			capacity: tooMuch,
+			invalid: tooMuch,
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not save this. Nothing was saved; your text stays.",
+		},
+		"Nothing was saved; your text stays.",
+	);
+	const status = refusal === "lost" || refusal === "unknown" ? "unknown" : refusal === "stale" ? "stale" : "rejected";
+	return { status, message, operationId: null, saved: null };
 }
 
 function preferenceOf(x: unknown): ProjectPreference | null {
@@ -263,7 +233,7 @@ function outcomeOf(x: unknown, project: string, operationId: string | null): Sav
 			saved: null,
 		};
 	}
-	return { status: "unknown", message: UNKNOWN_SAVE, operationId, saved: null };
+	return { status: "unknown", message: LOST, operationId, saved: null };
 }
 
 /** One fixed project. A late reply cannot replace another project's view. */
@@ -274,20 +244,17 @@ export class ConnectedPreferences implements PreferencesSource {
 	#refusal: Refusal | null = null;
 	#ops: Summary[] = [];
 	#checking = new Set<string>();
-	// Saves whose reply was lost: Pilot checks them by itself.
-	#auto = new AutoCheck(
-		(operationId) => this.#lookUp(operationId),
-		() => this.#publish(),
-	);
-	#reading: Promise<void> | null = null;
-	#again = false;
 	#asked = false;
 	#saving = false;
-	#sent = 0;
-	#applied = 0;
-	#listeners = new Map<number, (view: PreferencesView) => void>();
-	#next = 0;
-	#closed = false;
+	#order = new CallOrder();
+	#feed = new Feed(
+		() => this.view(),
+		(operationId) => this.#lookUp(operationId),
+	);
+	#reads = this.#feed.coalesce(async () => {
+		await this.#call("day.preferences.read", { projectId: this.#project });
+		this.#feed.publish();
+	});
 
 	constructor(window: string, project: string) {
 		this.#window = window;
@@ -308,39 +275,29 @@ export class ConnectedPreferences implements PreferencesSource {
 				.filter((o) => o.state === "unknown" || o.state === "pending")
 				.map((o) => ({
 					operationId: o.operationId,
-					state: this.#checking.has(o.operationId) || this.#auto.checking(o.operationId) ? "checking" : "unknown",
+					state: this.#checking.has(o.operationId) || this.#feed.checking(o.operationId) ? "checking" : "unknown",
 					expectedRevision: o.expectedRevision,
 				})),
-			reading: this.#reading !== null,
+			reading: this.#reads.busy(),
 			saving: this.#saving,
 		};
 	}
 
 	onChange(listener: (view: PreferencesView) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#publish() {
-		if (this.#closed) return;
-		const view = this.view();
-		for (const listener of this.#listeners.values()) listener(view);
+		return this.#feed.onChange(listener);
 	}
 
 	/** One exact call. Only the newest call's answer replaces what is shown. */
 	async #call(name: string, args: unknown): Promise<Reply<unknown>> {
-		const order = ++this.#sent;
+		const order = this.#order.next();
 		const reply = await call<unknown>(this.#window, name, args);
 		const r: Reply<unknown> =
 			reply.ok && reply.value.projectId !== this.#project ? { ok: false, refusal: "invalid" } : reply;
-		if (this.#closed) return r;
-		if (r.ok && order > this.#applied) {
+		if (this.#feed.closed) return r;
+		if (r.ok && this.#order.apply(order)) {
 			// The first answer after the service could not be reached: look the lost saves up again.
 			if (name === "day.preferences.read" && (this.#refusal === "offline" || this.#refusal === "lost"))
-				this.#auto.restart();
+				this.#feed.restart();
 			const snapshot = snapshotOf(r.snapshot);
 			// A read for another project than the one shown never replaces it.
 			if (snapshot?.projectId === this.#project) {
@@ -352,36 +309,21 @@ export class ConnectedPreferences implements PreferencesSource {
 			const ops = summariesOf(r.value.operations);
 			if (ops) {
 				this.#ops = ops;
-				this.#auto.watch(
+				this.#feed.watch(
 					ops.filter((o) => o.state === "unknown" || o.state === "pending").map((o) => o.operationId),
 				);
 			}
-			this.#applied = order;
-		} else if (!r.ok && name === "day.preferences.read" && order > this.#applied) {
+		} else if (!r.ok && name === "day.preferences.read" && this.#order.apply(order)) {
 			this.#refusal = r.refusal;
-			this.#applied = order;
 		}
 		return r;
 	}
 
 	read(): Promise<void> {
-		if (this.#reading) {
-			this.#again = true;
-			return this.#reading;
-		}
 		this.#asked = true;
-		this.#reading = (async () => {
-			do {
-				this.#again = false;
-				await this.#call("day.preferences.read", { projectId: this.#project });
-				this.#publish();
-			} while (this.#again && !this.#closed);
-		})().finally(() => {
-			this.#reading = null;
-			this.#publish();
-		});
-		this.#publish();
-		return this.#reading;
+		const reading = this.#reads().finally(() => this.#feed.publish());
+		this.#feed.publish();
+		return reading;
 	}
 
 	async save(intent: SaveIntent): Promise<SaveResult> {
@@ -396,7 +338,7 @@ export class ConnectedPreferences implements PreferencesSource {
 			};
 		}
 		this.#saving = true;
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.preferences.save", {
@@ -410,13 +352,13 @@ export class ConnectedPreferences implements PreferencesSource {
 		if (!r.ok) {
 			// A lost answer may hide a saved operation: the read lists it as Unknown.
 			void this.read();
-			this.#publish();
+			this.#feed.publish();
 			return refusedSave(r.refusal);
 		}
 		const outcome = r.value.outcome as { operationId?: unknown } | null;
 		const id = typeof outcome?.operationId === "string" ? outcome.operationId : null;
 		if (!snapshotOf(r.snapshot)) void this.read();
-		this.#publish();
+		this.#feed.publish();
 		return outcomeOf(outcome, intent.projectId, id);
 	}
 
@@ -424,7 +366,7 @@ export class ConnectedPreferences implements PreferencesSource {
 	async #lookUp(operationId: string): Promise<void> {
 		const r = await this.#call("day.preferences.check", { projectId: this.#project, operationId });
 		if (r.ok) {
-			this.#publish();
+			this.#feed.publish();
 			if (outcomeOf(r.value.outcome, this.#project, operationId).status === "accepted") void this.read();
 		}
 	}
@@ -432,14 +374,14 @@ export class ConnectedPreferences implements PreferencesSource {
 	async check(operationId: string): Promise<SaveResult> {
 		if (this.#checking.has(operationId)) return refusedSave("busy");
 		this.#checking.add(operationId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await this.#call("day.preferences.check", { projectId: this.#project, operationId });
 		} finally {
 			this.#checking.delete(operationId);
 		}
-		this.#publish();
+		this.#feed.publish();
 		if (!r.ok) {
 			return {
 				status: "unknown",
@@ -464,9 +406,7 @@ export class ConnectedPreferences implements PreferencesSource {
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#auto.close();
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -523,18 +463,6 @@ export function connectedPreferences(window: string): ScopedPreferences {
 
 /** Mirrors `source`'s view. Rows that arrive or leave glide to their places. */
 export function mirrorPreferences(source: PreferencesSource): ProjectPreferencesMirror {
-	const view = signal(source.view());
 	const shape = (v: PreferencesView) => (v.preferences?.entries ?? []).map((e) => e.id).join(",");
-	const stop = source.onChange((next) => {
-		if (shape(next) !== shape(view())) glide();
-		view.set(next);
-	});
-	return {
-		source,
-		view,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	return { source, ...mirror(source, source.view(), shape) };
 }

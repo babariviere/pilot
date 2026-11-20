@@ -5,6 +5,7 @@ import type { ExplorationPage, ExplorationQuery, SourceHit } from "./exploration
 import { paginate } from "./exploration-page.ts";
 import {
 	type Declaration,
+	EXCLUDED_DIRECTORIES,
 	parseDeclarations,
 	parseSource,
 	type SyntaxNode,
@@ -17,7 +18,7 @@ const MAX_ENTRIES = 10_000;
 const MAX_BYTES = 32 * 1024 * 1024;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_RESULTS = 1000;
-const EXCLUDED = [".git", ".jj", "node_modules", "target", "dist", ".next", ".cache"];
+const EXCLUDED: readonly string[] = EXCLUDED_DIRECTORIES;
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const order = (a: SourceHit, b: SourceHit) =>
 	b.score - a.score || compare(a.path, b.path) || a.span.start.offset - b.span.start.offset;

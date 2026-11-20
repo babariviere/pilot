@@ -1,13 +1,19 @@
 /** Mission orchestration: validation against projects and sessions, agent tool calls and kernel contexts. */
 import { randomUUID, webcrypto } from "node:crypto";
 import { type MissionAction, type MissionContext, THREAD_ACTIONS } from "@pilot/kernel";
-import { validateMissionWrite } from "@pilot/kernel/mission-write";
+import {
+	COORDINATOR_ACTIONS,
+	COORDINATOR_TASK_FIELDS,
+	TASK_PROTOTYPE_LIMITS,
+	validateMissionWrite,
+} from "@pilot/kernel/mission-write";
 import type {
 	ArtifactRevision,
 	CreateMissionRequest,
 	JoinMissionRequest,
 	MissionArtifactLink,
 	MissionArtifactLinkWrite,
+	MissionDecision,
 	MissionDetail,
 	MissionEvent,
 	MissionEventKind,
@@ -28,6 +34,7 @@ import type { CodePullRequestObservation } from "./github-delivery.ts";
 import { githubRepository } from "./github-url.ts";
 import { observeCodeContributions, observeCodeIntegration } from "./mission-code-delivery.ts";
 import {
+	assertWorkerSlot,
 	type ContinuationPolicySource,
 	type MissionContinuation,
 	MissionContinuations,
@@ -48,6 +55,7 @@ import { MissionNotices } from "./mission-notices.ts";
 import { publishedDefinition, sliceTaskBody } from "./mission-plan-store.ts";
 import { MissionPlanReader } from "./mission-plans.ts";
 import { MissionReports } from "./mission-reports.ts";
+import { isActiveBuilder, isActiveDecision, isOpenTask } from "./mission-rules.ts";
 import {
 	evaluateMissionReview,
 	type ReviewProducer,
@@ -55,16 +63,18 @@ import {
 	reviewReferences,
 	unavailableReviewProducer,
 } from "./mission-review-contract.ts";
+import { draftMessage, taskMessage } from "./mission-task-message.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
 import { threadHandoff } from "./mission-thread-handoff.ts";
 import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
-import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
+import type { MissionActivityQuery, MissionActor, MissionStore } from "./missions.ts";
 import { canonicalJSON } from "./operation-journal.ts";
-import { TASK_PROTOTYPE, type TaskPrototype } from "./planning-worker-store.ts";
+import type { TaskPrototype } from "./planning-worker-store.ts";
 import { ProjectRepositories } from "./project-repositories.ts";
 import type { ProjectStore } from "./projects.ts";
 import { replacedMissionView } from "./replaced-mission.ts";
+import { normalizeResourceWrite } from "./resource-url.ts";
 import {
 	captureRetainedBrief,
 	type RetainedBriefHeader,
@@ -79,76 +89,8 @@ import type { SourceMcpClient } from "./source-mcp.ts";
 import { allowedProfiles, pickProfileModel, sliceRoute, taskModelRoute } from "./work-profiles.ts";
 import { validateBaseBranch } from "./workspaces.ts";
 
-/** Sent to a chat that just became a mission, so it drafts the shared state from its own conversation. */
-export function draftMessage(title: string): string {
-	return [
-		`This chat is now part of the mission "${title}", which you coordinate.`,
-		"Using the mission tool, draft the shared mission state from our conversation so far:",
-		"- set a short goal and draft the brief (scope and requirements),",
-		"- record substantive agreed mission choices (scope, behavior or tradeoffs) with decide, keeping human-answer/source references and explicit authority limits; decision text never grants tool/runtime permission,",
-		"- keep routine directions/status in task updates or log context, not decisions; use existing memory only for appropriate lasting cross-mission preferences; discussion/proposal is not agreement,",
-		"- create tasks with current status, each small enough for one chat, and dependencies where order matters.",
-		"Do not start implementing tasks. Reply with a short summary so I can review the mission.",
-	].join("\n");
-}
-
-export function taskMessage(
-	tasks: MissionTask[],
-	extra?: string,
-	artifacts: MissionArtifactLink[] = [],
-	links: Pick<MissionResource, "url" | "kind" | "title" | "externalId">[] = [],
-	continuing = false,
-	explorer = false,
-): string {
-	const task = tasks[0]!;
-	const line = (value: string) => value.replace(/\s+/g, " ").trim();
-	const message = [
-		...(tasks.length === 1
-			? [
-					`${continuing ? "Continue" : "Work on"} mission task #${task.number}: ${task.title}`,
-					...(task.body ? ["", task.body] : []),
-				]
-			: [
-					"Work on these mission tasks in order:",
-					...tasks.flatMap((item) => ["", `#${item.number}: ${item.title}`, ...(item.body ? [item.body] : [])]),
-					"",
-					explorer
-						? "Report research findings, sources and limitations with mission log; propose planning changes with comment and share session-local artifacts with attach. Do not write product code."
-						: "Open one PR per task. Base the first on the requested starting branch, then each PR on the previous task's head with gh pr create --base <previous-head> --head <own-head>. Link PR URLs bottom-to-top with gh stack link. Attribute each PR with mission link + taskId. Keep plain chained PRs if stacks are unavailable.",
-				]),
-		...(extra?.trim() ? ["", extra.trim()] : []),
-		...(artifacts.length || links.length
-			? [
-					"",
-					"Task references. Read them as needed; their content is not included here:",
-					...artifacts
-						.toSorted((a, b) => a.artifactId.localeCompare(b.artifactId))
-						.map(
-							(item) =>
-								`- ${line(item.title)} (${item.kind}): ${item.artifactId}${item.revision === undefined ? "" : `, revision ${item.revision}`}`,
-						),
-					// New links use request order; persisted links can tie on timestamp and sort by random IDs.
-					...links
-						.toSorted((a, b) => a.url.localeCompare(b.url))
-						.map((item) => `- ${line(item.title ?? item.externalId ?? "Link")} (${item.kind}): ${item.url}`),
-				]
-			: []),
-		"",
-		tasks.length === 1
-			? continuing
-				? "This task is already claimed for this chat. Continue where you stopped, and read the mission with the mission tool."
-				: "This task is already claimed for this chat. Start by reading the mission with the mission tool."
-			: "All these tasks are already claimed for this chat. Start by reading the mission with the mission tool.",
-	].join("\n");
-	if (message.length > 4000)
-		throw new Error(
-			`Opening message is too long (${message.length} characters; max 4000). Shorten the task body, message or references. Put durable context in the brief, decisions or task links.`,
-		);
-	return message;
-}
-
 /** The app's Start chat acts for the user; the coordinator's start must respect user-set preferences. */
-export type TaskStarter = "user" | "coordinator";
+type TaskStarter = "user" | "coordinator";
 
 export type RetainedBriefConfiguration = Pick<
 	RetainedBriefHeader,
@@ -322,19 +264,17 @@ export class MissionService {
 			},
 			ownershipScope: (sessionId) => {
 				const member = store.membership(sessionId);
-				if (!member?.active || member.coordinator || (member.role !== undefined && member.role !== "builder"))
-					return undefined;
+				if (!isActiveBuilder(member)) return undefined;
 				const taskIds = store
 					.tasks(member.missionId)
-					.filter((task) => task.sessionId === sessionId && isOpen(task))
+					.filter((task) => task.sessionId === sessionId && isOpenTask(task))
 					.map((task) => task.id);
 				return taskIds.length ? { version: 1, sessionId, missionId: member.missionId, taskIds } : undefined;
 			},
 			reviewCaptureScope: async (sessionId) => {
 				await store.durable();
 				const member = store.membership(sessionId);
-				if (!member?.active || member.coordinator || (member.role !== undefined && member.role !== "builder"))
-					return undefined;
+				if (!isActiveBuilder(member)) return undefined;
 				const mission = store.require(member.missionId);
 				return { missionId: member.missionId, projectId: mission.projectId };
 			},
@@ -345,7 +285,7 @@ export class MissionService {
 			spawnProject: (missionId) => {
 				this.controls.assertOpen(missionId);
 				const mission = store.require(missionId);
-				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				assertActiveMission(mission);
 				return mission.projectId;
 			},
 			codingReservations: () => {
@@ -378,7 +318,7 @@ export class MissionService {
 						});
 					};
 					for (const task of store.tasks(mission.id)) {
-						if (task.sessionId && isOpen(task) && !store.retiredMember(task.sessionId))
+						if (task.sessionId && isOpenTask(task) && !store.retiredMember(task.sessionId))
 							add(task.sessionId, task.id, true);
 					}
 					const state = store.planningWorkers.get(mission.id);
@@ -397,7 +337,7 @@ export class MissionService {
 			joinSpawn: (sessionId, missionId, coordinator, taskId, admission) => {
 				this.controls.assertOpen(missionId);
 				const mission = store.require(missionId);
-				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				assertActiveMission(mission);
 				if (coordinator && mission.coordinatorSessionId)
 					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
@@ -541,8 +481,9 @@ export class MissionService {
 			}),
 		);
 		this.subscriptions.push(
-			store.onChange((missionId, passive, preferenceOnly, readModelOnly) => {
-				if (preferenceOnly || readModelOnly) return;
+			store.onChange((missionId, kind) => {
+				if (kind === "preference" || kind === "readModel") return;
+				const passive = kind === "passive";
 				sessions.codingCapacityChanged();
 				operations.time("missions.context.publish", () => {
 					if (!store.get(missionId)) return;
@@ -606,11 +547,10 @@ export class MissionService {
 	 */
 	private waitsForReply(sessionId: string, since: number): boolean {
 		const member = this.store.membership(sessionId);
-		if (!member?.active || member.coordinator || (member.role !== undefined && member.role !== "builder"))
-			return false;
+		if (!isActiveBuilder(member)) return false;
 		const mission = this.store.require(member.missionId);
 		if (mission.coordinatorSessionId && !this.store.plannedWithoutCoordinator(mission.id)) return false;
-		const tasks = this.store.tasks(mission.id).filter((task) => task.sessionId === sessionId && isOpen(task));
+		const tasks = this.store.tasks(mission.id).filter((task) => task.sessionId === sessionId && isOpenTask(task));
 		return tasks.length > 0 && !tasks.some((task) => this.deliveredSince(mission.id, task.id, sessionId, since));
 	}
 
@@ -641,7 +581,7 @@ export class MissionService {
 		for (const mission of this.store.list()) {
 			if (mission.status !== "active") continue;
 			for (const task of this.store.tasks(mission.id)) {
-				const chat = task.sessionId && isOpen(task) ? this.sessions.get(task.sessionId) : undefined;
+				const chat = task.sessionId && isOpenTask(task) ? this.sessions.get(task.sessionId) : undefined;
 				if (chat) this.nudgeIfWaiting(chat);
 			}
 		}
@@ -654,7 +594,7 @@ export class MissionService {
 	 */
 	async taskModelRoutes(missionId: string, tasks: readonly MissionTask[]): Promise<TaskModelRoute[]> {
 		const project = this.projects.require(this.store.require(missionId).projectId);
-		const open = tasks.filter((t) => t.status !== "done" && t.status !== "dropped");
+		const open = tasks.filter(isOpenTask);
 		if (!open.length) return [];
 		const [profiles, state] = await Promise.all([this.sessions.workProfiles(), this.sessions.modelState()]);
 		const allowed = allowedProfiles(profiles, project);
@@ -696,7 +636,7 @@ export class MissionService {
 		const held = this.store.controls.current(missionId).held;
 		const published = new Set(this.store.plans.get(missionId)?.publication?.tasks.map((t) => t.taskId));
 		const queue = tasks.flatMap((task) => {
-			if (!published.has(task.id) || !isOpen(task)) return [];
+			if (!published.has(task.id) || !isOpenTask(task)) return [];
 			const start = starts.get(task.id);
 			const unknown = (state.start?.taskId === task.id && !state.start.admitted) || start?.state === "starting";
 			const session = task.sessionId ? this.sessions.get(task.sessionId) : undefined;
@@ -1442,20 +1382,17 @@ export class MissionService {
 		const sees = mission.coordinatorSessionId === sessionId || !!thread;
 		const pins = new Set(
 			detail.tasks
-				.filter((task) => task.sessionId === sessionId && isOpen(task))
+				.filter((task) => task.sessionId === sessionId && isOpenTask(task))
 				.flatMap((task) => task.decisionIds ?? []),
 		);
-		const relevant = detail.decisions.filter(
-			(decision) =>
-				sees ||
-				decision.audience === "all" ||
-				(decision.audience === "coordinator" && sees) ||
-				pins.has(decision.id),
-		);
-		const selected = relevant.filter((decision) => !decision.replacement && !decision.withdrawn);
+		// Routed decisions reach this chat's prompt; the coordinator and thread chats also see the rest.
+		const routed = (decision: MissionDecision) =>
+			decision.audience === "all" || pins.has(decision.id) || (decision.audience === "coordinator" && sees);
+		const relevant = detail.decisions.filter((decision) => sees || routed(decision));
+		const selected = relevant.filter(isActiveDecision);
 		const owned = new Map(
 			detail.tasks
-				.filter((task) => task.sessionId === sessionId && isOpen(task))
+				.filter((task) => task.sessionId === sessionId && isOpenTask(task))
 				.map((task) => [task.id, task.number]),
 		);
 		const selectedIds = new Set(selected.map((decision) => decision.id));
@@ -1464,12 +1401,11 @@ export class MissionService {
 		const decisionRoutes: NonNullable<MissionContext["decisionRoutes"]> = Object.fromEntries(
 			detail.decisions.map((decision) => [
 				decision.id,
-				decision.audience === "all" || pins.has(decision.id) || (decision.audience === "coordinator" && sees)
+				routed(decision)
 					? "relevant"
 					: associated &&
 							decision.audience === "reference" &&
-							!decision.replacement &&
-							!decision.withdrawn &&
+							isActiveDecision(decision) &&
 							!associated.has(decision.id)
 						? "unknown"
 						: "unrelated",
@@ -1506,7 +1442,7 @@ export class MissionService {
 						? "user"
 						: "other",
 			tasks: detail.tasks
-				.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
+				.filter((task) => task.sessionId === sessionId && isOpenTask(task))
 				.map((task) => ({
 					number: task.number,
 					title: task.title,
@@ -1537,7 +1473,7 @@ export class MissionService {
 				...(withdrawn ? { withdrawn } : {}),
 				selected: selectedIds.has(id),
 			})),
-			remainingDecisions: detail.decisions.filter((d) => !d.replacement && !d.withdrawn).length - selected.length,
+			remainingDecisions: detail.decisions.filter(isActiveDecision).length - selected.length,
 			tickets: detail.resources
 				.filter(
 					(ref) =>
@@ -1640,7 +1576,7 @@ export class MissionService {
 		this.controls.assertOpen(missionId);
 		if (!request || typeof request !== "object") throw new Error("Expected coordinator start options");
 		const mission = this.store.require(missionId);
-		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+		assertActiveMission(mission);
 		if (mission.coordinatorSessionId) throw new Conflict("The mission already has a coordinator");
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
@@ -1819,7 +1755,7 @@ export class MissionService {
 		continuation?: { record: MissionContinuation; guard: () => void },
 	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
-		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+		assertActiveMission(mission);
 		const role = this.store.workerRole(missionId, request.role);
 		if (role === "explorer" && request.mode !== undefined && request.mode !== "ask")
 			throw new Conflict("Explorer admission requires Ask mode");
@@ -2006,18 +1942,9 @@ export class MissionService {
 			throw new Conflict("Only the current mission coordinator can start workers");
 		this.assertSameProject(sessionId, missionId);
 		this.sessions.missionDispatchFence(sessionId);
-		// Worker slots limit chats that can change code. Ask chats (explorers, prototypes, threads) never wait.
-		if (!changesCode) return;
-		const uncertain = this.store.controls
-			.continuations(missionId, true)
-			.filter(
-				(r) =>
-					r.operationId !== continuationOperationId &&
-					(r.state === "entered" || r.state === "unknown") &&
-					this.store.startChangesCode(missionId, r.request),
-			).length;
-		if (this.occupiedWorkers(missionId) + uncertain >= 2)
-			throw new Conflict("Waiting for a worker slot (2 chats that can change code, reviewers included)");
+		// Ask chats (explorers, prototypes, threads) never wait for a worker slot.
+		if (changesCode)
+			assertWorkerSlot(this.store, missionId, continuationOperationId, this.occupiedWorkers(missionId));
 	}
 
 	private occupiedWorkers(missionId: string, excludeId?: string): number {
@@ -2038,7 +1965,7 @@ export class MissionService {
 					return true;
 				return (
 					!awaitingPrototype(id) &&
-					tasks.some((task) => task.sessionId === id && isOpen(task) && !this.store.retiredMember(id))
+					tasks.some((task) => task.sessionId === id && isOpenTask(task) && !this.store.retiredMember(id))
 				);
 			},
 		).length;
@@ -2063,7 +1990,6 @@ export class MissionService {
 		);
 	}
 
-	/** One `mission` tool call from a member chat. Results are compact JSON for the model. */
 	/**
 	 * A builder asks for a prototype of its own published task, or reads it (taskId alone). Pilot makes it in a
 	 * read-only chat and sends the result to this builder. No plan change and no user confirmation; the user still
@@ -2100,25 +2026,27 @@ export class MissionService {
 		const allowed = ["taskId", "requestId", "question", "prototypeModel", "prototypeThinking"];
 		if (keys.some((k) => !allowed.includes(k))) throw new Error(`prototype takes only ${allowed.join(", ")}`);
 		const requestId = args.requestId;
-		if (typeof requestId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+		if (typeof requestId !== "string" || !TASK_PROTOTYPE_LIMITS.requestId.test(requestId))
 			throw new Error("requestId must be 1-128 letters, digits, dashes or underscores");
 		const prior = current();
 		if (prior?.requestId === requestId) return view(prior);
 		const question = args.question;
-		if (typeof question !== "string" || !question.trim() || question.length > TASK_PROTOTYPE.question)
+		if (typeof question !== "string" || !question.trim() || question.length > TASK_PROTOTYPE_LIMITS.question)
 			throw new Error(
-				`question must say what to compare and which variants, in 1-${TASK_PROTOTYPE.question} characters`,
+				`question must say what to compare and which variants, in 1-${TASK_PROTOTYPE_LIMITS.question} characters`,
 			);
 		const model = args.prototypeModel;
-		if (typeof model !== "string" || !model.trim() || model.length > 256)
+		if (typeof model !== "string" || !model.trim() || model.length > TASK_PROTOTYPE_LIMITS.model)
 			throw new Error("prototypeModel is the provider/modelId of the chat that makes the prototype");
 		const thinking = args.prototypeThinking;
-		if (thinking !== undefined && (typeof thinking !== "string" || thinking.length > 32))
+		if (thinking !== undefined && (typeof thinking !== "string" || thinking.length > TASK_PROTOTYPE_LIMITS.thinking))
 			throw new Error("prototypeThinking must be a thinking level");
 		if (prior && !["reported", "failed"].includes(prior.state))
 			throw new Conflict("This task already has a prototype in progress. Read it with taskId alone.");
-		if ((prior?.attempts ?? 0) >= TASK_PROTOTYPE.attempts)
-			throw new Conflict(`This task already had ${TASK_PROTOTYPE.attempts} prototypes. Ask the user how to go on.`);
+		if ((prior?.attempts ?? 0) >= TASK_PROTOTYPE_LIMITS.attempts)
+			throw new Conflict(
+				`This task already had ${TASK_PROTOTYPE_LIMITS.attempts} prototypes. Ask the user how to go on.`,
+			);
 		const project = this.projects.require(this.store.require(missionId).projectId);
 		// Refuses a model outside the project's scope or price cap; the error lists the allowed ones.
 		await this.sessions.selectTaskModel(project.path, model, thinking as string | undefined);
@@ -2147,6 +2075,7 @@ export class MissionService {
 			next: "Pilot starts a read-only prototype chat for it. When the chat finishes, Pilot sends its mockup and report to this chat. End your turn now; do not ask the user until then.",
 		};
 	}
+	/** One `mission` tool call from a member chat. Results are compact JSON for the model. */
 	async call(sessionId: string, action: MissionAction, args: Record<string, unknown>): Promise<unknown> {
 		const missionId = this.store.missionOf(sessionId);
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
@@ -2164,34 +2093,8 @@ export class MissionService {
 		} else if (action === "thread" || action === "handoff")
 			throw new Conflict(`Only a thread chat can use ${action}`);
 		if (
-			([
-				"complete",
-				"checkIn",
-				"revision-source",
-				"revision-propose",
-				"revision",
-				"claim",
-				"release",
-				"propose",
-				"supersede",
-				"delete",
-				"group",
-				"phase",
-				"start",
-				"send",
-				"answer",
-				"archiveWorker",
-				"restoreWorker",
-				"requestReview",
-				"retireReview",
-				"status",
-				"bindPr",
-				"unbindPr",
-				"split",
-				"updateLink",
-			].includes(action) ||
-				(action === "task" &&
-					(args.order !== undefined || args.model !== undefined || args.thinking !== undefined))) &&
+			((COORDINATOR_ACTIONS as readonly string[]).includes(action) ||
+				(action === "task" && COORDINATOR_TASK_FIELDS.some((field) => args[field] !== undefined))) &&
 			mission.coordinatorSessionId !== sessionId &&
 			!(thread && action === "status")
 		)
@@ -2380,7 +2283,7 @@ export class MissionService {
 						throw new Conflict("Only a current worker in the coordinator's mission/project can be organized");
 					const detail = this.store.detail(missionId, false);
 					const assigned = detail.tasks.filter((task) => task.sessionId === target || taskIds.includes(task.id));
-					if (!assigned.length || assigned.some((task) => task.status !== "done" && task.status !== "dropped"))
+					if (!assigned.length || assigned.some((task) => isOpenTask(task)))
 						throw new Conflict(
 							"Resolve the worker's assigned work before organizing its chat; idle is not completion",
 						);
@@ -2477,7 +2380,7 @@ export class MissionService {
 				};
 			}
 			case "start": {
-				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				assertActiveMission(mission);
 				if (args.id !== undefined && args.ids !== undefined) throw new Error("Use id or ids, not both");
 				if (args.ids !== undefined && !Array.isArray(args.ids)) throw new Error("start requires an ids array");
 				if (args.ids === undefined && (typeof args.id !== "string" || !args.id.trim()))
@@ -2655,7 +2558,7 @@ export class MissionService {
 				if (args.id !== undefined) return this.taskDetail(missionId, args.id, sessionId);
 				const detail = this.store.detail(missionId, false);
 				const view = new MissionAgentView(detail, sessionId, this.sessions);
-				const open = detail.tasks.filter(isOpen);
+				const open = detail.tasks.filter(isOpenTask);
 				const role = this.store.membership(sessionId)?.role;
 				const mine = open.filter((task) => task.sessionId === sessionId);
 				const phaseTasks = new Map<string | undefined, MissionTask[]>();
@@ -2684,7 +2587,7 @@ export class MissionService {
 								dropped: tasks.filter((task) => task.status === "dropped").length,
 								total: tasks.length,
 							},
-							tasks: tasks.filter(isOpen).map((task) => task.number),
+							tasks: tasks.filter(isOpenTask).map((task) => task.number),
 						};
 					}),
 					briefRevision: mission.briefRevision,
@@ -2785,7 +2688,7 @@ export class MissionService {
 					if (task && ref.taskId !== task.id) return false;
 					const linked = detail.tasks.find((item) => item.id === ref.taskId);
 					const done = linked
-						? !isOpen(linked)
+						? !isOpenTask(linked)
 						: ref.pullRequest?.state === "merged" || ref.pullRequest?.state === "closed";
 					return filter === "all" || (filter === "done" ? done : !done);
 				};
@@ -2918,7 +2821,7 @@ export class MissionService {
 					tasks: detail.tasks
 						.filter(
 							(task) =>
-								(filter === "all" || (filter === "done" ? !isOpen(task) : isOpen(task))) &&
+								(filter === "all" || (filter === "done" ? !isOpenTask(task) : isOpenTask(task))) &&
 								(!args.mine || task.sessionId === sessionId) &&
 								(args.milestone === undefined || args.milestone === task.milestone) &&
 								(phaseId === undefined || (task.phaseId ?? null) === phaseId),
@@ -3153,8 +3056,8 @@ function activityEvent(event: MissionEvent, sessionId: string) {
 	};
 }
 
-function isOpen(task: MissionTask): boolean {
-	return task.status !== "done" && task.status !== "dropped";
+function assertActiveMission(mission: { status: string }): void {
+	if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 }
 
 function readFilter(value: unknown): "open" | "done" | "all" {

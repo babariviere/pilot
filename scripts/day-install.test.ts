@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { PILOT_CAPABILITY_HEADER } from "../packages/daemon/src/native-app-capability.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "../packages/daemon/src/operation-journal.ts";
 import { ownRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
 import {
@@ -40,7 +41,7 @@ async function fixture() {
 	const requests: string[] = [];
 	const server = createServer((req, res) => {
 		requests.push(`${req.method} ${req.url}`);
-		assert.equal(req.headers["x-pilot-github-capability"], "a".repeat(64));
+		assert.equal(req.headers[PILOT_CAPABILITY_HEADER], "a".repeat(64));
 		res.setHeader("Content-Type", "application/json");
 		res.end(
 			JSON.stringify(
@@ -214,7 +215,7 @@ async function build197Fixture() {
 	owner.ready(hello);
 	owner.install((req, res) => {
 		assert.equal(req.url, "/api/hello");
-		assert.equal(req.headers["x-pilot-github-capability"], "a".repeat(64));
+		assert.equal(req.headers[PILOT_CAPABILITY_HEADER], "a".repeat(64));
 		res.end(JSON.stringify(hello));
 	});
 	const journal = new OperationJournal(join(f.profile, "global-update-operations"), {

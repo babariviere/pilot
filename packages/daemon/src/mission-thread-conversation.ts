@@ -1,16 +1,16 @@
-import { inputOrigin } from "@pilot/kernel";
-import type { EntryRecord } from "@pilot/protocol";
+import { inputOrigin, PLANNING_INPUT_ENTRY, QUESTION_ENTRY } from "@pilot/kernel";
 import type {
+	EntryRecord,
 	MissionThread,
 	MissionThreadConversation,
 	MissionThreadInputCausality,
-} from "../../protocol/src/mission-thread.ts";
+} from "@pilot/protocol";
 
 /** Exact carrier membership from a saved planning operation, never its rendered prompt. */
 export function threadBatch(entry: EntryRecord): { operationId: string; inputIds: string[] } | undefined {
 	const data = entry.data;
 	if (
-		entry.kind !== "pilot.planning-input" ||
+		entry.kind !== PLANNING_INPUT_ENTRY ||
 		!data ||
 		typeof data !== "object" ||
 		Array.isArray(data) ||
@@ -32,7 +32,6 @@ export function threadBatch(entry: EntryRecord): { operationId: string; inputIds
 	}
 }
 
-/** Only explicit original links or ownership of a dedicated chat establish topic membership. */
 /**
  * A thread chat's question as plain words: the question, its context and suggested answers. The user answers
  * with an ordinary thread message, so the thread must show the question.
@@ -53,6 +52,7 @@ export function threadQuestionText(data: unknown): string {
 	return parts.join("\n\n");
 }
 
+/** Only explicit original links or ownership of a dedicated chat establish topic membership. */
 export function threadConversationEntries(
 	topic: MissionThread,
 	sessionId: string,
@@ -66,7 +66,7 @@ export function threadConversationEntries(
 	return entries
 		.flatMap((entry) => {
 			let operation: { operationId?: string; kind?: string; payload?: string } = {};
-			if (entry.kind === "pilot.planning-input") {
+			if (entry.kind === PLANNING_INPUT_ENTRY) {
 				const data = entry.data;
 				if (data && typeof data === "object" && !Array.isArray(data) && typeof data.operation === "string") {
 					try {
@@ -138,7 +138,7 @@ export function threadConversationEntries(
 					return [];
 				}
 				role = "you";
-			} else if (chat && entry.kind === "pilot.question") {
+			} else if (chat && entry.kind === QUESTION_ENTRY) {
 				// The thread chat waits for this answer: show it, or the thread looks stuck.
 				role = "chat";
 				text = threadQuestionText(entry.data);

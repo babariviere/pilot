@@ -1,7 +1,8 @@
 export { installBundledAnthropicAuth } from "./bundled-extensions.ts";
 export type { ConnectivityState } from "./connectivity.ts";
-export { probeReachability, providerOrigin } from "./connectivity.ts";
+export { connectivityHints, probeReachability, providerOrigin } from "./connectivity.ts";
 export type { CoordinatorSources } from "./coordinator-sources.ts";
+export { ACTIVITY_ENTRY, PLANNING_INPUT_ENTRY, QUESTION_ENTRY } from "./entry-kinds.ts";
 export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";
 export { createMissionPlanTool, type NativePlanningPort } from "./mission-plan-tool.ts";
@@ -17,21 +18,16 @@ export type {
 export { assertPlanningBinding, PLANNING_PROFILE } from "./planning-worker.ts";
 export type { AskContext, MissionContext, PilotContext, WorkspaceContext, WorkspaceReset } from "./policy.ts";
 export type {
-	DiagnosticLogExcerpt,
-	DiagnosticLogPage,
-	DiagnosticLogRecord,
-	DiagnosticLogRequest,
-	DiagnosticLogResult,
-	DiagnosticLogSourceId,
-	DiagnosticLogSourceInventory,
 	ExecutionEvidence,
+	HostCall,
+	HostCallPacket,
+	HostCalls,
+	HostMethod,
 	KernelCommand,
 	KernelPacket,
 	KernelSpec,
 	KernelSubagent,
 	KernelTelemetryConfiguration,
-	KernelUsage,
-	NextAppLogOmissions,
 } from "./protocol.ts";
 export type { QuestionClarification } from "./question-clarifications.ts";
 export type { ReferenceSource } from "./reference-sources.ts";
@@ -44,6 +40,7 @@ export {
 	TOOL_ACTIVITY_FILE,
 } from "./tool-activity.ts";
 export { type ExecutionPermission, inheritedExecutionPermission } from "./tool-policy.ts";
+export type { KernelUsage } from "./usage.ts";
 
 /** Absolute path of the worker entry, for `child_process.fork`. Plain Node runs it: no loader is needed. */
 export const workerEntry = new URL("./worker-entry.ts", import.meta.url);
@@ -57,4 +54,5 @@ export type { RecoveryStop } from "./stop-recovery.ts";
 
 /** A long-lived, read-only watcher for one subagent transcript. */
 export const subagentWatchWorkerEntry = new URL("./subagent-watch-worker.ts", import.meta.url);
-export type { SystemMessageStateEvent } from "./held-inputs.ts";
+export type { SystemMessageStateEvent } from "./held-inputs-doc.ts";
+export { DIAGNOSTIC_LOG_SOURCES, TARGET_LOG_SOURCES } from "./diagnostic-log-sources.ts";

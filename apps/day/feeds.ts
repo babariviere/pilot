@@ -1,6 +1,4 @@
-// What the screens need from a feed, and nothing more. The mock feeds
-// (TodayFeed, PlanFeed) and the connected adapters (bridge.ts) both fit
-// these shapes, so the screens never know which one they talk to.
+// The Today and Planning interfaces for the connected adapters and native-backed fixtures.
 import type { PlanFeed, PlanOutcome, PlanPage, TodayFeed } from "pilot-day/native";
 import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
 import type { MigrationIntent, MigrationView } from "./migration";
@@ -57,7 +55,6 @@ export type PlanningFeed = Pick<
 	canReadInventory?: () => boolean;
 	prepareNew?: () => Promise<PlanOutcome>;
 	checkNew?: (operationId?: string) => Promise<PlanOutcome>;
-	dismissNew?: () => Promise<PlanOutcome>;
 	canCheckNew?: () => boolean;
 	startWork?: (
 		missionId: string,

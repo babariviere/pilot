@@ -27,6 +27,7 @@ import { Conflict, NotFound } from "./errors.ts";
 import { resolveFeedbackPaths } from "./feedback-paths.ts";
 import type { MissionStore } from "./missions.ts";
 import type { NativeChat, Selection } from "./native-chat.ts";
+import { asksUser } from "./needs-you-reason.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { SessionManager } from "./sessions.ts";
 import { USER_FEEDBACK_LIMITS } from "./user-feedback-store.ts";
@@ -208,7 +209,7 @@ function text(value: unknown, max: number, nullable = false): string | null {
 }
 
 /** A triage's last answer as a proposal. Anything else is not a proposal. */
-export function parseProposal(
+function parseProposal(
 	raw: string | undefined,
 	known: (feedbackId: string) => boolean,
 	/** A prototype chat's mockups: its proposal is the fix the user chose and names one of them. */
@@ -307,7 +308,7 @@ function finalText(entry: Entry): string | undefined {
 function chatState(s: SessionSummary | undefined): NonNullable<UserFeedbackWorkView["chat"]>["state"] {
 	if (!s) return "missing";
 	if (s.archivedAt) return "archived";
-	if (s.outcome === "question" || s.attentionReason?.kind === "asks") return "question";
+	if (asksUser(s)) return "question";
 	if (s.working) return "working";
 	if (s.outcome === "done") return "done";
 	if (s.outcome === "failed") return "failed";

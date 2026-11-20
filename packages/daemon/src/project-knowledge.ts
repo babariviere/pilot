@@ -18,7 +18,7 @@ import type { MissionStore } from "./missions.ts";
 import type { KnowledgeListFilter, PreparedKnowledgeWrite } from "./project-knowledge-store.ts";
 import { ProjectPreferencesService } from "./project-preferences.ts";
 
-export const KNOWLEDGE_LIMITS = {
+const KNOWLEDGE_LIMITS = {
 	/** UTF-8 bytes of one revision's title, synopsis, body, sources and reason. */
 	revisionBytes: 64 * 1024,
 	sources: 64,
@@ -130,7 +130,7 @@ function only(record: Record<string, unknown>, keys: string[], field: string): v
 }
 
 /** Fixed key order, so equal citations hash identically whatever order a client sent. */
-export function parseKnowledgeSource(value: unknown, index: number): KnowledgeSource {
+function parseKnowledgeSource(value: unknown, index: number): KnowledgeSource {
 	const field = `sources[${index}]`;
 	const v = object(value, field);
 	const label = text(v.label, `${field}.label`, KNOWLEDGE_LIMITS.label, { optional: true });
@@ -245,7 +245,7 @@ export function parseKnowledgeSource(value: unknown, index: number): KnowledgeSo
 }
 
 /** Validated write content. Rejects oversize writes; never truncates findings. */
-export function parseKnowledgeWrite(
+function parseKnowledgeWrite(
 	value: unknown,
 	append: boolean,
 ): Omit<PreparedKnowledgeWrite, "requestHash" | "author" | "origin" | "kind"> & {
@@ -296,7 +296,7 @@ export function parseKnowledgeWrite(
 }
 
 /** The body must explain the entry, not just point at sources. */
-export function assertReadableBody(kind: KnowledgeKind, body: string): void {
+function assertReadableBody(kind: KnowledgeKind, body: string): void {
 	const headings = body
 		.split("\n")
 		.map((line) => /^\s{0,3}#{1,6}\s+(.+)$/.exec(line)?.[1] ?? "")
@@ -325,7 +325,7 @@ function pageLimit(value: unknown): number {
 	return n;
 }
 
-export interface KnowledgeListQuery {
+interface KnowledgeListQuery {
 	kind?: unknown;
 	missionId?: unknown;
 	check?: unknown;

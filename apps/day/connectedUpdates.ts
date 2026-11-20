@@ -5,11 +5,17 @@
 // answer leaves the run Unknown and Check-only.
 import { signal } from "nsh";
 import type { ConfirmIntent, IntentOutcome, Prepared, PrepareIntent, ServiceView, UpdateRef } from "pilot-day/native";
-import { call, type Refusal, refusalOutcome } from "./bridge";
+import { call } from "./bridge";
+import { type Refusal, refusalOutcome } from "./refusals";
 import type { Update } from "./updateFeed";
 
 /** Refusals after which the root may have entered the effect: Unknown, Check only. */
 const UNCERTAIN = new Set<Refusal>(["unknown", "lost", "storage", "invalid"]);
+
+// Never reinterpret an older root's Force confirmation as a normal update.
+function withoutForce(view: ServiceView): ServiceView {
+	return view.pending?.mode === "force" ? { ...view, pending: null } : view;
+}
 
 /** What a refused prepare means: it never starts anything. */
 function prepareRefusal(refusal: Refusal, revision: number): Prepared {
@@ -36,13 +42,14 @@ function prepareRefusal(refusal: Refusal, revision: number): Prepared {
 export async function connectedUpdates(window: string): Promise<Update | null> {
 	const first = await call<ServiceView>(window, "day.update.read", {});
 	if (!first.ok) return null;
-	const service = signal(first.snapshot);
+	const service = signal(withoutForce(first.snapshot));
 	const listeners = new Set<(view: ServiceView) => void>();
 	let closed = false;
 	let awaiting: string | null = null;
 	const consumed = new Set<string>();
-	const publish = (view: ServiceView) => {
+	const publish = (snapshot: ServiceView) => {
 		if (closed) return;
+		const view = withoutForce(snapshot);
 		service.set(view);
 		for (const listener of listeners) listener(view);
 	};
@@ -60,10 +67,11 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 			? (result.outcome ?? { status: "accepted", revision: service().revision, message: "" })
 			: // No retry, refresh mutation, manufactured success or inferred receipt.
 				refusalOutcome(result.refusal, service().revision);
-	const confirm = async (id: string, intent: ConfirmIntent | UpdateRef, force: boolean): Promise<IntentOutcome> => {
+	const confirm = async (intent: ConfirmIntent): Promise<IntentOutcome> => {
+		const id = intent.confirmation;
 		const current = service();
 		const pending = current.pending;
-		if (awaiting || consumed.has(id) || pending?.id !== id || (pending.mode === "force") !== force) {
+		if (awaiting || consumed.has(id) || pending?.id !== id) {
 			return {
 				status: "stale",
 				revision: current.revision,
@@ -81,13 +89,11 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 				version: pending.to,
 				phase: "unknown",
 				steps: [],
-				message: force
-					? "Waiting for the native accepted-loss record and result."
-					: "Waiting for the native save barrier and result.",
+				message: "Waiting for the native save barrier and result.",
 				next: "Check only; nothing will be resent.",
 			},
 		});
-		const result = await send(force ? "day.update.forceConfirm" : "day.update.confirm", intent);
+		const result = await send("day.update.confirm", intent);
 		if (!result.ok && !UNCERTAIN.has(result.refusal) && awaiting === id) {
 			// Refused before anything was entered: the screen shows what it
 			// showed, without the used confirmation. It is never sent again.
@@ -125,7 +131,11 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 				const result = await send("day.update.prepare", intent);
 				if (!result.ok) return prepareRefusal(result.refusal, service().revision);
 				const outcome = outcomeOf(result);
-				return { status: outcome.status, message: outcome.message, confirmation: result.snapshot.pending ?? null };
+				return {
+					status: outcome.status,
+					message: outcome.message,
+					confirmation: withoutForce(result.snapshot).pending ?? null,
+				};
 			},
 			async cancel(intent: UpdateRef): Promise<IntentOutcome> {
 				// Cancellation revokes this local confirmation synchronously, even
@@ -135,8 +145,7 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 				if (current.pending?.id === intent.id) publish({ ...current, pending: null });
 				return outcomeOf(await send("day.update.cancel", intent));
 			},
-			confirm: (intent: ConfirmIntent) => confirm(intent.confirmation, intent, false),
-			forceConfirm: (intent: UpdateRef) => confirm(intent.id, intent, true),
+			confirm,
 			check: async () => outcomeOf(await send("day.update.check", {})),
 			restored: async (intent: UpdateRef) => outcomeOf(await send("day.update.restored", intent)),
 		},

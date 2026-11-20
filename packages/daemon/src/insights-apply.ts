@@ -68,7 +68,7 @@ export class InsightsApply {
 			payload.context !== this.enable.context(payload.projectId, payload.missionId)
 		)
 			throw new Conflict("Insights home/project/backlog changed");
-		this.deps.schedules.insightsEnableAvailable(payload.expectedHome);
+		this.deps.schedules.insights.insightsEnableAvailable(payload.expectedHome);
 		const admission = this.deps.sessions.insightsHostAdmission(id);
 		if (admission.binding.projectId !== payload.projectId || admission.binding.missionId !== payload.missionId)
 			throw new Conflict("Report binding changed");
@@ -231,8 +231,10 @@ export class InsightsApply {
 					await this.pending(op.targetId, op.operationId);
 					await this.available(payload);
 					this.guard(payload, progress.chat);
-					const cancelledRule = await this.deps.schedules.cancelInsights(payload.rule, payload.expectedHome, () =>
-						this.guard(payload, progress!.chat),
+					const cancelledRule = await this.deps.schedules.insights.cancelInsights(
+						payload.rule,
+						payload.expectedHome,
+						() => this.guard(payload, progress!.chat),
 					);
 					progress = { ...progress, cancelledRule };
 				}
@@ -248,7 +250,7 @@ export class InsightsApply {
 			await this.pending(op.targetId, op.operationId);
 			await this.available(payload);
 			this.guard(payload, progress.chat, true, true, progress.cancelledRule);
-			const created = await this.deps.schedules.createInsights(
+			const created = await this.deps.schedules.insights.createInsights(
 				{
 					trigger: "recurring",
 					title: payload.rule?.title ?? "Weekly Insights",

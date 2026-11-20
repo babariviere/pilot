@@ -8,7 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSubagent } from "@pilot/kernel";
 import type { SessionSummary } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
 const completion = { outcome: "done" as const, outcomeAt: 42 };

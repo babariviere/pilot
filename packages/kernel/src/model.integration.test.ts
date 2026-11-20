@@ -26,13 +26,13 @@ import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { Type } from "typebox";
 import { userText } from "./attempts.ts";
+import { QUESTION_ENTRY } from "./entry-kinds.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { BUILDING_SKILL_PATHS } from "./mission-building-skills.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
 import { PosthorseDoc } from "./posthorse.ts";
-import { QUESTION_ENTRY } from "./question-entry.ts";
 import { queueGuardToken } from "./queue.ts";
 import { KernelSession } from "./session.ts";
 import { readClarificationReceipt, readSessionSnapshot } from "./snapshot.ts";

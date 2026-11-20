@@ -92,8 +92,8 @@ test("confirmed chat and mission starts react on the parent without awaiting Sla
 		const linked = await f.tracking.patch(f.item.id, { ...link, start: true });
 		assert.equal(linked.sessionId ?? linked.missionId, Object.values(link)[0]);
 		assert.equal(linked.slack?.status, "in_progress");
-		const pending = f.tracking.startSlack(linked);
-		assert.equal(f.tracking.startSlack(linked), pending);
+		const pending = f.tracking.slack.start(linked);
+		assert.equal(f.tracking.slack.start(linked), pending);
 		await called;
 		assert.equal(outcome(await f.items.require(linked.id)), undefined, "no premature error while pending");
 		release();
@@ -106,7 +106,7 @@ test("confirmed chat and mission starts react on the parent without awaiting Sla
 		assert.equal(saved.updatedAt, f.item.updatedAt, "source timestamp stays source-owned");
 		await f.tracking.patch(linked.id, { ...link, start: true });
 		await f.tracking.patch(linked.id, { sessionId: "another-chat", start: true });
-		await f.tracking.startSlack(linked);
+		await f.tracking.slack.start(linked);
 		assert.equal(f.calls.length, 1, "new work, stale item snapshots and replay never react again");
 		await f.tracking.patch(linked.id, { dismissed: true, sessionId: null, missionId: null });
 		await f.tracking.patch(linked.id, { dismissed: false });
@@ -126,7 +126,7 @@ test("wrapped confirmations persist success without provider text or replaying t
 		const f = await fixture(t);
 		f.respond(response);
 		const item = await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-		await f.tracking.startSlack(item);
+		await f.tracking.slack.start(item);
 		const saved = await f.items.require(item.id);
 		assert.equal(outcome(saved)?.outcome, "reacted");
 		assert.equal(outcome(saved)?.error, undefined);
@@ -139,7 +139,7 @@ test("wrapped confirmations persist success without provider text or replaying t
 		} finally {
 			await reopened.close();
 		}
-		await f.tracking.startSlack(item);
+		await f.tracking.slack.start(item);
 		assert.equal(f.calls.length, 1);
 	}
 });
@@ -154,7 +154,7 @@ test("already_reacted in JSON, structured errors or MCP error text is successful
 		const f = await fixture(t);
 		f.respond(response);
 		const item = await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-		await f.tracking.startSlack(item);
+		await f.tracking.slack.start(item);
 		const saved = await f.items.require(item.id);
 		assert.equal(outcome(saved)?.outcome, "reacted");
 		assert.ok(!JSON.stringify(saved).includes("private detail"));
@@ -165,7 +165,7 @@ test("failure is quiet, durable, never retried, visible in dashboard/Inbox and p
 	const f = await fixture(t);
 	f.respond({ isError: true, content: [{ type: "text", text: "missing_scope: private external detail" }] });
 	const linked = await f.tracking.patch(f.item.id, { missionId: "mission", start: true });
-	await f.tracking.startSlack(linked);
+	await f.tracking.slack.start(linked);
 	const failed = await f.items.require(linked.id);
 	assert.equal(failed.missionId, "mission");
 	assert.equal(failed.slack?.status, "in_progress");
@@ -188,7 +188,7 @@ test("failure is quiet, durable, never retried, visible in dashboard/Inbox and p
 		await reopened.close();
 	}
 	await f.tracking.patch(linked.id, { sessionId: "new-chat", start: true });
-	await f.tracking.startSlack(linked);
+	await f.tracking.slack.start(linked);
 	assert.equal(f.calls.length, 1);
 });
 
@@ -203,7 +203,7 @@ test("ordinary/replayed links, Linear starts, invalid confirmation and polling n
 		{ start: true, sessionId: null },
 	])
 		assert.throws(() => validatePatch(patch));
-	await f.tracking.startSlack({ ...f.item, kind: "linear" });
+	await f.tracking.slack.start({ ...f.item, kind: "linear" });
 	f.tracking.register("linear", async (context) => {
 		for (const tool of ["startSlack", "startIssue"]) await assert.rejects(context.call(tool, {}), /cannot write/);
 		return { items: [] };
@@ -224,7 +224,7 @@ test("removed channel skips, malformed parent fails closed and legacy channel-na
 		await f.tracking.poll(`${f.project.id}:slack`);
 		await f.items.commit(f.project.id, "slack", [{ ...input, metadata: { ...metadata } }]);
 		await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-		await f.tracking.startSlack(await f.items.require(f.item.id));
+		await f.tracking.slack.start(await f.items.require(f.item.id));
 		assert.equal(outcome(await f.items.require(f.item.id))?.outcome, expected);
 		assert.equal(f.calls.length, expected === "reacted" ? 1 : 0);
 	}
@@ -244,7 +244,7 @@ test("interrupted reservations recover as errors and remain consumed after resta
 		await reopened.close();
 	}
 	await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-	await f.tracking.startSlack(f.item);
+	await f.tracking.slack.start(f.item);
 	assert.equal(f.calls.length, 0);
 });
 
@@ -287,12 +287,12 @@ test("reaction admission shares two slots with reads and records overflow once",
 		for (const release of gates.values()) release();
 	});
 	const linked = await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-	await f.tracking.startSlack(linked);
+	await f.tracking.slack.start(linked);
 	assert.equal(outcome(await f.items.require(f.item.id))?.outcome, "error");
 	for (const release of gates.values()) release();
 	await Promise.all([first, second]);
 	await f.tracking.patch(f.item.id, { missionId: "another-start", start: true });
-	await f.tracking.startSlack(linked);
+	await f.tracking.slack.start(linked);
 	assert.equal(f.calls.length, 0, "overflow has no retry queue after slots clear");
 });
 
@@ -307,11 +307,11 @@ test("configuration changes cancel obsolete reactions without retrying", async (
 		await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
 	});
 	await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-	const pending = f.tracking.startSlack(f.item);
+	const pending = f.tracking.slack.start(f.item);
 	await called;
 	await f.projects.update(f.project.id, { tracking: { slackChannels: ["COTHER"] } });
 	await pending;
 	assert.equal(outcome(await f.items.require(f.item.id))?.outcome, "error");
-	await f.tracking.startSlack(f.item);
+	await f.tracking.slack.start(f.item);
 	assert.equal(f.calls.length, 1);
 });

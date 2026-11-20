@@ -2,12 +2,12 @@
 import { posix } from "node:path";
 import type { CallEdge, CallFrame, CallPathQuery } from "./call-path-contract.ts";
 import { type Binding, type CallModule, callSyntax, GraphLimit, lookup } from "./call-path-syntax.ts";
+import { SOURCE_EXTENSIONS } from "./exploration-parser.ts";
 import { scanSource } from "./exploration-scan.ts";
 import type { AskContext } from "./policy.ts";
 
 const MAX_RECORDS = 20_000;
 export const MAX_CALL_RESULTS = 1000;
-const EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 export const CALL_LIMITATIONS = [
 	"Static lexical relationships, not runtime execution, reachability, type checking or impact proof.",
 	"Only direct identifier calls bind locally; member/optional/new/tagged/dynamic dispatch, aliases and callback invocation are unresolved. Callback bodies are separate frames, not invoked argument edges.",
@@ -34,9 +34,10 @@ function resolveBinding(binding: Binding, module: CallModule, modules: Map<strin
 		? [base]
 		: posix.extname(base)
 			? []
-			: [...EXTENSIONS.map((ext) => base + ext), ...EXTENSIONS.map((ext) => `${base}/index${ext}`)].filter((path) =>
-					modules.has(path),
-				);
+			: [
+					...SOURCE_EXTENSIONS.map((ext) => base + ext),
+					...SOURCE_EXTENSIONS.map((ext) => `${base}/index${ext}`),
+				].filter((path) => modules.has(path));
 	if (candidates.length > 1)
 		return { resolution: "ambiguous", provenance: "multiple-relative-import-file-candidates-no-edge" };
 	const targetModule = candidates[0] ? modules.get(candidates[0]) : undefined;

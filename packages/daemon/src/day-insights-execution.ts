@@ -68,7 +68,7 @@ export class DayInsightsExecution {
 			const guard = () => {
 				this.deps.owners.assertLegacyDayRunsQuiescent();
 				journal();
-				this.deps.schedules.assertLegacyDayQuiescent(a.owner.expectedHome);
+				this.deps.schedules.insights.assertLegacyDayQuiescent(a.owner.expectedHome);
 				for (const l of leases) l.revalidate();
 				let cursor: string | null = null;
 				for (const report of known) {
@@ -119,7 +119,8 @@ export class DayInsightsExecution {
 			this.deps.owners.assertApplyIdle(a);
 			this.deps.sessions.insightsOwnerApplySnapshot(a.owner.reportSessionId);
 		}
-		if (p.settings?.weekly && !status.paused) this.deps.schedules.insightsEnableAvailable(a.owner.expectedHome);
+		if (p.settings?.weekly && !status.paused)
+			this.deps.schedules.insights.insightsEnableAvailable(a.owner.expectedHome);
 	}
 	async execute(
 		a: InsightsWorkspaceAuthority,
@@ -244,7 +245,7 @@ export class DayInsightsExecution {
 	private async cancel(a: InsightsWorkspaceAuthority, guard: () => void) {
 		const rule = this.deps.schedules.store.list().find((r) => r.id === a.owner.scheduleId);
 		if (!rule || rule.state === "cancelled") return;
-		await this.deps.schedules.cancelOwnerInsights(rule, a.owner, guard);
+		await this.deps.schedules.insights.cancelOwnerInsights(rule, a.owner, guard);
 	}
 	private async schedule(
 		a: InsightsWorkspaceAuthority,
@@ -253,9 +254,9 @@ export class DayInsightsExecution {
 		guard: () => void,
 	) {
 		const prior = this.deps.schedules.store.list().find((r) => r.id === a.owner.scheduleId);
-		if (prior) await this.deps.schedules.rearmOwnerInsights(prior, a.owner, op.operationId, settings, guard);
+		if (prior) await this.deps.schedules.insights.rearmOwnerInsights(prior, a.owner, op.operationId, settings, guard);
 		else
-			await this.deps.schedules.createOwnerInsights(
+			await this.deps.schedules.insights.createOwnerInsights(
 				{
 					title: "Weekly Insights",
 					trigger: "recurring",

@@ -1,16 +1,26 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 /** Side-by-side connected installation. Never changes a profile or starts a process/service. */
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { constants, cp, lstat, mkdtemp, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { PILOT_CAPABILITY_HEADER } from "../packages/daemon/src/native-app-capability.ts";
 import { canonicalJSON, payloadHash } from "../packages/daemon/src/operation-journal.ts";
-import { inspectRuntime, type RuntimeBuild } from "../packages/daemon/src/runtime-owner.ts";
-import { writeNewDurableFile } from "./installation-records.ts";
+import {
+	inspectRuntime,
+	ownerRecordNames,
+	RUNTIME_OWNER_RECORD,
+	RUNTIME_UPDATE_PROOF_HEADER,
+	RUNTIME_UPDATE_ROUTE,
+	type RuntimeBuild,
+	runtimeUpdateProof,
+	verifiedRuntimeUpdateReply,
+} from "../packages/daemon/src/runtime-owner.ts";
+import { exists, readPrivateFile as privateFile, writeNewDurableFile } from "./installation-records.ts";
 
 export interface Selection {
 	app: string;
@@ -45,15 +55,6 @@ async function canonical(path: string) {
 		typeof path === "string" && isAbsolute(path) && (await realpath(path)) === path,
 		`Use a canonical absolute path: ${path}`,
 	);
-}
-async function exists(path: string) {
-	try {
-		await lstat(path);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-		throw error;
-	}
 }
 export async function digest(path: string) {
 	const hash = createHash("sha256");
@@ -118,19 +119,6 @@ export async function verifyApp(s: Selection, app = s.app) {
 	);
 }
 
-async function privateFile(path: string, limit: number) {
-	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-	try {
-		const st = await file.stat();
-		requireThat(
-			st.isFile() && st.uid === process.getuid?.() && !(st.mode & 0o077) && st.size <= limit,
-			`Unsafe native identity file: ${basename(path)}`,
-		);
-		return await file.readFile("utf8");
-	} finally {
-		await file.close();
-	}
-}
 async function identity(s: Selection) {
 	requireThat(
 		(await privateFile(join(s.sourceProfile, "daemon-id"), 128)).trim() === s.daemonId,
@@ -181,7 +169,7 @@ async function requestJSON(port: number, path: string, method: string, headers: 
 }
 async function get(s: Selection, path: string) {
 	const token = await identity(s);
-	const value = await requestJSON(s.port, path, "GET", { "x-pilot-github-capability": token });
+	const value = await requestJSON(s.port, path, "GET", { [PILOT_CAPABILITY_HEADER]: token });
 	requireThat((await identity(s)) === token, "Native credentials changed during preflight.");
 	return value as {
 		daemonId?: string;
@@ -196,16 +184,12 @@ async function get(s: Selection, path: string) {
 
 /** Only this sealed source omitted its capability despite implementing the native envelope. */
 async function qualifyBuild197(s: Selection, verify: typeof verifyApp) {
-	const ownerPath = join(s.targetProfile, ".daemon-owner.json");
+	const ownerPath = join(s.targetProfile, RUNTIME_OWNER_RECORD);
 	if (!(await exists(ownerPath))) return false;
 	const owner = JSON.parse(await privateFile(ownerPath, 16_384));
 	if (owner.build?.source !== "3bf2f7ce63205155b3cc33b5311bac675ba1dfee") return false;
 	requireThat(
-		owner.schema === 1 &&
-			/^[a-f0-9]{64}$/.test(owner.boot) &&
-			/^[a-f0-9]{64}$/.test(owner.secret) &&
-			owner.home === payloadHash(s.targetProfile) &&
-			owner.port === s.port &&
+		ownerRecordNames(owner, s.targetProfile, s.port) &&
 			typeof owner.runtimeRoot === "string" &&
 			owner.runtimeRoot.endsWith("/Contents/Resources/runtime"),
 		"Build 197 runtime owner is invalid.",
@@ -236,11 +220,7 @@ async function qualifyBuild197(s: Selection, verify: typeof verifyApp) {
 		"Build 197 runtime is not ready.",
 	);
 	requireThat(
-		owner.schema === 1 &&
-			/^[a-f0-9]{64}$/.test(owner.boot) &&
-			/^[a-f0-9]{64}$/.test(owner.secret) &&
-			owner.home === payloadHash(s.targetProfile) &&
-			owner.port === s.port &&
+		ownerRecordNames(owner, s.targetProfile, s.port) &&
 			owner.runtimeRoot === runtime &&
 			isDeepStrictEqual(owner.build, build),
 		"Build 197 runtime owner changed.",
@@ -264,23 +244,16 @@ async function qualifyBuild197(s: Selection, verify: typeof verifyApp) {
 	};
 	const nonce = randomBytes(32).toString("hex");
 	const raw = JSON.stringify({ boot: owner.boot, nonce, action: "inspect", receipt: { globalUpdate: operation } });
-	const mac = (body: string) =>
-		createHmac("sha256", Buffer.from(owner.secret, "hex")).update(`update/v1\n${body}`).digest("hex");
-	const envelope = (await requestJSON(
+	const envelope = await requestJSON(
 		s.port,
-		"/__pilot_runtime_update/v1",
+		RUNTIME_UPDATE_ROUTE,
 		"POST",
-		{ "x-pilot-update-proof": mac(raw) },
+		{ [RUNTIME_UPDATE_PROOF_HEADER]: runtimeUpdateProof(owner.secret, raw) },
 		raw,
-	)) as { body?: string; mac?: string };
-	requireThat(
-		typeof envelope?.body === "string" &&
-			typeof envelope.mac === "string" &&
-			/^[a-f0-9]{64}$/.test(envelope.mac) &&
-			timingSafeEqual(Buffer.from(mac(envelope.body), "hex"), Buffer.from(envelope.mac, "hex")),
-		"Build 197 lookup proof is invalid.",
 	);
-	const proof = JSON.parse(envelope.body);
+	const body = verifiedRuntimeUpdateReply(owner.secret, envelope);
+	requireThat(body !== undefined, "Build 197 lookup proof is invalid.");
+	const proof = JSON.parse(body);
 	requireThat(
 		proof.schema === 1 &&
 			proof.boot === owner.boot &&
@@ -427,7 +400,6 @@ export async function stageApp(s: Selection, verify = verifyApp) {
 			requireThat(!(await exists(s.appDestination)), "App destination exists. Nothing was replaced.");
 			await rename(app, s.appDestination);
 		}
-		// Only a fresh side-by-side directory is published. No app/profile replacement.
 		await rename(stage, s.installDirectory);
 		return "Installed, not launched. Open Launch Day.command when ready.";
 	} finally {
@@ -435,8 +407,8 @@ export async function stageApp(s: Selection, verify = verifyApp) {
 	}
 }
 
-export type NativeAction = "preflight" | "apply" | "inspect" | "retire";
-export interface NativeResult {
+type NativeAction = "preflight" | "apply" | "inspect" | "retire";
+interface NativeResult {
 	state?: string;
 	changed?: boolean;
 	completion?: { role?: string };

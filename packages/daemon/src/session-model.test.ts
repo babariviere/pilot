@@ -13,7 +13,8 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { OperationRejected } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { CommandRejected, type SessionWorker } from "./kernel-worker.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
@@ -46,14 +47,19 @@ class FakeWorker implements SessionWorker {
 	}
 	guardError?: string;
 	send(command: KernelCommand): void {
-		if (command.type === "model.configuration.result") this.guardError = command.error;
+		if (command.type === "host.result") this.guardError = command.error;
 	}
 	async request(command: Command): Promise<void> {
 		this.commands.push(command);
 		await this.gate;
 		if (command.type === "changeModel" || command.type === "changeModelConfiguration") {
 			if (command.type === "changeModelConfiguration") {
-				this.onPacket({ type: "model.configuration.guard", callId: "synthetic", requestId: command.requestId });
+				this.onPacket({
+					type: "host.call",
+					method: "model.configuration.guard",
+					callId: "synthetic",
+					args: { requestId: command.requestId },
+				});
 				if (this.guardError) throw new CommandRejected(this.guardError);
 			}
 			if (this.rejectBusy) throw new CommandRejected("Conversation is busy", "busy");
@@ -782,78 +788,3 @@ test("passive failed model HTTP has exact home/source/operation ACK and preserve
 
 const HANDOFF_REASON =
 	"Compaction failed: The handoff writer's model request failed. Original context was preserved. You can turn off automatic handoff in Settings → Chats and retry.";
-
-test("only an idle run that failed in automatic handoff offers its retry", async (t) => {
-	const f = await fixture(t);
-	const meta = failed(f, false);
-	assert.equal(f.sessions.get(f.id)?.canRetryHandoff, undefined);
-	await assert.rejects(f.sessions.retryHandoff(f.id, "op"), Conflict);
-	meta.outcomeReason = HANDOFF_REASON;
-	assert.equal(f.sessions.get(f.id)?.canRetryHandoff, true);
-	for (const patch of [
-		{ outcome: "done" },
-		{ working: true },
-		{ failure: "Session startup: boom" },
-		{ archivedAt: 123 },
-		{ continuedTo: "next" },
-	]) {
-		const before = structuredClone(meta);
-		Object.assign(meta, patch);
-		assert.equal(f.sessions.get(f.id)?.canRetryHandoff, undefined, JSON.stringify(patch));
-		await assert.rejects(f.sessions.retryHandoff(f.id, "op"));
-		for (const key of Object.keys(patch)) delete meta[key as keyof typeof meta];
-		Object.assign(meta, before);
-	}
-	assert.equal(f.workers.length, 0);
-	assert.equal(meta.pending, undefined);
-});
-
-test("a failed automatic handoff retries as one quiet explicit input and applies a saved model", async (t) => {
-	const f = await fixture(t);
-	const meta = failed(f, false);
-	meta.outcomeReason = HANDOFF_REASON;
-	const worker = new FakeWorker(() => {});
-	f.sessions["workers"].set(f.id, worker);
-	await f.sessions.saveFailedModel(f.id, f.sessions.get(f.id)!.failedModelSource!, { model: second }, f.models);
-	const summary = await f.sessions.retryHandoff(f.id, "op-1");
-	assert.equal(summary.id, f.id);
-	assert.equal(worker.closed, true, "explicit recovery reopens with the saved model");
-	assert.equal(meta.model, second);
-	assert.equal(meta.nextAttemptModel, undefined);
-	const inputs = f.workers.flatMap((w) => w.commands).filter((command) => command.type === "input");
-	assert.equal(inputs.length, 1);
-	const input = inputs[0] as Extract<Command, { type: "input" }>;
-	assert.equal(input.requestId, "handoff-retry:op-1");
-	assert.equal(input.mode, "followUp");
-	assert.deepEqual(input.event, { kind: "handoff_retry", text: "Retried the automatic handoff" });
-	assert.match(input.content, /handoff failed/);
-});
-
-test("retry-handoff HTTP validates the operation and refuses ineligible chats with 409", async (t) => {
-	const f = await fixture(t);
-	const meta = failed(f, false);
-	const server = createDaemonServer({
-		config: { home: f.home, host: "127.0.0.1", port: 0 },
-		sessions: f.sessions,
-		projects: f.projects,
-		models: f.models,
-		terminals: new TerminalManager(),
-	});
-	server.listen(0, "127.0.0.1");
-	await once(server, "listening");
-	t.after(() => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))));
-	const post = (body: unknown) =>
-		fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/${f.id}/retry-handoff`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(body),
-		});
-	for (const bad of [null, {}, { operationId: "" }, { operationId: "a b" }])
-		assert.equal((await post(bad)).status, 400);
-	assert.equal((await post({ operationId: "op" })).status, 409);
-	meta.outcomeReason = HANDOFF_REASON;
-	const response = await post({ operationId: "op" });
-	assert.equal(response.status, 200);
-	assert.equal(((await response.json()) as SessionSummary).id, f.id);
-	assert.equal(f.workers.flatMap((w) => w.commands).filter((command) => command.type === "input").length, 1);
-});

@@ -4,7 +4,8 @@
 // picks the project and checks the chat belongs to it on every read.
 // Nothing here opens, runs, saves, sends or records anything.
 import { signal } from "nsh";
-import { call, type Refusal } from "./bridge";
+import { call } from "./bridge";
+import { type Refusal, readReason } from "./refusals";
 import type { SavedArtifactKind } from "./deliveryArtifactContract";
 import { glide } from "./ui";
 
@@ -151,43 +152,24 @@ export function validImageSource(source: unknown): source is string {
 }
 
 function listMessage(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see it.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot list saved artifacts here.";
-		default:
-			return "Pilot could not read the saved artifacts.";
-	}
+	const unavailable = "This Pilot service cannot list saved artifacts here.";
+	return readReason(refusal, { denied: unavailable, unavailable, other: "Pilot could not read the saved artifacts." });
 }
 
 /** Why a saved revision is not shown, in one calm sentence. */
 export function readRefused(refusal: Refusal): ReadResult {
-	const r = (message: string): ReadResult => ({ status: "refused", message });
-	switch (refusal) {
-		case "stale":
-			return r("This artifact changed or left this project while Pilot read it. Nothing is shown.");
-		case "busy":
-		case "closed":
-			return r("Pilot is closing. Nothing is shown.");
-		case "offline":
-			return r("Pilot could not reach its service. Nothing is shown.");
-		case "identity":
-			return r("The Pilot service changed. Open Pilot again. Nothing is shown.");
-		case "invalid":
-			return r("Pilot's service answered in a way this app does not understand. Nothing is shown.");
-		case "lost":
-		case "unknown":
-			return r("Pilot did not hear back. Nothing is shown, and nothing changed.");
-		default:
-			return r("Pilot cannot show this saved revision here. Its chat may no longer be in this project.");
-	}
+	const lost = "Pilot did not hear back. Nothing is shown, and nothing changed.";
+	const message = readReason(
+		refusal,
+		{
+			stale: "This artifact changed or left this project while Pilot read it. Nothing is shown.",
+			lost,
+			unknown: lost,
+			other: "Pilot cannot show this saved revision here. Its chat may no longer be in this project.",
+		},
+		"Nothing is shown.",
+	);
+	return { status: "refused", message };
 }
 
 /** The connected window's reads: two exact native methods, no other channel. */

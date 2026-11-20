@@ -63,8 +63,8 @@ test("a builder's task prototype runs once, links its mockup to the task and rea
 		prototypeThinking: "high",
 	};
 	const settle = async () => {
-		f.workers.scheduleResearch(f.missionId);
-		await f.workers.settleResearch();
+		f.workers.scheduleReconcile(f.missionId);
+		await f.workers.settleReconciling();
 	};
 
 	// Only the task's own builder, a known model and a limited time.
@@ -80,8 +80,8 @@ test("a builder's task prototype runs once, links its mockup to the task and rea
 	assert.equal(((await ask(builder, request)) as { state: string }).state, "requested", "the same ID only reads it");
 	await assert.rejects(ask(builder, { ...request, requestId: "layouts-2" }), /already has a prototype in progress/);
 
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.equal(spawned.length, 1, "one read-only chat");
 	assert.deepEqual([spawned[0]!.mode, spawned[0]!.role, spawned[0]!.model], ["ask", "explorer", "faux/opus"]);
 	assert.equal(spawned[0]!.title, "Prototype for #1: Importer");
@@ -200,8 +200,8 @@ test("only chats that can change code take worker slots, so Ask prototype chats 
 		question: "Compare layouts",
 		prototypeModel: "faux/opus",
 	});
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.deepEqual(
 		admissions.map((a) => a.role),
 		["explorer"],

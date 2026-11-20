@@ -10,6 +10,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const HUMAN_REVIEW_SCHEMA = `
 CREATE TABLE IF NOT EXISTS human_review_drafts (
@@ -40,13 +41,6 @@ CREATE TABLE IF NOT EXISTS human_review_extraction_outbox (
 `;
 export type { HumanReviewRecord } from "@pilot/protocol";
 
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-}
 const parse = <T>(row: Record<string, SQLInputValue> | undefined): T | undefined =>
 	row ? JSON.parse(String(row.record)) : undefined;
 export const targetKey = (target: ReviewDispositionPayload["targets"][number]) => payloadHash(canonicalJSON(target));
@@ -61,8 +55,8 @@ export function reviewContent(request: HumanReviewContent): HumanReviewContent {
 	});
 }
 export class HumanReviewStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	draft(id: string): HumanReviewDraft | undefined {

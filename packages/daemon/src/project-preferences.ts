@@ -198,7 +198,7 @@ export class ProjectPreferencesService {
 				throw new Conflict("Preference coordinator authority changed during admission");
 			if (source.type !== "mission_note" || this.store.missionOf(caller.sessionId) !== source.missionId)
 				throw new Conflict("Preference source belongs to another mission");
-			const note = this.store.preferences.humanNote(source.missionId, source.eventId);
+			const note = this.store.userNote(source.missionId, source.eventId);
 			if (!note?.includes(source.quote))
 				throw new NotFound("Exact user note quotation was not found in this mission");
 			const current = this.store.preferences.get(projectId);

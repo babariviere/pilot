@@ -4,6 +4,7 @@ import { PILOT_PROFILE_PATH } from "@babariviere/pi-extensions/profile";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { SubscriptionRefreshProvider, SubscriptionUsage } from "@pilot/protocol";
 import { createJiti } from "jiti";
+import { subscriptionPiProvider } from "./subscription-provider.ts";
 
 type Provider = SubscriptionRefreshProvider["provider"];
 type Entry = { fetchedAt: number; snapshot: Omit<SubscriptionUsage, "fetchedAt"> };
@@ -26,7 +27,7 @@ export async function refreshSubscription(
 	runtime: Pick<ModelRuntime, "listCredentials" | "getAuth">,
 	injected?: UsageSource,
 ): Promise<RefreshResult> {
-	const id = provider === "openai" ? "openai-codex" : "anthropic";
+	const id = subscriptionPiProvider(provider);
 	// Do not execute configured API-key commands or read Claude Code/CLI stores.
 	if (!(await runtime.listCredentials()).some((c) => c.providerId === id && c.type === "oauth"))
 		return { outcome: "unavailable" };

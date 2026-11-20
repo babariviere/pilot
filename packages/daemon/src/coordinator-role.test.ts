@@ -98,7 +98,7 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	await assert.rejects(manager["openWorker"](id), /workspace role is still changing/);
 	manager.missionChanged(id);
 	await manager.commands(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	const sibling = randomUUID();
 	const siblingWorkspace = await manager["sharedWorkspaces"].create(
 		source,
@@ -114,7 +114,7 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 		workspace: { ...siblingWorkspace, source, upstream: "https://github.com/octo/repo.git" },
 	});
 	manager.missionChanged(sibling);
-	await manager.refreshCoordinatorWorkspace(sibling);
+	await manager.prepareCoordinatorRole(sibling);
 	assert.equal(manager.get(sibling)!.cwd, meta.cwd, "all source readers of the project share one view");
 	assert.notEqual(manager["require"](sibling).coordinatorView!.scratch, meta.coordinatorView!.scratch);
 	assert.equal(manager["mainProjects"]().length, 1);
@@ -180,20 +180,20 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	await manager.archive(id);
 	assert.equal(await readFile(join(scratch, "notes.txt"), "utf8"), "keep across turns", "archive keeps scratch");
 	await manager.restore(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	assert.equal(await readFile(join(scratch, "notes.txt"), "utf8"), "keep across turns", "restore keeps exact notes");
 	specs = [];
 	busy = true;
 	coordinator = false;
 	manager.missionChanged(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	assert.equal(meta.cwd, path, "demotion waits for an admitted turn or job");
 	await manager.send(id, "continue after demotion");
 	assert.equal(specs.length, 0, "new input cannot start a worker in the wrong role");
 	assert.equal(meta.workspace!.branch, "fix/old", "waiting for demotion does not move the isolated workspace");
 	busy = false;
 	manager.missionChanged(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	await manager["starting"].get(id);
 	assert.equal(meta.cwd, workspace.path);
 	assert.equal(meta.coordinatorView, undefined);
@@ -206,18 +206,18 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	busy = true;
 	coordinator = true;
 	manager.missionChanged(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	assert.equal(meta.coordinatorView, undefined, "promotion also waits for a safe boundary");
 	await manager.send(id, "read after promotion");
 	assert.equal(specs.length, 1);
 	busy = false;
 	manager.missionChanged(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	await manager["starting"].get(id);
 	assert.equal(meta.cwd, path);
 	assert.equal(specs.length, 2);
 	assert.equal(specs[1]!.cwd, scratch);
-	await manager.refreshCoordinatorWorkspace(sibling);
+	await manager.prepareCoordinatorRole(sibling);
 	await manager.archive(id);
 	await manager.archive(sibling);
 	await manager.archive(reader.id);
@@ -276,14 +276,14 @@ test("Git-only direct chats gain a read-only source view and an isolated workspa
 	const meta = { id, projectId: project.id, cwd: source, title: "Chat", createdAt: 1, updatedAt: 1 };
 	await manager["save"](meta);
 	manager.missionChanged(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	assert.notEqual(meta.cwd, source);
 	assert.equal(await readFile(join(meta.cwd, "file.txt"), "utf8"), "base\n");
 	const scratch = manager["require"](id).coordinatorView!.scratch;
 	await writeFile(join(scratch, "note"), "keep through archive, even after demotion");
 	coordinator = false;
 	manager.missionChanged(id);
-	await manager.refreshCoordinatorWorkspace(id);
+	await manager.prepareCoordinatorRole(id);
 	assert.equal(meta.cwd, join(home, "sessions", id, "workspace"));
 	assert.notEqual(meta.cwd, source);
 	await writeFile(join(meta.cwd, "new.txt"), "isolated");

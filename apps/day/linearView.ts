@@ -4,7 +4,7 @@
 // title, link or text never connects an issue to work.
 import { signal } from "nsh";
 import type { MissionRow } from "pilot-day/native";
-import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "./linearRead";
+import type { LinearCycleSummary, SavedLinearRead, TrackedItem } from "../../packages/protocol/src/tracking.ts";
 import { glide } from "./ui";
 
 /** Whether the Linear page is open over Today. */

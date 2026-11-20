@@ -1,7 +1,10 @@
 //! Real daemon HTTP/WS, native Rust transport and private on-disk journal.
+#[path = "support/bridge_calls.rs"]
+mod bridge_calls;
+use bridge_calls::Calls;
 use pilot_day_native::{
     host::{Error, NativeHost, Source},
-    model::{Delivery, FreshnessState, MissionRow, OutcomeStatus, Today},
+    model::{Delivery, FreshnessState, MissionRow, Today},
 };
 use serde_json::{Value, json};
 use std::{
@@ -73,7 +76,7 @@ impl Fixture {
         self.info["mission"].as_str().unwrap().into()
     }
     fn open(&self) -> NativeHost {
-        NativeHost::open(self.source(), self.ledger()).unwrap()
+        NativeHost::open_with_options(self.source(), self.ledger(), Default::default()).unwrap()
     }
 }
 impl Drop for Fixture {
@@ -138,9 +141,13 @@ fn ready(host: &NativeHost) -> Today {
 fn canonical_failure_is_visible_without_chat_reads_and_survives_host_reopen() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     f.cmd("problem", true);
-    assert!(matches!(reply(host.refresh()), Ok(_) | Err(Error::Stale)));
+    assert!(matches!(
+        calls.call("day.today.refresh", json!({}))["error"].as_str(),
+        None | Some("stale")
+    ));
     let today = wait(&host, |t| !t.problems.is_empty());
     assert!(today.problems_known);
     assert_eq!(
@@ -154,30 +161,32 @@ fn canonical_failure_is_visible_without_chat_reads_and_survives_host_reopen() {
     assert!(today.problems[0].session_id.is_some());
     assert_eq!(today.problems[0].task_id, None, "Today has no task details");
     assert_eq!(f.cmd("stats", false)["posts"], 0);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     let reopened = f.open();
+    let mut reopened_calls = Calls::new(reopened.clone());
     assert_eq!(ready(&reopened).problems, today.problems);
     f.cmd("problem", false);
     assert!(matches!(
-        reply(reopened.refresh()),
-        Ok(_) | Err(Error::Stale)
+        reopened_calls.call("day.today.refresh", json!({}))["error"].as_str(),
+        None | Some("stale")
     ));
     let cleared = wait(&reopened, |t| t.problems.is_empty());
     assert!(cleared.problems_known);
     assert_eq!(f.cmd("stats", false)["posts"], 0);
-    reply(reopened.close()).unwrap();
+    reopened_calls.close().unwrap();
 }
 
 #[test]
 fn background_refresh_does_not_turn_notice_invalidation_into_read_failure() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     // The real WS notice arrives while the authoritative HTTP read is
     // in flight. This is ordinary background activity, not an outage.
     for _ in 0..5 {
         f.cmd("dayRace", true);
-        let _ = reply(host.refresh());
+        let _ = calls.call("day.today.refresh", json!({}));
         let during = host.snapshot();
         assert!(
             !during.freshness.reason.contains("unavailable"),
@@ -187,20 +196,21 @@ fn background_refresh_does_not_turn_notice_invalidation_into_read_failure() {
         ready(&host);
     }
     assert_eq!(f.cmd("stats", true)["posts"], 0);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn real_reads_exact_detail_and_selective_pause_resume_preserve_other_holds() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let today = ready(&host);
     assert_eq!(row(&today).title, "Native synthetic mission");
     assert_eq!(
         row(&today).report.as_ref().unwrap().summary,
         "Agent assessment only"
     );
-    reply(host.read_mission(f.mission())).unwrap();
+    assert!(calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"].is_null());
     let page = host.mission(&f.mission()).unwrap();
     assert!(page.tasks_known);
     assert_eq!(page.tasks.len(), 1);
@@ -218,8 +228,11 @@ fn real_reads_exact_detail_and_selective_pause_resume_preserve_other_holds() {
         0,
         "opening the overview admits no control or execution"
     );
-    let pause = reply(host.pause(f.mission(), row(&ready(&host)).control.revision)).unwrap();
-    assert_eq!(pause.status, OutcomeStatus::Accepted);
+    let pause = calls.outcome(
+        "day.mission.pause",
+        json!({"missionId":f.mission(),"revision":row(&ready(&host)).control.revision}),
+    );
+    assert_eq!(pause["status"], "accepted");
     let paused = ready(&host);
     let control = &row(&paused).control;
     assert_eq!(control.state, pilot_day_native::model::ControlState::Paused);
@@ -229,8 +242,11 @@ fn real_reads_exact_detail_and_selective_pause_resume_preserve_other_holds() {
     );
     let pause_id = control.pause_operation_id.clone().unwrap();
     f.cmd("holdResume", true);
-    let resumed = reply(host.resume(f.mission(), control.revision, pause_id.clone())).unwrap();
-    assert_eq!(resumed.status, OutcomeStatus::Accepted);
+    let resumed = calls.outcome(
+        "day.mission.resume",
+        json!({"missionId":f.mission(),"revision":control.revision,"pauseOperationId":pause_id}),
+    );
+    assert_eq!(resumed["status"], "accepted");
     let stats = f.cmd("stats", true);
     assert_eq!(stats["posts"], 2);
     assert_eq!(stats["pauses"].as_array().unwrap().len(), 3);
@@ -254,7 +270,7 @@ fn real_reads_exact_detail_and_selective_pause_resume_preserve_other_holds() {
             .as_array()
             .is_some_and(|members| members.iter().all(|m| m["state"] == "held"))
     }));
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 /// Regression: a global window (the normal launch) showed every mission as
@@ -265,67 +281,84 @@ fn global_window_opens_and_controls_a_mission_in_its_own_project() {
     let mut f = Fixture::new();
     let mut global = f.source();
     global.project = None;
-    let host = NativeHost::open(global.clone(), f.ledger()).unwrap();
-    reply(host.read_mission(f.mission())).unwrap();
+    let host =
+        NativeHost::open_with_options(global.clone(), f.ledger(), Default::default()).unwrap();
+    let mut calls = Calls::new(host.clone());
+    assert!(calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"].is_null());
     let page = host.mission(&f.mission()).expect("mission opens");
     assert!(page.tasks_known);
     let today = ready(&host);
-    let pause = reply(host.pause(f.mission(), row(&today).control.revision)).unwrap();
-    assert_eq!(pause.status, OutcomeStatus::Accepted);
+    let pause = calls.outcome(
+        "day.mission.pause",
+        json!({"missionId":f.mission(),"revision":row(&today).control.revision}),
+    );
+    assert_eq!(pause["status"], "accepted");
     let paused = ready(&host);
     assert_eq!(
         row(&paused).control.state,
         pilot_day_native::model::ControlState::Paused
     );
-    reply(host.close()).unwrap();
-    let reopened = NativeHost::open(global, f.ledger()).unwrap();
-    reply(reopened.read_mission(f.mission())).unwrap();
+    calls.close().unwrap();
+    let reopened = NativeHost::open_with_options(global, f.ledger(), Default::default()).unwrap();
+    let mut reopened_calls = Calls::new(reopened.clone());
+    assert!(
+        reopened_calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"]
+            .is_null()
+    );
     assert_eq!(
         row(&ready(&reopened)).control.state,
         pilot_day_native::model::ControlState::Paused
     );
     assert_eq!(f.cmd("stats", true)["posts"], 1, "reopening sends nothing");
-    reply(reopened.close()).unwrap();
+    reopened_calls.close().unwrap();
 }
 
 #[test]
 fn lost_ack_cold_open_and_missing_mismatched_lookup_never_replay() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let before = ready(&host);
     f.cmd("lost", true);
-    let outcome = reply(host.pause(f.mission(), row(&before).control.revision)).unwrap();
-    assert_eq!(outcome.status, OutcomeStatus::Unknown);
+    let outcome = calls.outcome(
+        "day.mission.pause",
+        json!({"missionId":f.mission(),"revision":row(&before).control.revision}),
+    );
+    assert_eq!(outcome["status"], "unknown");
     wait(&host, |t| row(t).control.delivery == Delivery::Unknown);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let reopened = ready(&host);
     assert_eq!(row(&reopened).control.delivery, Delivery::Unknown);
     assert_eq!(f.cmd("stats", true)["posts"], 1, "cold open never POSTs");
     f.cmd("missing", true);
     assert_eq!(
-        reply(host.check(f.mission())).unwrap().status,
-        OutcomeStatus::Unknown
+        calls.outcome("day.mission.check", json!({"missionId":f.mission()}))["status"],
+        "unknown"
     );
     assert_eq!(
-        reply(host.pause(f.mission(), row(&ready(&host)).control.revision)),
-        Err(Error::Unknown)
+        calls.outcome(
+            "day.mission.pause",
+            json!({"missionId":f.mission(),"revision":row(&ready(&host)).control.revision})
+        )["error"],
+        "unknown"
     );
     f.cmd("missing", false);
     f.cmd("mismatch", true);
     assert_eq!(
-        reply(host.check(f.mission())).unwrap().status,
-        OutcomeStatus::Unknown
+        calls.outcome("day.mission.check", json!({"missionId":f.mission()}))["status"],
+        "unknown"
     );
     f.cmd("mismatch", false);
     assert_eq!(
-        reply(host.check(f.mission())).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome("day.mission.check", json!({"missionId":f.mission()}))["status"],
+        "accepted"
     );
     let stats = f.cmd("stats", true);
     assert_eq!(stats["posts"], 1);
     assert_eq!(stats["lookups"], 3);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
@@ -333,9 +366,16 @@ fn missing_capabilities_never_enable_controls_or_fabricate_empty_inventory() {
     let mut f = Fixture::new();
     f.cmd("noControls", true);
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let today = ready(&host);
     assert!(!row(&today).control.can_pause);
-    assert!(reply(host.pause(f.mission(), row(&today).control.revision)).is_err());
+    assert!(
+        calls.outcome(
+            "day.mission.pause",
+            json!({"missionId":f.mission(),"revision":row(&today).control.revision})
+        )["error"]
+            .is_string()
+    );
     assert_eq!(f.cmd("stats", true)["posts"], 0);
     f.cmd("noDay", true);
     wait(&host, |t| t.freshness.state == FreshnessState::Unavailable);
@@ -344,7 +384,7 @@ fn missing_capabilities_never_enable_controls_or_fabricate_empty_inventory() {
         1,
         "unavailable keeps the earlier inventory"
     );
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
@@ -358,10 +398,15 @@ fn authority_changed_during_preflight_or_after_durable_save_refuses_admission() 
     ] {
         let mut f = Fixture::new();
         let host = f.open();
+        let mut calls = Calls::new(host.clone());
         let before = ready(&host);
         f.cmd(fault, true);
         assert!(
-            reply(host.pause(f.mission(), row(&before).control.revision)).is_err(),
+            calls.outcome(
+                "day.mission.pause",
+                json!({"missionId":f.mission(),"revision":row(&before).control.revision})
+            )["error"]
+                .is_string(),
             "{fault}"
         );
         let stats = f.cmd("stats", true);
@@ -374,7 +419,7 @@ fn authority_changed_during_preflight_or_after_durable_save_refuses_admission() 
                 true
             );
         }
-        reply(host.close()).unwrap();
+        calls.close().unwrap();
     }
 }
 
@@ -413,61 +458,76 @@ fn session_events_read_again_without_marking_the_shown_read_stale() {
 fn ws_invalidates_inflight_reads_but_does_not_confirm_an_operation() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     f.cmd("dayRace", true);
-    assert_eq!(reply(host.refresh()), Err(Error::Stale));
+    assert_eq!(calls.call("day.today.refresh", json!({}))["error"], "stale");
     ready(&host);
     f.cmd("disconnect", true);
     wait(&host, |t| t.freshness.state == FreshnessState::Offline);
-    assert!(reply(host.pause(f.mission(), row(&host.snapshot()).control.revision)).is_err());
+    assert!(
+        calls.outcome(
+            "day.mission.pause",
+            json!({"missionId":f.mission(),"revision":row(&host.snapshot()).control.revision})
+        )["error"]
+            .is_string()
+    );
     assert_eq!(f.cmd("stats", true)["posts"], 0);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn passive_detail_reread_requalifies_one_invalidation_and_never_relaxes_project_checks() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     f.cmd("detailRace", true);
-    reply(host.read_mission(f.mission())).expect("one raced passive read is requalified");
+    assert!(
+        calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"].is_null(),
+        "one raced passive read is requalified"
+    );
     assert!(host.mission(&f.mission()).is_some());
     ready(&host);
     f.cmd("detailRace", false);
     assert_eq!(
-        reply(host.read_mission(f.mission())),
-        Err(Error::Stale),
+        calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"],
+        "stale",
         "retries are limited"
     );
     f.cmd("detailRaceOff", false);
     ready(&host);
     f.cmd("coordinator", true);
     assert_eq!(
-        reply(host.read_mission(f.mission())),
-        Err(Error::Stale),
+        calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"],
+        "stale",
         "mismatched overview/detail owner refuses the read"
     );
     f.cmd("coordinator", false);
-    reply(host.refresh()).unwrap();
+    assert!(calls.call("day.today.refresh", json!({}))["error"].is_null());
     ready(&host);
     f.cmd("project", true);
     f.cmd("detailRace", true);
     assert_eq!(
-        reply(host.read_mission(f.mission())),
-        Err(Error::Identity),
+        calls.call("day.mission.read", json!({"missionId":f.mission()}))["error"],
+        "identity",
         "project denial is never retried away"
     );
     assert_eq!(f.cmd("stats", true)["posts"], 0);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
 fn stop_racing_resume_remains_held_and_close_joins_entered_controls() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     ready(&host);
     f.cmd("pauseGate", true);
-    let pending = host.pause(f.mission(), row(&host.snapshot()).control.revision);
+    let pending = calls.start(
+        "day.mission.pause",
+        json!({"missionId":f.mission(),"revision":row(&host.snapshot()).control.revision}),
+    );
     wait(&host, |t| row(t).control.delivery == Delivery::Sending);
     // Barrier is inside the real daemon's participant adapter, not a simulated ACK.
     f.cmd("waitPause", true);
@@ -477,22 +537,21 @@ fn stop_racing_resume_remains_held_and_close_joins_entered_controls() {
         "close cannot claim quiescence while POST is entered"
     );
     f.cmd("release", true);
-    let _ = reply(pending);
+    let _ = calls.wait(pending);
     reply(closing).unwrap();
-    assert!(matches!(reply(host.refresh()), Err(Error::Closed)));
+    assert_eq!(
+        calls.call("day.today.refresh", json!({}))["error"],
+        "closed"
+    );
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let paused = ready(&host);
     f.cmd("resumeStop", true);
     let control = &row(&paused).control;
-    let outcome = reply(host.resume(
-        f.mission(),
-        control.revision,
-        control.pause_operation_id.clone().unwrap(),
-    ))
-    .unwrap();
-    assert_eq!(outcome.status, OutcomeStatus::Unknown);
+    let outcome = calls.outcome("day.mission.resume", json!({"missionId":f.mission(),"revision":control.revision,"pauseOperationId":control.pause_operation_id}));
+    assert_eq!(outcome["status"], "unknown");
     assert_eq!(f.cmd("stats", true)["control"]["held"], true);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }
 
 #[test]
@@ -501,15 +560,22 @@ fn selected_project_is_never_guessed_and_journal_writer_is_exclusive() {
     let host = f.open();
     ready(&host);
     let duplicate = f.open();
+    let mut duplicate_calls = Calls::new(duplicate.clone());
     wait(&duplicate, |t| {
         t.freshness.state == FreshnessState::Unavailable
     });
-    assert!(reply(duplicate.pause(f.mission(), 0)).is_err());
-    assert_eq!(reply(duplicate.close()), Err(Error::Storage));
+    assert!(
+        duplicate_calls.outcome(
+            "day.mission.pause",
+            json!({"missionId":f.mission(),"revision":0})
+        )["error"]
+            .is_string()
+    );
+    assert_eq!(duplicate_calls.close(), Err(Error::Storage));
     reply(host.close()).unwrap();
     let mut changed = f.source();
     changed.project.as_mut().unwrap().project_id = f.info["other"].as_str().unwrap().into();
-    let other = NativeHost::open(changed, f.ledger()).unwrap();
+    let other = NativeHost::open_with_options(changed, f.ledger(), Default::default()).unwrap();
     wait(&other, |t| t.freshness.state == FreshnessState::Unavailable);
     assert!(
         other.snapshot().moving.is_empty(),
@@ -523,14 +589,18 @@ fn selected_project_is_never_guessed_and_journal_writer_is_exclusive() {
 fn failed_journal_durability_never_sends() {
     let mut f = Fixture::new();
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let before = ready(&host);
     f.cmd("corruptJournal", true);
     assert_eq!(
-        reply(host.pause(f.mission(), row(&before).control.revision)),
-        Err(Error::Storage)
+        calls.outcome(
+            "day.mission.pause",
+            json!({"missionId":f.mission(),"revision":row(&before).control.revision})
+        )["error"],
+        "storage"
     );
     assert_eq!(f.cmd("stats", true)["posts"], 0);
-    assert_eq!(reply(host.close()), Err(Error::Storage));
+    assert_eq!(calls.close(), Err(Error::Storage));
     let host = f.open();
     wait(&host, |t| t.freshness.state == FreshnessState::Unavailable);
     assert!(host.snapshot().moving.is_empty());
@@ -543,17 +613,19 @@ fn crash_child_entry() {
         return;
     };
     let info: Value = serde_json::from_str(&info).unwrap();
-    let host = NativeHost::open(
+    let host = NativeHost::open_with_options(
         serde_json::from_value(info["source"].clone()).unwrap(),
         PathBuf::from(info["ledger"].as_str().unwrap()),
+        Default::default(),
     )
     .unwrap();
+    let mut calls = Calls::new(host.clone());
     let today = ready(&host);
     // Parent kills this native process after the real daemon enters its checkpoint.
-    let _ = reply(host.pause(
-        info["mission"].as_str().unwrap().into(),
-        row(&today).control.revision,
-    ));
+    let _ = calls.call(
+        "day.mission.pause",
+        json!({"missionId":info["mission"],"revision":row(&today).control.revision}),
+    );
     panic!("parent should have killed the entered native host");
 }
 
@@ -575,15 +647,16 @@ fn abrupt_native_process_crash_recovers_by_exact_lookup_without_post() {
     f.cmd("release", true);
     f.cmd("waitPaused", true);
     let host = f.open();
+    let mut calls = Calls::new(host.clone());
     let today = ready(&host);
     assert_eq!(row(&today).control.delivery, Delivery::Unknown);
     assert_eq!(f.cmd("stats", true)["posts"], 1);
     assert_eq!(
-        reply(host.check(f.mission())).unwrap().status,
-        OutcomeStatus::Accepted
+        calls.outcome("day.mission.check", json!({"missionId":f.mission()}))["status"],
+        "accepted"
     );
     let stats = f.cmd("stats", true);
     assert_eq!(stats["posts"], 1);
     assert_eq!(stats["lookups"], 1);
-    reply(host.close()).unwrap();
+    calls.close().unwrap();
 }

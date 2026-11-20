@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { MissionTaskStatus } from "@pilot/protocol";
-import { closingMentions, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
+import { closingIssueIds, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
 import { type LinearPrText, MissionLinearPrChecks, readLinearPrText } from "./mission-linear-prs.ts";
 import { MissionStore } from "./missions.ts";
 
@@ -95,7 +95,6 @@ test("eligibility is invalidated if contributors reopen or links change during l
 });
 
 test("closing keyword detection covers Linear variants, URLs and lists but not relation wording", () => {
-	const ref = { externalId: "ENG-12", url: "https://linear.app/acme/issue/ENG-12" };
 	for (const text of [
 		"Closes ENG-12",
 		"Fix: ENG-12",
@@ -105,7 +104,7 @@ test("closing keyword detection covers Linear variants, URLs and lists but not r
 		"Complete [ENG-12](https://linear.app/acme/issue/ENG-12)",
 		"Closes https://linear.app/acme/issue/ENG-12/title",
 	])
-		assert.ok(closingMentions(text, ref), text);
+		assert.ok(closingIssueIds(text).has("ENG-12"), text);
 	for (const text of [
 		"Related to ENG-12",
 		"Relates to ENG-12",
@@ -115,7 +114,7 @@ test("closing keyword detection covers Linear variants, URLs and lists but not r
 		"Fixes DES-2; Related to ENG-12",
 		"Fixes DES-2. Related to ENG-12",
 	])
-		assert.equal(closingMentions(text, ref), false, text);
+		assert.equal(closingIssueIds(text).has("ENG-12"), false, text);
 });
 
 test("automatic checks flag premature PR/commit directives and branch triggers, then recheck without editing", async (t) => {

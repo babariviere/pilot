@@ -252,7 +252,10 @@ struct InFlight<'a> {
 impl<'a> InFlight<'a> {
     fn start(shared: &'a Shared, id: &str) -> Self {
         Self::mark(shared, id, true);
-        Self { shared, id: id.to_owned() }
+        Self {
+            shared,
+            id: id.to_owned(),
+        }
     }
 
     fn mark(shared: &Shared, id: &str, on: bool) {
@@ -336,36 +339,6 @@ impl NativeHost {
             .iter()
             .filter_map(|(k, v)| Some((serde_json::from_str(k).ok()?, v.clone())))
             .collect()
-    }
-    /// Runs on the existing worker. Completion means the exact draft crossed fsync.
-    pub fn save_attention_draft(
-        &self,
-        key: DraftKey,
-        value: Value,
-    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
-        self.request(super::Work::AttentionDraft(key, value))
-    }
-    pub fn read_attention(
-        &self,
-    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
-        self.0
-            .shared
-            .attention_wanted
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.request(super::Work::AttentionRead)
-    }
-    /// Rust-only typed adapter input. Host adds identity and a fresh operation before fsync/send.
-    pub fn send_attention(
-        &self,
-        request: Value,
-    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
-        self.request(super::Work::AttentionSend(request))
-    }
-    pub fn check_attention(
-        &self,
-        id: String,
-    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
-        self.request(super::Work::AttentionCheck(id))
     }
 }
 

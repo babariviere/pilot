@@ -3,7 +3,6 @@
 import { readFile } from "fs/promises";
 import { connect } from "net";
 import { mount, signal } from "nsh";
-// @ts-expect-error The probe intentionally imports an unavailable process action.
 import { spawn } from "process";
 import { Block, Body } from "./ui";
 

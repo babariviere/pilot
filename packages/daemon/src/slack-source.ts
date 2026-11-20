@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
 import type { SlackExcerpt, SlackThread, TrackedItem, TrackingJson } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import type { ModelCatalog } from "./models.ts";
-import { parseSlackClassification, type SlackClassification, type SlackClassifierContext } from "./slack-classifier.ts";
+import {
+	parseSlackClassification,
+	type SlackClassification,
+	type SlackClassifier,
+	type SlackClassifierContext,
+} from "./slack-classifier.ts";
 import {
 	parseSlackPage,
 	parseSlackThread,
@@ -20,8 +24,8 @@ import {
 	parseSlackMentions,
 	type SlackIdentity,
 } from "./slack-mentions.ts";
+import type { SourcePollContext, SourcePoller, SourcePollResult } from "./source-poll.ts";
 import { SourceToolError } from "./source-tool-rules.ts";
-import type { SourcePollContext, SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { SlackCache } from "./tracked-items-disk.ts";
 
@@ -106,11 +110,7 @@ export function slackChannelProgress(
  * A channel the tool refuses (for example, no access) is marked failed and the others keep their turns.
  * Mention-only channels read the same history and keep top-level messages that mention you or your groups.
  * Mentions only in thread replies are not found: that would need a search or a thread read per message. */
-export function createSlackPoller(
-	store: CacheStore,
-	models: Pick<ModelCatalog, "classifySlack"> & Partial<Pick<ModelCatalog, "prepareSlackClassifier">>,
-	now = Date.now,
-): SourcePoller {
+export function createSlackPoller(store: CacheStore, models: SlackClassifier, now = Date.now): SourcePoller {
 	const active = new Map<string, Promise<SlackCache>>();
 	let identity: { value: SlackIdentity; at: number } | undefined;
 	return async (context) => {
@@ -218,11 +218,11 @@ export function createSlackPoller(
 					searchText = thread.messages.map((reply) => reply.text).join("\n\n");
 					classifierContext ??= await classifierContextFor(store, context);
 					classify ??= models.prepareSlackClassifier
-						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext, {
+						? await models.prepareSlackClassifier(context.signal, classifierContext, {
 								projectId: context.project.id,
 							})
 						: (text) =>
-								models.classifySlack(context.project.path, text, context.signal, classifierContext, {
+								models.classifySlack(text, context.signal, classifierContext, {
 									projectId: context.project.id,
 								});
 					context.signal.throwIfAborted();
@@ -354,11 +354,7 @@ export type SlackAdder = (context: SourcePollContext, link: SlackMessageLink) =>
  * it like a polled thread: cached per project, but a cached failure is retried because
  * the user asked. When classification is unavailable the message is still added, untyped, titled by its first line.
  * The row is marked manual, so it stays listed when its channel is not tracked. */
-export function createSlackAdder(
-	store: CacheStore,
-	models: Pick<ModelCatalog, "classifySlack"> & Partial<Pick<ModelCatalog, "prepareSlackClassifier">>,
-	now = Date.now,
-): SlackAdder {
+export function createSlackAdder(store: CacheStore, models: SlackClassifier, now = Date.now): SlackAdder {
 	return async (context, link) => {
 		const thread = parseSlackThread(
 			await context.call("thread", {
@@ -399,7 +395,7 @@ export function createSlackAdder(
 				const classifierContext = await classifierContextFor(store, context);
 				const classified = models.prepareSlackClassifier
 					? await (
-							await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext, {
+							await models.prepareSlackClassifier(context.signal, classifierContext, {
 								projectId: context.project.id,
 							})
 						)(
@@ -409,7 +405,6 @@ export function createSlackAdder(
 								.slice(0, 12_000),
 						)
 					: await models.classifySlack(
-							context.project.path,
 							thread.messages
 								.map((reply) => reply.text)
 								.join("\n\n")

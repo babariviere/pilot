@@ -13,7 +13,7 @@ import type { ModelCatalog } from "./models.ts";
 import { PiReload } from "./pi-reload.ts";
 import { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
-import { SourceSignInRequired } from "./source-tool-rules.ts";
+import { SourceRateLimited, SourceSignInRequired } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
@@ -108,18 +108,23 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	assert.equal(auth.signInCommand, "pi mcp login linear");
 	const slackPoll = `/sources/${project.id}:slack/poll`;
 	for (const body of [{ force: "true" }, [], true]) assert.equal((await api(slackPoll, body)).status, 400);
-	assert.equal((await api(`/sources/${project.id}:linear/poll`, { force: true })).status, 409);
-	const forcedCalls: boolean[] = [];
-	tracking.register("slack", async (context) => {
-		forcedCalls.push(context.force === true);
+	// Older clients may still send force. It is accepted and ignored.
+	assert.equal((await api(`/sources/${project.id}:linear/poll`, { force: true })).status, 200);
+	let slackPolls = 0;
+	let limited = false;
+	tracking.register("slack", async () => {
+		slackPolls++;
+		if (limited) throw new SourceRateLimited(60_000);
 		return { items: [] };
 	});
-	const limited = (await (await api(slackPoll, {})).json()) as TrackingSource;
-	assert.equal(limited.budgetLimited, undefined);
 	assert.equal((await api(slackPoll, {})).status, 200);
 	assert.equal((await api(slackPoll, { force: true })).status, 200);
 	assert.equal((await api(slackPoll, { force: false })).status, 200);
-	assert.deepEqual(forcedCalls, [false, false, true, false]);
+	assert.equal(slackPolls, 3);
+	limited = true;
+	assert.equal((await api(slackPoll, {})).status, 200);
+	assert.equal((await api(slackPoll, { force: true })).status, 409, "legacy force still respects Retry-After");
+	assert.equal(slackPolls, 4);
 	const teams = await (await api("/tracking/linear/teams")).json();
 	assert.equal((await api("/tracking/linear/states")).status, 400);
 	assert.equal((await api(`/tracking/linear/states?team=${"a".repeat(201)}`)).status, 400);
@@ -327,23 +332,11 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	await items.load([project.id]);
 	const recording = JSON.parse(await readFile(new URL("./fixtures/linear-current.json", import.meta.url), "utf8"));
 	let fallback = false;
-	let rejectStart!: () => void;
-	let startAttempted!: () => void;
-	const attempted = new Promise<void>((resolve) => {
-		startAttempted = resolve;
-	});
-	const startGate = new Promise<void>((resolve) => {
-		rejectStart = resolve;
-	});
-	t.after(rejectStart);
+	const calls: string[] = [];
 	const tracking = new SourceRegistry(projects, items, {
 		async call(kind, tool, args) {
 			assert.equal(kind, "linear");
-			if (tool === "me") {
-				startAttempted();
-				await startGate;
-				throw new Error("external secret");
-			}
+			calls.push(tool);
 			if (tool === "cycles") return fallback ? [] : recording.cycles;
 			if (tool === "states") {
 				assert.deepEqual(args, { team: "team-child" });
@@ -435,20 +428,15 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 		});
 		assert.equal(invalid.status, 400);
 	}
+	const beforeBinding = calls.length;
 	const confirmed = await fetch(`${root}/tracked-items/${item.id}`, {
 		method: "PATCH",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ sessionId: "chat", start: true }),
 	});
-	assert.equal(confirmed.status, 200, "binding returns while remote start is still gated");
+	assert.equal(confirmed.status, 200);
 	assert.equal((await confirmed.json()).sessionId, "chat");
-	await attempted;
-	const pending = tracking.startLinear(await items.require(item.id));
-	rejectStart();
-	await pending;
-	const result = await items.require(item.id);
-	assert.equal((result.metadata.linearStart as { outcome: string }).outcome, "error");
-	assert.ok(!JSON.stringify(result).includes("secret"));
+	assert.equal(calls.length, beforeBinding, "legacy PATCH links Linear issues without calling the provider");
 
 	fallback = true;
 	await tracking.poll(`${project.id}:linear`);

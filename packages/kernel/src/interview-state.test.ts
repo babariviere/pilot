@@ -3,13 +3,8 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, InboxDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import type { InterviewQuestion, StandaloneInterviewReply } from "@pilot/protocol";
-import {
-	admitWithHeld,
-	HeldInputsDoc,
-	holdOnStop,
-	initializeQuestionHold,
-	publishQuestionWithHeld,
-} from "./held-inputs.ts";
+import { admitWithHeld, holdOnStop, initializeQuestionHold, publishQuestionWithHeld } from "./held-inputs.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { interviewDigest } from "./interview-round.ts";
 import { interviewQuestion, StandaloneInterviewDoc } from "./interview-state.ts";
 

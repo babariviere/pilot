@@ -3,7 +3,7 @@ import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { AskContext } from "@pilot/kernel";
-import { namedFeedbackPaths } from "../../kernel/src/feedback-paths.ts";
+import { namedFeedbackPaths } from "@pilot/kernel/feedback-paths";
 
 export async function resolveFeedbackPaths(text: string): Promise<NonNullable<AskContext["feedbackSources"]>> {
 	const sources: NonNullable<AskContext["feedbackSources"]> = [];

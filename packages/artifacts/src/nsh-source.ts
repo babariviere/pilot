@@ -4,10 +4,9 @@ import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import type { ArtifactNsh } from "@pilot/protocol";
-import { callArtifactHost } from "./nsh-host.ts";
+import { callArtifactHost, NSH_RUNTIME } from "./nsh-host.ts";
 
 export const NSH_SOURCE_BYTES = 512 * 1024;
-export const NSH_RUNTIME = "nsh 0.6.1";
 const ENTRY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tsx$/;
 
 /** What the publish-time preview run showed (artifact_check.rs). Texts are cut short; counts are complete. */

@@ -1,4 +1,4 @@
-/** Projects: named working directories that sessions (and later, triggers) belong to. */
+/** Projects: named working directories that sessions belong to. */
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -26,7 +26,7 @@ import {
 } from "./environment-profile.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { durableJSON } from "./operation-journal.ts";
-import { projectOriginIdentity } from "./project-origin.ts";
+import { readProjectOrigin } from "./project-origin.ts";
 import { localSource } from "./source-copy.ts";
 import { listRemoteBranches, type Runner, run } from "./workspaces.ts";
 
@@ -165,27 +165,8 @@ export class ProjectStore {
 		return project.workspace === "direct" && !includeDirect ? { branches: [] } : listRemoteBranches(project.path);
 	}
 
-	/** Local Git config only. No network, CLI sign-in, SSH alias execution or credential disclosure. */
 	async origin(id: string): Promise<import("@pilot/protocol").ProjectOrigin> {
-		const project = this.require(id);
-		try {
-			const raw = await this.runner(
-				"git",
-				["config", "--local", "--no-includes", "--get-all", "remote.origin.url"],
-				project.path,
-				2000,
-				undefined,
-				{
-					PATH: process.env.PATH,
-					GIT_CONFIG_GLOBAL: "/dev/null",
-					GIT_CONFIG_SYSTEM: "/dev/null",
-					GIT_TERMINAL_PROMPT: "0",
-				},
-			);
-			return { identity: projectOriginIdentity(raw.trim()) };
-		} catch {
-			return { identity: null };
-		}
+		return readProjectOrigin(this.require(id).path, this.runner);
 	}
 
 	/** Only a user click resolves this. No startup scan, polling, or local-client filesystem access. */
@@ -471,7 +452,6 @@ export class ProjectStore {
 		if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
 			throw new Error("linkedProjects must be a list of project IDs");
 		const linked = [...new Set(value as string[])];
-		// Each link adds a main-view refresh and a line in agents' reference list; a few covers related repositories.
 		if (linked.length > MAX_LINKED_PROJECTS)
 			throw new Conflict(
 				`A project links at most ${MAX_LINKED_PROJECTS} projects and this update has ${linked.length}. Unlink one first.`,

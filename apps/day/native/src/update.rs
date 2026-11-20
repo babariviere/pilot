@@ -77,7 +77,7 @@ pub enum UpdateKind {
     Both,
 }
 
-/// Preservation is normal. Force requires a separate exact-update confirmation.
+/// Preservation is normal. Force is refused: no root can enforce accepted loss yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UpdateMode {
@@ -676,8 +676,8 @@ pub struct Restore {
 #[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceView {
-    /// True only when this native root can enforce a separate accepted-loss close.
-    /// Omitted/false is unsupported, never permission to use the normal path.
+    /// Always false or omitted: no root can enforce an accepted-loss close.
+    /// Kept in the view's shape for clients that read it.
     pub force_available: Option<bool>,
     /// Exact native operation, or empty for a read/mock without one. Check
     /// never treats another operation's success as this operation's ACK.
@@ -765,8 +765,6 @@ pub enum Stage {
     Verify,
     /// Saves where the user is (forms were saved to their stores first).
     Save,
-    /// Records explicit loss acceptance instead of claiming a successful save.
-    AcceptLoss,
     /// Pauses the affected agents at a safe point and proves they stopped.
     Pause,
     /// Registers the service, with the user's explicit consent.
@@ -855,7 +853,7 @@ fn step_of(kind: UpdateKind, stage: Stage) -> Option<usize> {
         (K::Register, Register | Stop(Stopped::Denied)) => 0,
         (K::Register, Start) => 1,
         (_, Verify | Stop(Stopped::Signature)) => 0,
-        (_, Save | AcceptLoss | Stop(Stopped::Save)) => 1,
+        (_, Save | Stop(Stopped::Save)) => 1,
         (K::App, Resume) => 5,
         (K::App, Restore) => 6,
         (_, Pause | Stop(Stopped::Jobs)) => 2,
@@ -885,8 +883,6 @@ pub struct UpdateDesk {
     saved: Option<SavedView>,
     /// Restores already acknowledged.
     restored: Vec<String>,
-    /// Mock loss disposition. Native consent lives in the durable host journal.
-    forced: bool,
 }
 
 impl UpdateDesk {
@@ -910,7 +906,6 @@ impl UpdateDesk {
             ]
         };
         let mut view = ServiceView {
-            force_available: Some(true),
             revision: 1,
             app: "0.9.2".into(),
             service: "0.9.2".into(),
@@ -980,7 +975,6 @@ impl UpdateDesk {
             inspect: false,
             saved: None,
             restored: Vec::new(),
-            forced: false,
         };
         desk.view.blocked = desk.blocked();
         desk
@@ -1066,10 +1060,10 @@ impl UpdateDesk {
                 "This changed. Read what Pilot shows now.",
             );
         }
-        if intent.kind == UpdateKind::Register && intent.mode == Some(UpdateMode::Force) {
+        if intent.mode == Some(UpdateMode::Force) {
             return refuse(
                 OutcomeStatus::Rejected,
-                "Force is only available for updates, not registration.",
+                "Force update is not available. Nothing was prepared.",
             );
         }
         let (pauses, keeps) = self.counts(offer.kind);
@@ -1111,20 +1105,7 @@ impl UpdateDesk {
     /// Uses the confirmation once and returns the run's stages, or why not.
     /// The saved view is checked here, before anything pauses.
     pub fn begin(&mut self, intent: &ConfirmIntent) -> Result<Vec<Stage>, IntentOutcome> {
-        self.begin_selected(&intent.confirmation, Some(&intent.view), false)
-    }
-
-    /// Explicitly confirms loss for a Force confirmation. No fake saved view.
-    pub fn begin_force(&mut self, intent: &UpdateRef) -> Result<Vec<Stage>, IntentOutcome> {
-        self.begin_selected(&intent.id, None, true)
-    }
-
-    fn begin_selected(
-        &mut self,
-        id: &str,
-        view: Option<&SavedView>,
-        forced: bool,
-    ) -> Result<Vec<Stage>, IntentOutcome> {
+        let view = &intent.view;
         let Some(confirmation) = self.prepared.take() else {
             return Err(outcome(
                 OutcomeStatus::Rejected,
@@ -1133,7 +1114,7 @@ impl UpdateDesk {
             ));
         };
         self.view.pending = None;
-        if confirmation.id != id || (confirmation.mode == Some(UpdateMode::Force)) != forced {
+        if confirmation.id != intent.confirmation {
             self.bump();
             return Err(outcome(
                 OutcomeStatus::Stale,
@@ -1141,18 +1122,17 @@ impl UpdateDesk {
                 "This changed. Confirm again.",
             ));
         }
-        if let Some(view) = view
-            && (view.text_bytes() > VIEW_LIMIT
-                || view.entries() > VIEW_ENTRIES
-                || !view.offsets_valid()
-                || !view.linear_valid()
-                || !view.insights_draft_valid()
-                || !view.insights_work_valid()
-                || !view.preferences_valid()
-                || !view.threads_valid()
-                || !view.question_help_valid()
-                || !view.recovery_notes_valid()
-                || !view.feedback_valid())
+        if view.text_bytes() > VIEW_LIMIT
+            || view.entries() > VIEW_ENTRIES
+            || !view.offsets_valid()
+            || !view.linear_valid()
+            || !view.insights_draft_valid()
+            || !view.insights_work_valid()
+            || !view.preferences_valid()
+            || !view.threads_valid()
+            || !view.question_help_valid()
+            || !view.recovery_notes_valid()
+            || !view.feedback_valid()
         {
             self.bump();
             return Err(outcome(
@@ -1178,7 +1158,7 @@ impl UpdateDesk {
             ));
         }
         use Stage::*;
-        let mut stages = match (self.scenario, kind, self.attempts) {
+        let stages = match (self.scenario, kind, self.attempts) {
             (UpdateScenario::Absent, _, _) => vec![Register, Lose],
             (UpdateScenario::Denied, _, 1) => vec![Register, Stop(Stopped::Denied)],
             (_, UpdateKind::Register, _) => vec![Register, Start],
@@ -1192,24 +1172,8 @@ impl UpdateDesk {
             // window's acknowledgement only says its view was shown.
             (_, UpdateKind::Both, _) => vec![Verify, Save, Pause, Replace, Start, Resume, Restore],
         };
-        if forced {
-            // Loss consent cannot bypass signature or process-exit failures.
-            stages = if self.scenario == UpdateScenario::Refused {
-                vec![Verify, AcceptLoss, Pause, Stop(Stopped::Jobs)]
-            } else {
-                stages
-                    .into_iter()
-                    .filter_map(|s| match s {
-                        Save => Some(AcceptLoss),
-                        Restore => None,
-                        other => Some(other),
-                    })
-                    .collect()
-            };
-        }
         self.before = self.view.agents.iter().map(|a| a.state).collect();
-        self.forced = forced;
-        self.saved = view.cloned();
+        self.saved = Some(view.clone());
         self.view.operation = confirmation.id;
         self.view.run = Some(UpdateRun {
             kind,
@@ -1217,16 +1181,8 @@ impl UpdateDesk {
             phase: UpdatePhase::Running,
             steps: labels(kind)
                 .iter()
-                .filter(|label| !forced || **label != "Restore where you were")
                 .map(|label| UpdateStep {
-                    label: (if forced && *label == "Save drafts and where you are" {
-                        "Record accepted state loss"
-                    } else if forced && label.starts_with("Resume") {
-                        "Leave interrupted work stopped"
-                    } else {
-                        label
-                    })
-                    .to_string(),
+                    label: label.to_string(),
                     state: UpdateStepState::Waiting,
                 })
                 .collect(),
@@ -1285,14 +1241,7 @@ impl UpdateDesk {
     fn unpause(&mut self) {
         for (agent, before) in self.view.agents.iter_mut().zip(&self.before) {
             if agent.state == AgentState::Paused {
-                agent.state = if self.forced {
-                    AgentState::Unknown
-                } else {
-                    *before
-                };
-                if self.forced {
-                    agent.note = "Interrupted by Force update; not replayed".into();
-                }
+                agent.state = *before;
             }
         }
     }
@@ -1303,7 +1252,7 @@ impl UpdateDesk {
         let kind = self.view.run.as_ref().map(|r| r.kind)?;
         let at = step_of(kind, stage);
         match stage {
-            Stage::Verify | Stage::Save | Stage::AcceptLoss | Stage::Register | Stage::Replace => {
+            Stage::Verify | Stage::Save | Stage::Register | Stage::Replace => {
                 self.mark(at, UpdateStepState::Now);
             }
             Stage::Pause => {
@@ -1363,17 +1312,10 @@ impl UpdateDesk {
             Stage::Resume => {
                 for agent in &mut self.view.agents {
                     if agent.state == AgentState::Paused {
-                        agent.state = if self.forced {
-                            AgentState::Unknown
-                        } else {
-                            AgentState::Resumed
-                        };
-                        if self.forced {
-                            agent.note = "Interrupted by Force update; not replayed".into();
-                        }
+                        agent.state = AgentState::Resumed;
                     }
                 }
-                if kind != UpdateKind::Service && !self.forced {
+                if kind != UpdateKind::Service {
                     // The window still restarts; the run ends once it shows its view.
                     self.mark(at, UpdateStepState::Done);
                     self.bump();
@@ -1381,26 +1323,10 @@ impl UpdateDesk {
                 }
                 self.all_done();
                 self.view.offer = None;
-                let message = if self.forced {
-                    self.view.app = if kind == UpdateKind::Service {
-                        self.view.app.clone()
-                    } else {
-                        self.version()
-                    };
-                    if self.view.state == ServiceState::Incompatible {
-                        self.view.state = ServiceState::Registered;
-                        self.view.reason.clear();
-                    }
-                    format!(
-                        "Updated to {}. Force accepted loss of unsaved UI state and unfinished work. Durable history was kept. Interrupted work was not replayed.",
-                        self.version()
-                    )
-                } else {
-                    format!(
-                        "Updated to {}. Pilot checked that the new version is the one running, and resumed only the agents it paused.",
-                        self.version()
-                    )
-                };
+                let message = format!(
+                    "Updated to {}. Pilot checked that the new version is the one running, and resumed only the agents it paused.",
+                    self.version()
+                );
                 self.finish(UpdatePhase::Done, &message, "");
                 self.saved = None;
                 self.bump();
@@ -1437,17 +1363,10 @@ impl UpdateDesk {
                             agent.note = "A job may still be running".into();
                         }
                         self.inspect = true;
-                        if self.forced {
-                            (
-                                "Not updated. Pilot cannot prove the job's processes ended. Force does not waive safe shutdown. Interrupted work stays stopped; durable history was kept.",
-                                "Check the original operation. Do not replay uncertain work.",
-                            )
-                        } else {
-                            (
-                                "Not updated. A job in “Release notes” may still have processes running, and Pilot cannot prove they ended, so it stopped before replacing anything. The other paused agents went back to work.",
-                                "“Release notes” stays as it is until someone checks it. Pilot will not update the service before then.",
-                            )
-                        }
+                        (
+                            "Not updated. A job in “Release notes” may still have processes running, and Pilot cannot prove they ended, so it stopped before replacing anything. The other paused agents went back to work.",
+                            "“Release notes” stays as it is until someone checks it. Pilot will not update the service before then.",
+                        )
                     }
                 };
                 self.finish(UpdatePhase::Stopped, message, next);
@@ -1524,9 +1443,7 @@ impl UpdateDesk {
             let mut first = true;
             for agent in &mut self.view.agents {
                 if agent.state == AgentState::Paused {
-                    agent.state = if self.forced {
-                        AgentState::Unknown
-                    } else if first {
+                    agent.state = if first {
                         AgentState::Resumed
                     } else {
                         AgentState::Resuming
@@ -1544,16 +1461,9 @@ impl UpdateDesk {
                     };
                 }
             }
-            if self.forced {
-                self.all_done();
-                format!(
-                    "Pilot found the update finished: the service running is {version}. Force accepted state loss. Interrupted work was not replayed."
-                )
-            } else {
-                format!(
-                    "Pilot found the update finished: the service running is {version}, and Pilot checked it. One paused agent's resume is asked, not confirmed yet."
-                )
-            }
+            format!(
+                "Pilot found the update finished: the service running is {version}, and Pilot checked it. One paused agent's resume is asked, not confirmed yet."
+            )
         };
         self.finish(UpdatePhase::Done, &message, "");
         self.saved = None;

@@ -198,9 +198,15 @@ importers:
       '@pilot/kernel':
         specifier: workspace:*
         version: link:packages/kernel
+      '@pilot/protocol':
+        specifier: workspace:*
+        version: link:packages/protocol
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
       '@typescript/native-preview':
         specifier: latest
         version: 7.0.0-dev.20260707.2

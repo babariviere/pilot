@@ -441,7 +441,7 @@ for (const nextUser of [false, true]) {
 		]);
 		const storageDir = join(f.root, "storage");
 		const spec = { sessionId: "held", cwd: f.root, storageDir };
-		const events: import("./held-inputs.ts").SystemMessageStateEvent[] = [];
+		const events: import("./held-inputs-doc.ts").SystemMessageStateEvent[] = [];
 		let session = await KernelSession.open(spec, {
 			onWorking: () => {},
 			onSystemMessageState: (event) => events.push(event),
@@ -631,7 +631,7 @@ test("discard held actions keep the kernel stopped, emit per-message events, and
 	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
 		openAdapter.call(NativeAdapter, { ...options, ...f.options }),
 	);
-	const states: import("./held-inputs.ts").SystemMessageStateEvent[] = [];
+	const states: import("./held-inputs-doc.ts").SystemMessageStateEvent[] = [];
 	const session = await KernelSession.open(
 		{ sessionId: "discard", cwd: f.root, storageDir: join(f.root, "storage") },
 		{

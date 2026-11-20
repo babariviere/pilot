@@ -5,6 +5,7 @@ import type { NativeReviewComparison, ReviewDispositionTarget, ReviewRequestStat
 import { Conflict } from "./errors.ts";
 import { targetKey } from "./human-review-store.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const REVIEW_REQUEST_SCHEMA = `
 CREATE TABLE IF NOT EXISTS review_requests (
@@ -54,13 +55,6 @@ export interface ReviewRequestReceipt {
 	state: ReviewRequestState;
 	target: ReviewDispositionTarget;
 }
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	durable(): Promise<void>;
-}
 const parse = <T>(row: Record<string, SQLInputValue> | undefined, field = "record"): T | undefined =>
 	row ? JSON.parse(String(row[field])) : undefined;
 export const requestLineage = (actor: ReviewRequestActor, t: ReviewDispositionTarget) =>
@@ -76,8 +70,8 @@ export const requestLineage = (actor: ReviewRequestActor, t: ReviewDispositionTa
 	);
 
 export class ReviewRequestStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	get(id: string): ReviewRequestRecord | undefined {

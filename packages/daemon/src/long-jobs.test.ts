@@ -97,6 +97,7 @@ test("a long-job attention event creates no mission event or coordinator input",
 			return () => {};
 		},
 		canSendNotice: () => true,
+		ownedPullRequests: () => [],
 		sendNotice: async () => {
 			sent++;
 			return true;

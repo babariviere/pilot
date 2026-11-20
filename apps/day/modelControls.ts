@@ -2,6 +2,7 @@
 import { signal } from "nsh";
 import type { FundingOwner, FundingView } from "../../packages/protocol/src/funding";
 import type { WorkProfile } from "../../packages/protocol/src/work-profiles";
+import { AutoCheck } from "./autoCheck";
 import { call } from "./bridge";
 
 export type ModelChoice = {
@@ -89,6 +90,8 @@ export interface ModelControls {
 	read(): Promise<void>;
 	write(action: ModelAction, value: unknown, binding?: string): Promise<boolean>;
 	check(id: string): Promise<void>;
+	/** Stops the automatic lookups. */
+	close?(): void;
 	recovery(sessionId: string): Promise<ModelRecovery | null>;
 	signIn(
 		run: string,
@@ -104,9 +107,12 @@ export function connectedModelControls(window: string): ModelControls {
 	const busy = signal(false);
 	const message = signal("");
 	const unknown = signal<{ operationId: string }[]>([]);
+	// Unknown actions are looked up by their receipt automatically; Check is the fallback.
+	const auto = new AutoCheck(check, () => {});
 	function receive(r: { snapshot: ModelSettings | null; value: Record<string, unknown> }) {
 		if (r.snapshot) settings.set(r.snapshot);
 		unknown.set((r.value.operations ?? []) as { operationId: string }[]);
+		auto.watch(unknown().map((o) => o.operationId));
 	}
 	async function read() {
 		if (busy()) return;
@@ -202,5 +208,5 @@ export function connectedModelControls(window: string): ModelControls {
 			busy.set(false);
 		}
 	}
-	return { settings, busy, message, unknown, read, write, check, signIn, recovery };
+	return { settings, busy, message, unknown, read, write, check, signIn, recovery, close: () => auto.close() };
 }

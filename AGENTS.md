@@ -21,7 +21,8 @@ Docs to use when the task touches them:
   Update concise feature guides in [docs/README.md](docs/README.md) when user-facing behavior changes.
 - Keep lasting contracts and runbooks beside the code they cover.
 - [DESIGN.md](DESIGN.md) holds the UI intent, state vocabulary and review checklist for UI changes.
-- `scripts/bench` holds reopen, workspace, memory and daemon-stall benchmarks for hot-path changes;
+- Benchmarks for hot-path changes live in `scripts/bench` (reopen, workspace, daemon stalls and more),
+  `packages/*/src/*.bench.ts` and `packages/kernel/scripts/bench-*`;
   [docs/technical/performance-check.md](docs/technical/performance-check.md) records a past CPU and memory audit and its method.
 - Agent-facing text (the Pilot prompt in `packages/kernel/src/policy.ts`, tool descriptions and the bundled
   `pilot-artifacts` skill) is loaded on every turn or tool listing. Keep it short, state boundaries plainly,

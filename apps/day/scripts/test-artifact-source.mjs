@@ -43,7 +43,7 @@ const tests = spawn(
 		"packages/artifacts/src/nsh-source.test.ts",
 		"packages/artifacts/src/nsh-revision.test.ts",
 		"packages/artifacts/src/nsh-host.test.ts",
-		"packages/kernel/src/artifact-tools.test.ts",
+		"packages/kernel/src/artifact-tools.fast.test.ts",
 	],
 	{ cwd: root, env: { ...process.env, NSH_ARTIFACT_TEST_HOST: executable }, stdio: "inherit" },
 );

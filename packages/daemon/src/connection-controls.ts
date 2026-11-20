@@ -5,11 +5,14 @@ import { NotFound } from "./errors.ts";
 import { McpSetupError, type McpSetupStore } from "./mcp-setup.ts";
 import { mcpSetupName } from "./mcp-setup-projection.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
-import { type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
+import { parseIntent, SerialAdmissions } from "./native-intent.ts";
+import { type OperationJournal, OperationRejected } from "./operation-journal.ts";
+import type { ControlOperation } from "./operations.ts";
 
 export const CONNECTION_CONTROLS = "connection-controls";
+const OUTCOME_UNKNOWN = "Connection outcome unknown; lookup only";
 export class ConnectionControls {
-	private pending: Promise<unknown> = Promise.resolve();
+	private readonly admissions = new SerialAdmissions(OUTCOME_UNKNOWN);
 	private readonly store: McpSetupStore;
 	private readonly mcp?: McpStatusService;
 	private readonly readOnly: boolean;
@@ -33,27 +36,17 @@ export class ConnectionControls {
 		return { version: 1, binding, setup, status, readOnly: this.readOnly };
 	}
 	admit(op: DurableOperation, journal: OperationJournal, firstEntry: boolean): Promise<unknown> {
-		if (!firstEntry) return Promise.reject(new Error("Connection outcome unknown; lookup only"));
-		const work = this.pending.then(() => this.apply(op, journal));
-		this.pending = work.catch(() => undefined);
-		return work;
+		return this.admissions.admit(firstEntry, () => this.apply(op, journal));
 	}
 	private async apply(op: DurableOperation, journal: OperationJournal) {
-		let p: Record<string, unknown>;
-		try {
-			p = JSON.parse(op.payload);
-			if (
-				!p ||
-				Object.keys(p).sort().join() !== "action,binding,purpose,value" ||
-				p.purpose !== CONNECTION_CONTROLS ||
-				op.kind !== CONNECTION_CONTROLS ||
-				op.targetId !== "global-connections" ||
-				!sameHost(op.origin, journal.destination)
-			)
-				throw new Error();
-		} catch {
-			throw new OperationRejected("Invalid connection intent");
-		}
+		const p = parseIntent(
+			op,
+			journal.destination,
+			CONNECTION_CONTROLS,
+			["action", "binding", "purpose", "value"],
+			"Invalid connection intent",
+		);
+		if (op.targetId !== "global-connections") throw new OperationRejected("Invalid connection intent");
 		let current: Awaited<ReturnType<ConnectionControls["read"]>>;
 		try {
 			current = await this.read();
@@ -99,3 +92,13 @@ export class ConnectionControls {
 		}
 	}
 }
+
+export const connectionOperations = (
+	controls: ConnectionControls,
+	journal: OperationJournal | undefined,
+): ControlOperation => ({
+	kind: CONNECTION_CONTROLS,
+	unavailable: "Native connections unavailable",
+	outcomeUnknown: OUTCOME_UNKNOWN,
+	admit: journal && ((op, firstEntry) => controls.admit(op, journal, firstEntry)),
+});

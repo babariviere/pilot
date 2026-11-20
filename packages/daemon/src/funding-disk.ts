@@ -9,7 +9,7 @@ import type {
 	FundingRate,
 	FundingTokens,
 	FundingView,
-} from "../../protocol/src/funding.ts";
+} from "@pilot/protocol";
 import { FundingRefused } from "./funding-errors.ts";
 
 const integer = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;

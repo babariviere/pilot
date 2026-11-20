@@ -30,12 +30,11 @@ test("disk-backed stores run in memory and save each commit through the replica"
 	await withFile(async (file) => {
 		const store = new MissionStore(file);
 		try {
-			const internal = store as unknown as { db: DatabaseSync; replica?: { pending: boolean } };
-			const main = internal.db.prepare("PRAGMA database_list").all()[0] as { file: string };
+			const database = store["database"];
+			const main = database.prepare("PRAGMA database_list").all()[0] as { file: string };
 			assert.equal(main.file, "", "the event loop never touches the disk file");
 			const { id } = store.create({ projectId: "project", title: "Durable" });
-			assert.equal(internal.replica?.pending, true, "the commit returns before the disk write");
-			assert.ok(store.whenDurable());
+			assert.ok(store.whenDurable(), "the commit returns before the disk write");
 			await store.durable();
 			assert.equal(store.whenDurable(), undefined);
 			assert.equal(
@@ -58,7 +57,7 @@ test("disk-backed stores run in memory and save each commit through the replica"
 			);
 			assert.deepEqual(
 				onDisk(file, (db) => db.prepare("SELECT COUNT(*) AS n FROM events WHERE mission_id = ?").get(id)?.n),
-				internal.db.prepare("SELECT COUNT(*) AS n FROM events WHERE mission_id = ?").get(id)?.n,
+				database.one("SELECT COUNT(*) AS n FROM events WHERE mission_id = ?", id)?.n,
 			);
 		} finally {
 			store.close();
@@ -73,7 +72,20 @@ test("a failed transaction ships nothing and later commits still save", async ()
 			const { id } = store.create({ projectId: "project", title: "Rollback" });
 			await store.durable();
 			assert.throws(() => store.addTask(id, { title: "x", body: "y".repeat(9_000) }));
+			const changes: string[] = [];
+			store.onChange((id) => changes.push(id));
+			assert.throws(
+				() =>
+					store.batchChanges(() => {
+						store.addTask(id, { title: "Rolled back" });
+						store.setNoticeActivity(id, true, 1);
+						throw new Error("abort batch");
+					}),
+				/abort batch/,
+			);
 			assert.equal(store.whenDurable(), undefined, "a rollback leaves nothing to save");
+			assert.deepEqual(changes, [], "a rollback does not notify listeners");
+			assert.deepEqual(store.tasks(id), [], "nested writes also roll back in memory");
 			store.addTask(id, { title: "Kept" });
 			await store.durable();
 			assert.deepEqual(

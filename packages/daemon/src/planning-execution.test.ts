@@ -35,8 +35,8 @@ test("after the user's Start, marking a task done starts the next ready task by 
 		},
 	);
 	// Nothing starts by rule before the user's own Start.
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, []);
 	// The user's Start of the first task.
 	f.store.join("worker-1", f.missionId);
@@ -45,11 +45,11 @@ test("after the user's Start, marking a task done starts the next ready task by 
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
 		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first.id, admitted: true };
 	});
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, [], "the second task waits for the first");
 	// The user marks the first result done; Pilot starts the second task once.
 	f.store.updateTask(f.missionId, first.id, { status: "done" });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, [second.id]);
 	assert.equal(f.store.task(f.missionId, second.id).status, "in_progress");
 	assert.deepEqual(
@@ -57,7 +57,7 @@ test("after the user's Start, marking a task done starts the next ready task by 
 		[[second.id, "admitted"]],
 	);
 	f.store.updateTask(f.missionId, first.id, { body: first.body });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, [second.id], "a later change starts nothing again");
 });
 
@@ -76,13 +76,13 @@ test("a refused start by rule is forgotten and waits before the next try", async
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
 		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first!.id, admitted: true };
 	});
-	f.workers.startResearch();
+	f.workers.startReconciling();
 	f.store.updateTask(f.missionId, first!.id, { status: "done" });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(calls, 1);
 	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.autoStarts ?? [], [], "nothing was created");
 	f.store.updateTask(f.missionId, first!.id, { body: first!.body });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(calls, 1, "no tight loop: the next try waits");
 });
 
@@ -96,11 +96,11 @@ test("a ready task Pilot cannot start shows why on the planning page", async (t)
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
 		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first!.id, admitted: true };
 	});
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.doesNotMatch((await f.workers.startView(f.missionId)).reason, /could not start/, "nothing is ready yet");
 	f.store.updateTask(f.missionId, first!.id, { status: "done" });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(
 		(await f.workers.startView(f.missionId)).reason,
 		"Work started. Pilot could not start the next ready task: Planning owner was stopped or reconfigured; Start unavailable It tries again on the next change.",
@@ -114,7 +114,7 @@ test("a ready task Pilot cannot start shows why on the planning page", async (t)
 	});
 	await f.sessions.pauseForSleep("100:1", true);
 	await f.sessions.resumeAfterSleep();
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(admitted.length, 1);
 });
 
@@ -164,12 +164,12 @@ test("a merged PR that owns a planned task finishes it, and Pilot starts what it
 		checkedAt: Date.now() + 1000,
 		...(state === "merged" ? { mergedAt: Date.now() + 1000 } : {}),
 	});
-	f.workers.startResearch();
+	f.workers.startReconciling();
 	f.store.recordMemberPullRequests(chat, [pr("open")]);
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, []);
 	f.store.recordMemberPullRequests(chat, [pr("merged")]);
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(f.store.task(f.missionId, first!.id).status, "done");
 	assert.deepEqual(admitted, [second!.id]);
 });
@@ -203,12 +203,12 @@ test("a merged PR in another repository, or on a task that is not moving, leaves
 		});
 		f.store.recordMemberPullRequests(chat, [pr("open")]);
 		f.store.recordMemberPullRequests(chat, [pr("merged")]);
-		await f.workers.settleResearch();
+		await f.workers.settleReconciling();
 		return f.store
 			.activity(f.missionId, { kind: "update", limit: 100 })
 			.find((e) => e.text.includes(`PR #${number} `))?.text;
 	};
-	f.workers.startResearch();
+	f.workers.startReconciling();
 	// A prerequisite PR in another repository does not finish the task.
 	const other = await merge("https://github.com/stoikio/eventbus-schema/pull/239", 239);
 	assert.equal(f.store.task(f.missionId, first!.id).status, "in_progress");
@@ -282,8 +282,8 @@ test("tasks a confirmed revision adds join the published plan and start by rule"
 		},
 		{ sessionId: f.owner },
 	);
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, [], "a proposal adds and starts nothing");
 	await f.store.revisions.confirm(f.missionId, proposal.id, { digest: proposal.digest, humanSource: "user:answer" });
 	const added = f.store.tasks(f.missionId).find((task) => task.title === "Export chats")!;
@@ -298,10 +298,10 @@ test("tasks a confirmed revision adds join the published plan and start by rule"
 	);
 	assert.equal(publication.tasks[2]!.sliceId, `revision:${proposal.id}:export`);
 	assert.equal(publication.briefRevision, f.store.brief(f.missionId)!.revision);
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, [], "the new task waits for its dependency");
 	f.store.updateTask(f.missionId, first.id, { status: "done" });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted.sort(), [second.id, added.id].sort());
 	assert.equal(f.store.task(f.missionId, added.id).status, "in_progress");
 });
@@ -323,15 +323,15 @@ test("an uncertain automatic start keeps its identity when receipt and metadata 
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
 		s.start = { operation: f.submit, sessionId: "worker-1", taskId: first.id, admitted: true };
 	});
-	f.workers.startResearch();
+	f.workers.startReconciling();
 	f.store.updateTask(f.missionId, first.id, { status: "done" });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	const original = f.store.planningWorkers.get(f.missionId)!.autoStarts?.[0];
 	assert.ok(original, "an ambiguous failure must keep the original attempt");
 	assert.equal(original.taskId, second.id);
 	assert.equal(original.state, "starting");
 	f.store.updateTask(f.missionId, first.id, { body: first.body });
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(f.store.planningWorkers.get(f.missionId)!.autoStarts?.[0]?.operationId, original.operationId);
 	assert.deepEqual(starts, [original.operationId]);
 	assert.match((await f.workers.startView(f.missionId)).reason, /unknown|not confirmed/i);
@@ -416,8 +416,8 @@ test("an uncertain first Start reserves only its task and independent ready work
 	f.store.planningWorkers.change(f.missionId, state.revision, (s) => {
 		s.start = { operation: f.submit, sessionId: "uncertain-first", taskId: first.id, admitted: false };
 	});
-	f.workers.startResearch();
-	await f.workers.settleResearch();
+	f.workers.startReconciling();
+	await f.workers.settleReconciling();
 	assert.deepEqual(admitted, [second.id]);
 	assert.equal(f.store.task(f.missionId, first.id).sessionId, undefined);
 	assert.equal(f.store.planningWorkers.get(f.missionId)!.start!.sessionId, "uncertain-first");

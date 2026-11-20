@@ -1,6 +1,6 @@
 import type { HumanReviewFeedback } from "./human-review.ts";
-import type { MissionBrief, MissionDecision } from "./index.ts";
 import type { InterviewAgreementBinding } from "./mission-interview.ts";
+import type { MissionBrief, MissionDecision } from "./missions.ts";
 
 export type WorkflowOperationKind =
 	| "workflow-approve"

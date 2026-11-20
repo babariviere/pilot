@@ -20,6 +20,7 @@ import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ResultReviews } from "./result-reviews.ts";
 import { FINAL_REPLY_CHARS, UserVerifications } from "./user-verification.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 const host = { hostId: "daemon", daemonId: "daemon", lineageId: "lineage" };
 
@@ -994,10 +995,13 @@ test("task mission hold is enforced from canonical membership even without a sum
 	const f = await fixture(t);
 	f.deliver();
 	f.setChat({ missionId: undefined });
-	const controls = new MissionControls(f.store, {
-		checkpointMission: async () => "paused",
-		resumeMission: async () => "resumed",
-	});
+	const controls = new MissionControls(
+		f.store,
+		pauseParticipants({
+			checkpointMission: async () => "paused",
+			resumeMission: async () => "resumed",
+		}),
+	);
 	controls.setScheduleDrain(async () => {});
 	await controls.execute(f.mission.id, {
 		version: 1,

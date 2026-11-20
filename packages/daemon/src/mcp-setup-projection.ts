@@ -2,7 +2,8 @@ import { isIP } from "node:net";
 import type { McpSetupEntry, McpShareConfig } from "@pilot/protocol";
 
 export const mcpSetupName = (name: string): boolean => /^[A-Za-z0-9_-]{1,64}$/.test(name);
-export const mcpSetupNamespace = (name: string): string => name.replaceAll("-", "_");
+/** Chats reach servers as `mcp__<name>` with dashes as underscores, like pi's mcpNamespace. */
+export const mcpNamespace = (name: string): string => name.replaceAll("-", "_");
 const record = (value: unknown): value is Record<string, unknown> =>
 	!!value &&
 	typeof value === "object" &&

@@ -7,7 +7,8 @@ import type { Project, TrackedItem, TrackingJson } from "@pilot/protocol";
 import { linearStart, pollLinear } from "./linear-source.ts";
 import { startedWorkflowStates, workflowStates } from "./linear-workflow.ts";
 import { ProjectStore, validateTrackingConfig } from "./projects.ts";
-import { type SourcePollContext, SourceRegistry } from "./sources.ts";
+import type { SourcePollContext } from "./source-poll.ts";
+import { SourceRegistry } from "./sources.ts";
 import { validatePatch } from "./tracked-item-patch.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
@@ -314,7 +315,7 @@ test("settings workflow choices come from the requested actual team, including t
 		{ id: "canceled", name: "Won't do", type: "canceled" },
 		{ id: "duplicate", name: "Duplicate", type: "duplicate" },
 	]);
-	assert.deepEqual(await f.tracking.linearStates("team-child"), {
+	assert.deepEqual(await f.tracking.linear.states("team-child"), {
 		status: "ok",
 		items: [
 			{ id: "duplicate", name: "Duplicate", type: "duplicate" },
@@ -351,7 +352,7 @@ test("all seven mappings persist without writes; starting work applies only In p
 	assert.deepEqual(f.projects.require(f.project.id).tracking?.linearStateMappings, { "team-child": mapping });
 	await f.tracking.poll(`${f.project.id}:linear`);
 	assert.ok(!f.calls.some((call) => call.tool === "startIssue"), "polling never applies saved lifecycle mappings");
-	await f.tracking.startLinear(f.item);
+	await f.tracking.linear.start(f.item);
 	assert.deepEqual(
 		f.calls.filter((call) => call.tool === "startIssue"),
 		[{ tool: "startIssue", args: { id: "issue-7", state: "active" } }],
@@ -375,8 +376,8 @@ test("confirmed chat/mission binding does not await MCP; duplicate starts coales
 		t.after(release);
 		const linked = await f.tracking.patch(f.item.id, { ...link, start: true });
 		assert.equal(linked.sessionId ?? linked.missionId, Object.values(link)[0]);
-		const pending = f.tracking.startLinear(linked);
-		assert.equal(f.tracking.startLinear(linked), pending);
+		const pending = f.tracking.linear.start(linked);
+		assert.equal(f.tracking.linear.start(linked), pending);
 		assert.equal((await f.items.require(linked.id)).status, "Todo", "no optimistic state mutation");
 		release();
 		await pending;
@@ -396,7 +397,7 @@ test("remote failure is quiet, durable, visible on dashboard and preserved throu
 	const f = await registry(t);
 	f.setFailure(new Error("secret external error body"));
 	const linked = await f.tracking.patch(f.item.id, { sessionId: "chat", start: true });
-	await f.tracking.startLinear(linked);
+	await f.tracking.linear.start(linked);
 	const failed = await f.items.require(linked.id);
 	assert.equal(failed.sessionId, "chat");
 	assert.deepEqual(failed.metadata.linearStart, {
@@ -461,7 +462,7 @@ test("configuration change cancels obsolete start before any write", async (t) =
 		await gate;
 	});
 	t.after(release);
-	const pending = f.tracking.startLinear(f.item);
+	const pending = f.tracking.linear.start(f.item);
 	await reading;
 	await f.projects.update(f.project.id, { tracking: { linearTeam: "other", slackChannels: [] } });
 	release();
@@ -489,7 +490,7 @@ test("editing only the start target fences an in-flight write without invalidati
 	});
 	t.after(release);
 	const checkpoint = f.items.checkpoint(`${f.project.id}:linear`);
-	const pending = f.tracking.startLinear(f.item);
+	const pending = f.tracking.linear.start(f.item);
 	await reading;
 	await f.projects.update(f.project.id, {
 		tracking: {
@@ -529,9 +530,9 @@ test("start admission is bounded and shutdown cancels work without retrying", as
 		})),
 	);
 	const extras = (await f.items.list({ projectId: f.project.id })).items.filter((item) => item.id !== f.item.id);
-	const first = f.tracking.startLinear(f.item);
-	const second = f.tracking.startLinear(extras[0]!);
-	await f.tracking.startLinear(extras[1]!);
+	const first = f.tracking.linear.start(f.item);
+	const second = f.tracking.linear.start(extras[0]!);
+	await f.tracking.linear.start(extras[1]!);
 	assert.equal(
 		((await f.items.require(extras[1]!.id)).metadata.linearStart as Record<string, TrackingJson>).outcome,
 		"error",

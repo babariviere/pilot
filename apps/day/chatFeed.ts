@@ -6,9 +6,11 @@
 // creation whose answer is lost stays Unknown, also after reopening, and
 // blocks another until Check reads its saved receipt. Nothing here picks a
 // project for the user after a refusal.
-import { type Signal, signal } from "nsh";
+import type { Signal } from "nsh";
 import type { ChatChoice } from "pilot-day/native";
-import { call, type Refusal, type Reply } from "./bridge";
+import { call, type Reply } from "./bridge";
+import { LOST, type Refusal, readReason, writeRefusal } from "./refusals";
+import { CallOrder, Feed, mirror } from "./source";
 
 /** What a new chat may do: Ask reads only; Build uses the project's own workspace and limits. */
 /** Read-only ask, a build chat, or the screen agent of one window (screenAgent.ts). */
@@ -39,7 +41,7 @@ export type ChatView = {
 	projects: ChatProject[];
 	/** The project this window opened for (Today's), when Pilot said which. Missions start there. */
 	current: string | null;
-	/** Creations whose result is not known. Only Check settles them, and none other starts meanwhile. */
+	/** Creations whose result is not known. Pilot looks them up by itself, Check is the fallback, and none other starts meanwhile. */
 	unsettled: ChatOp[];
 	/** Creations settled while this window was open, oldest first. */
 	settled: ChatOp[];
@@ -76,9 +78,6 @@ export interface ChatSource {
 	dispose(): void;
 }
 
-/** The same promise everywhere a creation's answer was lost. */
-export const CHAT_UNKNOWN = "Pilot sent this but heard nothing back. It will not send it again; Check only reads.";
-
 /** Builds a result. */
 export function chatResult(
 	status: ChatResult["status"],
@@ -90,24 +89,13 @@ export function chatResult(
 
 /** Why the projects could not be read, in one calm sentence. */
 export function projectsReason(refusal: Refusal): string {
-	switch (refusal) {
-		case "offline":
-			return "Pilot could not reach its service.";
-		case "identity":
-			return "The Pilot service changed. Open Pilot again to see your projects.";
-		case "closed":
-		case "busy":
-			return "Pilot is closing.";
-		case "capacity":
-			return "You have more projects than one read holds, so Pilot shows none of them.";
-		case "denied":
-		case "unavailable":
-			return "This Pilot service cannot list projects here yet.";
-		case "invalid":
-			return "Pilot's service answered in a way this app does not understand.";
-		default:
-			return "Pilot could not read your projects.";
-	}
+	const unavailable = "This Pilot service cannot list projects here yet.";
+	return readReason(refusal, {
+		capacity: "You have more projects than one read holds, so Pilot shows none of them.",
+		denied: unavailable,
+		unavailable,
+		other: "Pilot could not read your projects.",
+	});
 }
 
 /** What a refused selection means. Nothing was sent: selecting never creates. */
@@ -126,30 +114,19 @@ function refusedSelect(refusal: Refusal): ChatResult {
 
 /** What a refused creation means. Every refusal here is before sending, except a lost answer. */
 function refusedCreate(refusal: Refusal): ChatResult {
-	switch (refusal) {
-		case "lost":
-			return chatResult("unknown", CHAT_UNKNOWN);
-		case "unknown":
-			return chatResult("rejected", "An earlier new chat is not confirmed. Check it first; nothing was sent.");
-		case "stale":
-			return chatResult(
-				"stale",
-				"This project or its setup changed since Pilot read it. Nothing was sent; your words stay.",
-			);
-		case "busy":
-			return chatResult("rejected", "Pilot is saving this window before it closes. Nothing was sent.");
-		case "closed":
-			return chatResult("rejected", "Pilot is closing. Nothing was sent.");
-		case "offline":
-			return chatResult("rejected", "Pilot could not reach its service. Nothing was sent; your words stay.");
-		case "identity":
-			return chatResult("rejected", "The Pilot service changed. Open Pilot again. Nothing was sent.");
-		case "denied":
-		case "unavailable":
-			return chatResult("rejected", "Pilot cannot start chats here. Nothing was sent.");
-		default:
-			return chatResult("rejected", "Pilot could not send this. Nothing was sent; your words stay.");
-	}
+	const unavailable = "Pilot cannot start chats here. Nothing was sent.";
+	const message = writeRefusal(
+		refusal,
+		{
+			unknown: "An earlier new chat is not confirmed. Check it first; nothing was sent.",
+			stale: "This project or its setup changed since Pilot read it. Nothing was sent; your words stay.",
+			denied: unavailable,
+			unavailable,
+			other: "Pilot could not send this. Nothing was sent; your words stay.",
+		},
+		"Nothing was sent; your words stay.",
+	);
+	return chatResult(refusal === "lost" ? "unknown" : refusal === "stale" ? "stale" : "rejected", message);
 }
 
 type Summary = {
@@ -213,7 +190,7 @@ function outcomeResult(outcome: unknown): ChatResult {
 	}
 	if (o?.state === "not-sent")
 		return chatResult("rejected", "Pilot did not send it. Nothing was created.", { operationId: id });
-	return chatResult("unknown", CHAT_UNKNOWN, { operationId: id });
+	return chatResult("unknown", LOST, { operationId: id });
 }
 
 /** New's chat source over this window's native root. */
@@ -223,20 +200,36 @@ export class ConnectedChats implements ChatSource {
 	#current: string | null = null;
 	#refusal: Refusal | null = null;
 	#ops: Summary[] = [];
-	/** Read order: an older read's answer never replaces a newer one's. */
-	#sent = 0;
-	#applied = 0;
-	#reading: Promise<void> | null = null;
-	#again = false;
 	/** Only the newest selection's answer counts. */
-	#selection = 0;
+	#selection = new CallOrder();
 	#creating = false;
 	#checking = new Set<string>();
 	/** Creations this window sent or checked, so their settled result can show. */
 	#mine: string[] = [];
-	#listeners = new Map<number, (view: ChatView) => void>();
-	#next = 0;
-	#closed = false;
+	#feed = new Feed(
+		() => this.view(),
+		(operationId) => this.#lookUp(operationId),
+	);
+	#reads = this.#feed.coalesce(async () => {
+		const r = await call<unknown>(this.#window, "day.projects.read", {});
+		if (r.ok) {
+			const projects = projectsOf(r.snapshot);
+			if (projects) {
+				// Back from a refused read: Pilot looks every Unknown creation up again.
+				if (this.#refusal) this.#feed.restart();
+				this.#projects = projects;
+				this.#refusal = null;
+				const current = r.value.current;
+				this.#current = typeof current === "string" && current !== "" ? current : null;
+			} else {
+				this.#refusal = "invalid";
+			}
+			this.#takeOps(r.value);
+		} else {
+			this.#refusal = r.refusal;
+		}
+		this.#feed.publish();
+	});
 
 	constructor(window: string) {
 		this.#window = window;
@@ -250,7 +243,7 @@ export class ConnectedChats implements ChatSource {
 			delivery:
 				o.state === "accepted" || o.state === "rejected"
 					? o.state
-					: this.#checking.has(o.operationId)
+					: this.#checking.has(o.operationId) || this.#feed.checking(o.operationId)
 						? "checking"
 						: "unknown",
 			reason: o.receipt?.reason ?? "",
@@ -279,67 +272,40 @@ export class ConnectedChats implements ChatSource {
 	}
 
 	onChange(listener: (view: ChatView) => void): () => void {
-		const id = this.#next++;
-		this.#listeners.set(id, listener);
-		return () => {
-			this.#listeners.delete(id);
-		};
-	}
-
-	#publish() {
-		if (this.#closed) return;
-		const view = this.view();
-		for (const listener of this.#listeners.values()) listener(view);
+		return this.#feed.onChange(listener);
 	}
 
 	#takeOps(value: Record<string, unknown>) {
 		const ops = summariesOf(value.operations);
-		if (ops) this.#ops = ops;
+		if (!ops) return;
+		this.#ops = ops;
+		this.#feed.watch(this.view().unsettled.map((o) => o.operationId));
 	}
 
 	read(): Promise<void> {
-		if (this.#reading) {
-			this.#again = true;
-			return this.#reading;
+		return this.#reads();
+	}
+
+	/** One automatic Check: a receipt read only. It never creates the chat again. */
+	async #lookUp(operationId: string): Promise<void> {
+		const r = await call<unknown>(this.#window, "day.chat.check", { operationId });
+		if (r.ok) {
+			if (!this.#mine.includes(operationId)) this.#mine.push(operationId);
+			this.#takeOps(r.value);
+			if (!Array.isArray(r.value.operations)) void this.read();
 		}
-		this.#reading = (async () => {
-			do {
-				this.#again = false;
-				const order = ++this.#sent;
-				const r = await call<unknown>(this.#window, "day.projects.read", {});
-				if (order <= this.#applied) continue;
-				this.#applied = order;
-				if (r.ok) {
-					const projects = projectsOf(r.snapshot);
-					if (projects) {
-						this.#projects = projects;
-						this.#refusal = null;
-						const current = r.value.current;
-						this.#current = typeof current === "string" && current !== "" ? current : null;
-					} else {
-						this.#refusal = "invalid";
-					}
-					this.#takeOps(r.value);
-				} else {
-					this.#refusal = r.refusal;
-				}
-				this.#publish();
-			} while (this.#again && !this.#closed);
-		})().finally(() => {
-			this.#reading = null;
-		});
-		return this.#reading;
+		this.#feed.publish();
 	}
 
 	async select(pick: ChatPick): Promise<ChatResult> {
-		const order = ++this.#selection;
+		const order = this.#selection.next();
 		const r = await call<unknown>(this.#window, "day.chat.select", {
 			projectId: pick.projectId,
 			contextDigest: pick.contextDigest,
 			mode: pick.mode,
 		});
 		// A newer selection replaced this one, in Rust too: its answer means nothing now.
-		if (order !== this.#selection) return chatResult("stale", "");
+		if (!this.#selection.latest(order)) return chatResult("stale", "");
 		if (!r.ok) {
 			// What changed or waits shows in the next read; reading sends nothing.
 			if (r.refusal === "stale" || r.refusal === "unknown") void this.read();
@@ -360,7 +326,7 @@ export class ConnectedChats implements ChatSource {
 		if (this.view().unsettled.length > 0)
 			return chatResult("rejected", "An earlier new chat is not confirmed. Check it first; nothing was sent.");
 		this.#creating = true;
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await call<unknown>(this.#window, "day.chat.create", { choice, message });
@@ -370,7 +336,7 @@ export class ConnectedChats implements ChatSource {
 		if (!r.ok) {
 			// A lost answer may hide a saved creation: the read lists it as Unknown.
 			void this.read();
-			this.#publish();
+			this.#feed.publish();
 			return refusedCreate(r.refusal);
 		}
 		this.#takeOps(r.value);
@@ -378,14 +344,14 @@ export class ConnectedChats implements ChatSource {
 		if (result.operationId && !this.#mine.includes(result.operationId)) this.#mine.push(result.operationId);
 		// An answer without the saved list (its receipt was not saved here) is read once more.
 		if (!Array.isArray(r.value.operations)) void this.read();
-		this.#publish();
+		this.#feed.publish();
 		return result;
 	}
 
 	async check(operationId: string): Promise<ChatResult> {
 		if (this.#checking.has(operationId)) return chatResult("rejected", "Pilot is already checking it.");
 		this.#checking.add(operationId);
-		this.#publish();
+		this.#feed.publish();
 		let r: Reply<unknown>;
 		try {
 			r = await call<unknown>(this.#window, "day.chat.check", { operationId });
@@ -394,14 +360,14 @@ export class ConnectedChats implements ChatSource {
 		}
 		if (!this.#mine.includes(operationId)) this.#mine.push(operationId);
 		if (!r.ok) {
-			this.#publish();
+			this.#feed.publish();
 			return chatResult("unknown", "Pilot could not check it now. Nothing was sent; it stays not confirmed.", {
 				operationId,
 			});
 		}
 		this.#takeOps(r.value);
 		if (!Array.isArray(r.value.operations)) void this.read();
-		this.#publish();
+		this.#feed.publish();
 		const result = outcomeResult(r.value.outcome);
 		return result.status === "unknown"
 			? chatResult("unknown", "Pilot's service has no result for it yet. Nothing was sent again.", { operationId })
@@ -412,12 +378,11 @@ export class ConnectedChats implements ChatSource {
 		for (const o of this.#ops) {
 			if (o.draftId === draftId && !this.#mine.includes(o.operationId)) this.#mine.push(o.operationId);
 		}
-		this.#publish();
+		this.#feed.publish();
 	}
 
 	dispose(): void {
-		this.#closed = true;
-		this.#listeners.clear();
+		this.#feed.close();
 	}
 }
 
@@ -430,14 +395,5 @@ export type ChatMirror = {
 
 /** Mirrors `source`'s view. */
 export function mirrorChats(source: ChatSource): ChatMirror {
-	const view = signal(source.view());
-	const stop = source.onChange((next) => view.set(next));
-	return {
-		source,
-		view,
-		close: () => {
-			stop();
-			source.dispose();
-		},
-	};
+	return { source, ...mirror(source, source.view()) };
 }

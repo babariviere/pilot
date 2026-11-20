@@ -1,6 +1,6 @@
 import type { TrackedItem } from "@pilot/protocol";
+import type { SourcePollContext } from "./source-poll.ts";
 import { validSourceArguments } from "./source-tool-rules.ts";
-import type { SourcePollContext } from "./sources.ts";
 
 /** Start write: eyes on the stored parent, never the reply that surfaced the thread. */
 export async function slackStart(context: SourcePollContext, item: TrackedItem): Promise<"reacted" | "skipped"> {

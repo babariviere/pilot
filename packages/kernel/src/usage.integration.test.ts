@@ -19,6 +19,7 @@ import { AssistantEntry, createRegistry, Harness, MemoryStorage, UserEntry } fro
 import type { UsageObservation } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { fakeHostCall } from "./testing/host-calls.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -311,7 +312,10 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 		storageDir: join(f.root, "storage"),
 	};
 	const session = await KernelSession.open(spec, {
-		reportUsageHistory,
+		call: fakeHostCall({
+			"usage-history": ({ row }) => reportUsageHistory(row),
+			"usage-history.epoch": () => spec.usageHistory,
+		}),
 		onUsageChanged: (usage) => {
 			changes.push(usage);
 			usageChanged?.(usage);
@@ -378,7 +382,10 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	// Ready usage is reconstructed from committed history, without another model call.
 	await session.close();
 	const restored = await KernelSession.open(spec, {
-		reportUsageHistory,
+		call: fakeHostCall({
+			"usage-history": ({ row }) => reportUsageHistory(row),
+			"usage-history.epoch": () => spec.usageHistory,
+		}),
 		onWorking: () => {},
 		onUsageChanged: (usage) => changes.push(usage),
 	});

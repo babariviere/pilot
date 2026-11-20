@@ -15,7 +15,8 @@ import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { applyActivity } from "./session-outcomes.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
@@ -1021,14 +1022,21 @@ test("restore does not start an agent, and permits the next input admission", as
 	}
 });
 
-test("guarded queued edit forwards its capture and reserves admission through ACK", async (t) => {
+test("overlapping guarded queue edits and removals block archive until both ACKs", async (t) => {
 	const { sessions, ids, cleanup } = await fixture();
 	const id = ids[0]!;
 	const worker = new FakeWorker();
 	const ack = deferred();
 	const requested = deferred();
+	const removalAck = deferred();
+	const removalRequested = deferred();
 	t.mock.method(worker, "request", async (command: Command) => {
 		worker.commands.push(command);
+		if (command.type === "removeQueuedMessage") {
+			removalRequested.resolve();
+			await removalAck.promise;
+			return;
+		}
 		requested.resolve();
 		await ack.promise;
 	});
@@ -1037,7 +1045,6 @@ test("guarded queued edit forwards its capture and reserves admission through AC
 		const edit = sessions.editQueuedMessage(id, 42, "Literal captured text", undefined, "a".repeat(64));
 		worker.gate.resolve();
 		await requested.promise;
-		assert.equal(sessions["sending"].get(id), 1);
 		await assert.rejects(sessions.archive(id), Conflict);
 		assert.deepEqual(
 			worker.commands.map(({ requestId: _, ...command }) => command),
@@ -1050,15 +1057,20 @@ test("guarded queued edit forwards its capture and reserves admission through AC
 				},
 			],
 		);
-		ack.resolve();
-		await edit;
-		assert.equal(sessions["sending"].has(id), false);
-		await sessions.removeQueuedMessage(id, 42, "b".repeat(64));
+		const remove = sessions.removeQueuedMessage(id, 43, "b".repeat(64));
+		await removalRequested.promise;
 		const removal = worker.commands[1]!;
 		assert.equal(removal.type, "removeQueuedMessage");
 		if (removal.type === "removeQueuedMessage") assert.equal(removal.guardToken, "b".repeat(64));
+		ack.resolve();
+		await edit;
+		await assert.rejects(sessions.archive(id), Conflict);
+		removalAck.resolve();
+		await remove;
+		assert.ok((await sessions.archive(id)).archivedAt);
 	} finally {
 		ack.resolve();
+		removalAck.resolve();
 		worker.gate.resolve();
 		await cleanup();
 	}

@@ -1,6 +1,6 @@
 /**
  * Workspace benchmark: time each command of createWorkspace and dissociateWorkspace on a real project.
- *   node --import tsx scripts/bench/workspace.ts <project-dir> [--baseline]
+ *   node scripts/bench/workspace.ts <project-dir> [--baseline]
  * --baseline also times the previous approach, a plain local \`git clone\` (hardlinked objects).
  */
 import { execFile } from "node:child_process";

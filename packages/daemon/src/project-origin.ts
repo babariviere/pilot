@@ -1,4 +1,24 @@
+import type { ProjectOrigin } from "@pilot/protocol";
 import { githubRepository } from "./github-url.ts";
+import { localGitConfigEnvironment } from "./workspace-environment.ts";
+import type { Runner } from "./workspaces.ts";
+
+/** Reads the project's origin from local Git config only: no network, CLI sign-in, SSH alias or credential disclosure. */
+export async function readProjectOrigin(path: string, runner: Runner): Promise<ProjectOrigin> {
+	try {
+		const raw = await runner(
+			"git",
+			["config", "--local", "--no-includes", "--get-all", "remote.origin.url"],
+			path,
+			2000,
+			undefined,
+			localGitConfigEnvironment(),
+		);
+		return { identity: projectOriginIdentity(raw.trim()) };
+	} catch {
+		return { identity: null };
+	}
+}
 
 /** Pure navigation identity. Never resolves SSH aliases, expands credentials or contacts a server. */
 export function projectOriginIdentity(raw: string): string | null {
@@ -36,5 +56,13 @@ export function projectOriginIdentity(raw: string): string | null {
 			return null;
 		}
 	}
-	return JSON.stringify([host + port, path]);
+	return originIdentity(host + port, path);
+}
+
+/**
+ * The stored identity string of a repository. Diagnostic repair items keep it, so the layout (a JSON array of the
+ * lowercase host with any port, then the path) must not change.
+ */
+export function originIdentity(host: string, path: string): string {
+	return JSON.stringify([host, path]);
 }

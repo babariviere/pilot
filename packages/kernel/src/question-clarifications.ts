@@ -8,8 +8,8 @@ import {
 	type Storage,
 	type Tx,
 } from "@earendil-works/pi-durable";
+import { QUESTION_ENTRY } from "./entry-kinds.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
-import { QUESTION_ENTRY } from "./question-entry.ts";
 import { findInputReceipt } from "./storage.ts";
 
 export interface ClarificationRequest {

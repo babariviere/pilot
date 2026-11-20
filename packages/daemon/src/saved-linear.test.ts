@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SavedLinearRead } from "@pilot/protocol";
-import type { SavedLinearRead as DayWire } from "../../../apps/day/linearContract.ts";
+import type { SavedLinearRead as DayWire } from "../../protocol/src/tracking.ts";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
 import { SourceSignInRequired } from "./source-tool-rules.ts";
 

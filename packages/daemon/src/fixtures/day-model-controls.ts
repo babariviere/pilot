@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { serveCommands } from "./commands.ts";
 import { mock } from "node:test";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
@@ -76,22 +76,17 @@ console.log(
 		ledger,
 	}),
 );
-for await (const line of createInterface({ input: process.stdin })) {
-	const c = JSON.parse(line);
-	if (c.action === "quit") break;
+await serveCommands(async (c) => {
 	if (c.action === "lost") lost = true;
 	if (c.action === "external")
 		await writeFile(
 			settings,
 			'{"defaultProvider":"fixture","defaultModel":"small","defaultThinkingLevel":"off","extensions":["keep"]}',
 		);
-	console.log(
-		JSON.stringify({
-			writes,
-			sessions: f.sessions.list().length,
-			settings: JSON.parse(await readFile(settings, "utf8")),
-		}),
-	);
-}
-process.stdin.destroy();
+	return {
+		writes,
+		sessions: f.sessions.list().length,
+		settings: JSON.parse(await readFile(settings, "utf8")),
+	};
+});
 await f.close();

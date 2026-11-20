@@ -1,5 +1,6 @@
 // Presentation mirror. Native code owns host identity, queue fencing and durable sends.
 import { signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call } from "./bridge";
 import type { ModelChoice } from "./modelControls";
 export type Privacy = {
@@ -37,6 +38,8 @@ export interface DiagnosisControls {
 		binding?: string,
 	): Promise<{ accepted: boolean; sessionId?: string }>;
 	check(id: string): Promise<void>;
+	/** Stops the automatic lookups. */
+	close?(): void;
 }
 export function connectedDiagnosisControls(window: string): DiagnosisControls {
 	const snapshot = signal<DiagnosisSnapshot | null>(null),
@@ -45,10 +48,17 @@ export function connectedDiagnosisControls(window: string): DiagnosisControls {
 		operations = signal<DiagnosisOperation[]>([]),
 		readFailed = signal(false);
 	let lost = false;
+	// Unknown actions are looked up by their receipt automatically; Check is the fallback.
+	const auto = new AutoCheck(check, () => {});
 	function receive(r: { snapshot: DiagnosisSnapshot | null; value: Record<string, unknown> }) {
 		if (r.snapshot) snapshot.set(r.snapshot);
 		else if (snapshot()) snapshot.set({ ...snapshot()!, binding: "" });
 		operations.set((r.value.operations ?? []) as DiagnosisOperation[]);
+		auto.watch(
+			operations()
+				.filter((o) => o.pending)
+				.map((o) => o.operationId),
+		);
 		lost = false;
 	}
 	async function read() {
@@ -144,5 +154,5 @@ export function connectedDiagnosisControls(window: string): DiagnosisControls {
 			busy.set(false);
 		}
 	}
-	return { snapshot, busy, message, operations, read, readFailed, write, check };
+	return { snapshot, busy, message, operations, read, readFailed, write, check, close: () => auto.close() };
 }

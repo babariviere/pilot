@@ -1,10 +1,11 @@
 /** Waiting Slack messages: read their threads for new replies and resume the chat that waits on them. */
 import type { TrackedItem } from "@pilot/protocol";
+import { slackReplyRequestId } from "./input-requests.ts";
 import { parseSlackThreadReplies, type SlackReply, slackTimestamp } from "./slack-format.ts";
 import { parseSlackIdentity, type SlackIdentity } from "./slack-mentions.ts";
 import { slackStartAllowed } from "./slack-start.ts";
+import type { SourcePollContext } from "./source-poll.ts";
 import { SourceToolError } from "./source-tool-rules.ts";
-import type { SourcePollContext } from "./sources.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
 
 const REPLY_LIMIT = 30;
@@ -21,8 +22,8 @@ export type ResumeChat = (
 	requestId: string,
 	admissionGuard: () => void,
 ) => Promise<boolean>;
-/** One bounded pass over a project's waiting messages. The boolean is kept for older callers. */
-export type SlackWaitingWatcher = (context: SourcePollContext) => Promise<boolean>;
+/** One limited pass over a project's waiting messages. */
+export type SlackWaitingWatcher = (context: SourcePollContext) => Promise<void>;
 
 export function createSlackWaitingWatcher(
 	store: Pick<TrackedItemStore, "reserveSlackWaiting" | "slackWaitingResult" | "require" | "onChange">,
@@ -31,7 +32,7 @@ export function createSlackWaitingWatcher(
 ): SlackWaitingWatcher {
 	let identity: { value: SlackIdentity; at: number } | undefined;
 	return async (context) => {
-		const batch = await store.reserveSlackWaiting(context.project.id, now(), context.force);
+		const batch = await store.reserveSlackWaiting(context.project.id, now());
 		if (!batch.reads.length) {
 			context.observe?.({
 				stage: "waiting_replies",
@@ -39,7 +40,7 @@ export function createSlackWaitingWatcher(
 				outcome: "success",
 				count: 0,
 			});
-			return false;
+			return;
 		}
 		// The user's own replies (including what an agent posts as them) never end a wait.
 		if (!identity || now() - identity.at >= 3_600_000) {
@@ -107,7 +108,7 @@ export function createSlackWaitingWatcher(
 				const delivered = await resume(
 					current.sessionId,
 					replyNotice(current, fresh, me, thread.more),
-					`slack-reply:${item.id}:${latest}`,
+					slackReplyRequestId(item.id, latest),
 					guard,
 				);
 				if (delivered && !changed) await store.slackWaitingResult(item.id, since, { status: "in_progress" });
@@ -125,7 +126,6 @@ export function createSlackWaitingWatcher(
 			outcome: "success",
 			count: batch.reads.length,
 		});
-		return false;
 	};
 }
 

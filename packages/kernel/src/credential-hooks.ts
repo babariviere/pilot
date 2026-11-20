@@ -24,6 +24,14 @@ export function createDiscoveryRuntime(options: CreateModelRuntimeOptions): Prom
 // Jiti child profiles and native ESM share this SDK class, but not module-local state.
 const key = Symbol.for("pilot.credential-broker.hooks.v1");
 const sdk = ModelRuntime as typeof ModelRuntime & { [key]?: Promise<void> };
+/**
+ * The agent directory whose models.json the daemon's shared catalog owns in this process, when a credential endpoint
+ * named one. That owner revalidates definitions, credentials and revocation fences on every read.
+ */
+export function sharedCatalogDir(): string | undefined {
+	return process.env.PILOT_SHARED_CATALOG_DIR;
+}
+
 export function installCredentialBrokerHooks(options: { descendants?: boolean } = {}): Promise<void> {
 	if (options.descendants && process.env.PILOT_REQUIRE_CREDENTIAL_BROKER === "1") {
 		const preload = `--import=${new URL("./credential-preload.ts", import.meta.url).href}`;
@@ -43,7 +51,7 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 			if (client && !owner) await client.pi.list(); // No best-effort SDK fallback when the authority is unavailable.
 			if (!owner && client && options.credentials && options.credentials !== client.pi)
 				throw new Error("Credential broker requires the canonical credential store");
-			const sharedDir = process.env.PILOT_SHARED_CATALOG_DIR;
+			const sharedDir = sharedCatalogDir();
 			const shared =
 				!owner &&
 				client &&

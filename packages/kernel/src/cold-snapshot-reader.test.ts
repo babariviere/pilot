@@ -22,7 +22,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { watchEvents } from "./agent-events.ts";
 import { AttentionDoc } from "./attention.ts";
-import { HeldInputsDoc } from "./held-inputs.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { queueGuardToken } from "./queue.ts";
 import {
 	DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,

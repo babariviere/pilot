@@ -18,7 +18,7 @@ export function sessionNeedsYouReason(session: SessionSummary, now = Date.now())
 		session.attentionReason?.kind === "tool_stall"
 	)
 		return session.attentionReason;
-	if (session.outcome === "failed" || (!session.outcome && session.state === "failed")) {
+	if (chatFailed(session)) {
 		const limit = subscriptionLimit(session, now);
 		if (limit) return { kind: "limit", ...(limit.resumesAt !== undefined ? { resumesAt: limit.resumesAt } : {}) };
 		return {
@@ -36,6 +36,21 @@ export function sessionNeedsYouReason(session: SessionSummary, now = Date.now())
 	if (session.attentionReason) return session.attentionReason;
 	if (hasMissingPullRequest(session)) return { kind: "no_pr" };
 	return { kind: "not_reviewed" };
+}
+
+/** The chat's last outcome is a failure, or it failed before it reported any outcome. */
+export function chatFailed(session: SessionSummary): boolean {
+	return session.outcome === "failed" || (!session.outcome && session.state === "failed");
+}
+
+/** The chat asks the user: its outcome is a question, or it raised an "asks" attention while working. */
+export function asksUser(session: SessionSummary): boolean {
+	return session.outcome === "question" || session.attentionReason?.kind === "asks";
+}
+
+/** An open pull request whose cached readiness says it can merge. */
+export function isReadyPullRequest(pr: { state: string; readiness?: { state: string } }): boolean {
+	return pr.state === "open" && pr.readiness?.state === "ready";
 }
 
 /** Use cached workspace evidence, not push history. Any known PR (including a draft or settled one) counts. */

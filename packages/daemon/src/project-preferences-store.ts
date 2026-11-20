@@ -10,9 +10,9 @@ import type {
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON } from "./operation-journal.ts";
-import type { KnowledgeDb } from "./project-knowledge-store.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
-type PreferencesDb = Pick<KnowledgeDb, "all" | "one" | "run" | "transaction">;
+type PreferencesDb = Pick<MissionDbPort, "all" | "one" | "run" | "transaction">;
 
 export const PROJECT_PREFERENCES_SCHEMA = `
 CREATE TABLE IF NOT EXISTS project_preferences_revisions (
@@ -64,16 +64,6 @@ export class ProjectPreferencesStore {
 		);
 		const revisions: ProjectPreferences[] = rows.slice(0, limit).map((row) => JSON.parse(String(row.snapshot)));
 		return { revisions, more: rows.length > limit, before: rows.length > limit ? revisions.at(-1)!.revision : null };
-	}
-
-	/** A locator to human-authored evidence, not a permission/consent projection from decision authorship. */
-	humanNote(missionId: string, eventId: number): string | undefined {
-		const row = this.db.one(
-			"SELECT text FROM events WHERE mission_id=? AND id=? AND is_user_note=1 AND session_id IS NULL",
-			missionId,
-			eventId,
-		);
-		return row ? String(row.text) : undefined;
 	}
 
 	write(

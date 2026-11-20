@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, utimes,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { DiagnosticLogRequest } from "@pilot/kernel";
+import type { DiagnosticLogRequest } from "@pilot/protocol";
 import { DiagnosticLogReader, sanitizeDiagnosticLogLine } from "./diagnostic-logs.ts";
 import { operations } from "./event-loop-watchdog.ts";
 

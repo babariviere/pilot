@@ -6,7 +6,7 @@
 // chat keeps the field, its focus and its words.
 import { signal, View } from "nsh";
 import { keepField } from "./kept";
-import type { ContinueResult, SessionChatSource } from "./sessionChat";
+import { type ContinueResult, type SessionChatSource, settle } from "./sessionChat";
 import { Button, Caption, Quote, TextField } from "./ui";
 
 /** Most characters a reply carries, as the service checks: the same as a new chat's first message. */
@@ -38,7 +38,7 @@ export function ChatWaits(props: {
 	const run = async (send: () => Promise<ContinueResult>, words: string) => {
 		if (sending()) return;
 		sending.set(true);
-		const r = await send();
+		const r = await settle(props.chat, await send());
 		result.set(r);
 		sending.set(false);
 		if (r.status !== "accepted") return;

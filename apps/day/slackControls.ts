@@ -1,5 +1,6 @@
 // Native code owns project authority, command IDs and the durable ledger.
 import { signal } from "nsh";
+import { AutoCheck } from "./autoCheck";
 import { call } from "./bridge";
 export type ReportEvidence = { value: string; evidence: string };
 export type ReportDetails = {
@@ -59,6 +60,8 @@ export interface SlackControls {
 	write(action: "save" | "import" | "report" | "group", value: unknown, binding: string): Promise<boolean>;
 	check(id: string): Promise<void>;
 	setAside(id: string): Promise<void>;
+	/** Stops the automatic lookups. */
+	close?(): void;
 	open?(itemId: string, digest: string, binding: string): Promise<void>;
 }
 export function connectedSlackControls(window: string, changed: () => void): SlackControls {
@@ -68,6 +71,11 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 		unknown = signal<{ operationId: string }[]>([]),
 		readFailed = signal(false);
 	let again = false;
+	// Unknown actions are looked up by their receipt automatically; Check is the fallback.
+	const auto = new AutoCheck(
+		(operationId) => request("check", { operationId }).then(() => undefined),
+		() => {},
+	);
 	async function request(name: string, args: unknown): Promise<boolean> {
 		if (busy()) {
 			if (name === "read") again = true;
@@ -92,6 +100,7 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 			}
 			if (r.snapshot) snapshot.set(r.snapshot);
 			unknown.set((r.value.operations ?? []) as { operationId: string }[]);
+			auto.watch(unknown().map((o) => o.operationId));
 			const outcome = r.value.outcome as
 				| { state?: string; receipt?: { reason?: string; result?: { action?: string } } }
 				| undefined;
@@ -148,5 +157,6 @@ export function connectedSlackControls(window: string, changed: () => void): Sla
 				binding,
 			});
 		},
+		close: () => auto.close(),
 	};
 }

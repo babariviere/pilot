@@ -7,7 +7,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { openSessionStorage } from "@pilot/kernel/testing";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 
 test("authenticated HTTP conversation reads real SQLite causal links and late answers without a worker start", async (t) => {

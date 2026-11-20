@@ -268,8 +268,7 @@ export class NativeMissionPlanning {
 				// An unreadable history leaves the run without a step. It never hides that the coordinator works.
 			}
 		return planningActivity(
-			// Test doubles may lack live workers; then times stay unknown.
-			{ sessionId: coordinator.id, working, cwd: coordinator.cwd, ...this.deps.sessions.liveRun?.(coordinator.id) },
+			{ sessionId: coordinator.id, working, cwd: coordinator.cwd, ...this.deps.sessions.liveRun(coordinator.id) },
 			entries,
 		);
 	}

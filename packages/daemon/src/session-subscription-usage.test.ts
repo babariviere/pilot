@@ -8,7 +8,8 @@ import { type TestContext, test } from "node:test";
 import type { KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
 import type { SessionState, SessionSummary } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { SessionManager, type SessionWorker } from "./sessions.ts";
+import { SessionManager } from "./sessions.ts";
+import { type SessionWorker } from "./kernel-worker.ts";
 import { type SubscriptionProvider, SubscriptionUsageCache } from "./subscription-usage.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 
@@ -325,11 +326,16 @@ test("provider-reported limits acknowledge only a persisted resumable pause, and
 	meta.working = true;
 	const ack = new Promise<KernelCommand>((resolve) =>
 		t.mock.method(worker, "send", (command: KernelCommand) => {
-			if (command.type === "subscription.limit.result") resolve(command);
+			if (command.type === "host.result") resolve(command);
 		}),
 	);
-	f.sessions["onPacket"](meta, worker, { type: "subscription.limit", callId: "limit", limit: { provider: "openai" } });
-	assert.deepEqual(await ack, { type: "subscription.limit.result", callId: "limit" });
+	f.sessions["onPacket"](meta, worker, {
+		type: "host.call",
+		method: "subscription.limit",
+		callId: "limit",
+		args: { limit: { provider: "openai" } },
+	});
+	assert.deepEqual(await ack, { type: "host.result", callId: "limit" });
 	assert.equal(f.sessions.get(id)?.state, "working");
 	assert.equal(f.sessions.get(id)?.working, false);
 	assert.equal(f.sessions.get(id)?.outcome, undefined, "no failure or completion is synthesized");

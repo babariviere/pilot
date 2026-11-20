@@ -1,3 +1,4 @@
+import { MISSION_DELIVERY_LIMITS, MISSION_REPORT_LIMITS as REPORT } from "@pilot/kernel/mission-write";
 import type { MissionDeliveryScreens, MissionReport, MissionReportView, MissionReportWrite } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
@@ -88,16 +89,16 @@ export class MissionReports {
 				.sort()
 				.join() !== "evidence,expectedPreviousId,movement,nextStep,reportId,source,summary,taskId,version" ||
 			write.version !== 1 ||
-			!text(write.reportId, 128) ||
-			!text(write.taskId, 128) ||
+			!text(write.reportId, REPORT.id) ||
+			!text(write.taskId, REPORT.id) ||
 			!/^[a-f0-9]{64}$/.test(write.source) ||
-			(write.expectedPreviousId !== null && !text(write.expectedPreviousId, 128)) ||
+			(write.expectedPreviousId !== null && !text(write.expectedPreviousId, REPORT.id)) ||
 			!["moving", "not_moving", "unknown"].includes(write.movement) ||
-			!text(write.summary, 2000) ||
-			!text(write.nextStep, 1000) ||
+			!text(write.summary, REPORT.summary) ||
+			!text(write.nextStep, REPORT.nextStep) ||
 			!Array.isArray(write.evidence) ||
-			write.evidence.length > 16 ||
-			write.evidence.some((item) => !text(item, 1000))
+			write.evidence.length > REPORT.evidenceItems ||
+			write.evidence.some((item) => !text(item, REPORT.evidence))
 		)
 			throw new Error("Invalid versioned mission report");
 		if ("delivery" in write) {
@@ -112,9 +113,9 @@ export class MissionReports {
 					.join() !== "checks,issues" ||
 				// No commit: the task changed no code (a decision, a mockup or research).
 				("commit" in delivery && (!text(delivery.commit, 40) || !/^[a-f0-9]{40}$/.test(delivery.commit!))) ||
-				!text(delivery.checks, 2000) ||
+				!text(delivery.checks, MISSION_DELIVERY_LIMITS.checks) ||
 				typeof delivery.issues !== "string" ||
-				delivery.issues.length > 1000
+				delivery.issues.length > MISSION_DELIVERY_LIMITS.issues
 			)
 				throw new Error("Invalid scoped delivery facts");
 			if ("screens" in delivery) checkScreenShape(delivery.screens, text);

@@ -1,21 +1,18 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename, stat, unlink } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { DurableOperation, OperationHost, OperationReceipt } from "@pilot/protocol";
+import { canonicalJSON, payloadHash } from "./canonical.ts";
+import { durableJSON } from "./durable-file.ts";
 import { trace } from "./trace.ts";
+
+// Existing consumers can keep their imports while the file and hash helpers move out of the journal.
+export { canonicalJSON, payloadHash } from "./canonical.ts";
+export { durableJSON } from "./durable-file.ts";
 
 const MAX_PAYLOAD = 64 * 1024;
 const MAX_RECORDS = 4096;
 const MAX_STREAMS = 1024;
 const identifier = /^[A-Za-z0-9_-]{1,128}$/;
-export const payloadHash = (payload: string): string => createHash("sha256").update(payload).digest("hex");
-export function canonicalJSON(value: unknown): string {
-	return JSON.stringify(value, (_key, item) =>
-		item && typeof item === "object" && !Array.isArray(item)
-			? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b)))
-			: item,
-	);
-}
 const streamKey = (op: DurableOperation): string => payloadHash(canonicalJSON([op.origin, op.producerId]));
 export const sameHost = (a: OperationHost, b: OperationHost): boolean =>
 	a.daemonId === b.daemonId && a.lineageId === b.lineageId;
@@ -53,29 +50,6 @@ interface JournalReadState {
 	readonly records: Iterable<JournalObservation>;
 	readonly failed: boolean;
 	readonly pendingKinds: Iterable<string>;
-}
-
-/** Async fsync + atomic publication, including directory durability. No SQLite on the daemon loop. */
-export async function durableJSON(file: string, value: unknown): Promise<void> {
-	const temp = `${file}.${randomUUID()}.tmp`;
-	const handle = await open(temp, "wx", 0o600);
-	try {
-		await handle.writeFile(JSON.stringify(value));
-		await handle.sync();
-	} finally {
-		await handle.close();
-	}
-	try {
-		await rename(temp, file);
-		const directory = await open(join(file, ".."), "r");
-		try {
-			await directory.sync();
-		} finally {
-			await directory.close();
-		}
-	} finally {
-		await unlink(temp).catch(() => {});
-	}
 }
 
 /** One owner per daemon data home, like SessionManager. Bounded admission, no TTL eviction.

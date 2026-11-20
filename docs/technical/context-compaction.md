@@ -32,7 +32,8 @@ one more oversized request. The existing idle cold-cache compaction before user 
 
 ## Digest
 
-`packages/kernel/src/context-digest.ts`. The section design is adapted from
+The digest module (`packages/kernel/src/context-digest.ts`) was removed after [Posthorse](posthorse.md) replaced it;
+this section describes it for history. The section design was adapted from
 [pi-blackhole](https://github.com/k0valik/pi-blackhole) (MIT), itself derived from pi-vcc. It is a
 re-implementation over pi-durable entries; the Pi extension is not installed, and none of its model workers
 (Observer, Reflector, Dropper) are used.

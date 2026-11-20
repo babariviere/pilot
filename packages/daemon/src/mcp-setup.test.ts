@@ -85,7 +85,7 @@ test("MCP setup rechecks target edits and replacements after preparing bytes, wi
 	assert.deepEqual(await readdir(directory), ["mcp.json"]);
 });
 
-const { loadSdkMcpEditor } = await import("../../kernel/src/sdk-mcp-editors.ts");
+const { loadSdkMcpEditor } = await import("@pilot/kernel/testing/runtime");
 const configEditors = [await loadSdkMcpEditor("extension"), await loadSdkMcpEditor("cli")];
 
 test("Pilot MCP writes preserve untouched numeric literals without rounding or null conversion", async (t) => {

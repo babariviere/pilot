@@ -1,8 +1,7 @@
-import type { SQLInputValue } from "node:sqlite";
-import type { DurableOperation } from "@pilot/protocol";
-import type { MissionThread } from "../../protocol/src/mission-thread.ts";
+import type { DurableOperation, MissionThread } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
+import type { MissionDbPort } from "./mission-database.ts";
 
 export const MISSION_THREAD_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_threads (
@@ -14,18 +13,10 @@ CREATE TABLE IF NOT EXISTS mission_thread_events (
  operation_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL,
  PRIMARY KEY(mission_id,operation_id)
 );`;
-interface Port {
-	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
-	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
-	run(sql: string, ...params: SQLInputValue[]): void;
-	transaction<T>(work: () => T): T;
-	/** Tells mission listeners (planning reconcile, the app) that a topic changed. */
-	changed?(id: string): void;
-}
 /** Only topic metadata and immutable operation results. Original entries stay in session storage. */
 export class MissionThreadStore {
-	private readonly port: Port;
-	constructor(port: Port) {
+	private readonly port: MissionDbPort;
+	constructor(port: MissionDbPort) {
 		this.port = port;
 	}
 	list(id: string): MissionThread[] {
@@ -88,7 +79,7 @@ export class MissionThreadStore {
 			);
 			return topic;
 		});
-		this.port.changed?.(id);
+		this.port.changed(id);
 		return saved;
 	}
 	/** The open or later topic whose thread chat is `sessionId`, if any. */

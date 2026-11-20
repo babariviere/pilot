@@ -60,7 +60,7 @@ itself establish the application-level 2% CPU budget.
 For large retained histories and streamed tool turns, run:
 
 ```sh
-node --expose-gc scripts/bench/request-timings.ts 5
+node --expose-gc packages/kernel/scripts/bench-request-timings.ts 5
 node packages/kernel/src/bundled-extensions.bench.ts 5
 ```
 

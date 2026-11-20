@@ -1,43 +1,10 @@
 // NSH-safe view of the canonical DeliveredWork contract. No Node SDK imports.
 // The daemon's compile-time contract test checks every field this view exposes.
 // This describes wire data only, not a second verification/domain store.
-import type { DurableOperation, OperationReceipt } from "../../packages/protocol/src/operations.ts";
+import type { UserVerification, UserVerificationLookup } from "../../packages/protocol/src/user-verification.ts";
+import type { VerificationSubject } from "../../packages/protocol/src/verification-subject.ts";
 
-export type VerificationSubject =
-	| { kind: "task"; projectId: string; missionId: string; taskId: string }
-	| { kind: "chat"; projectId: string; sessionId: string };
-
-export interface UserVerification {
-	version: 1;
-	subject: VerificationSubject;
-	deliveryId: string;
-	revision: number;
-	operationId: string;
-	state: "done" | "sent_back" | "open";
-	note: string;
-	createdAt: number;
-	messageReceipt?: { sessionId: string; requestId: string; state: "admitted" };
-}
-
-export interface UserVerificationLookup {
-	receipt: OperationReceipt | { state: "unknown" };
-	verificationReceipt: {
-		operation: DurableOperation;
-		operationId: string;
-		payloadHash: string;
-		intent: {
-			purpose: "user-verification";
-			subject: VerificationSubject;
-			deliveryId: string;
-			expectedRevision: number;
-			action: "done" | "send_back" | "reopen";
-			note: string;
-			revisionRecipientSessionId?: string;
-		};
-		verification: UserVerification;
-		state: "pending" | "accepted";
-	} | null;
-}
+export type { UserVerification, UserVerificationLookup, VerificationSubject };
 
 type Evidence = { kind: "brief"; revision: number } | { kind: "artifact"; artifactId: string; revision: number };
 

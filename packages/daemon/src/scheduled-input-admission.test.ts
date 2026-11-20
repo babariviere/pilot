@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { ScheduleStore } from "./schedule-store.ts";
 import { type ScheduleClock, ScheduleService } from "./schedules.ts";
-import { CommandRejected } from "./sessions.ts";
+import { CommandRejected } from "./kernel-worker.ts";
 import { deferred, fixture, until } from "./testing/session-workspace.ts";
 
 async function setup(t: TestContext, coordinator = false) {

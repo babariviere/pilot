@@ -24,6 +24,7 @@ import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
+import { pauseParticipants } from "./testing/pause-participants.ts";
 
 export async function nativePlanningFixture(
 	options: { native?: boolean; mcp?: McpStatusService; connections?: boolean; diagnostics?: boolean } = {},
@@ -119,14 +120,17 @@ export async function nativePlanningFixture(
 				knowledge: new KnowledgeService(store, projects, sessions),
 				service: {
 					reports: new MissionReports(store),
-					controls: new MissionControls(store, {
-						checkpointMission: async () => {
-							throw new Error("Fixture forbids execution");
-						},
-						resumeMission: async () => {
-							throw new Error("Fixture forbids execution");
-						},
-					}),
+					controls: new MissionControls(
+						store,
+						pauseParticipants({
+							checkpointMission: async () => {
+								throw new Error("Fixture forbids execution");
+							},
+							resumeMission: async () => {
+								throw new Error("Fixture forbids execution");
+							},
+						}),
+					),
 				} as MissionService,
 			},
 		};

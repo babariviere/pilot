@@ -1,6 +1,7 @@
 /** Increment for incompatible API changes, independently of the application release version. */
 export const DAEMON_PROTOCOL_VERSION = 1;
 export const MINIMUM_CLIENT_PROTOCOL_VERSION = 1;
+/** Carries the native host-action capability. Day's Rust transport keeps its own copy of this name. */
 
 /** GET /api/hello. Read before opening streams or sending mutations to a newly connected host. */
 export interface DaemonHello {
@@ -82,3 +83,5 @@ export interface DaemonCapabilities {
 	/** `planning-enroll` accepts `replaces` (an old mission), reads carry the link, and Stop re-planning exists. */
 	missionReplanning?: 1;
 }
+
+export const DEFAULT_PORT = 4319;

@@ -53,7 +53,7 @@ test("Have an agent look starts one Diagnostics chat on the planner, and its fix
 		chats.has(id) ? ({ ...chats.get(id) } as SessionSummary) : get(id),
 	);
 	t.mock.method(f.sessions, "lastAssistantReply", async () => block(note));
-	f.workers.startResearch();
+	f.workers.startReconciling();
 
 	const view = (await f.native.read(f.project.id, f.missionId)).repair as {
 		available: boolean;
@@ -64,7 +64,7 @@ test("Have an agent look starts one Diagnostics chat on the planner, and its fix
 	assert.equal((await f.execute(stale)).state, "rejected", "a changed mission refuses the start");
 	const op = f.operation(f.missionId, { purpose: "plan-repair-start" }, view.contextDigest);
 	assert.equal((await f.execute(op)).state, "accepted");
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	assert.equal(spawned.length, 1);
 	const chat = spawned[0]!;
 	assert.deepEqual(
@@ -79,8 +79,8 @@ test("Have an agent look starts one Diagnostics chat on the planner, and its fix
 	assert.deepEqual([read.state, read.chatId, read.available], ["looking", "repair-1", false]);
 
 	chats.set("repair-1", { id: "repair-1", state: "idle", working: false, outcome: "done" });
-	f.workers.scheduleResearch(f.missionId);
-	await f.workers.settleResearch();
+	f.workers.scheduleReconcile(f.missionId);
+	await f.workers.settleReconciling();
 	read = (await f.native.read(f.project.id, f.missionId)).repair as Record<string, unknown>;
 	assert.deepEqual([read.state, read.current, read.available], ["proposed", true, true]);
 	assert.deepEqual(read.proposal, note);
@@ -108,16 +108,16 @@ test("a repair reply with no usable fix fails plainly", async (t) => {
 			: get(id),
 	);
 	t.mock.method(f.sessions, "lastAssistantReply", async () => "I think it is fine.");
-	f.workers.startResearch();
+	f.workers.startReconciling();
 	const view = (await f.native.read(f.project.id, f.missionId)).repair as { contextDigest: string };
 	assert.equal(
 		(await f.execute(f.operation(f.missionId, { purpose: "plan-repair-start" }, view.contextDigest))).state,
 		"accepted",
 	);
-	await f.workers.settleResearch();
+	await f.workers.settleReconciling();
 	done = true;
-	f.workers.scheduleResearch(f.missionId);
-	await f.workers.settleResearch();
+	f.workers.scheduleReconcile(f.missionId);
+	await f.workers.settleReconciling();
 	const read = (await f.native.read(f.project.id, f.missionId)).repair as Record<string, unknown>;
 	assert.equal(read.state, "failed");
 	assert.match(String(read.reason), /no fix Pilot can use/);

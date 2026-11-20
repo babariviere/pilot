@@ -33,7 +33,20 @@ jobs:
           python3 -B -m unittest discover -s apps/day/scripts -p 'test_*.py'
           python3 -B -m unittest discover -s crates/scripts -p 'test_*.py'
 
-  # Portable tests use Linux so they do not compete for macOS runner capacity.
+  workflows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Validate workflow schema
+        run: python3 scripts/validate-workflows.py
+
+  # The full suite runs on Linux so it does not compete for macOS runner capacity.
   node:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -74,7 +87,7 @@ jobs:
       - name: Check Day screen styling
         run: pnpm exec biome lint --only=plugin apps/day
       # --timings lists the slowest test files, which decide how long this job takes.
-      - run: pnpm test -- --lane=portable --timings
+      - run: pnpm test -- --timings
 
   # Native Node/runtime and packaging contracts, without building the legacy Swift app.
   # Rust and required native helper/security checks run independently below.
@@ -134,8 +147,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Validate workflow schema
-        run: python3 scripts/validate-workflows.py
       - name: Install shared helper dependencies
         run: |
           sudo apt-get update

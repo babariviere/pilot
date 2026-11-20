@@ -1,8 +1,8 @@
 //! Original sources through released NSH, the real native bridge and isolated daemon.
-#[path = "support/day_library.rs"]
-mod day_library;
 #[path = "support/app_source.rs"]
 mod app_source;
+#[path = "support/day_library.rs"]
+mod day_library;
 use nsh_core::prelude::*;
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, compile_tsx};
@@ -87,7 +87,12 @@ impl Fixture {
     }
     fn bridge(&self) -> Bridge {
         let source: Source = serde_json::from_value(self.info["source"].clone()).unwrap();
-        let host = NativeHost::open(source, self.info["ledger"].as_str().unwrap().into()).unwrap();
+        let host = NativeHost::open_with_options(
+            source,
+            self.info["ledger"].as_str().unwrap().into(),
+            Default::default(),
+        )
+        .unwrap();
         let changes = host.changes();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
