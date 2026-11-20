@@ -2,11 +2,11 @@
 // storage. A scripted artifact source with the connected rules: rows name an
 // exact revision, one press reads that revision once, and a refusal shows
 // nothing earlier. The project page and one mission's section share rows.
-import { keymap, mount, Scroll, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
 import { createShelf, FullArtifact, MissionArtifacts } from "./ArtifactShelf";
 import { ArtifactsScreen } from "./ArtifactsScreen";
 import { type ArtifactRow, type ArtifactSource, type ListResult, type ReadResult, readRefused } from "./artifactReads";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, Panel } from "./ui";
 
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
 const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
@@ -102,11 +102,23 @@ function reopenEmpty() {
 	script.empty = true;
 	opened.update((n) => n + 1);
 }
+
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => {
 	// The full window is a dialog over every control here, so tests reach the page by key.
 	keymap.bind("mod+shift+e", reopenEmpty, { when: "always" });
 	return (
-		<View class="flex-1 bg-background">
+		<FixtureWindow>
 			<View class="flex-1">
 				<If
 					when={page() === "mission"}
@@ -116,37 +128,44 @@ mount(() => {
 						</Each>
 					}
 				>
+					{/* A mission's artifacts are a Section of the mission's panel. */}
 					<Scroll class="flex-1">
-						<View class="w-full max-w-2xl self-center px-6 py-6">
-							<MissionArtifacts source={source} shelf={shelf} missionId="m1" />
-						</View>
+						<Page width="form">
+							<Panel>
+								<Column>
+									<MissionArtifacts source={source} shelf={shelf} missionId="m1" />
+								</Column>
+							</Panel>
+						</Page>
 					</Scroll>
 				</If>
 				<FullArtifact />
 			</View>
-			<View class="gap-1 border-t border-border px-6 py-3">
-				<Text testID="reads">{`Reads: [${reads().join(" ")}]`}</Text>
-				<View class="flex-row flex-wrap gap-1">
-					<Action label="Mission page" onPress={() => page.set("mission")} />
-					<Action label="Refuse reads" onPress={() => (script.refuseReads = true)} />
-					<Action label="Allow reads" onPress={() => (script.refuseReads = false)} />
-					<Action
+			<Block>
+				<Caption testID="reads">{`Reads: [${reads().join(" ")}]`}</Caption>
+				<Buttons>
+					<Button small label="Mission page" onPress={() => page.set("mission")} />
+					<Button small label="Refuse reads" onPress={() => (script.refuseReads = true)} />
+					<Button small label="Allow reads" onPress={() => (script.refuseReads = false)} />
+					<Button
+						small
 						label="Reopen refused"
 						onPress={() => {
 							script.refuseList = true;
 							opened.update((n) => n + 1);
 						}}
 					/>
-					<Action label="Reopen empty" onPress={reopenEmpty} />
-					<Action
+					<Button small label="Reopen empty" onPress={reopenEmpty} />
+					<Button
+						small
 						label="Reopen with screens"
 						onPress={() => {
 							script.screens = true;
 							opened.update((n) => n + 1);
 						}}
 					/>
-				</View>
-			</View>
-		</View>
+				</Buttons>
+			</Block>
+		</FixtureWindow>
 	);
 });

@@ -2,9 +2,10 @@
 // what happened. nsh.json declares no capabilities, so each must be refused.
 import { readFile } from "fs/promises";
 import { connect } from "net";
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal } from "nsh";
 // @ts-expect-error The probe intentionally imports an unavailable process action.
 import { spawn } from "process";
+import { Block, Body } from "./ui";
 
 const results = signal<string[]>([]);
 
@@ -19,9 +20,9 @@ async function attempt(name: string, run: () => Promise<unknown> | unknown) {
 }
 
 mount(() => (
-	<View class="gap-1 p-4">
-		<Each of={results()}>{(line) => <Text>{line()}</Text>}</Each>
-	</View>
+	<Block gap={1}>
+		<Each of={results()}>{(line) => <Body>{line()}</Body>}</Each>
+	</Block>
 ));
 
 void (async () => {

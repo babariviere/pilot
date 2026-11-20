@@ -3,11 +3,11 @@
 // view, the preview pauses: NSH has no way to freeze a running engine, so it
 // stops and starts again from the same saved revision when it shows. Its
 // local state starts over then.
-import { effect, nativeComponent, signal, Text, View, type ViewRef } from "nsh";
+import { effect, nativeComponent, signal, View, type ViewRef } from "nsh";
 import type { SavedArtifact, Shown } from "./artifactReads";
 import { rested, showsInPage } from "./onScreen";
 import { SourcePanel } from "./SourcePanel";
-import { Action, QuietPanel } from "./ui";
+import { Body, Button, Caption, Notice } from "./ui";
 
 type State = { state: string; message: string };
 const NativePreview = nativeComponent<{ snapshot: SavedArtifact }, { state: State }>("pilot/artifact-preview", {
@@ -44,34 +44,34 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 	});
 	const saved = () => props.inspection.artifact;
 	const present = () => saved()?.content.state === "text";
+	// The preview's chrome uses the parts; the preview itself is the agent's document and keeps its own look.
 	return (
-		<QuietPanel testID="artifact-preview" class={`gap-2 ${props.fill ? "flex-1" : ""}`}>
+		<View testID="artifact-preview" class={`gap-2 ${props.fill ? "flex-1" : ""}`}>
 			<If when={props.inspection.state === "reading" || (present() && inView() && state().state === "loading")}>
-				<Text class="text-sm text-muted-foreground">Opening the saved preview…</Text>
+				<Body tone="muted">Opening the saved preview…</Body>
 			</If>
 			<If when={props.inspection.state === "refused"}>
-				<Text role="alert" class="text-sm text-muted-foreground">
+				<Body role="alert" tone="muted">
 					{props.inspection.message}
-				</Text>
+				</Body>
 			</If>
 			<If when={saved()?.content.state === "unavailable"}>
-				<Text class="text-sm text-muted-foreground">This saved revision is not available to preview.</Text>
-			</If>
-			<If when={state().state === "error"}>
-				<Text role="alert" testID="artifact-preview-error" class="text-sm text-muted-foreground">
-					{state().message}
-				</Text>
+				<Body tone="muted">This saved revision is not available to preview.</Body>
 			</If>
 			<If when={state().state === "error" || state().state === "stopped"}>
-				<If when={state().state === "stopped"}>
-					<Text role="alert" testID="artifact-preview-stopped" class="text-sm text-needs-ink">
-						{`This preview was stopped: ${state().message}. Pilot limits each preview's memory and time. Retry preview resets it.`}
-					</Text>
-				</If>
-				<Text class="text-sm text-muted-foreground">
-					The saved source is still readable below. Retry starts a fresh preview.
-				</Text>
-				<Action label="Retry preview" testID="artifact-preview-retry" onPress={startAgain} />
+				{/* One problem and its way out: the preview failed or was stopped; the saved source stays readable. */}
+				<Notice
+					testID={state().state === "stopped" ? "artifact-preview-stopped" : "artifact-preview-error"}
+					role="alert"
+					kind={state().state === "stopped" ? "needs" : "failed"}
+					text={
+						state().state === "stopped"
+							? `This preview was stopped: ${state().message}. Pilot limits each preview's memory and time. Retry preview resets it.`
+							: state().message
+					}
+					detail="The saved source is still readable below. Retry starts a fresh preview."
+					action={<Button small label="Retry preview" testID="artifact-preview-retry" onPress={startAgain} />}
+				/>
 				<SourcePanel inspection={props.inspection} />
 			</If>
 			<If when={present()}>
@@ -86,9 +86,9 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 						when={inView()}
 						else={
 							<View testID="artifact-preview-paused" class="flex-1 items-center justify-center">
-								<Text class="text-sm text-muted-foreground">
+								<Body tone="muted">
 									Paused out of view. It starts again from this saved revision when it shows.
-								</Text>
+								</Body>
 							</View>
 						}
 					>
@@ -104,10 +104,12 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 					</If>
 				</View>
 			</If>
-			<Text class="text-xs text-faint">Changes stay in this preview. Opening it does not mark the work done.</Text>
+			<Caption tone="faint">Changes stay in this preview. Opening it does not mark the work done.</Caption>
 			<If when={present() && state().state !== "error" && state().state !== "stopped"}>
-				<Action label="Reset" testID="artifact-preview-reset" onPress={startAgain} />
+				<View class="flex-row">
+					<Button small label="Reset" testID="artifact-preview-reset" onPress={startAgain} />
+				</View>
 			</If>
-		</QuietPanel>
+		</View>
 	);
 }

@@ -2,7 +2,8 @@
 // the selected file's saved diff on the right, and the private comments kept with this result. Selecting lines
 // opens a comment field under them. Comments are kept with the result and never posted to GitHub; Send back sends
 // them to the agent once, through the result's own Send back. Opening the page or reading code records nothing.
-import { cleanup, computed, effect, keymap, signal, Text, untracked, View, type ViewRef } from "nsh";
+import { cleanup, computed, effect, keymap, signal, untracked, View, type ViewRef } from "nsh";
+import { DiffCounts, DiffSplit, FillPage, FillPanel } from "./ChangesScreen";
 import type { DeliveredWork, DeliveryMirror } from "./deliveryFeed";
 import { webLink } from "./deliveryFeed";
 import {
@@ -33,20 +34,29 @@ import {
 } from "./resultReview";
 import { anchorFile, type LineAnchor, type ReviewFile, type ReviewSession, reviewSession } from "./reviewSession";
 import {
-	Action,
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
 	type DiffAnnotation,
 	type DiffLineRange,
 	Disclosure,
-	LinkAction,
-	Mark,
+	EmptyLine,
+	Link,
 	Menu,
 	MenuItem,
 	MenuTrigger,
 	Notice,
+	Num,
+	PageHead,
 	Picker,
-	Pressable,
+	Quote,
 	ReviewDiff,
-	SectionTitle,
+	Row,
+	Rows,
+	Section,
 	TextField,
 } from "./ui";
 import { setFor } from "./view";
@@ -83,7 +93,8 @@ export function ReviewStatus(props: { review: ReviewSession }) {
 						text="Private save not confirmed"
 						detail="Only this result is held. Independent work continues."
 						action={
-							<Action
+							<Button
+								small
 								label="Check saved comment"
 								disabled={props.review.busy()}
 								onPress={() => void props.review.check(id())}
@@ -93,9 +104,9 @@ export function ReviewStatus(props: { review: ReviewSession }) {
 				)}
 			</Each>
 			<If when={props.review.message()}>
-				<Text role="alert" testID="review-message" class="text-sm text-muted-foreground">
+				<Body role="alert" testID="review-message" tone="muted">
 					{props.review.message()}
-				</Text>
+				</Body>
 			</If>
 		</View>
 	);
@@ -149,30 +160,36 @@ function CodeChangesRow(props: {
 	});
 	keymap.bind("mod+r", props.onOpen);
 	return (
-		<View testID="code-changes" class="gap-3">
-			<SectionTitle title="Code changes" />
-			<View class="flex-row items-center gap-3 rounded-xl border border-border px-4 py-3">
-				<View class="min-w-0 flex-1 gap-0.5">
-					<Text testID="code-changes-line" class="text-sm text-foreground">
-						{props.line}
-					</Text>
-					<Text class="text-xs text-faint">{props.detail}</Text>
-				</View>
-				<Action
-					variant={props.primary ? "primary" : "outline"}
-					label="Review code"
-					testID="review-code"
-					shortcut={REVIEW_KEYS}
-					accessibilityLabel="Review code. Opens the saved changes; reading them records nothing."
-					anchor={(node: ViewRef) => {
-						if (untracked(focusReviewCode) !== props.placeKey) return;
-						focusReviewCode.set(null);
-						node.focus();
-					}}
-					onPress={props.onOpen}
+		<Section testID="code-changes" title="Code changes">
+			<Rows>
+				<Row
+					testID="code-changes-line"
+					title={props.line}
+					meta={props.detail}
+					trailing={<ReviewCodeButton {...props} />}
 				/>
-			</View>
-		</View>
+			</Rows>
+		</Section>
+	);
+}
+
+/** Review code (⌘R) in the Code changes row: the result's next step while its review comes first. */
+function ReviewCodeButton(props: { placeKey: string; primary: boolean; onOpen: () => void }) {
+	return (
+		<Button
+			small
+			kind={props.primary ? "primary" : "secondary"}
+			label="Review code"
+			testID="review-code"
+			shortcut={REVIEW_KEYS}
+			accessibilityLabel="Review code. Opens the saved changes; reading them records nothing."
+			anchor={(node: ViewRef) => {
+				if (untracked(focusReviewCode) !== props.placeKey) return;
+				focusReviewCode.set(null);
+				node.focus();
+			}}
+			onPress={props.onOpen}
+		/>
 	);
 }
 
@@ -185,26 +202,27 @@ function FileRow(props: {
 	onPress: () => void;
 }) {
 	return (
-		<Pressable
+		<Row
 			testID={`review-file-${props.file.path}`}
 			accessibilityLabel={`${filePath(props.file)}, ${props.file.status}${props.comments ? `, ${plural(props.comments, "comment")}` : ""}`}
 			selected={props.selected}
 			onPress={props.onPress}
-			class={`gap-0.5 rounded-lg px-3 py-2 hover:bg-accent ${props.selected ? "bg-muted" : ""}`}
-		>
-			<Text class="truncate text-sm text-foreground">{fileName(props.file.path)}</Text>
-			<View class="flex-row items-center gap-2">
-				<Text class="min-w-0 flex-1 truncate text-xs text-faint">{props.file.path}</Text>
-				<If when={props.counts} else={<Text class="text-xs text-faint">not shown</Text>}>
-					<Text class="text-xs text-ok-ink">{`+${props.counts?.added ?? 0}`}</Text>
-					<Text class="text-xs text-failed-ink">{`−${props.counts?.deleted ?? 0}`}</Text>
+			title={fileName(props.file.path)}
+			meta={folderOf(props.file.path)}
+			state={props.comments > 0 ? plural(props.comments, "comment") : undefined}
+			trailing={
+				<If when={props.counts} else={<Num>not shown</Num>}>
+					<DiffCounts added={props.counts?.added ?? 0} removed={props.counts?.deleted ?? 0} />
 				</If>
-				<If when={props.comments > 0} else={<View class="size-2" />}>
-					<Mark kind="needs" />
-				</If>
-			</View>
-		</Pressable>
+			}
+		/>
 	);
+}
+
+/** A file's folder, or "" at the top of the repository. */
+function folderOf(path: string): string {
+	const at = path.lastIndexOf("/");
+	return at < 0 ? "" : path.slice(0, at);
 }
 
 /** A saved comment under its lines. */
@@ -216,14 +234,12 @@ function SavedComment(props: { entry: ResultReviewEntry | undefined; current: bo
 		return a.side === "before" ? `old ${lines}` : lines;
 	};
 	return (
-		<View class="gap-1 bg-muted p-3">
-			<Text class="text-xs text-muted-foreground">
-				{props.current ? `Your comment · ${where()}` : `Earlier result version · ${where()}`}
-			</Text>
-			<View selectable>
-				<Text class="text-sm text-foreground">{props.entry?.body ?? ""}</Text>
-			</View>
-		</View>
+		<Block>
+			<Quote>
+				<Caption>{props.current ? `Your comment · ${where()}` : `Earlier result version · ${where()}`}</Caption>
+				<Body>{props.entry?.body ?? ""}</Body>
+			</Quote>
+		</Block>
 	);
 }
 
@@ -247,23 +263,23 @@ function CommentField(props: {
 		if (await props.review.save("comment")) props.onDone();
 	};
 	return (
-		<View testID="comment-field" class="gap-2 border-y border-border bg-background p-3">
+		<Block testID="comment-field">
 			<If
 				when={props.tooLong === 0}
 				else={
-					<Text class="text-sm text-muted-foreground">
+					<Body tone="muted">
 						{`A comment covers at most ${COMMENT_LINES} lines, and this selection has ${props.tooLong}. Select fewer lines.`}
-					</Text>
+					</Body>
 				}
 			>
 				<If
 					when={!elsewhere()}
 					else={
-						<Text class="text-sm text-muted-foreground">
+						<Body tone="muted">
 							{draft().anchor.kind !== "lines"
 								? "Your unsaved note is open on the result page. Save or discard it first."
 								: `You have an unsaved comment on ${anchorLabel(draft().anchor)}. Save or discard it first.`}
-						</Text>
+						</Body>
 					}
 				>
 					<TextField
@@ -280,9 +296,9 @@ function CommentField(props: {
 								keepReviewDraft(props.review.key, { kind: "comment", anchor: props.target, body: value });
 						}}
 					/>
-					<View class="flex-row items-center gap-2">
-						<Action
-							variant="outline"
+					<View class="flex-row flex-wrap items-center gap-2">
+						<Button
+							small
 							label={props.review.busy() ? "Saving…" : "Save comment"}
 							testID="comment-save"
 							disabled={
@@ -293,7 +309,8 @@ function CommentField(props: {
 							}
 							onPress={() => void save()}
 						/>
-						<Action
+						<Button
+							small
 							label="Discard"
 							testID="comment-discard"
 							disabled={props.review.busy()}
@@ -302,11 +319,13 @@ function CommentField(props: {
 								props.onDone();
 							}}
 						/>
-						<Text class="flex-1 text-xs text-faint">Kept with this result. Never posted to GitHub.</Text>
+						<Caption tone="faint" grow>
+							Kept with this result. Never posted to GitHub.
+						</Caption>
 					</View>
 				</If>
 			</If>
-		</View>
+		</Block>
 	);
 }
 
@@ -432,28 +451,26 @@ function EarlierDrafts(props: { work: DeliveredWork }) {
 				open={open()}
 				onToggle={() => open.set(!open())}
 			>
-				<Text class="text-xs text-muted-foreground">Read-only original words. Nothing was moved or sent.</Text>
+				<Caption>Read-only original words. Nothing was moved or sent.</Caption>
 				<Each of={earlier.slice(at(), at() + 20)} key={(d) => d.deliveryId}>
 					{(d) => (
-						<View selectable class="gap-1 border-t border-border pt-3">
-							<Text class="text-xs text-muted-foreground">{`Unsent · original result ${d().deliveryId.slice(0, 12)} · ${d().draft.kind === "note" ? "My note" : anchorLabel(d().draft.anchor)}`}</Text>
+						<View selectable class="gap-1">
+							<Caption>{`Unsent · original result ${d().deliveryId.slice(0, 12)} · ${d().draft.kind === "note" ? "My note" : anchorLabel(d().draft.anchor)}`}</Caption>
 							<If when={d().draft.anchor.kind === "lines"}>
-								<Text class="text-xs font-mono text-muted-foreground">
-									{(d().draft.anchor as LineAnchor).excerpt}
-								</Text>
+								<Quote code text={(d().draft.anchor as LineAnchor).excerpt} />
 							</If>
-							<Text class="text-sm text-foreground">{d().draft.body}</Text>
+							<Body>{d().draft.body}</Body>
 						</View>
 					)}
 				</Each>
-				<View class="flex-row gap-2">
+				<Buttons>
 					<If when={at() > 0}>
-						<Action label="Newer drafts" onPress={() => at.set(Math.max(0, at() - 20))} />
+						<Button small label="Newer drafts" onPress={() => at.set(Math.max(0, at() - 20))} />
 					</If>
 					<If when={at() + 20 < earlier.length}>
-						<Action label="Older drafts" onPress={() => at.set(at() + 20)} />
+						<Button small label="Older drafts" onPress={() => at.set(at() + 20)} />
 					</If>
-				</View>
+				</Buttons>
 			</Disclosure>
 		</If>
 	);
@@ -477,19 +494,20 @@ export function CodeReviewScreen(props: {
 	keymap.bind("mod+[", back, { when: "always" });
 	const source = props.source ?? connectedResultReview();
 	return (
-		<View testID="code-review" class="flex-1 bg-background">
+		<FillPage testID="code-review">
 			<If
 				when={source}
 				else={
-					<View class="gap-3 px-6 py-6">
-						<LinkAction label={`‹ ${props.title}`} testID="code-review-back" onPress={back} />
-						<Text class="text-sm text-muted-foreground">Private review is unavailable in this window.</Text>
-					</View>
+					<PageHead
+						pre={<Link label={`‹ ${props.title}`} testID="code-review-back" onPress={back} />}
+						title="Review code"
+						text="Private review is unavailable in this window."
+					/>
 				}
 			>
 				<Review {...props} source={source as ResultReviewSource} back={back} placeKey={key} />
 			</If>
-		</View>
+		</FillPage>
 	);
 }
 
@@ -593,161 +611,184 @@ function Review(props: {
 	};
 	const shown = () => files().filter((f) => f.path === selected());
 	return (
-		<View class="flex-1">
-			<View class="flex-row items-center gap-3 border-b border-border px-6 py-3">
-				<LinkAction label={`‹ ${props.title}`} testID="code-review-back" onPress={props.back} />
-				<Text role="header" class="text-base font-semibold text-foreground">
-					Review code
-				</Text>
-				<Text class="min-w-0 flex-1 truncate text-xs text-faint">{summary()}</Text>
-				<If when={(review.page()?.snapshots.length ?? 0) > 1}>
-					<Picker
-						testID="review-comparison"
-						label="Comparison"
-						placeholder="Comparison"
-						items={(review.page()?.snapshots ?? []).map((id) => ({
-							value: id,
-							title: `Comparison ${id.slice(0, 8)}`,
-						}))}
-						value={review.diff()?.snapshotId ?? null}
-						disabled={!props.fresh}
-						onChange={(id) => void review.openDiff(id)}
-					/>
-				</If>
-				<If when={props.mirror.view().webLinks && pr()}>
-					<LinkAction label={`Open ${prShort(props.work)}`} testID="code-review-pr" onPress={openPr} />
-				</If>
-				<Menu
-					open={menuOpen()}
-					onOpenChange={menuOpen.set}
-					align="end"
-					agentLabel="More review commands"
-					trigger={
-						<MenuTrigger
-							icon="more"
-							testID="code-review-more"
-							accessibilityLabel="More review commands"
-							tooltip="More"
-						/>
-					}
-				>
-					<MenuItem
-						label="Add to review queue"
-						testID="review-select"
-						disabled={review.disabled()}
-						onSelect={() => void review.save("select")}
-					/>
-					<MenuItem
-						label="Refresh private review"
-						testID="review-refresh"
-						disabled={review.busy()}
-						onSelect={() => void review.read()}
-					/>
-					<If when={review.page()?.nextBefore}>
-						<MenuItem
-							label="Earlier comments"
-							disabled={review.busy()}
-							onSelect={() => void review.read(review.page()?.nextBefore ?? undefined)}
-						/>
-					</If>
-					<If when={review.historyBefore() !== undefined}>
-						<MenuItem label="Latest comments" disabled={review.busy()} onSelect={() => void review.read()} />
-					</If>
-				</Menu>
-			</View>
-			<If when={review.message() || review.pending().length > 0 || (review.diff()?.omissions.length ?? 0) > 0}>
-				<View class="gap-2 border-b border-border px-6 py-2">
-					<Each of={review.diff()?.omissions ?? []} key={(v) => v}>
-						{(v) => <Text class="text-sm text-muted-foreground">{v()}</Text>}
-					</Each>
-					<ReviewStatus review={review} />
-				</View>
-			</If>
-			<View class="min-h-0 flex-1 flex-row">
-				<View class="w-72 gap-1 border-r border-border p-3">
-					<Text class="px-3 pb-1 text-xs text-faint">Files</Text>
-					<Each of={files()} key={(f) => f.path}>
-						{(f) => (
-							<FileRow
-								file={f()}
-								counts={review.counts()[files().indexOf(f())] ?? null}
-								comments={commentsOn(f())}
-								selected={selected() === f().path}
-								onPress={() => selected.set(f().path)}
+		<>
+			<PageHead
+				pre={<Link label={`‹ ${props.title}`} testID="code-review-back" onPress={props.back} />}
+				title="Review code"
+				actions={
+					<>
+						<If when={(review.page()?.snapshots.length ?? 0) > 1}>
+							<Picker
+								testID="review-comparison"
+								label="Comparison"
+								placeholder="Comparison"
+								items={(review.page()?.snapshots ?? []).map((id) => ({
+									value: id,
+									title: `Comparison ${id.slice(0, 8)}`,
+								}))}
+								value={review.diff()?.snapshotId ?? null}
+								disabled={!props.fresh}
+								onChange={(id) => void review.openDiff(id)}
 							/>
-						)}
-					</Each>
-					<View class="pt-3">
-						<EarlierDrafts work={props.work} />
-					</View>
-				</View>
-				<View class="min-w-0 flex-1 gap-3 p-5">
-					<If when={!props.fresh}>
-						<Text class="text-sm text-muted-foreground">Pilot cannot show this result's code now.</Text>
-					</If>
-					<If when={props.fresh && !review.failed() && !review.page()}>
-						<Text class="text-sm text-muted-foreground">Reading the saved code changes…</Text>
-					</If>
-					<If when={props.fresh && review.page()?.snapshots.length === 0}>
-						<Text class="text-sm text-muted-foreground">
-							No saved comparison matches this result. Pilot never shows your working copy instead.
-						</Text>
-					</If>
-					<If
-						when={
-							props.fresh && (review.page()?.snapshots.length ?? 0) > 0 && !review.diff() && !review.message()
+						</If>
+						<If when={props.mirror.view().webLinks && pr()}>
+							<Button label={`Open ${prShort(props.work)}`} testID="code-review-pr" onPress={openPr} />
+						</If>
+						<Menu
+							open={menuOpen()}
+							onOpenChange={menuOpen.set}
+							align="end"
+							agentLabel="More review commands"
+							trigger={
+								<MenuTrigger
+									icon="more"
+									testID="code-review-more"
+									accessibilityLabel="More review commands"
+									tooltip="More"
+								/>
+							}
+						>
+							<MenuItem
+								label="Add to review queue"
+								testID="review-select"
+								disabled={review.disabled()}
+								onSelect={() => void review.save("select")}
+							/>
+							<MenuItem
+								label="Refresh private review"
+								testID="review-refresh"
+								disabled={review.busy()}
+								onSelect={() => void review.read()}
+							/>
+							<If when={review.page()?.nextBefore}>
+								<MenuItem
+									label="Earlier comments"
+									disabled={review.busy()}
+									onSelect={() => void review.read(review.page()?.nextBefore ?? undefined)}
+								/>
+							</If>
+							<If when={review.historyBefore() !== undefined}>
+								<MenuItem
+									label="Latest comments"
+									disabled={review.busy()}
+									onSelect={() => void review.read()}
+								/>
+							</If>
+						</Menu>
+					</>
+				}
+			>
+				<If when={summary()}>
+					<Num>{summary()}</Num>
+				</If>
+				<Each of={review.diff()?.omissions ?? []} key={(v) => v}>
+					{(v) => <Caption>{v()}</Caption>}
+				</Each>
+				<ReviewStatus review={review} />
+			</PageHead>
+			<View class="min-h-0 flex-1 gap-3">
+				<FillPanel testID="code-review-panel">
+					<DiffSplit
+						list={files().length > 0}
+						files={
+							<Section title="Files" count={files().length}>
+								<Rows>
+									<Each of={files()} key={(f) => f.path}>
+										{(f) => (
+											<FileRow
+												file={f()}
+												counts={review.counts()[files().indexOf(f())] ?? null}
+												comments={commentsOn(f())}
+												selected={selected() === f().path}
+												onPress={() => selected.set(f().path)}
+											/>
+										)}
+									</Each>
+								</Rows>
+								<Block>
+									<EarlierDrafts work={props.work} />
+								</Block>
+							</Section>
 						}
-					>
-						<Text class="text-sm text-muted-foreground">Reading the comparison…</Text>
-					</If>
-					<If when={review.diff() && files().length === 0}>
-						<Text class="text-sm text-muted-foreground">This comparison has no changed files.</Text>
-					</If>
-					<Each of={shown()} key={(f) => `${review.diff()?.snapshotId ?? ""}/${f.path}`}>
-						{(f) => (
-							<View class="min-h-0 flex-1 gap-3">
-								<View class="flex-row items-baseline gap-2">
-									<Text class="min-w-0 shrink truncate text-sm font-semibold text-foreground">
-										{filePath(f())}
-									</Text>
-									<Text class="text-xs text-faint">{`${f().status} · ${index() + 1} of ${files().length} · J K next file`}</Text>
-								</View>
-								<If when={!f().reason} else={<Text class="text-sm text-muted-foreground">{f().reason}</Text>}>
-									<View class="min-h-0 flex-1 overflow-hidden rounded-xl border border-border">
-										<FileDiff review={review} file={f()} snapshotId={review.diff()?.snapshotId ?? ""} />
-									</View>
+						diff={
+							<>
+								<If when={!props.fresh}>
+									<EmptyLine text="Pilot cannot show this result's code now." />
 								</If>
-							</View>
-						)}
-					</Each>
+								<If when={props.fresh && !review.failed() && !review.page()}>
+									<EmptyLine text="Reading the saved code changes…" />
+								</If>
+								<If when={props.fresh && review.page()?.snapshots.length === 0}>
+									<EmptyLine text="No saved comparison matches this result. Pilot never shows your working copy instead." />
+								</If>
+								<If
+									when={
+										props.fresh &&
+										(review.page()?.snapshots.length ?? 0) > 0 &&
+										!review.diff() &&
+										!review.message()
+									}
+								>
+									<EmptyLine text="Reading the comparison…" />
+								</If>
+								<If when={review.diff() && files().length === 0}>
+									<EmptyLine text="This comparison has no changed files." />
+								</If>
+								<Each of={shown()} key={(f) => `${review.diff()?.snapshotId ?? ""}/${f.path}`}>
+									{(f) => (
+										<View class="min-h-0 flex-1">
+											<Block>
+												<View class="flex-row flex-wrap items-baseline gap-x-2">
+													<BodyStrong truncate>{filePath(f())}</BodyStrong>
+													<Caption tone="faint">{`${f().status} · ${index() + 1} of ${files().length} · J K next file`}</Caption>
+												</View>
+											</Block>
+											<If when={!f().reason} else={<EmptyLine text={f().reason ?? ""} />}>
+												<View class="min-h-0 flex-1">
+													<FileDiff
+														review={review}
+														file={f()}
+														snapshotId={review.diff()?.snapshotId ?? ""}
+													/>
+												</View>
+											</If>
+										</View>
+									)}
+								</Each>
+							</>
+						}
+					/>
+				</FillPanel>
+				{/* The page's one commit stays in view under the panel, beside what it sends. */}
+				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-2">
+					<Caption testID="review-count" grow>
+						{count() > 0
+							? `${plural(count(), "comment")} · kept with this result, never posted to GitHub`
+							: "No comments yet. Select lines to comment; comments are never posted to GitHub."}
+					</Caption>
+					<Buttons>
+						<Button
+							kind="primary"
+							label={
+								sending()
+									? "Sending…"
+									: count() > 0
+										? `Send back with ${plural(count(), "comment")}`
+										: "Send back with comments"
+							}
+							testID="review-send-back"
+							disabled={count() === 0 || !sendable() || review.disabled()}
+							onPress={() => void sendBack()}
+						/>
+						<Button
+							label="Keep for later"
+							testID="review-later"
+							disabled={review.disabled()}
+							onPress={() => void review.save("later")}
+						/>
+					</Buttons>
 				</View>
 			</View>
-			<View class="flex-row items-center gap-3 border-t border-border px-6 py-3">
-				<Text testID="review-count" class="min-w-0 flex-1 text-sm text-muted-foreground">
-					{count() > 0
-						? `${plural(count(), "comment")} · kept with this result, never posted to GitHub`
-						: "No comments yet. Select lines to comment; comments are never posted to GitHub."}
-				</Text>
-				<Action
-					label="Keep for later"
-					testID="review-later"
-					disabled={review.disabled()}
-					onPress={() => void review.save("later")}
-				/>
-				<Action
-					variant="primary"
-					label={
-						sending()
-							? "Sending…"
-							: count() > 0
-								? `Send back with ${plural(count(), "comment")}`
-								: "Send back with comments"
-					}
-					testID="review-send-back"
-					disabled={count() === 0 || !sendable() || review.disabled()}
-					onPress={() => void sendBack()}
-				/>
-			</View>
-		</View>
+		</>
 	);
 }

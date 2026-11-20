@@ -1,6 +1,18 @@
-import { cleanup, signal, Text, View } from "nsh";
+import { cleanup, signal, View } from "nsh";
 import { call, windowId } from "./bridge";
-import { Action, CheckboxRow, MarkdownPreview, Notice, SectionTitle } from "./ui";
+import {
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Checkbox,
+	Heading,
+	Link,
+	MarkdownPreview,
+	Notice,
+	Spacer,
+} from "./ui";
 
 type IssueText = { title: string; description: string };
 type Issue = { identifier: string; url: string };
@@ -50,13 +62,18 @@ const connected: Request = async (missionId, intent) => {
 	return r.ok && r.snapshot?.missionId === missionId ? r.snapshot : null;
 };
 
+/** A sub-heading inside the publisher: it sits in a `Block` of the mission's section, so it is not a `Section`. */
+function Part(props: { title: string }) {
+	return <Caption role="header">{props.title}</Caption>;
+}
+
 function Copy(props: { text: string; label?: string }) {
 	return (
 		<View selectable class="gap-1">
 			<If when={props.label}>
-				<Text class="text-xs font-semibold text-muted-foreground">{props.label ?? ""}</Text>
+				<Caption>{props.label ?? ""}</Caption>
 			</If>
-			<Text class="text-sm text-foreground">{props.text}</Text>
+			<Body>{props.text}</Body>
 		</View>
 	);
 }
@@ -65,9 +82,9 @@ function IssueDescription(props: { markdown: string; label?: string }) {
 	return (
 		<View class="gap-1">
 			<If when={props.label}>
-				<Text class="text-xs font-semibold text-muted-foreground">{props.label ?? ""}</Text>
+				<Caption>{props.label ?? ""}</Caption>
 			</If>
-			<If when={props.markdown} else={<Text class="text-sm text-muted-foreground">No description.</Text>}>
+			<If when={props.markdown} else={<Body tone="muted">No description.</Body>}>
 				<MarkdownPreview markdown={props.markdown} />
 			</If>
 		</View>
@@ -77,22 +94,25 @@ function IssueDescription(props: { markdown: string; label?: string }) {
 function IssueDraft(props: { row: Draft }) {
 	const opened = signal(false);
 	return (
-		<View class="gap-3 border-t border-border py-3">
-			<Text class="text-sm font-semibold text-foreground">
-				{(props.row.issue ? `${props.row.issue.identifier} · ` : "") + props.row.after.title}
-			</Text>
-			<View class="flex-row flex-wrap items-center gap-2">
-				<Text class="text-sm text-muted-foreground">
-					{
+		<View class="gap-2">
+			<View class="flex-row items-start gap-2">
+				<View class="min-w-0 flex-1">
+					<BodyStrong>
+						{(props.row.issue ? `${props.row.issue.identifier} · ` : "") + props.row.after.title}
+					</BodyStrong>
+					<Caption>
 						{
-							create: "Creates a sub-issue",
-							update: "Updates this issue",
-							unchanged: "Unchanged",
-							manual: "Needs an edit in Linear",
-						}[props.row.change]
-					}
-				</Text>
-				<Action
+							{
+								create: "Creates a sub-issue",
+								update: "Updates this issue",
+								unchanged: "Unchanged",
+								manual: "Needs an edit in Linear",
+							}[props.row.change]
+						}
+					</Caption>
+				</View>
+				<Button
+					small
 					label={opened() ? "Hide issue draft" : props.row.before ? "Show changes" : "Show issue draft"}
 					testID={`linear-publish-draft-${props.row.taskId}`}
 					accessibilityLabel={`${opened() ? "Hide" : "Show"} issue draft for ${props.row.after.title}`}
@@ -191,9 +211,11 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 	const count = (kind: Draft["change"]) => draft()?.issues.filter((i) => i.change === kind).length ?? 0;
 	return (
 		<View class="gap-3" testID="linear-publisher">
-			<View class="flex-row items-center justify-between gap-3 border-t border-border pt-3">
-				<SectionTitle title="Linear" />
-				<Action
+			<View class="flex-row items-center gap-2">
+				<Heading role="header">Linear</Heading>
+				<Spacer />
+				<Button
+					small
 					label={open() ? "Close publisher" : "Publish tasks to Linear"}
 					testID="linear-publisher-open"
 					disabled={!!busy()}
@@ -201,21 +223,24 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 				/>
 			</View>
 			<If when={open()}>
-				<View class="gap-4 pb-4">
+				<View class="gap-4">
 					<If when={busy()}>
-						<Text class="text-sm text-muted-foreground">
+						<Body tone="muted">
 							{busy() === "publish"
 								? "Sending confirmed changes to Linear…"
 								: busy() === "setting"
 									? "Saving project setting…"
 									: "Checking Linear publishing…"}
-						</Text>
+						</Body>
 					</If>
-					<If when={trouble() || view()?.message}>
-						<Notice
-							kind={trouble() || needsCheck() ? "unknown" : "still"}
-							text={trouble() || view()?.message || ""}
-						/>
+					{/* A problem the user can act on is a notice; the service's plain answer is a line. */}
+					<If when={trouble() || (needsCheck() && view()?.message)}>
+						<Notice text={trouble() || view()?.message || ""} />
+					</If>
+					<If when={!trouble() && !needsCheck() && view()?.message}>
+						<Body role="alert" tone="muted">
+							{view()?.message ?? ""}
+						</Body>
 					</If>
 					<If when={needsCheck()}>
 						<View class="gap-2">
@@ -226,53 +251,50 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 										: "The publish is not confirmed."
 								}
 							/>
-							<View class="flex-row">
-								<Action
+							<Buttons>
+								<Button
+									kind="primary"
 									label="Check status"
-									variant="primary"
 									disabled={!!busy()}
 									testID="linear-publish-check"
 									onPress={() => void load({ action: "check" })}
 								/>
-							</View>
+							</Buttons>
 						</View>
 					</If>
 					<If when={!view() && trouble() && !needsCheck()}>
-						<View class="flex-row">
-							<Action label="Try again" disabled={!!busy()} onPress={() => void start()} />
-						</View>
+						<Buttons>
+							<Button label="Try again" disabled={!!busy()} onPress={() => void start()} />
+						</Buttons>
 					</If>
 					<If when={view()}>
 						<View class="gap-2">
-							<View class="flex-row flex-wrap items-center justify-between gap-2">
-								<Text class="text-sm text-muted-foreground">
-									{`${view()?.projectName} · Publishing ${view()?.enabled ? "on" : "off"}`}
-								</Text>
-								<Action
+							<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+								<Body tone="muted">{`${view()?.projectName} · Publishing ${view()?.enabled ? "on" : "off"}`}</Body>
+								<Link
 									label={settings() ? "Hide project setting" : "Project setting"}
 									onPress={() => settings.set(!settings())}
 								/>
 							</View>
 							<If when={settings()}>
-								<CheckboxRow
-									label="Allow publishing in this project"
-									testID="linear-publish-enable"
-									checked={view()?.enabled ?? false}
-									disabled={!!busy()}
-									onChange={() => {
-										const v = view();
-										if (v) void load({ action: "setting", enabled: !v.enabled, revision: v.revision });
-									}}
-								>
-									<Text class="text-sm text-muted-foreground">
-										Allows confirmed writes only. Does not manage issue status.
-									</Text>
-								</CheckboxRow>
+								<View class="gap-1">
+									<Checkbox
+										label="Allow publishing in this project"
+										testID="linear-publish-enable"
+										checked={view()?.enabled ?? false}
+										disabled={!!busy()}
+										onChange={() => {
+											const v = view();
+											if (v) void load({ action: "setting", enabled: !v.enabled, revision: v.revision });
+										}}
+									/>
+									<Caption>Allows confirmed writes only. Does not manage issue status.</Caption>
+								</View>
 							</If>
 						</View>
 						<If when={(view()?.mappings.length ?? 0) > 0}>
 							<View class="gap-1">
-								<SectionTitle title="Published issues" />
+								<Part title="Published issues" />
 								<Each of={view()?.mappings ?? []} key={(m) => m.taskId}>
 									{(m) => (
 										<Copy
@@ -289,15 +311,13 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 						</If>
 						<If when={!needsCheck() && !draft()}>
 							<View class="gap-3">
-								<SectionTitle title="Parent issue" />
+								<Part title="Parent issue" />
 								<If when={!view()?.parentUrls.length}>
-									<Text class="text-sm text-muted-foreground">
-										Link a Linear issue to this mission to use it as the parent.
-									</Text>
+									<Body tone="muted">Link a Linear issue to this mission to use it as the parent.</Body>
 								</If>
 								<Each of={view()?.parentUrls ?? []} key={(url) => url}>
 									{(url) => (
-										<CheckboxRow
+										<Checkbox
 											label={url()}
 											disabled={!!busy()}
 											checked={parent() === url()}
@@ -305,15 +325,15 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 										/>
 									)}
 								</Each>
-								<SectionTitle title="Approved tasks" />
-								<Text class="text-sm text-muted-foreground">
+								<Part title="Approved tasks" />
+								<Body tone="muted">
 									{view()?.tasks.length
 										? "Select up to 8 tasks. Only these issue drafts will be sent."
 										: "No approved tasks with publishable outcomes and criteria."}
-								</Text>
+								</Body>
 								<Each of={view()?.tasks ?? []} key={(t) => t.id}>
 									{(t) => (
-										<CheckboxRow
+										<Checkbox
 											testID={`linear-publish-task-${t().id}`}
 											label={`#${t().number} ${t().title}`}
 											checked={tasks().includes(t().id)}
@@ -328,32 +348,32 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 										/>
 									)}
 								</Each>
-								<View class="flex-row">
-									<Action
+								<Buttons>
+									<Button
+										kind="primary"
 										label="Preview changes"
-										variant="primary"
 										testID="linear-publish-preview"
 										disabled={!!busy() || !parent() || !tasks().length}
 										onPress={() => void preview()}
 									/>
-								</View>
+								</Buttons>
 							</View>
 						</If>
 						<If when={draft()}>
 							{(review) => (
 								<View class="gap-3">
-									<SectionTitle title="Parent issue" />
+									<Part title="Parent issue" />
 									<Copy
 										label={`${review().parent.identifier} · ${review().parent.title}`}
 										text={review().parent.url}
 									/>
-									<SectionTitle title="Changes to publish" />
+									<Part title="Changes to publish" />
 									<Each of={review().issues} key={(i) => i.taskId}>
 										{(i) => <IssueDraft row={i()} />}
 									</Each>
-									<SectionTitle title="Blocking links" />
+									<Part title="Blocking links" />
 									<If when={!review().links.length}>
-										<Text class="text-sm text-muted-foreground">No Linear links will be created.</Text>
+										<Body tone="muted">No Linear links will be created.</Body>
 									</If>
 									<Each of={review().links} key={(e) => `${e.from}/${e.to}`}>
 										{(e) => (
@@ -373,10 +393,10 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 										)}
 									</Each>
 									<If when={conflict()}>
-										<SectionTitle title="Review edits in Linear" />
+										<Part title="Review edits in Linear" />
 										<Each of={review().edits} key={(e) => e.taskId}>
 											{(e) => (
-												<View class="gap-2 border-t border-border py-2">
+												<View class="gap-2">
 													<Copy
 														label={`${e().issue.identifier} · Last sent by Pilot`}
 														text={e().sent.title}
@@ -387,52 +407,52 @@ export function LinearPublisher(props: { missionId: string; request?: Request })
 												</View>
 											)}
 										</Each>
-										<Text class="text-sm text-muted-foreground">
+										<Body tone="muted">
 											Use the current Linear values for comparison. This changes neither Linear nor the plan.
 											Preview again before publishing.
-										</Text>
+										</Body>
 									</If>
 									<If when={!conflict()}>
 										<If when={count("manual") > 0}>
-											<Text class="text-sm text-muted-foreground">
+											<Body tone="muted">
 												Pilot cannot safely replace a title or empty description. Make that edit in Linear
 												and preview again, or change the selection.
-											</Text>
+											</Body>
 										</If>
-										<Text class="text-sm text-muted-foreground">
+										<Body tone="muted">
 											{count("create") +
 												" to create · " +
 												count("update") +
 												" to update · " +
 												review().links.filter((l) => l.change === "add").length +
 												" blocking links to add"}
-										</Text>
+										</Body>
 										<If when={!view()?.enabled}>
-											<Text class="text-sm text-muted-foreground">Publishing is off for this project.</Text>
+											<Body tone="muted">Publishing is off for this project.</Body>
 										</If>
 									</If>
-									<View class="flex-row flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
-										<Action label="Change selection" disabled={!!busy()} onPress={reset} />
+									<Buttons>
 										<If
 											when={conflict()}
 											else={
-												<Action
+												<Button
+													kind="primary"
 													label={count("update") ? "Publish changes" : "Publish to Linear"}
-													variant="primary"
 													testID="linear-publish-confirm"
 													disabled={!!busy() || !view()?.enabled || !review().pin}
 													onPress={() => void confirm("publish")}
 												/>
 											}
 										>
-											<Action
+											<Button
+												kind="primary"
 												label="Use current Linear version"
-												variant="primary"
 												disabled={!!busy() || !review().pin}
 												onPress={() => void confirm("reconcile")}
 											/>
 										</If>
-									</View>
+										<Button label="Change selection" disabled={!!busy()} onPress={reset} />
+									</Buttons>
 								</View>
 							)}
 						</If>

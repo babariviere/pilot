@@ -1,8 +1,18 @@
-import { Image, Scroll, signal, Text, View } from "nsh";
+import { Image, type JSX, Scroll, signal, View } from "nsh";
 import { currentWindow, Window } from "nsh/desktop";
-import { Action } from "./ui/button";
-import { Page, PageTitle } from "./ui/layout";
 import type { Shown } from "./artifactReads";
+import { Block, Body, Caption, Column, GridBackdrop, Link, Page, PageHead, Panel } from "./ui";
+
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a window that has no
+// DayScreen, such as this separate inspection window. This local root does what DayScreen's root does.
+function WindowCanvas(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
 
 /** An immutable copy of already-read evidence, never a live editor or an action source. */
 export function InspectInWindow(props: { title: string; context: string; text?: string; artifact?: Shown }) {
@@ -22,23 +32,28 @@ export function InspectInWindow(props: { title: string; context: string; text?: 
 			}
 			Window.open(
 				() => (
-					<Scroll class="flex-1 bg-background">
-						<Page gap={8}>
-							<View class="gap-1">
-								<Text class="text-xs text-muted-foreground">{context} · Read only</Text>
-								<PageTitle title={title} />
-							</View>
-							{content?.state === "image" ? (
-								<Image src={content.source} class="h-96 w-full object-contain" accessibilityLabel={title} />
-							) : (
-								<View selectable>
-									<Text class="text-sm text-foreground">
-										{content?.state === "text" ? content.source : (text ?? "")}
-									</Text>
-								</View>
-							)}
-						</Page>
-					</Scroll>
+					<WindowCanvas>
+						<Scroll class="flex-1">
+							<Page width="form">
+								<PageHead pre={<Caption>{`${context} · Read only`}</Caption>} title={title} />
+								<Panel>
+									<Column>
+										<Block selectable>
+											{content?.state === "image" ? (
+												<Image
+													src={content.source}
+													class="h-96 w-full object-contain"
+													accessibilityLabel={title}
+												/>
+											) : (
+												<Body>{content?.state === "text" ? content.source : (text ?? "")}</Body>
+											)}
+										</Block>
+									</Column>
+								</Panel>
+							</Page>
+						</Scroll>
+					</WindowCanvas>
 				),
 				{
 					id: "inspection",
@@ -55,9 +70,9 @@ export function InspectInWindow(props: { title: string; context: string; text?: 
 	}
 	return (
 		<View class="items-start gap-1">
-			<Action label="Open in new window" icon="fullscreen" onPress={open} />
+			<Link label="Open in new window" icon="fullscreen" onPress={open} />
 			<If when={error()}>
-				<Text class="text-xs text-muted-foreground">{error()}</Text>
+				<Caption>{error()}</Caption>
 			</If>
 		</View>
 	);

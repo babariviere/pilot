@@ -1,10 +1,10 @@
 // Share for one shown saved revision: a small menu in its viewer's header. It
 // exports only what was saved and is on screen: an image's raster bytes, or
 // code's exact source as text. There is no capture of a running preview.
-import { effect, signal, Text, View } from "nsh";
+import { effect, signal, View } from "nsh";
 import { ArtifactExport as NativeExport } from "pilot-day/native";
 import type { SavedArtifact, Shown } from "./artifactReads";
-import { Menu, MenuItem, MenuTitle, MenuTrigger } from "./ui";
+import { Caption, Menu, MenuItem, MenuTitle, MenuTrigger } from "./ui";
 
 /** The one export a saved copy supports, or none while nothing usable was read. */
 function exportOf(artifact: SavedArtifact | null): string {
@@ -72,9 +72,9 @@ export function ShareMenu(props: { shown: Shown; testID: string }) {
 		<If when={label()}>
 			<View class="flex-row items-center gap-2">
 				<If when={message()}>
-					<Text role="alert" class="max-w-64 text-xs text-muted-foreground">
-						{message()}
-					</Text>
+					<View class="max-w-64">
+						<Caption role="alert">{message()}</Caption>
+					</View>
 				</If>
 				<Menu
 					open={open()}

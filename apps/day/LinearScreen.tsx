@@ -7,7 +7,7 @@
 // A close or an update keeps the page, its project, the open issue and the
 // scroll offset (windowState.ts). The restored page reads again, as opening
 // it does, and shows nothing when the read is for another project.
-import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
+import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, View, type ViewRef } from "nsh";
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
 import { keepRead, staleLine } from "./freshness";
@@ -37,25 +37,38 @@ import {
 	troubleLine,
 } from "./linearView";
 import {
-	Action,
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	EmptyLine,
 	ExpandableRow,
 	glide,
-	InlineAction,
+	Link,
 	Mark,
 	type MarkKind,
 	Notice,
 	Page,
-	PageTitle,
-	SectionTitle,
+	PageFoot,
+	PageHead,
+	Panel,
+	Progress,
+	Rows,
+	Section,
 } from "./ui";
 import { openMission } from "./view";
 
+// Linear's own states, as the marks say them: started is working, not started and other states are new, done and
+// closed are done.
 const MARK: Record<GroupKey, MarkKind> = {
-	started: "moving",
-	todo: "still",
+	started: "working",
+	todo: "new",
 	done: "done",
 	closed: "done",
-	other: "unknown",
+	other: "new",
 };
 
 function missionsOf(day: Day): MissionRow[] {
@@ -69,24 +82,33 @@ function Cycle(props: { read: SavedLinearRead }) {
 	const cycle = (): LinearCycleSummary | null =>
 		linear()?.cycleStatus === "current" ? (linear()?.currentCycle ?? null) : null;
 	return (
-		<View testID="linear-cycle" class="gap-2">
-			<If
-				when={cycle()}
-				else={
-					<Text class="text-sm text-muted-foreground">
-						{linear()?.statusMessage || "Linear has no active cycle for this team. Pilot saved your open issues."}
-					</Text>
-				}
-			>
-				<Text class="text-sm text-foreground">{cycle() ? cycleLine(cycle() as LinearCycleSummary) : ""}</Text>
-				<View class="h-1 w-40 flex-row overflow-hidden rounded-full bg-track">
-					<View class="h-full bg-ok" style={{ flexGrow: cycle()?.done ?? 0, flexBasis: 0 }} />
-					<View class="h-full bg-progress" style={{ flexGrow: cycle()?.inProgress ?? 0, flexBasis: 0 }} />
-					<View class="h-full" style={{ flexGrow: cycle()?.todo ?? 0, flexBasis: 0 }} />
-				</View>
-				<Text class="text-xs text-faint">{cycle() ? progressLine(cycle() as LinearCycleSummary) : ""}</Text>
-			</If>
-		</View>
+		<Section testID="linear-cycle" title="Cycle">
+			<Block>
+				<If
+					when={cycle()}
+					else={
+						<Body tone="muted">
+							{linear()?.statusMessage ||
+								"Linear has no active cycle for this team. Pilot saved your open issues."}
+						</Body>
+					}
+				>
+					<Body>{cycle() ? cycleLine(cycle() as LinearCycleSummary) : ""}</Body>
+					<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+						<Progress
+							counts={{
+								done: cycle()?.done ?? 0,
+								review: 0,
+								active: cycle()?.inProgress ?? 0,
+								blocked: 0,
+								todo: cycle()?.todo ?? 0,
+							}}
+						/>
+						<Caption tone="faint">{cycle() ? progressLine(cycle() as LinearCycleSummary) : ""}</Caption>
+					</View>
+				</If>
+			</Block>
+		</Section>
 	);
 }
 
@@ -95,9 +117,9 @@ function PlaceAction(props: { place: Place; itemId: string }) {
 	const p = () => props.place;
 	return (
 		<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-			<Text class="min-w-0 shrink text-sm text-foreground">{placeSentence(p())}</Text>
+			<Body>{placeSentence(p())}</Body>
 			<If when={p().kind === "mission" && (p() as Extract<Place, { kind: "mission" }>).title}>
-				<InlineAction
+				<Link
 					label="Open the mission"
 					testID={`linear-mission-${props.itemId}`}
 					onPress={() => {
@@ -108,6 +130,46 @@ function PlaceAction(props: { place: Place; itemId: string }) {
 				/>
 			</If>
 		</View>
+	);
+}
+
+// LIBRARY GAP: Row has no form that opens in place (MissionWork.tsx needs the same). An issue's row shows its details
+// below it when pressed, with the expanded state for screen readers, and keeps the keyboard focus. The library should
+// offer an "open in place" Row (an `open` prop, `onToggle` and the content under it). Until then this helper builds
+// one from ExpandableRow, with Row's slots (mark, title, meta, a state word) and Row's spacing.
+function OpenRow(props: {
+	open: boolean;
+	testID: string;
+	accessibilityLabel: string;
+	mark: MarkKind;
+	title: string;
+	meta: string;
+	state: string;
+	anchor: (node: ViewRef) => void;
+	onToggle: () => void;
+	content: JSX.Element;
+}) {
+	return (
+		<ExpandableRow
+			open={props.open}
+			anchor={props.anchor}
+			testID={props.testID}
+			accessibilityLabel={props.accessibilityLabel}
+			onToggle={props.onToggle}
+			summaryClass="flex-row items-start gap-2.5 px-4 py-1.5 hover:bg-accent"
+			content={<View class="gap-2 pb-2.5 pl-10 pr-4">{props.content}</View>}
+		>
+			<View class="h-4.5 w-3.5 items-center justify-center">
+				<Mark kind={props.mark} />
+			</View>
+			<View class="min-w-0 flex-1">
+				<BodyStrong truncate>{props.title}</BodyStrong>
+				<Caption tone="faint" truncate>
+					{props.meta}
+				</Caption>
+			</View>
+			<Caption>{props.state}</Caption>
+		</ExpandableRow>
 	);
 }
 
@@ -149,123 +211,118 @@ function Issue(props: { day: Day; item: TrackedItem; group: GroupKey; place: Pla
 		}
 	});
 	return (
-		<ExpandableRow
+		<OpenRow
 			open={open()}
 			anchor={(n: ViewRef) => node.set(n)}
 			testID={`linear-issue-${i().id}`}
 			accessibilityLabel={`${i().title}, ${i().status}. ${placeWord(props.place)}. ${open() ? "Hide" : "Show"} its details.`}
+			mark={MARK[props.group]}
+			title={i().title}
+			meta={[key(), placeWord(props.place)].filter(Boolean).join(" · ")}
+			state={i().status}
 			onToggle={() => {
 				glide();
 				openIssue.set(open() ? null : i().id);
 				node()?.focus();
 			}}
-			summaryClass="gap-1 py-3"
 			content={
-				<View testID={`linear-detail-${i().id}`} class="flex-row gap-2.5 pb-3.5">
-					<View class="size-2" />
-					<View class="flex-1 gap-2">
-						<PlaceAction place={props.place} itemId={i().id} />
-						<If when={earlierLine(i())}>
-							<Text class="text-xs text-muted-foreground">{earlierLine(i())}</Text>
-						</If>
-						<If when={i().linearParent}>
-							<Text class="text-xs text-muted-foreground">
-								{`Sub-issue of ${i().linearParent?.identifier ?? ""} · ${i().linearParent?.title ?? ""}`}
-							</Text>
-						</If>
-						<Text class="text-xs text-faint">{i().url}</Text>
-						<If when={size()}>
-							<Text class="text-sm text-muted-foreground">{`Suggested size: ${size()}. You choose how to start.`}</Text>
-						</If>
-						<If when={sync()}>
-							<Text class="text-sm text-muted-foreground">
-								{sync()?.reconcilePlan
-									? "Review the linked work. Linear closed the issue without changing the Pilot plan."
-									: sync()?.reassigned
-										? "Work is held because Linear assigned the issue to someone else."
-										: sync()?.error ||
-											sync()?.reason ||
-											"Pilot manages progress and review. You mark the issue complete."}
-							</Text>
-						</If>
-						<If when={management() && !!props.day.linear?.source.manage}>
-							<View class="flex-row flex-wrap gap-2">
-								<If when={!management()?.enabled}>
-									<Action
-										label="Manage status"
-										disabled={managing()}
-										onPress={() => void changeManagement("manage")}
-									/>
-								</If>
-								<If
-									when={
-										management()?.sessionId &&
-										management()?.enabled &&
-										!sync()?.reassigned &&
-										!sync()?.reconcilePlan
-									}
-								>
-									<Action
-										label="Stop managing status"
-										disabled={managing()}
-										onPress={() => void changeManagement("stop")}
-									/>
-								</If>
-								<If
-									when={
-										management()?.enabled &&
-										!sync()?.reassigned &&
-										(sync()?.state === "paused" || sync()?.state === "error")
-									}
-								>
-									<Action
-										label="Resume status sync"
-										disabled={managing()}
-										onPress={() => void changeManagement("resume")}
-									/>
-								</If>
-							</View>
-							<If when={managementMessage()}>
-								<Text class="text-sm text-needs-ink">{managementMessage()}</Text>
-							</If>
-						</If>
-						<Each of={intake && request() ? [request()!] : []} key={(row) => row.request.id}>
-							{(row) => (
-								<IntakeWorkControls
-									mirror={intake!}
-									row={row()}
-									missions={openMissions(
-										props.day.scope
-											?.view()
-											.snapshot?.projects.find((p) => p.id === linearProject() && p.currentness === "live")
-											?.today ??
-											(props.day.scope
-												? { ...props.day.today(), moving: [], notMoving: [], unreported: [] }
-												: props.day.today()),
-									)}
-									busy={
-										intake!.view().sending.includes(i().id) ||
-										intake!.view().unsettled.some((o) => o.itemId === i().id)
-									}
-									fromLinearList
-									onStarted={closeLinear}
+				<View testID={`linear-detail-${i().id}`} class="gap-2">
+					<PlaceAction place={props.place} itemId={i().id} />
+					<If when={earlierLine(i())}>
+						<Caption>{earlierLine(i())}</Caption>
+					</If>
+					<If when={i().linearParent}>
+						<Caption>
+							{`Sub-issue of ${i().linearParent?.identifier ?? ""} · ${i().linearParent?.title ?? ""}`}
+						</Caption>
+					</If>
+					<Caption tone="faint">{i().url}</Caption>
+					<If when={size()}>
+						<Body tone="muted">{`Suggested size: ${size()}. You choose how to start.`}</Body>
+					</If>
+					<If when={sync()}>
+						<Body tone="muted">
+							{sync()?.reconcilePlan
+								? "Review the linked work. Linear closed the issue without changing the Pilot plan."
+								: sync()?.reassigned
+									? "Work is held because Linear assigned the issue to someone else."
+									: sync()?.error ||
+										sync()?.reason ||
+										"Pilot manages progress and review. You mark the issue complete."}
+						</Body>
+					</If>
+					<If when={management() && !!props.day.linear?.source.manage}>
+						<Buttons>
+							<If when={!management()?.enabled}>
+								<Button
+									small
+									label="Manage status"
+									disabled={managing()}
+									onPress={() => void changeManagement("manage")}
 								/>
-							)}
-						</Each>
-					</View>
+							</If>
+							<If
+								when={
+									management()?.sessionId &&
+									management()?.enabled &&
+									!sync()?.reassigned &&
+									!sync()?.reconcilePlan
+								}
+							>
+								<Button
+									small
+									label="Stop managing status"
+									disabled={managing()}
+									onPress={() => void changeManagement("stop")}
+								/>
+							</If>
+							<If
+								when={
+									management()?.enabled &&
+									!sync()?.reassigned &&
+									(sync()?.state === "paused" || sync()?.state === "error")
+								}
+							>
+								<Button
+									small
+									label="Resume status sync"
+									disabled={managing()}
+									onPress={() => void changeManagement("resume")}
+								/>
+							</If>
+						</Buttons>
+						<If when={managementMessage()}>
+							<Body role="alert" tone="muted">
+								{managementMessage()}
+							</Body>
+						</If>
+					</If>
+					<Each of={intake && request() ? [request()!] : []} key={(row) => row.request.id}>
+						{(row) => (
+							<IntakeWorkControls
+								mirror={intake!}
+								row={row()}
+								missions={openMissions(
+									props.day.scope
+										?.view()
+										.snapshot?.projects.find((p) => p.id === linearProject() && p.currentness === "live")
+										?.today ??
+										(props.day.scope
+											? { ...props.day.today(), moving: [], notMoving: [], unreported: [] }
+											: props.day.today()),
+								)}
+								busy={
+									intake!.view().sending.includes(i().id) ||
+									intake!.view().unsettled.some((o) => o.itemId === i().id)
+								}
+								fromLinearList
+								onStarted={closeLinear}
+							/>
+						)}
+					</Each>
 				</View>
 			}
-		>
-			<View class="flex-row items-center gap-2.5">
-				<Mark kind={MARK[props.group]} />
-				<Text class="flex-1 text-sm font-medium text-foreground group-hover:underline">{i().title}</Text>
-				<Text class="text-xs text-muted-foreground">{i().status}</Text>
-			</View>
-			<View class="flex-row gap-2.5">
-				<View class="size-2" />
-				<Text class="flex-1 text-xs text-faint">{[key(), placeWord(props.place)].filter(Boolean).join(" · ")}</Text>
-			</View>
-		</ExpandableRow>
+		/>
 	);
 }
 
@@ -286,83 +343,87 @@ function Issues(props: { day: Day; read: SavedLinearRead }) {
 				.map((item) => ({ item, place: placeOf(item, missions, ids) })),
 		})).filter((g) => g.rows.length > 0);
 	};
+	return (
+		<>
+			<If when={props.read.items.length === 0}>
+				<Section title="Your issues">
+					<EmptyLine
+						testID="linear-empty"
+						text={props.read.total === 0 ? "Pilot saved no issues of yours here." : ""}
+					/>
+				</Section>
+			</If>
+			<Each of={groups()} key={(g) => g.key}>
+				{(g) => (
+					<Section testID={`linear-group-${g().key}`} title={g().title} count={g().rows.length}>
+						{/* Rows hides the first row's hairline under the heading. */}
+						<Rows>
+							<Each of={g().rows} key={(r) => r.item.id}>
+								{(r) => <Issue day={props.day} item={r().item} group={g().key} place={r().place} />}
+							</Each>
+						</Rows>
+					</Section>
+				)}
+			</Each>
+			<If when={countLine(props.read)}>
+				<EmptyLine testID={props.read.complete ? "linear-complete" : "linear-more"} text={countLine(props.read)} />
+			</If>
+		</>
+	);
+}
+
+/**
+ * A read Pilot could show: the source's state as notices across the top of the panel, then the cycle and the issues
+ * when they are current.
+ */
+function Saved(props: { day: Day; read: SavedLinearRead }) {
+	const r = () => props.read;
+	const configured = () => r().source.configured && r().source.status !== "not_configured";
+	const shown = () => configured() && r().configurationCurrent;
 	// The open issue is no longer among the rows shown: say so, never open another.
 	const lost = () => {
 		const id = openIssue();
-		return !!id && !props.read.items.some((item) => item.id === id);
+		return shown() && !!id && !r().items.some((item) => item.id === id);
 	};
 	return (
-		<View class="gap-8">
+		<>
+			<If when={troubleLine(r())}>
+				<Notice testID="linear-trouble" placement="panel" text={troubleLine(r())} />
+			</If>
+			<If when={!configured()}>
+				<Notice
+					testID="linear-unset"
+					placement="panel"
+					text="Linear is not set up for this project, so Pilot saved no issues."
+					detail="This is not the same as having none."
+				/>
+			</If>
+			<If when={configured() && !r().configurationCurrent}>
+				<Notice
+					testID="linear-not-current"
+					placement="panel"
+					text="Pilot has not saved issues for this project's current Linear settings yet."
+					detail="Nothing is shown. This is not the same as having none."
+				/>
+			</If>
 			<If when={lost()}>
 				<Notice
 					testID="linear-issue-gone"
+					placement="panel"
 					text={
-						props.read.complete
+						r().complete
 							? "The issue you had open is not in Pilot's saved copy now."
 							: "The issue you had open is not among the issues shown here."
 					}
 				/>
 			</If>
-			<If when={props.read.items.length === 0}>
-				<Text testID="linear-empty" class="text-base text-muted-foreground">
-					{props.read.total === 0 ? "Pilot saved no issues of yours here." : ""}
-				</Text>
-			</If>
-			<Each of={groups()} key={(g) => g.key}>
-				{(g) => (
-					<View testID={`linear-group-${g().key}`} class="gap-0.5">
-						<View class="pb-1">
-							<SectionTitle title={g().title} count={g().rows.length} />
-						</View>
-						<Each of={g().rows} key={(r) => r.item.id}>
-							{(r) => <Issue day={props.day} item={r().item} group={g().key} place={r().place} />}
-						</Each>
-					</View>
-				)}
-			</Each>
-			<If when={countLine(props.read)}>
-				<Text testID={props.read.complete ? "linear-complete" : "linear-more"} class="text-xs text-faint">
-					{countLine(props.read)}
-				</Text>
-			</If>
-		</View>
-	);
-}
-
-/** A read Pilot could show: the source's state, then the cycle and the issues when they are current. */
-function Saved(props: { day: Day; read: SavedLinearRead }) {
-	const r = () => props.read;
-	const configured = () => r().source.configured && r().source.status !== "not_configured";
-	return (
-		<View class="gap-8">
-			<If when={troubleLine(r())}>
-				<Notice testID="linear-trouble" text={troubleLine(r())} />
-			</If>
-			<If
-				when={configured()}
-				else={
-					<Notice
-						testID="linear-unset"
-						text="Linear is not set up for this project, so Pilot saved no issues."
-						detail="This is not the same as having none."
-					/>
-				}
-			>
-				<If
-					when={r().configurationCurrent}
-					else={
-						<Notice
-							testID="linear-not-current"
-							text="Pilot has not saved issues for this project's current Linear settings yet."
-							detail="Nothing is shown. This is not the same as having none."
-						/>
-					}
-				>
+			<If when={shown()}>
+				<Column>
 					<Cycle read={r()} />
 					<Issues day={props.day} read={r()} />
-				</If>
+				</Column>
 			</If>
-		</View>
+		</>
 	);
 }
 
@@ -431,28 +492,21 @@ export function LinearScreen(props: { day: Day }) {
 	return (
 		<Scroll
 			ref={(node) => scroller.set(node)}
-			class="flex-1 bg-background"
+			class="flex-1"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
 			onScroll={(e) => {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<Page testID="linear" gap={8}>
-				<View class="gap-2">
-					<Text class="text-xs text-faint">Linear</Text>
-					<PageTitle title={linearTitle(read())} />
-					<Text class="text-base leading-relaxed text-muted-foreground">
-						Your own issues that Pilot saved for this project. Not your team's other issues or other cycles.
-					</Text>
-					<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
-						<If when={read() && savedLine(read() as SavedLinearRead)}>
-							<Text testID="linear-saved" class="flex-1 text-xs text-faint">
-								{read() ? savedLine(read() as SavedLinearRead) : ""}
-							</Text>
-						</If>
+			<Page testID="linear">
+				<PageHead
+					pre={<Caption tone="faint">Linear</Caption>}
+					title={linearTitle(read())}
+					text="Your own issues that Pilot saved for this project. Not your team's other issues or other cycles."
+					actions={
 						<If when={reads.warn()}>
-							<Action
+							<Button
 								label={v().reading ? "Reading…" : "Try now"}
 								icon="refresh"
 								testID="linear-read"
@@ -461,42 +515,60 @@ export function LinearScreen(props: { day: Day }) {
 								onPress={() => void reads.now()}
 							/>
 						</If>
-					</View>
-				</View>
-				<If when={other()}>
-					<Notice
-						testID="linear-other-project"
-						text="Pilot cannot show the issues this page showed before. Its saved copy is now for another project."
-						detail="Nothing is shown. This is not the same as having none."
-					/>
-				</If>
-				{/* With issues shown, a failed read says nothing until the shared old-data rule does. */}
-				<If when={v().reason && !other() && (!read() || reads.stale())}>
-					<Notice
-						testID="linear-off"
-						text={
-							read()
-								? staleLine(reads.readAt() ?? 0)
-								: `Pilot cannot show your Linear issues here. ${v().reason}`
-						}
-						detail={read() ? undefined : "This is not the same as having none."}
-					/>
-				</If>
-				<If
-					when={read()}
-					else={
-						<If when={!v().reason && !other()}>
-							<Text class="text-base text-muted-foreground">Reading your saved Linear issues…</Text>
-						</If>
 					}
 				>
-					<Each of={read() ? [read() as SavedLinearRead] : []} key={(r) => r.contextDigest}>
-						{(r) => <Saved day={props.day} read={r()} />}
-					</Each>
-				</If>
-				<Text class="border-t border-border pt-5 text-xs text-faint">
-					Reading the list never starts work or changes Linear.
-				</Text>
+					<If when={read() && savedLine(read() as SavedLinearRead)}>
+						<Caption testID="linear-saved" tone="faint">
+							{read() ? savedLine(read() as SavedLinearRead) : ""}
+						</Caption>
+					</If>
+				</PageHead>
+				<Panel
+					testID="linear-panel"
+					notice={
+						<>
+							<If when={other()}>
+								<Notice
+									testID="linear-other-project"
+									placement="panel"
+									text="Pilot cannot show the issues this page showed before. Its saved copy is now for another project."
+									detail="Nothing is shown. This is not the same as having none."
+								/>
+							</If>
+							{/* With issues shown, a failed read says nothing until the shared old-data rule does. */}
+							<If when={v().reason && !other() && (!read() || reads.stale())}>
+								<Notice
+									testID="linear-off"
+									placement="panel"
+									text={
+										read()
+											? staleLine(reads.readAt() ?? 0)
+											: `Pilot cannot show your Linear issues here. ${v().reason}`
+									}
+									detail={read() ? undefined : "This is not the same as having none."}
+								/>
+							</If>
+						</>
+					}
+				>
+					<If
+						when={read()}
+						else={
+							<If when={!v().reason && !other()}>
+								<Column>
+									<Section title="Your issues">
+										<EmptyLine text="Reading your saved Linear issues…" />
+									</Section>
+								</Column>
+							</If>
+						}
+					>
+						<Each of={read() ? [read() as SavedLinearRead] : []} key={(r) => r.contextDigest}>
+							{(r) => <Saved day={props.day} read={r()} />}
+						</Each>
+					</If>
+				</Panel>
+				<PageFoot text="Reading the list never starts work or changes Linear." />
 			</Page>
 		</Scroll>
 	);

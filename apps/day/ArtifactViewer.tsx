@@ -4,7 +4,7 @@
 // side; the full window shows a copy of the pane it was opened from and
 // reads nothing. When that pane stops being what its page shows (a newer
 // result, another pin or side, a closed page), the copy closes at once.
-import { cleanup, effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, type JSX, keymap, Scroll, signal, View, type ViewRef } from "nsh";
 import { Dialog } from "nsh/base";
 import { ShareMenu, savedTitle } from "./ArtifactExport";
 import { ArtifactPreview } from "./ArtifactPreview";
@@ -12,7 +12,7 @@ import type { Shown } from "./artifactReads";
 import { artifactPreviewsAvailable } from "./bridge";
 import { kindName } from "./deliveryView";
 import { SourcePanel } from "./SourcePanel";
-import { Action, glide } from "./ui";
+import { Body, Button, Caption, GridBackdrop, glide, Heading, narrow } from "./ui";
 
 /** Whether `shown` runs in the app's isolated preview rather than showing its saved content. */
 export function showsPreview(shown: Shown): boolean {
@@ -83,7 +83,8 @@ export function ArtifactTools(props: {
 					props.onFull && props.shown.state === "shown" && props.shown.artifact?.content.state !== "unavailable"
 				}
 			>
-				<Action
+				<Button
+					small
 					label="Show in the full window"
 					icon="fullscreen"
 					iconOnly
@@ -95,7 +96,8 @@ export function ArtifactTools(props: {
 				/>
 			</If>
 			<If when={props.onExit}>
-				<Action
+				<Button
+					small
 					label="Close full window (Esc)"
 					icon="fullscreenExit"
 					iconOnly
@@ -146,7 +148,26 @@ function closeFull() {
 
 /** Where a viewer without its pane in view says so, in the pane's place. */
 export function InFullNote() {
-	return <Text class="text-sm text-muted-foreground">Showing in the full window. Esc comes back here.</Text>;
+	return <Body tone="muted">Showing in the full window. Esc comes back here.</Body>;
+}
+
+// LIBRARY GAP: no part for a full-window view over a page: an opaque canvas with the grid, a bar across its top
+// (a title, a quiet line, commands at the right, a hairline under it) and the content filling the rest. The library
+// should offer one (ExpeditionChart's full chart needs the same). Until then this helper draws it with the
+// canvas and hairline tokens and DayScreen's grid.
+function FullWindow(props: { bar: JSX.Element; actions: JSX.Element; children?: JSX.Element }) {
+	return (
+		<View testID="artifact-full" class="flex-1 bg-background">
+			<GridBackdrop />
+			<View
+				class={`flex-row flex-wrap items-center gap-x-4 gap-y-1 border-b border-border py-2.5 ${narrow() ? "px-3" : "px-6"}`}
+			>
+				<View class="min-w-0 flex-1 gap-0.5">{props.bar}</View>
+				{props.actions}
+			</View>
+			<View class="min-h-0 flex-1 p-4">{props.children}</View>
+		</View>
+	);
 }
 
 /**
@@ -185,36 +206,40 @@ export function FullArtifact() {
 					onOpen={() => exit?.focus()}
 					class="absolute inset-0 bg-background"
 				>
-					<View testID="artifact-full" class="flex-1">
-						<View class="flex-row flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-6 py-2.5">
-							<View class="min-w-0 flex-1 gap-0.5">
-								<Text role="header" class="truncate text-sm font-semibold text-foreground">
+					<FullWindow
+						bar={
+							<>
+								<Heading role="header" truncate>
 									{`${savedTitle(v().shown)} · ${kindName(v().shown.kind)} · revision ${v().shown.pin.revision}`}
-								</Text>
-								<Text class="text-xs text-faint">
+								</Heading>
+								<Caption tone="faint">
 									{v().side ? `${v().side} · ${paneLine(v().shown)}` : paneLine(v().shown)}
-								</Text>
-							</View>
-							<If when={v().shown.kind === "nsh" && artifactPreviewsAvailable()}>
-								<Action
-									label={v().shown.preview ? "Inspect source" : "Show preview"}
-									testID="artifact-full-toggle"
-									onPress={toggle}
+								</Caption>
+							</>
+						}
+						actions={
+							<>
+								<If when={v().shown.kind === "nsh" && artifactPreviewsAvailable()}>
+									<Button
+										small
+										label={v().shown.preview ? "Inspect source" : "Show preview"}
+										testID="artifact-full-toggle"
+										onPress={toggle}
+									/>
+								</If>
+								<ArtifactTools
+									shown={v().shown}
+									testID="artifact-full"
+									onExit={closeFull}
+									exitAnchor={(node) => {
+										exit = node;
+									}}
 								/>
-							</If>
-							<ArtifactTools
-								shown={v().shown}
-								testID="artifact-full"
-								onExit={closeFull}
-								exitAnchor={(node) => {
-									exit = node;
-								}}
-							/>
-						</View>
-						<View class="min-h-0 flex-1 p-4">
-							<ArtifactBody shown={v().shown} fill />
-						</View>
-					</View>
+							</>
+						}
+					>
+						<ArtifactBody shown={v().shown} fill />
+					</FullWindow>
 				</Dialog>
 			)}
 		</If>

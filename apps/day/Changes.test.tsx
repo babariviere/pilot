@@ -114,7 +114,9 @@ test("a change seen landed once keeps that, with a later unclear check", async (
 	const app = await open("./Changes.tsx", desktop);
 	await app.press(`id:change-${shell.identity.snapshotId}`);
 	await app.waitFor("Seen on main 2 days ago. A later check could not confirm it.");
-	expect(app.shows("Mode changed scripts/bootstrap.sh: No lines for this file in the kept patch.")).toBe(false);
+	// Each file is a row now (its name, then folder, change and note on its meta line). A mode change says only that.
+	expect(app.shows("id:change-file-scripts/bootstrap.sh >> text:scripts · Mode changed")).toBe(true);
+	expect(app.shows("text:/No lines for this file in the kept patch/")).toBe(false);
 	expect(app.shows("1 file changed, +0 −0")).toBe(true);
 });
 
@@ -124,7 +126,8 @@ test("Later defers without approval, and Bring back names the new revision", asy
 	await app.press(`id:change-${docs.identity.snapshotId}`);
 	await app.waitFor("Waiting for your review.");
 	expect(app.shows("Not kept: 2 images over 1 MiB were not kept.")).toBe(true);
-	expect(app.shows("Added docs/day.png: Binary file. No lines to show.")).toBe(true);
+	// Each file is a row now: its name, then folder, change and why it has no lines on its meta line.
+	expect(app.shows("id:change-file-docs/day.png >> text:docs · Added · Binary file. No lines to show.")).toBe(true);
 	await app.press("role:button[Later]");
 	await app.waitFor("Put off. It still waits for your review; nothing was approved.");
 	expect(app.shows("You put this off. It still waits for your review.")).toBe(true);

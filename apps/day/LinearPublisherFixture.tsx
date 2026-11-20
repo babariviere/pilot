@@ -1,6 +1,6 @@
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { type JSX, mount, Scroll, signal, View } from "nsh";
 import { LinearPublisher, type PublisherIntent, type PublisherSnapshot } from "./LinearPublisher";
-import { Page, PageTitle } from "./ui";
+import { Block, Column, GridBackdrop, Page, PageFoot, PageHead, Panel, Section } from "./ui";
 
 const parent = {
 	title: "Make failed payments recoverable",
@@ -64,17 +64,38 @@ function Fixture() {
 		};
 	};
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll class="flex-1">
 			<Page>
-				<PageTitle title="Recover failed payments" />
-				<LinearPublisher missionId="fixture" request={request} />
-				<Text class="text-xs text-muted-foreground">{calls().join(" → ")}</Text>
+				<PageHead title="Recover failed payments" />
+				{/* As the mission page shows it: in a Block of the mission's "In this mission" section. */}
+				<Panel>
+					<Column>
+						<Section title="In this mission">
+							<Block>
+								<LinearPublisher missionId="fixture" request={request} />
+							</Block>
+						</Section>
+					</Column>
+				</Panel>
+				<PageFoot text={calls().join(" → ")} />
 			</Page>
 		</Scroll>
 	);
 }
+
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1">
+	<FixtureWindow>
 		<Fixture />
-	</View>
+	</FixtureWindow>
 ));

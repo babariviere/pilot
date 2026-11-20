@@ -1,16 +1,16 @@
-// Saved artifacts as a gallery: one card per artifact with its kind, title
+// Saved artifacts as a shelf: one row per artifact with its title, kind
 // and exact revision. A mission's overview groups its links by task; the
 // project's Artifacts page lists newest first. Each page reads its list once
-// when it opens and starts no preview: opening a card reads that revision
+// when it opens and starts no preview: opening a row reads that revision
 // once and shows it below its row, in the app's isolated preview for NSH or
 // as plain text otherwise. One artifact shows at a time on a page, and one
 // pane at a time in it: comparing a previous version switches Before and
-// After in the same place. A screen a worker reported is one card: its After
+// After in the same place. A screen a worker reported is one row: its After
 // and Before captures open together, After first.
 // The panel arrives with a short fade and rise and the rows below glide; it
 // fades out before it closes, and a new side fades in where the old one was.
 // Nothing here is saved, sent or counted as anyone's check.
-import { cleanup, effect, type Signal, signal, Text, untracked, View, type ViewRef } from "nsh";
+import { cleanup, effect, type Signal, signal, untracked, View, type ViewRef } from "nsh";
 import { savedTitle } from "./ArtifactExport";
 import { ArtifactBody, ArtifactTools, closeFullFor, InFullNote, inFull, openFull, paneLine } from "./ArtifactViewer";
 import { type ArtifactList, type ArtifactRow, type ArtifactSource, beforeRow, type Shown } from "./artifactReads";
@@ -18,22 +18,28 @@ import { artifactPreviewsAvailable } from "./bridge";
 import { screenTitle } from "./deliveryScreens";
 import { kindName } from "./deliveryView";
 import {
-	Action,
+	Block,
+	BodyStrong,
+	Button,
+	Caption,
 	createPanelMotion,
+	EmptyLine,
 	FadeIn,
 	Field,
 	glide,
 	LEAVE_MS,
 	Notice,
-	Pressable,
-	SectionTitle,
-	TabItem,
-	TabRow,
+	Row,
+	RowGroup,
+	Rows,
+	Section,
+	Tab,
+	Tabs,
 } from "./ui";
 
 export { FullArtifact } from "./ArtifactViewer";
 
-/** The artifact open on a page, by its card's key. */
+/** The artifact open on a page, by its row's key. */
 type Opened = Shown & { key: string; generation: number; row: ArtifactRow };
 
 /** What one page's gallery shows. It lives with the page and is never saved. */
@@ -42,7 +48,7 @@ export type Shelf = {
 	/** The generation of the open artifact while its panel fades out, else null: it counts as closed. */
 	closing: Signal<number | null>;
 	anchors: Map<string, ViewRef>;
-	/** Closes the open artifact, after its panel fades out, and focuses its card. False when none is open or it is already closing. */
+	/** Closes the open artifact, after its panel fades out, and focuses its row. False when none is open or it is already closing. */
 	hideLast(): boolean;
 	/** The open panel's way out, while one is on screen. */
 	leave: (() => Promise<void>) | null;
@@ -66,7 +72,7 @@ export function createShelf(): Shelf {
 			anchors.get(now.key)?.focus();
 			closing.set(now.generation);
 			const close = () => {
-				// A card opened meanwhile stays open.
+				// A row opened meanwhile stays open.
 				if (open()?.generation !== now.generation) return;
 				glide();
 				open.set(null);
@@ -82,7 +88,7 @@ export function createShelf(): Shelf {
 	return shelf;
 }
 
-/** A card's identity on its page: the same revision can be linked to two tasks. */
+/** A row's identity on its page: the same revision can be linked to two tasks. */
 function rowKey(row: ArtifactRow): string {
 	return [row.taskId ?? "", row.sessionId, row.artifactId, row.revision ?? ""].join("/");
 }
@@ -96,7 +102,7 @@ let generations = 0;
 
 /**
  * Opens `row`, reading its exact revision once. What was open before
- * closes; a late answer for a card closed since is dropped.
+ * closes; a late answer for a row closed since is dropped.
  */
 async function openRow(shelf: Shelf, source: ArtifactSource, row: ArtifactRow) {
 	if (row.revision === null) return;
@@ -141,22 +147,22 @@ function revisionLine(row: ArtifactRow, inMission: boolean): string {
 	return `${kindName(row.kind)} · revision ${row.revision}${current}`;
 }
 
-/** A card's title: a screen's name without "(After)". */
-function cardTitle(row: ArtifactRow): string {
+/** A row's title: a screen's name without "(After)". */
+function rowTitle(row: ArtifactRow): string {
 	return row.pair ? screenTitle(row.title) : row.title;
 }
 
-/** What a card's thumbnail says. */
-function thumbLabel(row: ArtifactRow): string {
-	if (!row.pair) return kindName(row.kind);
+/** What a reported screen's row says it holds; other rows name their kind in their meta line. */
+function pairLabel(row: ArtifactRow): string {
+	if (!row.pair) return "";
 	return row.pair.before ? "Before / After" : "New screen";
 }
 
-/** One artifact's card. Its thumbnail names the kind; nothing runs until it opens. */
-function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; inMission: boolean }) {
+/** One artifact's row: its title, kind and revision. Nothing runs until it opens. */
+function ShelfRow(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; inMission: boolean }) {
 	const key = rowKey(props.row);
 	const isOpen = () => props.shelf.open()?.key === key && props.shelf.closing() === null;
-	const name = () => cardTitle(props.row) || "the artifact";
+	const name = () => rowTitle(props.row) || "the artifact";
 	const label = () => {
 		if (props.row.revision === null) return `${name()}. No saved revision can be read here.`;
 		if (isOpen()) return `Close ${name()}.`;
@@ -166,31 +172,31 @@ function Card(props: { source: ArtifactSource; shelf: Shelf; row: ArtifactRow; i
 			? `Open ${name()}, revision ${props.row.revision}, in its isolated preview. Looking records nothing.`
 			: `Show the saved source of ${name()}, revision ${props.row.revision}, as plain text. Looking records nothing.`;
 	};
+	// A row with no saved revision cannot open: it shows, but is not a press target.
 	return (
-		<Pressable
-			anchor={(node: ViewRef) => props.shelf.anchors.set(key, node)}
+		<Row
 			testID={`artifact-card-${key}`}
+			title={rowTitle(props.row) || "Artifact"}
+			meta={revisionLine(props.row, props.inMission)}
+			state={pairLabel(props.row) || undefined}
+			selected={isOpen()}
 			accessibilityLabel={label()}
-			disabled={props.row.revision === null}
-			onPress={() => {
-				if (isOpen()) props.shelf.hideLast();
-				else void openRow(props.shelf, props.source, props.row);
-			}}
-			class="group flex-1 gap-2 rounded-xl border p-2 transition duration-150 hover:bg-accent active:bg-accent disabled:opacity-60"
-			classList={{ "border-border-strong bg-accent": isOpen(), "border-border": !isOpen() }}
-		>
-			<View class="h-24 items-center justify-center rounded-lg bg-muted">
-				<Text class="text-xs font-semibold tracking-wide text-faint">{thumbLabel(props.row)}</Text>
-			</View>
-			<View class="gap-0.5 px-1 pb-1">
-				<Text class="truncate text-sm text-foreground group-hover:underline">
-					{cardTitle(props.row) || "Artifact"}
-				</Text>
-				<Text class="truncate text-xs text-muted-foreground">{revisionLine(props.row, props.inMission)}</Text>
-			</View>
-		</Pressable>
+			anchor={(node: ViewRef) => props.shelf.anchors.set(key, node)}
+			onPress={
+				props.row.revision === null
+					? undefined
+					: () => {
+							if (isOpen()) props.shelf.hideLast();
+							else void openRow(props.shelf, props.source, props.row);
+						}
+			}
+		/>
 	);
 }
+
+// LIBRARY GAP: Tabs attach only to the Panel's top edge, and no part switches between two views inside a section.
+// Before and After use Tabs and Tab as they are, above the one pane they switch; the library should offer a small
+// switch for a view inside a section (a segmented control).
 
 /**
  * The open artifact, under its row: its preview or saved source, and Close.
@@ -281,110 +287,97 @@ function Viewer(props: { shelf: Shelf; source: ArtifactSource }) {
 		});
 	};
 	return (
-		<View testID="artifact-viewer" class="gap-2 pt-1" style={panel.style}>
-			{/* The tabs keep their own width; when the row is narrow, the commands wrap below them, never under them. */}
-			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+		<View testID="artifact-viewer" style={panel.style}>
+			<Block>
+				{/* The pane's own saved title: an older revision keeps the name it was saved with. Its commands wrap below it
+				when the row is narrow. */}
+				<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+					<View class="min-w-0 flex-1 flex-row flex-wrap items-baseline gap-x-2">
+						<BodyStrong testID="artifact-viewer-title">{savedTitle(pane())}</BodyStrong>
+						<Caption tone="faint">{paneLine(pane())}</Caption>
+					</View>
+					<View class="flex-row flex-wrap items-center justify-end gap-2">
+						<If when={now().state === "refused"}>
+							<Button
+								small
+								label="Retry read"
+								testID="artifact-viewer-retry"
+								onPress={() => void openRow(props.shelf, props.source, now().row)}
+							/>
+						</If>
+						<If when={!now().row.pair && now().state === "shown" && now().pin.revision > 1}>
+							<Button
+								small
+								label={before() ? "Close comparison" : "Compare previous version"}
+								testID="artifact-compare"
+								onPress={() => {
+									if (before()) stopComparing();
+									else void compare();
+								}}
+							/>
+						</If>
+						<If when={now().kind === "nsh" && artifactPreviewsAvailable() && now().state === "shown"}>
+							<Button
+								small
+								label={now().preview ? "Inspect source" : "Show preview"}
+								testID="artifact-viewer-toggle"
+								onPress={toggle}
+							/>
+						</If>
+						<ArtifactTools shown={pane()} testID="artifact-viewer" onFull={full} />
+						<Button small label="Close" testID="artifact-viewer-close" onPress={() => props.shelf.hideLast()} />
+					</View>
+				</View>
+				{/* The tabs keep their own width, above the one pane they switch. */}
 				<If when={before()}>
 					<View class="flex-row">
-						<TabRow>
-							<TabItem
+						<Tabs>
+							<Tab
 								label={pair() ? "Before" : `Before · revision ${before()?.pin.revision ?? ""}`}
 								selected={side() === "before"}
 								testID="artifact-tab-before"
 								onPress={() => side.set("before")}
 							/>
-							<TabItem
+							<Tab
 								label={pair() ? "After" : `After · revision ${now().pin.revision}`}
 								selected={side() === "after"}
 								testID="artifact-tab-after"
 								onPress={() => side.set("after")}
 							/>
-						</TabRow>
+						</Tabs>
 					</View>
 				</If>
-				<View class="ml-auto flex-row flex-wrap items-center justify-end gap-1">
-					<If when={now().state === "refused"}>
-						<Action
-							label="Retry read"
-							testID="artifact-viewer-retry"
-							onPress={() => void openRow(props.shelf, props.source, now().row)}
-						/>
-					</If>
-					<If when={!now().row.pair && now().state === "shown" && now().pin.revision > 1}>
-						<Action
-							label={before() ? "Close comparison" : "Compare previous version"}
-							testID="artifact-compare"
-							onPress={() => {
-								if (before()) stopComparing();
-								else void compare();
-							}}
-						/>
-					</If>
-					<If when={now().kind === "nsh" && artifactPreviewsAvailable() && now().state === "shown"}>
-						<Action
-							label={now().preview ? "Inspect source" : "Show preview"}
-							testID="artifact-viewer-toggle"
-							onPress={toggle}
-						/>
-					</If>
-					<ArtifactTools shown={pane()} testID="artifact-viewer" onFull={full} />
-					<Action label="Close" testID="artifact-viewer-close" onPress={() => props.shelf.hideLast()} />
-				</View>
-			</View>
-			{/* The pane's own saved title: an older revision keeps the name it was saved with. */}
-			<View class="flex-row flex-wrap items-baseline gap-x-2">
-				<Text testID="artifact-viewer-title" class="text-sm font-medium text-foreground">
-					{savedTitle(pane())}
-				</Text>
-				<Text class="text-xs text-faint">{paneLine(pane())}</Text>
-			</View>
-			<If when={!inFull(props.shelf)} else={<InFullNote />}>
-				{/* A new artifact or side starts its own pane; a preview there starts again from its saved revision. */}
-				<Each of={[`${props.shelf.open()?.generation ?? ""}/${side()}`]} key={String}>
-					{/* Comparing, Before and After share one pane of a fixed height. */}
-					{() => (
-						<FadeIn>
-							<ArtifactBody shown={pane()} bounded={!!before()} />
-						</FadeIn>
-					)}
-				</Each>
-			</If>
+				<If when={!inFull(props.shelf)} else={<InFullNote />}>
+					{/* A new artifact or side starts its own pane; a preview there starts again from its saved revision. */}
+					<Each of={[`${props.shelf.open()?.generation ?? ""}/${side()}`]} key={String}>
+						{/* Comparing, Before and After share one pane of a fixed height. */}
+						{() => (
+							<FadeIn>
+								<ArtifactBody shown={pane()} bounded={!!before()} />
+							</FadeIn>
+						)}
+					</Each>
+				</If>
+			</Block>
 		</View>
 	);
 }
 
-const COLUMNS = 3;
-
-/** `rows` in runs of three cards, the last run padded so cards keep their width. */
-function runs(rows: ArtifactRow[]): ArtifactRow[][] {
-	const out: ArtifactRow[][] = [];
-	for (let i = 0; i < rows.length; i += COLUMNS) out.push(rows.slice(i, i + COLUMNS));
-	return out;
-}
-
-function Grid(props: { source: ArtifactSource; shelf: Shelf; rows: ArtifactRow[]; inMission: boolean }) {
+/** The rows of one list, the open one with its viewer under it. */
+function ShelfRows(props: { source: ArtifactSource; shelf: Shelf; rows: ArtifactRow[]; inMission: boolean }) {
 	return (
-		<View class="gap-3">
-			<Each of={runs(props.rows)} key={(run) => run.map(rowKey).join("|")}>
-				{(run) => (
-					<View class="gap-3">
-						<View class="flex-row gap-3">
-							<Each of={run()} key={rowKey}>
-								{(row) => (
-									<Card source={props.source} shelf={props.shelf} row={row()} inMission={props.inMission} />
-								)}
-							</Each>
-							<Each of={Array.from({ length: COLUMNS - run().length }, (_, i) => i)} key={String}>
-								{() => <View class="flex-1" />}
-							</Each>
-						</View>
-						<If when={run().some((row) => rowKey(row) === props.shelf.open()?.key)}>
+		<Rows>
+			<Each of={props.rows} key={rowKey}>
+				{(row) => (
+					<>
+						<ShelfRow source={props.source} shelf={props.shelf} row={row()} inMission={props.inMission} />
+						<If when={rowKey(row()) === props.shelf.open()?.key}>
 							<Viewer shelf={props.shelf} source={props.source} />
 						</If>
-					</View>
+					</>
 				)}
 			</Each>
-		</View>
+		</Rows>
 	);
 }
 
@@ -405,7 +398,7 @@ function byTask(rows: ArtifactRow[]): Group[] {
 
 type Listing = { status: "reading" } | { status: "shown"; list: ArtifactList } | { status: "refused"; message: string };
 
-/** The cards of the project, or of mission `missionId` grouped by task. It reads once when it shows. */
+/** The rows of the project, or of mission `missionId` grouped by task. It reads once when it shows. */
 export function ArtifactShelf(props: {
 	source: ArtifactSource;
 	shelf: Shelf;
@@ -448,58 +441,58 @@ export function ArtifactShelf(props: {
 		return l.status === "refused" ? l.message : "";
 	};
 	return (
-		<View testID={props.testID} class="gap-1">
+		<View testID={props.testID}>
 			<If when={listing().status === "shown"}>
-				<Field
-					label="Search loaded outputs"
-					testID="artifact-search"
-					value={query()}
-					onChange={(value) => {
-						props.shelf.hideLast();
-						query.set(value);
-					}}
-				/>
+				<Block>
+					<Field
+						label="Search loaded outputs"
+						testID="artifact-search"
+						value={query()}
+						onChange={(value) => {
+							props.shelf.hideLast();
+							query.set(value);
+						}}
+					/>
+				</Block>
 			</If>
 			<If when={listing().status === "reading"}>
-				<Text class="text-sm text-muted-foreground">Reading saved artifacts…</Text>
+				<EmptyLine text="Reading saved artifacts…" />
 			</If>
 			<If when={refusal()}>
-				<Notice role="alert" text={`${refusal()} This is not the same as having none.`} />
+				<Notice placement="section" role="alert" text={`${refusal()} This is not the same as having none.`} />
 			</If>
 			<If when={listed() && rows().length === 0}>
-				<Text class="text-sm text-muted-foreground">
-					{query().trim() ? "No loaded outputs match this search." : props.empty}
-				</Text>
+				<EmptyLine text={query().trim() ? "No loaded outputs match this search." : props.empty} />
 			</If>
 			<Each of={groups()} key={(g) => g.id}>
 				{(g) => (
-					<View class="gap-2 pb-3">
+					<>
 						<If when={g().label}>
-							<Text class="pt-2 text-xs text-faint">{g().label}</Text>
+							<RowGroup label={g().label} />
 						</If>
-						<Grid source={props.source} shelf={props.shelf} rows={g().rows} inMission={!!props.missionId} />
-					</View>
+						<ShelfRows source={props.source} shelf={props.shelf} rows={g().rows} inMission={!!props.missionId} />
+					</>
 				)}
 			</Each>
 			<If when={listed()?.more}>
-				<Text class="pt-1 text-xs text-faint">Showing the 100 newest. Older ones stay with their chats.</Text>
+				<EmptyLine text="Showing the 100 newest. Older ones stay with their chats." />
 			</If>
 		</View>
 	);
 }
 
-/** Exact pinned revisions as cards, such as the prototype a round asks about. Nothing is read until one opens. */
+/** Exact pinned revisions as rows, such as the prototype a round asks about. Nothing is read until one opens. */
 export function PinnedArtifacts(props: { source: ArtifactSource; shelf: Shelf; rows: ArtifactRow[] }) {
-	return <Grid source={props.source} shelf={props.shelf} rows={props.rows} inMission={true} />;
+	return <ShelfRows source={props.source} shelf={props.shelf} rows={props.rows} inMission={true} />;
 }
 
-/** A mission's Artifacts section: what its agents linked, by task. */
+/**
+ * A mission's artifacts: what its agents linked, by task, as a `Section` of rows. Put it straight in a column, not
+ * in a `Block`: its rows bring their own inset.
+ */
 export function MissionArtifacts(props: { source: ArtifactSource; shelf: Shelf; missionId: string }) {
 	return (
-		<View class="gap-1">
-			<View class="pb-1">
-				<SectionTitle title="Artifacts" />
-			</View>
+		<Section testID="mission-artifacts-section" title="Artifacts">
 			<ArtifactShelf
 				source={props.source}
 				shelf={props.shelf}
@@ -507,6 +500,6 @@ export function MissionArtifacts(props: { source: ArtifactSource; shelf: Shelf; 
 				testID="mission-artifacts"
 				empty="No artifacts are linked to this mission yet."
 			/>
-		</View>
+		</Section>
 	);
 }
