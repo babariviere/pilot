@@ -5467,7 +5467,8 @@ ${run.excerpt}`,
 					const title = diagnosticContextResponse(host, this.summary(meta, this.workers.get(meta.id)).title).data;
 					if (typeof title !== "string" || !title.toLowerCase().includes(request.query.toLowerCase())) continue;
 				}
-				rows.push(summary(meta));
+				// Scoped Insights needs only source identifiers. Large diagnostic details must not truncate its inventory.
+				rows.push(sourceAllowed ? { id: meta.id, projectId: meta.projectId } : summary(meta));
 			}
 			if (!found) return { ...diagnosticContextResponse(host, null), status: "missing", reason: "deleted" };
 			return diagnosticContextResponse(

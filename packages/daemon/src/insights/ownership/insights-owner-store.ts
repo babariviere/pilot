@@ -202,6 +202,7 @@ export class InsightsOwnerStore {
 		lease: InsightsWorkspaceAdmission,
 		a: InsightsOwnerAdmission,
 		input: unknown,
+		freshDayReport = false,
 	): Promise<unknown> {
 		a.revalidate();
 		const request = parseInsightsBacklog(input);
@@ -212,7 +213,7 @@ export class InsightsOwnerStore {
 		if (["propose", "amend", "save_report", "save_checkpoint"].includes(request.action)) {
 			result = await store.write(lease, raw, () => {
 				a.revalidate();
-				if ("draft" in request) this.reviews.pattern(a, request.key, request.patternKey);
+				if ("draft" in request) this.reviews.pattern(a, request.key, request.patternKey, freshDayReport);
 				if (request.action === "save_report") {
 					const record = this.reviews.finish(a, request.key, request.record);
 					this.db.run(
@@ -254,7 +255,8 @@ export class InsightsOwnerStore {
 		} else {
 			result = this.db.transaction(() => {
 				a.revalidate();
-				if (request.action === "review_context") return this.reviews.context(a, request.cursor ?? 0);
+				if (request.action === "review_context")
+					return this.reviews.context(a, request.cursor ?? 0, freshDayReport);
 				if (request.action === "receipt") {
 					const row = this.db.one(
 						"SELECT result FROM insights_workspace_receipts WHERE workspace_id=? AND operation_id=?",

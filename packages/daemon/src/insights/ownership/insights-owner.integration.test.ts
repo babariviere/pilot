@@ -464,6 +464,24 @@ test("Day denies metrics and other report engines while preserving passive histo
 	assert.equal(await f.day.supersededReceipt(run), null, "Committed Run reservation receipts are never superseded");
 });
 
+test("Day samples chat history even when diagnostic inventory truncates mission context", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const source = await seedSource(f, undefined, "INSIGHTS_INVENTORY_SAMPLE");
+	const mission = f.missions.create({ projectId: f.project.id, title: "Synthetic source mission" });
+	f.missions.join(source.sourceId, mission.id);
+	for (let n = 0; n < 10; n++)
+		f.missions.addDecision(mission.id, `Synthetic decision ${n}: ${"text ".repeat(1000)}`, {}, "all");
+
+	const diagnostic = await f.sessions.readDiagnosticContext({ action: "chats", host, limit: 4 });
+	assert.equal(diagnostic.status, "partial", "Ordinary diagnostics still include and limit mission context");
+
+	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
+	const context = await f.sessions.insightsOwnerBacklog(f.owner.reportSessionId, { action: "review_context" });
+	assert.match(JSON.stringify(context), /INSIGHTS_INVENTORY_SAMPLE/, "Insights must reach the eligible chat history");
+	assert.equal(f.workers.length, 1, "Only the report worker should start");
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
 test("Day first turn completes through real worker IPC without workspace access", async (t) => {
 	let firstTurn: SessionCompletion | "workspace.prepare" | "worker exited" | undefined;
 	const f = await dayRuntimeFixture(t, undefined, {
@@ -495,6 +513,48 @@ test("Day first turn completes through real worker IPC without workspace access"
 	await until(() => firstTurn !== undefined);
 	assert.notEqual(firstTurn, "workspace.prepare", "The closed daemon drops workspace.prepare, stalling generation");
 	assert.equal(typeof firstTurn === "object" && firstTurn.outcome, "done", JSON.stringify(firstTurn));
+});
+
+test("Day proposes from current evidence without prior reads and refuses duplicate pattern keys", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	await seedSource(f, undefined, "CURRENT_REVIEW_EVIDENCE");
+	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
+	const backlog = (request: unknown) => f.sessions.insightsOwnerBacklog(f.owner.reportSessionId, request);
+	const context = (await backlog({ action: "review_context" })) as { limitations: string; evidence: unknown };
+	assert.match(JSON.stringify(context.evidence), /CURRENT_REVIEW_EVIDENCE/);
+	assert.doesNotMatch(context.limitations, /Page prior findings/);
+	assert.match(context.limitations, /Propose from current evidence/i);
+	const proposal = {
+		action: "propose",
+		key: randomUUID(),
+		operationId: randomUUID(),
+		expectedRevision: 0,
+		patternKey: "synthetic workflow repeated reads",
+		draft: {
+			title: "Repeated synthetic correction",
+			priority: "medium",
+			observation: "The current synthetic sample contains a repeated correction",
+			uncertainty: "Limited sample",
+			proposedChange: "Investigate the workflow",
+			expectedBenefit: "Fewer repeated corrections",
+			targets: [],
+			implementationLinks: [],
+		},
+		evidence: [],
+	};
+	await backlog(proposal);
+	assert.deepEqual(await backlog({ action: "list", kind: "finding" }), {
+		items: [],
+		nextCursor: null,
+		state: "unavailable",
+		reason: "prior_tracking_not_in_fresh_report_context",
+	});
+	await assert.rejects(backlog({ ...proposal, operationId: randomUUID(), key: randomUUID() }), (error: Error) => {
+		assert.match(error.message, /pattern_already_recorded/);
+		assert.ok(!error.message.includes(proposal.key));
+		return true;
+	});
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
 });
 
 test("Day idle without report settles both stores and permits only a distinct run", async (t) => {
@@ -1710,6 +1770,8 @@ for (const freshDay of [false, true])
 			let day: DayInsights | undefined;
 			const marker = "FIRST_TRANSCRIPT_PRIVATE_MARKER_27";
 			let firstSawMarker = false;
+			let dayProposalInstructions = false;
+			let dayPriorReadInstructions = false;
 			const storagePaths: string[] = [];
 			const workers: SessionWorker[] = [];
 			const factory: SessionFactories["worker"] = (spec, onPacket, onExit) => {
@@ -1879,6 +1941,10 @@ for (const freshDay of [false, true])
 				const respond = (payload: import("@earendil-works/pi-ai").TranscriptContext) => {
 					if (freshDay) {
 						const serialized = JSON.stringify(payload);
+						dayProposalInstructions ||= /Use insights_backlog propose for supported findings from this run/i.test(
+							serialized,
+						);
+						dayPriorReadInstructions ||= /Page prior findings with list\/get/i.test(serialized);
 						if (cycle === 0 && serialized.includes(marker)) firstSawMarker = true;
 						if (cycle === 1)
 							assert.ok(
@@ -1969,6 +2035,8 @@ for (const freshDay of [false, true])
 			if (freshDay) {
 				assert.equal(new Set(storagePaths).size, 2);
 				assert.ok(firstSawMarker);
+				assert.ok(dayProposalInstructions, "The Day provider must receive actionable proposal instructions");
+				assert.equal(dayPriorReadInstructions, false, "The Day provider must not be told to read hidden findings");
 				assert.equal(
 					Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_allowance")!.n),
 					faux.state.callCount,

@@ -112,12 +112,18 @@ is reopened. Configuration changes inert model metadata; no model turn is used
 to change a fresh report's settings. The stable report session is a container.
 Native should link saved tracking reports, not assume one shared chat transcript.
 The closed reader's source positions and pattern identities stay in owner tables.
+Chat discovery returns only chat and project IDs after source eligibility checks.
+Mission context does not count against the inventory page limit. History remains
+separately limited and rechecks source eligibility.
 
 Model-facing `list/get/history/evidence/receipt` reads do not replay prior tracking
 contents. They return explicit unavailable state. This conservative boundary
 keeps prior reports/findings from becoming an indirect channel for newly excluded
 evidence. Native passive tracking/history is unchanged and remains readable.
 Reports can propose/amend tracking claims, but cannot grant lifecycle approval.
+Day reports propose supported findings from current evidence without reading
+prior tracking. The host rejects duplicate pattern keys without disclosing
+the earlier finding or asking the model to amend it.
 Models have no `scoped_metrics`, direct history, files, shell, source workers or
 ordinary task tools. All other Insights report-engine chats are excluded from Day
 sources, while their passive history remains available to the user.

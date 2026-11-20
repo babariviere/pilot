@@ -268,7 +268,7 @@ export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmissi
 	/** An explicit normalized target/mechanism label deduplicates even when a new UUID is proposed.
 	 * Semantic equivalence remains a review judgement, never a host-certified inference.
 	 */
-	pattern(admission: A, key: string, pattern?: string): void {
+	pattern(admission: A, key: string, pattern?: string, freshDayReport = false): void {
 		this.scope(admission);
 		if (!pattern) {
 			if (
@@ -278,7 +278,9 @@ export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmissi
 				)
 			)
 				throw new Conflict(
-					"Review findings require a stable target/mechanism patternKey; inspect prior findings first",
+					freshDayReport
+						? "Review findings require a stable target/mechanism patternKey"
+						: "Review findings require a stable target/mechanism patternKey; inspect prior findings first",
 				);
 			return;
 		}
@@ -289,7 +291,11 @@ export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmissi
 			pattern,
 		);
 		if (old && old.finding_key !== key)
-			throw new Conflict(`Recurring pattern already tracked by ${old.finding_key}; get and amend it`);
+			throw new Conflict(
+				freshDayReport
+					? "workspace_pattern_already_recorded"
+					: `Recurring pattern already tracked by ${old.finding_key}; get and amend it`,
+			);
 		const assigned = this.db.one(
 			`SELECT pattern FROM ${this.tables.patterns} WHERE ${this.tables.owner}=? AND finding_key=?`,
 			mission,
@@ -626,7 +632,7 @@ export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmissi
 		});
 	}
 	/** One bounded excerpt per call. Access receipts do not certify semantic inspection or delivery. */
-	context(admission: A, cursor: number) {
+	context(admission: A, cursor: number, freshDayReport = false) {
 		const scope = this.scope(admission);
 		const row = this.db.one(
 			`SELECT * FROM ${this.tables.runs} WHERE session_id=? ORDER BY seq DESC LIMIT 1`,
@@ -658,8 +664,13 @@ export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmissi
 				row.seq!,
 			),
 			pendingSources: this.db.one(`SELECT COUNT(*) AS count FROM ${this.tables.sources} WHERE scope=?`, scope),
-			limitations:
-				"Excerpt parts split original reader receipts, pagination.returned refers to the original page. Page prior findings with list/get before proposing; not a change feed. No date filter, comprehensive coverage, artifact inspection or storage-incarnation proof. Old sweeps may defer newer activity. Prior interrupted windows remain unresolved.",
+			limitations: [
+				"Excerpt parts split reader receipts. pagination.returned refers to the original page.",
+				freshDayReport
+					? "Propose from current evidence using a stable patternKey. Prior tracking is unavailable; Pilot rejects duplicate pattern keys."
+					: "Page prior findings with list/get before proposing.",
+				"This is not a change feed. No date filter, comprehensive coverage, artifact inspection or storage-incarnation proof. Old sweeps may defer newer activity. Prior interrupted windows remain unresolved.",
+			].join(" "),
 		};
 	}
 	/** Within the report transaction: derive coverage from receipts, never model checkpoint text. */

@@ -16,7 +16,10 @@ contain private project text. The two limits use catalog estimates, not bills:
 each request must fit both the report budget and the shared UTC calendar-month
 budget. Insights does not use the small background-work allowance.
 
-**Findings** opens the usual fix or mission draft, with source references.
+**Findings** shows separate proposals based on the evidence from a report.
+Pilot rejects an exact duplicate pattern key without showing the earlier
+finding to the report model. A finding opens a fix or mission draft with
+source references.
 Only an explicit Start or Plan begins that work. Shipping is not benefit
 verification; mark the benefit verified only after checking it yourself.
 Earlier history is read-only and does not transfer source access or schedules.

@@ -178,7 +178,7 @@ export class DayInsights {
 			throw new Conflict("day_insights_exact_run_key_required");
 		const s = this.deps.store.current(this.deps.home, this.guard)!;
 		const lease = this.deps.sessions!.insightsOwnerLease(this.authority(s.owner!.projectId));
-		const result = await this.deps.owners!.backlog(this.deps.workspace, lease, admission, request);
+		const result = await this.deps.owners!.backlog(this.deps.workspace, lease, admission, request, true);
 		this.delivery(id, run);
 		if (request.action === "save_report")
 			await this.deps.store.runState(run, "partial", "Bounded report saved; not comprehensive coverage");

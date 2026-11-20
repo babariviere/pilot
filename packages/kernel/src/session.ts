@@ -624,6 +624,7 @@ export class KernelSession {
 				repairDiagnostics: spec.repairDiagnostics,
 				...(spec.pilot?.executionPermission ? { executionPermission: { ...spec.pilot.executionPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
+				freshDayReport: spec.dayInsightsRunId !== undefined,
 				ghStack,
 			};
 			const refreshWorkspace = hooks.prepareWorkspace;
@@ -760,7 +761,7 @@ export class KernelSession {
 						? [createScopedMetricsTool(host?.callDiagnosticContext)]
 						: []),
 					...(spec.role === "insights" && host?.callInsightsBacklog
-						? [createInsightsBacklogTool(host?.callInsightsBacklog)]
+						? [createInsightsBacklogTool(host?.callInsightsBacklog, pilot.freshDayReport)]
 						: []),
 					...(spec.role === "insights" && !spec.insightsOwnerBinding && host?.callDiagnosticContext
 						? [createInsightsHistoryTool(host?.callDiagnosticContext)]
