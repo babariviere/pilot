@@ -2,12 +2,12 @@
 // goes through or skips a ritual, and that is saved, Today stops offering it for that day. Showing Today records
 // that the user looked, once for each day; reading or opening Pilot in the background does not.
 // The date sits above Today's title, the buttons at the right of its head, the notes under its summary.
-import { effect, lifecycle, signal, untracked } from "nsh";
+import { effect, lifecycle, untracked } from "nsh";
 import type { RitualSnapshot } from "pilot-day/native";
 import type { Day } from "./day";
 import type { Rituals } from "./ritualFeed";
 import { offered, openRitual, openStandup } from "./ritualView";
-import { Button, Caption, Link, Notice, Num } from "./ui";
+import { Button, Link, Notice, Num } from "./ui";
 
 /** Why Today offers no start or end of day, when its saved progress cannot say. */
 function progressLine(progress: RitualSnapshot, uncertain: boolean): string {
@@ -19,9 +19,6 @@ function progressLine(progress: RitualSnapshot, uncertain: boolean): string {
 	}
 	return "";
 }
-
-/** Whether the keyboard shortcuts line shows, for a window with work search. */
-const shortcuts = signal(false);
 
 /**
  * Today is on screen, readable and in front: that is a visit. The store sends it once for each day context and
@@ -41,7 +38,7 @@ export function DayDate(props: { day: Day }) {
 	return <Num>{props.day.today().dateLine}</Num>;
 }
 
-/** The start or end of day when it fits, the standup notes and, with work search, the shortcuts. */
+/** The start or end of day when it fits, and the standup notes. */
 export function DayActions(props: { day: Day; rituals: Rituals }) {
 	const r = props.rituals;
 	const ritual = () => offered(props.day.today(), r.progress(), r.uncertain());
@@ -59,38 +56,25 @@ export function DayActions(props: { day: Day; rituals: Rituals }) {
 				testID="standup"
 				onPress={() => openStandup(null)}
 			/>
-			<If when={props.day.search}>
-				<Button
-					label={shortcuts() ? "Hide shortcuts" : "Shortcuts"}
-					onPress={() => shortcuts.update((open) => !open)}
-				/>
-			</If>
 		</>
 	);
 }
 
-/** Under Today's summary: the shortcuts, and why no start or end of day is offered. */
+/** Under Today's summary: why no start or end of day is offered. */
 export function DayNotes(props: { day: Day; rituals: Rituals }) {
 	const r = props.rituals;
 	const note = () => progressLine(r.progress(), r.uncertain());
 	return (
-		<>
-			<If when={shortcuts()}>
-				<Caption>
-					J / K: next or previous item. 1–9: pick an option. L: Later. Use the card’s submit button when ready.
-				</Caption>
-			</If>
-			<If when={!props.day.search && note()}>
-				<Notice
-					testID="ritual-progress"
-					text={note()}
-					action={
-						<If when={r.uncertain() || r.progress().availability === "unknown"}>
-							<Link label="Read again" testID="ritual-read" onPress={() => void r.refresh()} />
-						</If>
-					}
-				/>
-			</If>
-		</>
+		<If when={!props.day.search && note()}>
+			<Notice
+				testID="ritual-progress"
+				text={note()}
+				action={
+					<If when={r.uncertain() || r.progress().availability === "unknown"}>
+						<Link label="Read again" testID="ritual-read" onPress={() => void r.refresh()} />
+					</If>
+				}
+			/>
+		</If>
 	);
 }
