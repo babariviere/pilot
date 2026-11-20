@@ -634,7 +634,8 @@ export function runKernelWorker(): void {
 					callRepairProposal,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
-					prepareWorkspace,
+					// The closed Insights profile has no workspace. Its daemon allowlist drops this request.
+					...(command.spec.role !== "insights" ? { prepareWorkspace } : {}),
 				});
 				if (pendingMission) opened.setMission(pendingMission.context);
 				if (pendingSlackLinked !== undefined) opened.setSlackLinked(pendingSlackLinked);

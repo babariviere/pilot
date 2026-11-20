@@ -1,5 +1,6 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Probe supervised IPC and persistence without a live provider.
 import assert from "node:assert/strict";
+import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, readFile } from "node:fs/promises";
@@ -18,7 +19,7 @@ import {
 import { createModels } from "@earendil-works/pi-ai/models";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import type { DurableOperation, ModelOption } from "@pilot/protocol";
+import type { DurableOperation, ModelOption, SessionCompletion } from "@pilot/protocol";
 import { CredentialClient } from "../../kernel/src/credential-client.ts";
 import { type DayInsightsReservation, installDayInsightsRuntime } from "../../kernel/src/day-insights-runtime.ts";
 import { NativeAdapter } from "../../kernel/src/native-adapter.ts";
@@ -36,7 +37,7 @@ import type { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import type { SessionFactories, SessionWorker } from "./sessions.ts";
+import { type SessionFactories, type SessionWorker, Worker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 import { fixture as sessionFixture, until } from "./testing/session-workspace.ts";
@@ -209,8 +210,12 @@ async function seedSource(f: Awaited<ReturnType<typeof fixture>>, archivedAt?: s
 	return { sourceId, dir, sourceBytes };
 }
 
-async function dayRuntimeFixture(t: TestContext, seed?: (home: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
-	const f = await fixture(t);
+async function dayRuntimeFixture(
+	t: TestContext,
+	seed?: (home: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+	factories?: SessionFactories,
+) {
+	const f = await fixture(t, factories);
 	await seed?.(f);
 	const settings: import("@pilot/protocol").DayInsightsSettings = {
 		model: model.id,
@@ -448,6 +453,39 @@ test("Day denies metrics and other report engines while preserving passive histo
 	assert.ok((await f.stored(engine.sourceId)).role === "insights", "Passive old metadata is kept");
 	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
 	assert.equal(await f.day.supersededReceipt(run), null, "Committed Run reservation receipts are never superseded");
+});
+
+test("Day first turn completes through real worker IPC without workspace access", async (t) => {
+	let firstTurn: SessionCompletion | "workspace.prepare" | "worker exited" | undefined;
+	const f = await dayRuntimeFixture(t, undefined, {
+		worker(spec, onPacket, onExit) {
+			assert.ok(spec.dayInsightsRunId);
+			const home = join(spec.cwd, "..");
+			const child = fork(new URL("../../kernel/src/testing/day-insights-faux-worker.ts", import.meta.url), {
+				execArgv: [],
+				env: { HOME: home, PATH: process.env.PATH, NODE_ENV: "test", PI_OFFLINE: "1" },
+				serialization: "advanced",
+			});
+			return new Worker(
+				spec,
+				(packet) => {
+					onPacket(packet);
+					if (packet.type === "workspace.prepare") firstTurn ??= packet.type;
+					if (packet.type === "working" && !packet.working) firstTurn ??= packet.completion;
+				},
+				(...args) => {
+					firstTurn ??= "worker exited";
+					onExit(...args);
+				},
+				undefined,
+				{ child },
+			);
+		},
+	});
+	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
+	await until(() => firstTurn !== undefined);
+	assert.notEqual(firstTurn, "workspace.prepare", "The closed daemon drops workspace.prepare, stalling generation");
+	assert.equal(typeof firstTurn === "object" && firstTurn.outcome, "done", JSON.stringify(firstTurn));
 });
 
 test("Day idle without report settles both stores and permits only a distinct run", async (t) => {
