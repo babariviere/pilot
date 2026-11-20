@@ -9,8 +9,6 @@ export NPM_CONFIG_IGNORE_SCRIPTS=true
 export COREPACK_ENABLE_AUTO_PIN=0
 export COREPACK_ENABLE_NETWORK=0
 here="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=apps/day/scripts/build-env.sh
-source "$here/scripts/build-env.sh"
 cli="${NSH_DAY_CLI:-$(command -v nsh || true)}"
 if [[ -z "$cli" && -x "$HOME/.nsh/bin/nsh" ]]; then
 	cli="$HOME/.nsh/bin/nsh"
@@ -25,6 +23,36 @@ if [[ "$version" != 'nsh 0.6.1 (2f51d86)' ]]; then
 	echo 'nsh.sh: expected longbridge/nsh 0.6.1 (2f51d86); qualify another release before use' >&2
 	exit 1
 fi
+if [[ "${1:-}" == mock ]]; then
+	cd "$here"
+	case "${2:-}:${3:-}" in
+		run:*Fixture.tsx|test:*.test.ts|test:*.test.tsx) ;;
+		*) echo 'Usage: nsh.sh mock {run <NameFixture.tsx>|test <Name.test.tsx>} [NSH options]' >&2; exit 2 ;;
+	esac
+	entry="$3"
+	if [[ "$entry" == */* || "$entry" == -* || ! -f "$entry" ]]; then
+		echo 'Use a fixture or test filename from apps/day.' >&2
+		exit 2
+	fi
+	mkdir -p .nsh output
+	mock="$(mktemp -d "$here/.nsh/mock.XXXXXX")"
+	trap 'rm -rf "$mock"' EXIT
+	# NSH requires assets inside the app directory. Copy the source and assets,
+	# not the mixed app config, Rust targets or generated declarations.
+	cp -R ./*.ts ./*.tsx icons fonts ui theme.json "$mock/"
+	for fixture in fixtures/inspection fixtures/recovery; do
+		mkdir -p "$mock/$fixture"
+		cp "$fixture/nsh.json" "$fixture"/*.tsx "$mock/$fixture/"
+	done
+	ln -s "$here/output" "$mock/output"
+	printf '%s\n' '{"name":"Pilot Day (mock)","id":"test.pilot.day.mock","theme":"theme.json","capabilities":{}}' > "$mock/nsh.json"
+	cd "$mock"
+	shift
+	CARGO=/usr/bin/false "$cli" "$@"
+	exit
+fi
+# shellcheck source=apps/day/scripts/build-env.sh
+source "$here/scripts/build-env.sh"
 export CARGO="$here/scripts/cargo"
 command_index=1
 for arg in "$@"; do

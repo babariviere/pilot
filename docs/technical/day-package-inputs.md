@@ -41,7 +41,13 @@ sources. No separate candidate-specific builder is added.
 
 Cargo is offline and uses the pinned stock executable, independently of the
 user's global Cargo. The builder keeps the real HOME so Cargo can read installed
-dependency sources. Build outputs remain in the private checkout.
+dependency sources. The executable builds and NSH describe use one private
+Cargo target. By default it lasts only for this snapshot.
+The local private-install script uses `--cargo-cache` in
+`${PILOT_BUILD_ROOT:-/tmp/day-build}/.cargo-cache` to reuse matching Cargo units
+across snapshots. This cache stays local to the build user and serializes builds
+that share it. It can be removed when no build is running. Source extraction,
+compiled receipts, resource validation and signing still run on every build.
 Ambient trust, provider/discovery credentials, compiler wrappers, Cargo tuning,
 NSH resource overrides and package-manager configuration are not inherited.
 Missing dependencies fail, rather than bootstrapping or repairing shared state.

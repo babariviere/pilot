@@ -63,6 +63,17 @@ To look at one, pass its entry file:
 apps/day/nsh.sh run MockApp.tsx
 ```
 
+Fixtures that do not import native code can use NSH's prebuilt host, with no
+Cargo. This runs a snapshot of the current UI sources; rerun after edits.
+
+```sh
+apps/day/nsh.sh mock run RecoveryFixture.tsx
+apps/day/nsh.sh mock test ScreenAgentBar.test.tsx
+```
+
+Use the regular commands for `MockApp.tsx`, Rust-backed fixtures and native
+boundary tests. Mock screenshots still go under `apps/day/output/`.
+
 ## Check
 
 ```sh

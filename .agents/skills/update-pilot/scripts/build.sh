@@ -48,11 +48,16 @@ built=0
 trap '[[ $built == 1 ]] || rm -rf "${work:?}"' EXIT
 trap 'exit 143' TERM INT
 mkdir -p "$work"
+echo 'STAGE runtime'
 [[ -d "$work/runtime" ]] || python3 apps/day/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$work/runtime"
+echo 'STAGE native helpers'
 [[ -d "$work/native" ]] || python3 apps/day/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$work/native"
 rm -rf "$work/inputs" "$work/app"
-python3 apps/day/scripts/day_build_inputs.py --production --source "$SOURCE" --output "$work/inputs"
+echo 'STAGE desktop, updater, artifact host and NSH resources'
+python3 apps/day/scripts/day_build_inputs.py --production --source "$SOURCE" --output "$work/inputs" \
+	--cargo-cache "$ROOT/.cargo-cache"
 mkdir "$work/app"
+echo 'STAGE bundle assembly and verification'
 python3 apps/day/scripts/bundle_runtime.py bundle --production \
 	--source "$SOURCE" --bundle-build "$BUILD" \
 	--runtime "$work/runtime" --native "$work/native" --executables "$work/inputs" \

@@ -408,6 +408,23 @@ fi
                 day.compile_snapshot(self.root, self.root, self.root / "out", self.source,
                                      self.tools, {}, connected_only=True)
 
+    def test_cargo_target_is_private_by_default_and_cache_is_explicit(self):
+        with day.cargo_target(self.root, None) as target:
+            self.assertEqual(target, self.root / "cargo-target")
+        cache = self.root / "cache"
+        with day.cargo_target(self.root, cache) as first:
+            self.assertEqual(first, cache.resolve() / "target")
+            self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
+            (first / "release").mkdir(parents=True)
+        with day.cargo_target(self.root, cache) as second:
+            self.assertTrue((second / "release").is_dir())
+        alias = self.root / "alias"
+        alias.symlink_to(cache)
+        for unsuitable in (alias, cache):
+            cache.chmod(0o755 if unsuitable == cache else 0o700)
+            with self.assertRaisesRegex(ValueError, "private directory"), day.cargo_target(self.root, unsuitable):
+                self.fail("accepted an unsafe cache")
+
     def test_snapshot_refuses_the_fork_even_if_its_cargo_version_matches(self):
         app = self.root / "apps/day/native"
         app.mkdir(parents=True)
@@ -471,9 +488,9 @@ fi
             if args[-1] == "--build-input-receipt":
                 return json.dumps(compiled)
             if "--message-format=json-render-diagnostics" in args:
-                self.assertNotIn("CARGO_TARGET_DIR", env)
+                self.assertEqual(env["CARGO_TARGET_DIR"], str(self.root / "cargo-target"))
                 self.assertNotIn("CARGO_HOME", env)
-                target = Path(args[args.index("--manifest-path") + 1]).parent / "target" / ("release" if production else "debug")
+                target = Path(env["CARGO_TARGET_DIR"]) / ("release" if production else "debug")
                 target.mkdir(parents=True, exist_ok=True)
                 name = args[args.index("--bin") + 1]
                 path = target / name
@@ -481,6 +498,7 @@ fi
                 path.chmod(0o755)
                 return json.dumps(dict(reason="compiler-artifact", target=dict(name=name), executable=str(path)))
             if "Connected.tsx" in args:
+                self.assertEqual(env["CARGO_TARGET_DIR"], str(self.root / "cargo-target"))
                 built = Path(args[-1])
                 built.mkdir()
                 (built / "bundle.nshc").write_bytes(b"synthetic only")
