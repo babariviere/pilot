@@ -71,6 +71,8 @@ jobs:
           jj --version
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - name: Check Day screen styling
+        run: pnpm exec biome lint --only=plugin apps/day
       # --timings lists the slowest test files, which decide how long this job takes.
       - run: pnpm test -- --lane=portable --timings
 

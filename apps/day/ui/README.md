@@ -38,15 +38,15 @@ density. Today (`TodayScreen.tsx`) is the reference screen: read it next to this
 
 ### Checking a screen for look classes
 
-Run this from `apps/day`. It lists class strings outside `ui/` that set colour, size, weight, font, border,
-radius, shadow, tint, opacity, padding or margin. The only lines it may print are in the three exceptions above.
+From the repository root, run the same Forge lint as CI:
 
 ```sh
-rg -n --glob '*.tsx' --glob '!ui/**' --glob '!fixtures/**' --glob '!native/**' -e '(class|Class|classList)=' . \
-  | rg -e '\b(bg|text|font|border|rounded|shadow|tint|ring|opacity|leading|tracking|p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr)-([a-z0-9(]|\[)' \
-       -e '\b(italic|underline|truncate|line-clamp-[0-9])\b' -e '"(border|rounded|shadow)[ "]' \
-  | rg -v 'ExpeditionChart.tsx|Palette.tsx|FontProbeFixture.tsx'
+pnpm exec biome lint --only=plugin apps/day
 ```
+
+[The rule](../scripts/forge-screens.grit) checks top-level Day TSX files, with the three exceptions above.
+It rejects direct `nsh/base` imports, look classes in JSX attributes and common inline appearance styles.
+It does not follow computed values or judge the rendered screen. Review native captures too.
 
 ## Tokens
 

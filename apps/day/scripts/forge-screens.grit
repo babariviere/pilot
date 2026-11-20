@@ -1,0 +1,17 @@
+// Screen styling stops at the Forge library. Geometry classes are fine.
+or {
+    JsModuleSource() as $source where {
+        $source <: r"[\x22\x27]nsh/base(?:/[^'\x22]+)?[\x22\x27]",
+        register_diagnostic(span = $source, message = "Use a Forge part from ./ui instead of importing nsh/base.")
+    },
+    JsxAttribute(name=$name, initializer=$init) as $attribute where {
+        $name <: r"(?:class|className|classList|[A-Za-z]+Class)",
+        $init <: r"(?s).*(?:[\s\x22\x27\x60:]|^)-?(?:(?:bg|text|font|border|rounded|shadow|tint|ring|opacity|leading|tracking|p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|line-clamp)-[^\s\x22\x27\x60]+|italic|underline|truncate|border|rounded|shadow)(?:[\s\x22\x27\x60]|$).*",
+        register_diagnostic(span = $attribute, message = "Put look classes in a Forge part or variant in apps/day/ui; use only layout classes here.")
+    },
+    JsxAttribute(name=$name, initializer=$init) as $attribute where {
+        $name <: r"style",
+        $init <: r"(?s).*(?:[{\s,\x22\x27])(?:color|background(?:Color)?|font(?:Family|Size|Weight|Style)?|lineHeight|letterSpacing|border[A-Za-z]*|padding[A-Za-z]*|shadow[A-Za-z]*|opacity)[\x22\x27]?\s*:.*",
+        register_diagnostic(span = $attribute, message = "Put appearance styles in a Forge part or variant in apps/day/ui.")
+    }
+}

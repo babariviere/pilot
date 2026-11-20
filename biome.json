@@ -38,6 +38,15 @@
 	},
 	"overrides": [
 		{
+			"includes": [
+				"apps/day/*.tsx",
+				"!apps/day/ExpeditionChart.tsx",
+				"!apps/day/Palette.tsx",
+				"!apps/day/FontProbeFixture.tsx"
+			],
+			"plugins": ["./apps/day/scripts/forge-screens.grit"]
+		},
+		{
 			"includes": ["apps/day/**", "packages/kernel/skills/pilot-artifacts/nsh/**"],
 			"linter": {
 				"rules": {
