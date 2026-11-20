@@ -4,6 +4,8 @@
 //! these check what the screen says about each native state, what it sends,
 //! and what a flush and a cold restore carry. No daemon, updater, service or
 //! visible window: the native updater's own rules are in `update_host.rs`.
+#[path = "support/day_library.rs"]
+mod day_library;
 #[path = "support/app_source.rs"]
 mod app_source;
 use nsh_core::prelude::*;
@@ -47,18 +49,7 @@ fn entry() -> PathBuf {
     // Shared chrome imports its packaged SVGs. Keep this isolated source copy
     // complete rather than removing icons or granting filesystem capabilities.
     // The component library lives in ui/; screens import it as "./ui".
-    std::fs::create_dir(dir.join("ui")).unwrap();
-    for file in std::fs::read_dir(app.join("ui")).unwrap() {
-        let path = file.unwrap().path();
-        std::fs::copy(&path, dir.join("ui").join(path.file_name().unwrap())).unwrap();
-    }
-    std::fs::create_dir(dir.join("icons")).unwrap();
-    for file in std::fs::read_dir(app.join("icons")).unwrap() {
-        let path = file.unwrap().path();
-        if path.extension().is_some_and(|e| e == "svg") {
-            std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
-        }
-    }
+    day_library::copy(&app, &dir);
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

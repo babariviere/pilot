@@ -15,6 +15,8 @@ pub mod actions;
 pub mod artifact_check;
 pub mod artifact_export;
 #[cfg(unix)]
+pub mod artifact_library;
+#[cfg(unix)]
 pub mod artifact_runtime;
 #[cfg(unix)]
 pub mod artifact_source;

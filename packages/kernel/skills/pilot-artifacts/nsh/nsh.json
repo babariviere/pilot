@@ -3,7 +3,9 @@
 	"capabilities": {},
 	"resolve": {
 		"alias": {
-			"pilot-artifact/ui": "./kit/index.ts"
+			"pilot-artifact/ui": "./kit/index.ts",
+			"pilot-day/ui": "../../../../../apps/day/ui/index.ts"
 		}
-	}
+	},
+	"theme": "../../../../../apps/day/theme.json"
 }

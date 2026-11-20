@@ -12,7 +12,8 @@ use nsh_engine::{Bundle, Chunk, EngineConfig, Limits, Policy};
 use crate::artifact_source::CapturedSource;
 
 // Fixed app sources, not a source resolver. Relative imports stay within these
-// eight supplied chunks; the artifact compiler rejects authored file imports.
+// eight supplied chunks and Day's library (`artifact_library`); the artifact
+// compiler rejects authored file imports.
 const KIT: &[(&str, &str, &str)] = &[
     (
         "index",
@@ -83,8 +84,9 @@ const KIT: &[(&str, &str, &str)] = &[
 /// How many compiled entries the process keeps, newest last.
 const CACHED_ENTRIES: usize = 8;
 
-/// The fixed kit chunks, compiled once per process.
-fn kit() -> Result<&'static [(String, String)], String> {
+/// The fixed trusted chunks: the kit with its `pilot-artifact/ui` facade and
+/// Day's library (`artifact_library::chunks`), compiled once per process.
+fn trusted() -> Result<&'static [(String, String)], String> {
     static CODE: OnceLock<Result<Vec<(String, String)>, String>> = OnceLock::new();
     CODE.get_or_init(|| {
         let descriptions: Vec<_> = nsh_base::registry()
@@ -92,7 +94,8 @@ fn kit() -> Result<&'static [(String, String)], String> {
             .into_iter()
             .map(SetDescription::from)
             .collect();
-        KIT.iter()
+        let mut chunks = KIT
+            .iter()
             .map(|(name, extension, source)| {
                 let id = format!("pilot-artifact/kit/{name}");
                 let code = nsh_bundler::compile_module(
@@ -102,7 +105,13 @@ fn kit() -> Result<&'static [(String, String)], String> {
                 )?;
                 Ok((id, code))
             })
-            .collect()
+            .collect::<Result<Vec<_>, String>>()?;
+        chunks.push((
+            "pilot-artifact/ui".into(),
+            "export * from 'pilot-artifact/kit/index';".into(),
+        ));
+        chunks.extend(crate::artifact_library::chunks(&descriptions)?);
+        Ok(chunks)
     })
     .as_deref()
     .map_err(Clone::clone)
@@ -143,7 +152,7 @@ fn entry(captured: &CapturedSource) -> Result<String, String> {
 /// Call off the UI thread. The app owns the engine and must join disposal off
 /// the UI thread before replacing it. This function neither reads a path nor
 /// starts an engine, opens a window, or changes the connected app's permissions.
-/// The kit compiles once per process and recent entries are reused by source
+/// The trusted chunks compile once per process and recent entries are reused by source
 /// SHA-256; each call still verifies the exact source and builds a fresh config.
 ///
 /// # Errors
@@ -153,24 +162,24 @@ pub fn config(captured: CapturedSource) -> Result<EngineConfig, String> {
 }
 
 /// The engine configuration for an entry `compile_source` has just compiled.
-/// Same kit, bootstrap, policy, UI sets and limits as a saved revision gets.
+/// Same trusted chunks, bootstrap, policy, UI sets and limits as a saved
+/// revision gets. The bootstrap gives the preview Day's theme first, so token
+/// classes and fonts resolve as in the app.
 ///
 /// # Errors
-/// Returns kit compile errors before any code executes.
+/// Returns trusted chunk compile errors before any code executes.
 pub fn config_for(code: String) -> Result<EngineConfig, String> {
     let registry = nsh_base::registry();
-    let mut chunks = Vec::with_capacity(KIT.len() + 2);
-    for (id, code) in kit()? {
+    let trusted = trusted()?;
+    let mut chunks = Vec::with_capacity(trusted.len() + 1);
+    for (id, code) in trusted {
         chunks.push(Chunk::source(id.clone(), code.clone()));
     }
-    chunks.push(Chunk::source(
-        "pilot-artifact/ui",
-        "export * from 'pilot-artifact/kit/index';".into(),
-    ));
     chunks.push(Chunk::source("artifact-entry", code));
-    let bundle = Bundle::source(
-        "import {Text} from 'nsh'; import {mountArtifact} from 'pilot-artifact/kit/ui'; import('artifact-entry').then(module => mountArtifact(module.default)).catch(error => mountArtifact(() => Text({children: 'This artifact could not start: ' + String(error)})));".into(),
-    ).with_chunks(chunks).with_policy(Policy {
+    let bundle = Bundle::source(format!(
+        "import {{Text, setTheme}} from 'nsh'; import {{mountArtifact}} from 'pilot-artifact/kit/ui'; setTheme({}); import('artifact-entry').then(module => mountArtifact(module.default)).catch(error => mountArtifact(() => Text({{children: 'This artifact could not start: ' + String(error)}})));",
+        crate::artifact_library::THEME.trim()
+    )).with_chunks(chunks).with_policy(Policy {
         harden: true,
         declared: Some(Capabilities::default()),
         granted: Some(Capabilities::default()),

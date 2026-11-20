@@ -37,6 +37,25 @@ fn main() {
                     .is_some_and(|value| value.to_string() == text)
         })
     }
+    /// The view as AppKit draws it in process, as a PNG (NSH's own in-process capture does the same).
+    fn picture(view: &NSView) -> Vec<u8> {
+        use nsh_platform_macos::{
+            objc2::runtime::AnyObject,
+            objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRepPropertyKey},
+            objc2_foundation::NSDictionary,
+        };
+        let bounds = view.bounds();
+        let rep = view
+            .bitmapImageRepForCachingDisplayInRect(bounds)
+            .expect("a bitmap of the view");
+        view.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+        let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::new();
+        // SAFETY: an empty property dictionary is valid for PNG.
+        let data = unsafe {
+            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+        };
+        data.expect("PNG data").to_vec()
+    }
     fn pump(root: &NSView, label: &str, until: impl Fn() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(15);
         while !until() {
@@ -59,35 +78,32 @@ fn main() {
     let main = MainThreadMarker::new().expect("native fixture main thread");
     NSApplication::sharedApplication(main)
         .setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
-    let directory = std::env::temp_dir().join(format!("artifact-preview-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&directory).expect("fixture directory");
+    // The parent entry sits in Day's app directory, so it builds with Day's theme and with the fonts and icons
+    // ArtifactPreview's parts import, as Day's own window does. It is removed when the test ends.
+    let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(format!(
+            "ArtifactPreviewHost-{}.tsx",
+            uuid::Uuid::new_v4().simple()
+        ));
     struct Temp(std::path::PathBuf);
     impl Drop for Temp {
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_file(&self.0);
         }
     }
-    let _temp = Temp(directory.clone());
-    let component = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../ArtifactPreview.tsx");
+    let _temp = Temp(entry.clone());
     std::fs::write(
-        directory.join("nsh.json"),
-        r#"{"name":"Hidden artifact preview","capabilities":{}}"#,
-    )
-    .expect("manifest");
-    std::fs::write(
-        directory.join("App.tsx"),
-        format!(
-            r#"
-import {{mount,Text,View,signal,host}} from 'nsh';
-import {{ArtifactPreview}} from {};
+        &entry,
+        r#"
+import {mount,Text,View,signal,host} from 'nsh';
+import {ArtifactPreview} from './ArtifactPreview';
 const inspected=signal(null);
 host.on('fixture.show',value=>inspected.set(value));
 mount(()=><View class="flex-1"><Text>Parent stays connected</Text>
-  <If when={{inspected()}}><ArtifactPreview inspection={{inspected()}} /></If>
+  <If when={inspected()}><ArtifactPreview inspection={inspected()} /></If>
 </View>);
 "#,
-            json!(component)
-        ),
     )
     .expect("fixture entry");
     let host = HostChannel::new();
@@ -96,6 +112,10 @@ mount(()=><View class="flex-1"><Text>Parent stays connected</Text>
     );
     let options = AppOptions {
         host: host.clone(),
+        // Where Day's window reads the fonts and icons its parts import (bootstrap.rs sets its bundle's).
+        asset_base: Some(nsh_platform_macos::AssetBase::Directory(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
+        )),
         ..AppOptions::default()
     };
     pilot_day_native::macos_artifact::register(main, &options.components, &host);
@@ -118,13 +138,16 @@ mount(()=><View class="flex-1"><Text>Parent stays connected</Text>
         window.setReleasedWhenClosed(false);
     }
     window.setContentView(Some(&root));
-    let bundle = nsh_testing::compile_tsx(directory.join("App.tsx"), &[])
-        .expect("real preview TSX builds")
-        .with_policy(Policy {
-            harden: true,
-            declared: Some(Capabilities::default()),
-            granted: Some(Capabilities::default()),
-        });
+    let bundle = nsh_testing::compile_tsx(
+        &entry,
+        &[nsh_base::registry(), pilot_day_native::registry()],
+    )
+    .expect("real preview TSX builds")
+    .with_policy(Policy {
+        harden: true,
+        declared: Some(Capabilities::default()),
+        granted: Some(Capabilities::default()),
+    });
     parent.load(bundle.into());
     pump(&root, "parent mounted", || {
         shows(&root, "Parent stays connected")
@@ -142,6 +165,9 @@ mount(()=><View class="flex-1"><Text>Parent stays connected</Text>
         .find(|view| {
             view.accessibilityRole()
                 .is_some_and(|role| role.to_string() == "AXButton")
+                && view
+                    .accessibilityLabel()
+                    .is_some_and(|label| label.to_string() == "Try")
         })
         .expect("actual child button");
     // SAFETY: NSH's own AXButton view implements accessibilityPerformPress.
@@ -168,7 +194,7 @@ mount(()=><View class="flex-1"><Text>Parent stays connected</Text>
             "This artifact could not start: Error: Startup fixture failed",
         )
     });
-    let mut invalid = inspection;
+    let mut invalid = inspection.clone();
     invalid["artifact"]["metadata"]["kind"] = json!("html");
     host.send("fixture.show", invalid)
         .expect("historical source stays inert");
@@ -176,6 +202,49 @@ mount(()=><View class="flex-1"><Text>Parent stays connected</Text>
         shows(&root, "Unsupported saved NSH revision")
     });
     assert!(!shows(&root, "Count: 0"));
+
+    // Day's library (`pilot-day/ui`) in a preview, with Day's theme. The parent registered Geist for the whole
+    // process when ArtifactPreview's parts imported ui/fonts.ts, as Day's own window does.
+    let page = r#"import {Scroll} from 'nsh';
+import {Body, Button, Column, Icon, Notice, Num, Page, PageHead, Panel, Question, Row, Rows, Section, State, Tab, Tabs} from 'pilot-day/ui';
+export default function Artifact() {
+  return <Scroll class="flex-1"><Page>
+    <PageHead pre={<Num>Thursday 14 November</Num>} title="Release 2.4" state={<State kind="needs" />}
+      text="Drawn with Pilot's parts, theme and Geist." actions={<Button label="Share" icon="share" onPress={() => {}} />} />
+    <Panel tabs={<Tabs><Tab label="Overview" selected onPress={() => {}} /><Tab label="Done" count={2} selected={false} onPress={() => {}} /></Tabs>}
+      notice={<Notice text="Checks are slow today" detail="About 20 min a run." placement="panel" />}>
+      <Column>
+        <Section title="Needs you" count={1}>
+          <Question title="Ship behind a flag?" foot={<Button kind="primary" icon="check" label="Decide" onPress={() => {}} />}>
+            <Body>Support has not seen the new page yet.</Body>
+          </Question>
+        </Section>
+        <Section title="Working" count={2}>
+          <Rows>
+            <Row mark="working" title="Move the billing tables" meta="Billing" trailing={<Icon name="check" tint="tint-ok" />} />
+            <Row mark="failed" title="Retry failed uploads" meta="Uploads" state="Failed" stateTone="failed" />
+          </Rows>
+        </Section>
+      </Column>
+    </Panel>
+  </Page></Scroll>;
+}"#;
+    let mut library = inspection.clone();
+    library["pin"]["revision"] = json!(3);
+    library["artifact"]["reference"]["revision"] = json!(3);
+    library["artifact"]["content"]["source"] = json!(page);
+    host.send("fixture.show", library)
+        .expect("show the library page");
+    pump(&root, "library page", || {
+        shows(&root, "Ship behind a flag?")
+    });
+    // Icons decode off the main thread; give them a few frames.
+    let settle = Instant::now() + Duration::from_millis(800);
+    pump(&root, "icons decode", || Instant::now() >= settle);
+    let png =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("artifact-preview-library.png");
+    std::fs::write(&png, picture(&root)).expect("write the capture");
+    println!("Library preview capture: {}", png.display());
     parent.stop();
     window.setContentView(None);
     window.close();

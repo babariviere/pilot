@@ -140,7 +140,7 @@ test(
 	"NSH supplied examples prepare without filesystem resolution; host reach is refused with its reason",
 	options,
 	async () => {
-		for (const name of ["summary", "charts", "flow", "sequence", "prototype", "mockup"]) {
+		for (const name of ["summary", "charts", "flow", "sequence", "prototype", "mockup", "page"]) {
 			const source = await readFile(
 				new URL(`../../kernel/skills/pilot-artifacts/nsh/examples/${name}.tsx`, import.meta.url),
 				"utf8",

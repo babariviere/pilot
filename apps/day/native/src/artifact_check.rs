@@ -29,9 +29,10 @@ const NO_ROOM_EXAMPLES: usize = 5;
 /// How much of an error the report keeps. Headless errors list the texts on
 /// screen after the message, which the agent does not need in full.
 const ERROR_CHARS: usize = 1500;
-/// The variant switches the check presses: each `Choices` option (a button in
-/// a radio group) and each `nsh/base` `Tab`. Other buttons may stand for
-/// actions in the mock, so they are left alone.
+/// The variant switches the check presses: each `nsh/base` `Tab` (which
+/// `pilot-day/ui`'s `Tab` and `Choices` options are) and each button in a radio
+/// group (`Choices` before it drew tabs). Other buttons may stand for actions in
+/// the mock, so they are left alone.
 const SWITCHES: &[&str] = &["role:radiogroup >> role:button", "role:tab"];
 /// No press starts later than this after the run starts. A press may still take
 /// the 1 s call limit and the 2 s settle, so the run ends within 9 s, under the

@@ -59,9 +59,22 @@ Neither field authorizes rendering or makes preview available.
 
 `apps/day/native/src/artifact_runtime.rs` builds an isolated NSH engine
 configuration from captured source. It reuses the source compiler and supplies
-eight fixed, app-owned helper modules as in-memory source chunks. It uses no
-filesystem resolver or authored bytecode. The bootstrap mounts the default
-component through the existing helper error boundary.
+eight fixed, app-owned helper modules and Day's component library as in-memory
+source chunks. It uses no filesystem resolver or authored bytecode. The bootstrap
+gives the preview Day's theme (`setTheme` with `apps/day/theme.json`), then mounts
+the default component through the existing helper error boundary.
+
+`artifact_library.rs` embeds `apps/day/ui` as it is (`pilot-day/ui/<file>` chunks and
+a `pilot-day/ui` facade). A preview has no asset reader, so each icon the library
+imports is a chunk of its own that exports a `data:image/svg+xml` URL and its size,
+and each font file is a chunk that exports its family name ("Geist", "Geist Mono").
+A preview cannot register fonts: on macOS, Day's own window registers Geist for the
+whole process when it imports the same files, and previews draw with it. Tests keep
+the embedded files equal to `apps/day/ui`, its icons and fonts, and check that the
+library imports only `nsh`, `nsh/base`, `nsh/base/plot`, its own files, icons and
+fonts, and no refused name. Compiling the kit and the library takes about 25-45 ms
+once per process (release); an artifact on the library starts and draws its first
+screen in under 10 ms and needs about 2 MiB of its 64 MiB heap.
 
 The configuration explicitly declares and grants no host capabilities, hardens
 the VM and sets heap, stack, time, node and operation limits. It installs only
@@ -119,7 +132,9 @@ The source host uses OXC's TSX AST to reject local,
 remote, dynamic, default and namespace imports, import metadata/attributes,
 TypeScript import aliases/types and module re-exports. A default component
 export is required. Named imports from `nsh`, `nsh/base`, `nsh/base/plot` and the
-trusted `pilot-artifact/ui` are allowed, except the names in `artifact_source::REFUSED`:
+trusted `pilot-day/ui` and `pilot-artifact/ui` are allowed, except the names in `artifact_source::REFUSED`.
+`pilot-day/ui` gives the names `ui/index.ts` exports, without the screen agent's
+registry functions (`artifact_library::exports`). Refused:
 what reaches outside the preview (host calls, clipboard, storage, links, pickers,
 web views, notifications, sound, speech, terminal, system alerts, eye dropper),
 shaders (no GPU time limit, and they can sample what is drawn behind), `setColorScheme`
@@ -161,8 +176,9 @@ no room when a view around it that clips leaves none of it, or a scroll view
 around it has no height or width. This found the blank mockups users saw (a
 `Scroll` with `flex-1` inside `Page`).
 
-After the first screen it presses each variant switch once: every `Choices`
-option and every `nsh/base` `Tab` that is not already selected. Other buttons
+After the first screen it presses each variant switch once: every tab (`nsh/base`
+`Tab`, which `pilot-day/ui`'s `Tab` and `Choices` options are) and every button in a
+radio group that is not already selected. Other buttons
 may stand for actions in the mock, so it leaves them alone. Each state reached
 is checked the same way, and an error is refused with the switch that led to
 it. A press that throws is refused too. Presses start only in the first 6 s and

@@ -1,8 +1,10 @@
 // Page structure for artifacts: a scrolling page, sections, cards, stats and a
-// comparison table. They draw with the theme's semantic tokens only, so an
+// comparison table. Page, Section, Card, Choices and Stat keep their props for
+// saved artifacts and draw with Pilot's own parts (`pilot-day/ui`, Day's
+// component library). Everything draws with the theme's semantic tokens, so an
 // artifact follows the app's light and dark appearance.
 import { type Component, computed, ErrorBoundary, fontScale, type JSX, mount, Scroll, Text, View } from "nsh";
-import { Button } from "nsh/base";
+import { Caption, Page as DayPage, Display, Heading, PageHead, Panel, Tab, Tabs } from "pilot-day/ui";
 import { attempt, type Laid, list, Problem, record, text } from "./check";
 
 /** Text grows with the reader's text size up to this factor; diagram boxes grow with it. */
@@ -63,47 +65,40 @@ export function DataProblem(props: { what: string; problem: string }) {
 	);
 }
 
-/** A scrolling page with a title. Most artifacts start here. */
+/** A scrolling page with a title: Pilot's page head (`pilot-day/ui` `Page` and `PageHead`), then the children. */
 export function Page(props: { title: string; subtitle?: string; children?: JSX.Element }) {
 	return (
 		<Scroll class="flex-1">
-			<View class="gap-6 p-6">
-				<View class="gap-1">
-					<Text role="header" class="text-xl font-semibold text-foreground">
-						{props.title}
-					</Text>
-					<If when={props.subtitle}>
-						<Text class="text-sm text-muted-foreground">{props.subtitle}</Text>
-					</If>
-				</View>
-				{props.children}
-			</View>
+			<DayPage>
+				<PageHead title={props.title} text={props.subtitle} />
+				<View class="gap-6">{props.children}</View>
+			</DayPage>
 		</Scroll>
 	);
 }
 
-/** A titled region of a page. */
+/** A titled region of a page: Pilot's section heading, then the children. */
 export function Section(props: { title: string; children?: JSX.Element }) {
 	return (
 		<View class="gap-3">
-			<Text role="header" class="text-base font-semibold text-foreground">
-				{props.title}
-			</Text>
+			<Heading role="header">{props.title}</Heading>
 			{props.children}
 		</View>
 	);
 }
 
-/** A surface for one group of content. Avoid cards inside cards. */
+/** A surface for one group of content: a Pilot `Panel`. `class` places it (`w-64`, `m-3`). Avoid cards inside cards. */
 export function Card(props: { title?: string; children?: JSX.Element; class?: string }) {
 	return (
-		<View class={`gap-3 rounded-xl border border-border bg-card p-4 ${props.class ?? ""}`}>
-			<If when={props.title}>
-				<Text role="header" class="text-sm font-semibold text-card-foreground">
-					{props.title}
-				</Text>
-			</If>
-			{props.children}
+		<View class={props.class}>
+			<Panel>
+				<View class="gap-3 p-4">
+					<If when={props.title}>
+						<Heading role="header">{props.title ?? ""}</Heading>
+					</If>
+					{props.children}
+				</View>
+			</Panel>
 		</View>
 	);
 }
@@ -115,9 +110,8 @@ export interface ChoiceOption<T extends string> {
 }
 
 /**
- * A labelled row of options with one chosen, to switch variants, situations or settings in a mockup. The chosen
- * option is filled and has no hover style; the others show one. Use it instead of a hand-made chip: on macOS a
- * `hover:` style covers a `selected:` one while the pointer stays on the option, so the chosen one looks empty.
+ * A labelled row of options with one chosen, to switch variants, situations or settings in a mockup: Pilot's
+ * `Tabs` on a hairline. Many options scroll sideways. Publishing presses each one once.
  */
 export function Choices<T extends string>(props: {
 	label: string;
@@ -126,44 +120,36 @@ export function Choices<T extends string>(props: {
 	onChange: (id: T) => void;
 }) {
 	return (
-		<View class="flex-row flex-wrap items-center gap-1" role="radiogroup" accessibilityLabel={props.label}>
-			<Text class="w-24 text-xs text-muted-foreground">{props.label}</Text>
-			<Each of={props.options} key={(o) => o.id}>
-				{(o) => (
-					<Button
-						selected={props.value === o().id}
-						onPress={() => props.onChange(o().id)}
-						class={
-							props.value === o().id
-								? "rounded-md bg-primary px-2.5 py-1"
-								: "rounded-md px-2.5 py-1 hover:bg-accent"
-						}
-					>
-						<Text
-							class={
-								props.value === o().id
-									? "text-xs font-medium text-primary-foreground"
-									: "text-xs text-foreground"
-							}
-						>
-							{o().label}
-						</Text>
-					</Button>
-				)}
-			</Each>
+		<View class="flex-row items-end gap-3 border-b border-border">
+			<View class="w-24 pb-2">
+				<Caption>{props.label}</Caption>
+			</View>
+			<Scroll horizontal class="-mb-px min-w-0 flex-1">
+				<Tabs>
+					<Each of={props.options} key={(o) => o.id}>
+						{(o) => (
+							<Tab label={o().label} selected={props.value === o().id} onPress={() => props.onChange(o().id)} />
+						)}
+					</Each>
+				</Tabs>
+			</Scroll>
 		</View>
 	);
 }
 
-/** One figure with its label. Put several in a `View class="flex-row flex-wrap gap-3"`. */
+/** One figure with its label, on a Pilot `Panel`. Put several in a `View class="flex-row flex-wrap gap-3"`. */
 export function Stat(props: { label: string; value: string; note?: string }) {
 	return (
-		<View class="min-w-40 flex-1 gap-1 rounded-xl border border-border bg-card p-4">
-			<Text class="text-xs text-muted-foreground">{props.label}</Text>
-			<Text class="text-2xl font-semibold tabular-nums text-card-foreground">{props.value}</Text>
-			<If when={props.note}>
-				<Text class="text-xs text-muted-foreground">{props.note}</Text>
-			</If>
+		<View class="min-w-40 flex-1">
+			<Panel>
+				<View class="gap-1 p-4">
+					<Caption>{props.label}</Caption>
+					<Display>{props.value}</Display>
+					<If when={props.note}>
+						<Caption>{props.note ?? ""}</Caption>
+					</If>
+				</View>
+			</Panel>
 		</View>
 	);
 }

@@ -151,7 +151,7 @@ fn the_bundled_prototype_example_switches_variants_with_choices() {
     let mut app = Headless::start(config).expect("separate artifact engine");
     app.wait_for("A: one banner above the list. The list stays as it was.")
         .expect("first variant");
-    app.press("role:button[B · Inline row]")
+    app.press("role:tab[B · Inline row]")
         .expect("Choices option");
     app.wait_for("B: the failed row opens in place with what happened.")
         .expect("second variant");

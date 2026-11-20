@@ -55,11 +55,18 @@ const KIT_EXPORTS: &[&str] = &[
     "TABLE_LIMITS",
 ];
 /// The modules an artifact may import from. Everything they export is allowed except \`REFUSED\`.
-const MODULES: &[&str] = &["nsh", "nsh/base", "nsh/base/plot", "pilot-artifact/ui"];
+/// `pilot-day/ui` is Day's component library (`artifact_library`).
+const MODULES: &[&str] = &[
+    "nsh",
+    "nsh/base",
+    "nsh/base/plot",
+    "pilot-day/ui",
+    "pilot-artifact/ui",
+];
 /// Names an artifact may not import, and why. Each one reaches outside the preview: the host app, the
 /// computer, the network, or Pilot's own window. The deny-all policy also stops the capabilities at run
 /// time (\`artifact_runtime\`); this list says why before anything is published.
-const REFUSED: &[(&str, &str, &str)] = &[
+pub(crate) const REFUSED: &[(&str, &str, &str)] = &[
     ("nsh", "mount", "Pilot mounts the default export itself"),
     ("nsh", "host", "it calls the app that hosts the preview"),
     (
@@ -137,6 +144,7 @@ fn module_refusal(module: &str) -> &'static str {
         "net" | "websocket" => "it opens network connections",
         "process" | "os" => "it reaches programs and the computer",
         "pilot-day/native" => "it is Pilot's own native bridge",
+        m if m.starts_with("pilot-day/") => "import Pilot's parts from \"pilot-day/ui\"",
         _ => "a preview has no other packages or files",
     }
 }
@@ -252,7 +260,7 @@ impl<'a> Visit<'a> for Imports {
         let module = it.source.value.as_str();
         if !MODULES.contains(&module) {
             self.error = Some(format!(
-                "imports from {module:?} are refused: {}. Import from \"nsh\", \"nsh/base\", \"nsh/base/plot\" and \"pilot-artifact/ui\"",
+                "imports from {module:?} are refused: {}. Import from \"nsh\", \"nsh/base\", \"nsh/base/plot\", \"pilot-day/ui\" and \"pilot-artifact/ui\"",
                 module_refusal(module)
             ));
             return;
@@ -280,6 +288,10 @@ impl<'a> Visit<'a> for Imports {
             } else if module == "pilot-artifact/ui" && !KIT_EXPORTS.contains(&name) {
                 // NSH modules check their own names when compiling; the kit is linked later, so check it here.
                 self.error = Some(format!("pilot-artifact/ui has no {name}"));
+            } else if module == crate::artifact_library::MODULE
+                && !crate::artifact_library::exports().has(name)
+            {
+                self.error = Some(format!("pilot-day/ui has no {name}"));
             }
         }
     }

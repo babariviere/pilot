@@ -48,8 +48,10 @@ test("bundled artifact skill is valid and keeps detailed writing guidance outsid
 		"runs the file once like Day's preview",
 		"there is no screenshot",
 		"no `.get()`",
-		"`Page` scrolls already",
-		"must be `Choices` (or an `nsh/base` `Tab`)",
+		"`Page` scrolls",
+		"must be a `Tab` or `Choices`",
+		"Build with `pilot-day/ui`; do not hand-style",
+		"`pilot-day/ui`",
 	])
 		assert.ok(source.includes(guidance), `missing ${guidance}`);
 	assert.doesNotMatch(
@@ -72,7 +74,9 @@ test("NSH examples and trusted helpers are all readable and import only what art
 	for (const path of ARTIFACT_NSH_FILES) {
 		const source = await readFile(path, "utf8");
 		const imports = [...source.matchAll(/^import[^;]*?from "([^"]+)";/gms)].map((match) => match[1]);
-		const allowed = path.includes("/kit/") ? /^(nsh|nsh\/base|\.\/[a-z]+)$/ : /^(nsh|nsh\/base|pilot-artifact\/ui)$/;
+		const allowed = path.includes("/kit/")
+			? /^(nsh|nsh\/base|pilot-day\/ui|\.\/[a-z]+)$/
+			: /^(nsh|nsh\/base|pilot-day\/ui|pilot-artifact\/ui)$/;
 		for (const name of imports) assert.match(name, allowed, `${relative(nsh, path)} imports ${name}`);
 		assert.doesNotMatch(
 			source,

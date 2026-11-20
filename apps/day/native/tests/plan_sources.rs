@@ -1,4 +1,6 @@
 //! Original sources through released NSH, the real native bridge and isolated daemon.
+#[path = "support/day_library.rs"]
+mod day_library;
 #[path = "support/app_source.rs"]
 mod app_source;
 use nsh_core::prelude::*;
@@ -68,18 +70,7 @@ impl Fixture {
             }
         }
         // The component library lives in ui/; screens import it as "./ui".
-        std::fs::create_dir(dir.join("ui")).unwrap();
-        for file in std::fs::read_dir(app.join("ui")).unwrap() {
-            let path = file.unwrap().path();
-            std::fs::copy(&path, dir.join("ui").join(path.file_name().unwrap())).unwrap();
-        }
-        std::fs::create_dir(dir.join("icons")).unwrap();
-        for icon in std::fs::read_dir(app.join("icons")).unwrap() {
-            let icon = icon.unwrap().path();
-            if icon.extension().is_some_and(|extension| extension == "svg") {
-                std::fs::copy(&icon, dir.join("icons").join(icon.file_name().unwrap())).unwrap();
-            }
-        }
+        day_library::copy(&app, &dir);
         std::fs::write(dir.join("nsh.json"),json!({"name":"Pilot","id":"test.day.sources","theme":"theme.json","capabilities":{"host":METHODS}}).to_string()).unwrap();
         Self {
             child,

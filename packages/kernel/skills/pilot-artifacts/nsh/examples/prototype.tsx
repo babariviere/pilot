@@ -4,9 +4,26 @@
 // - Only the shown variant is drawn, so a large mock stays small.
 // - Switching resets the case's local state, so each combination starts the same way.
 // - Nothing is saved or sent: pressing things changes only this preview.
-import { signal, Text, View } from "nsh";
-import { Button } from "nsh/base";
-import { Card, Choices, Page } from "pilot-artifact/ui";
+// - The screen is built from Pilot's own parts (`pilot-day/ui`), so it looks like the app.
+import { Scroll, signal, View } from "nsh";
+import { Choices } from "pilot-artifact/ui";
+import {
+	Block,
+	Body,
+	Button,
+	Caption,
+	Column,
+	Columns,
+	Notice,
+	Num,
+	Page,
+	PageHead,
+	Panel,
+	Row,
+	RowDetail,
+	Rows,
+	Section,
+} from "pilot-day/ui";
 
 type Variant = "banner" | "inline" | "panel";
 type Situation = "first" | "again" | "fixed";
@@ -40,6 +57,7 @@ const CASES: Record<Situation, { detail: string; after: string }> = {
 };
 
 const FILES = ["Invoices · March", "Payroll export", "Supplier list", "Expense reports"];
+const FAILED = 1;
 
 export default function Artifact() {
 	const variant = signal<Variant>("banner");
@@ -52,80 +70,99 @@ export default function Artifact() {
 	};
 	const note = () => VARIANTS.find((v) => v.id === variant())?.note ?? "";
 	return (
-		<Page title="Sync error: 3 variants" subtitle="Preview only. Buttons change only this preview; nothing is sent.">
-			<View class="gap-2">
-				<Choices
-					label="Variant"
-					options={VARIANTS}
-					value={variant()}
-					onChange={(id) => choose(() => variant.set(id))}
-				/>
-				<Choices
-					label="Situation"
-					options={SITUATIONS}
-					value={situation()}
-					onChange={(id) => choose(() => situation.set(id))}
-				/>
-				<Text class="text-xs text-muted-foreground">{note()}</Text>
-			</View>
-			{/* The realistic screen around the variant: a desktop window. */}
-			<View class="w-full max-w-3xl self-center rounded-xl border border-border bg-background">
-				<View class="flex-row items-center border-b border-border px-4 py-2">
-					<Text class="text-sm font-semibold text-foreground">Files</Text>
-				</View>
+		<Scroll class="flex-1">
+			<Page>
+				<PageHead
+					title="Sync error: 3 variants"
+					text="Preview only. Buttons change only this preview; nothing is sent."
+				>
+					<View class="gap-2 pt-2">
+						<Choices
+							label="Variant"
+							options={VARIANTS}
+							value={variant()}
+							onChange={(id) => choose(() => variant.set(id))}
+						/>
+						<Choices
+							label="Situation"
+							options={SITUATIONS}
+							value={situation()}
+							onChange={(id) => choose(() => situation.set(id))}
+						/>
+						<Caption>{note()}</Caption>
+					</View>
+				</PageHead>
+				{/* The realistic screen around the variant. */}
 				<Each of={[variant()]} key={(v) => v}>
 					{(v) => (
 						<Screen variant={v()} situation={situation()} pressed={pressed()} onRetry={() => pressed.set(true)} />
 					)}
 				</Each>
-			</View>
-		</Page>
+			</Page>
+		</Scroll>
 	);
 }
 
 /** One variant of the screen, in one situation. */
 function Screen(props: { variant: Variant; situation: Situation; pressed: boolean; onRetry: () => void }) {
-	const c = () => CASES[props.situation];
-	const failure = () => (
-		<View class="gap-2">
-			<Text class="text-sm font-medium text-foreground">Sync failed</Text>
-			<Text class="text-sm text-muted-foreground">{props.pressed ? c().after : c().detail}</Text>
-			<If when={!props.pressed}>
-				<Button
-					onPress={props.onRetry}
-					class="self-start rounded-md border border-border px-3 py-1.5 hover:bg-accent"
-				>
-					<Text class="text-sm text-foreground">Try again</Text>
-				</Button>
-			</If>
-		</View>
+	const words = () => (props.pressed ? CASES[props.situation].after : CASES[props.situation].detail);
+	// Functions, so each place that shows them gets its own views.
+	const retry = () => (
+		<If when={!props.pressed}>
+			<Button small label="Try again" onPress={props.onRetry} />
+		</If>
 	);
-	const list = (failed: number) => (
-		<View>
-			<Each of={FILES} key="index">
-				{(name, i) => (
-					<View class="gap-2 border-b border-border px-4 py-3">
-						<View class="flex-row items-center justify-between">
-							<Text class="text-sm text-foreground">{name()}</Text>
-							<Text class="text-xs text-muted-foreground">{i() === failed ? "Not synced" : "Synced 08:40"}</Text>
-						</View>
-						<If when={props.variant === "inline" && i() === failed}>{failure()}</If>
-					</View>
-				)}
-			</Each>
-		</View>
+	const files = () => (
+		<Section title="Files" count={FILES.length}>
+			<Rows>
+				<Each of={FILES} key={(name) => name}>
+					{(name, i) => (
+						<Row
+							title={name()}
+							mark={i() === FAILED ? "failed" : "done"}
+							state={i() === FAILED ? "Not synced" : undefined}
+							stateTone="failed"
+							trailing={
+								<If when={i() !== FAILED}>
+									<Num>08:40</Num>
+								</If>
+							}
+							detail={
+								<If when={props.variant === "inline" && i() === FAILED}>
+									<RowDetail>
+										<Body tone="muted">{words()}</Body>
+										<View class="flex-row">{retry()}</View>
+									</RowDetail>
+								</If>
+							}
+						/>
+					)}
+				</Each>
+			</Rows>
+		</Section>
 	);
 	return (
-		<View class={props.variant === "panel" ? "flex-row" : ""}>
-			<If when={props.variant === "banner"}>
-				<View class="border-b border-border bg-muted p-4">{failure()}</View>
+		<Panel
+			notice={
+				<If when={props.variant === "banner"}>
+					<Notice kind="failed" text="Sync failed" detail={words()} action={retry()} placement="panel" />
+				</If>
+			}
+		>
+			<If when={props.variant === "panel"} else={<Column>{files()}</Column>}>
+				<Columns
+					main={files()}
+					side={
+						<Section title="Payroll export">
+							<Block>
+								<Body>Sync failed</Body>
+								<Body tone="muted">{words()}</Body>
+								<View class="flex-row">{retry()}</View>
+							</Block>
+						</Section>
+					}
+				/>
 			</If>
-			<View class="flex-1">{list(1)}</View>
-			<If when={props.variant === "panel"}>
-				<Card class="m-3 w-64" title="Payroll export">
-					{failure()}
-				</Card>
-			</If>
-		</View>
+		</Panel>
 	);
 }

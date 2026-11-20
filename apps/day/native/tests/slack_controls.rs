@@ -1,4 +1,6 @@
 //! Released JSON bridge and real daemon/storage. No live Slack account or model.
+#[path = "support/day_library.rs"]
+mod day_library;
 include!("support/intake_fixture.rs");
 
 #[test]
@@ -67,13 +69,7 @@ fn real_report_screen_saves_corrections_through_the_released_bridge_and_storage(
             std::fs::copy(&p, f.dir.join(name)).unwrap();
         }
     }
-    for directory in ["ui", "icons"] {
-        std::fs::create_dir(f.dir.join(directory)).unwrap();
-        for entry in std::fs::read_dir(day.join(directory)).unwrap() {
-            let p = entry.unwrap().path();
-            std::fs::copy(&p, f.dir.join(directory).join(p.file_name().unwrap())).unwrap();
-        }
-    }
+    day_library::copy(&day, &f.dir);
     let source = format!(
         r#"import {{mount,host}} from 'nsh';
 import {{SlackReportsScreen}} from {};

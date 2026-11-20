@@ -6,6 +6,9 @@ use std::io::{Read, Write};
 #[path = "../artifact_check.rs"]
 #[cfg(unix)]
 mod artifact_check;
+#[path = "../artifact_library.rs"]
+#[cfg(unix)]
+mod artifact_library;
 #[path = "../artifact_runtime.rs"]
 #[cfg(unix)]
 #[allow(dead_code)] // Day's saved-revision entry cache; the helper only checks a fresh capture.

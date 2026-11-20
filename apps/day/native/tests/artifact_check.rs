@@ -38,6 +38,13 @@ fn every_bundled_example_runs_and_has_room_for_its_text() {
             "A: one banner above the list. The list stays as it was.",
         ),
         (
+            "page",
+            include_str!(
+                "../../../../packages/kernel/skills/pilot-artifacts/nsh/examples/page.tsx"
+            ),
+            "Release 2.4",
+        ),
+        (
             "flow",
             include_str!(
                 "../../../../packages/kernel/skills/pilot-artifacts/nsh/examples/flow.tsx"

@@ -5,6 +5,7 @@
 			"nsh": ["./.nsh/types/nsh/index.d.ts"],
 			"nsh/*": ["./.nsh/types/nsh/*.d.ts"],
 			"pilot-artifact/ui": ["./kit/index.ts"],
+			"pilot-day/ui": ["../../../../../apps/day/ui/index.ts"],
 			"*": ["./.nsh/types/*.d.ts"]
 		}
 	},

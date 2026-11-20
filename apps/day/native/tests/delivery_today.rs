@@ -10,6 +10,8 @@
 //! stays "not confirmed" across a reopen; Check reads it once and nothing is
 //! sent again.
 #![allow(dead_code)]
+#[path = "support/day_library.rs"]
+mod day_library;
 include!("support/intake_fixture.rs");
 #[path = "support/app_source.rs"]
 mod app_source;
@@ -25,16 +27,7 @@ fn entry() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("day-delivery-today-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
     // The component library lives in ui/; screens import it as "./ui".
-    std::fs::create_dir(dir.join("ui")).unwrap();
-    for file in std::fs::read_dir(app.join("ui")).unwrap() {
-        let path = file.unwrap().path();
-        std::fs::copy(&path, dir.join("ui").join(path.file_name().unwrap())).unwrap();
-    }
-    std::fs::create_dir(dir.join("icons")).unwrap();
-    for file in std::fs::read_dir(app.join("icons")).unwrap() {
-        let path = file.unwrap().path();
-        std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
-    }
+    day_library::copy(&app, &dir);
     for file in std::fs::read_dir(&app).unwrap() {
         let path = file.unwrap().path();
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();

@@ -16,6 +16,7 @@ export const ARTIFACT_NSH_FILES = [
 	"examples/prototype.tsx",
 	"examples/flow.tsx",
 	"examples/sequence.tsx",
+	"examples/page.tsx",
 	"kit/index.ts",
 	"kit/ui.tsx",
 	"kit/charts.tsx",

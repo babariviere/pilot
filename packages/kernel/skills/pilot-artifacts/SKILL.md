@@ -10,7 +10,7 @@ The `artifact` tool publishes session-local, offline artifacts. New artifacts ha
 
 - **NSH** (`kind: "nsh"`): one TSX file that Pilot draws with native views. Use it for charts, tables, diagrams,
   UI mockups and design alternatives. Only some sessions offer it: check that the tool accepts `kind: "nsh"`.
-  Guide: [references/nsh.md](references/nsh.md).
+  Build with Pilot's own parts (`pilot-day/ui`) so it looks like Pilot. Guide: [references/nsh.md](references/nsh.md).
 - **Image** (`kind: "image"`): PNG, JPEG, GIF or WebP. Guide: [references/images.md](references/images.md).
 
 Visual, shader, HTML, React and SwiftUI artifacts are read-only. `get` and `list` return them exactly as saved.

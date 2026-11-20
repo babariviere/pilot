@@ -17,6 +17,8 @@
 //! of the same exact names (no daemon, no `NativeHost`): a read and empty
 //! list, refusals that are not an empty list, Read again, invalidations that
 //! read only the root's cached list, and a page older than the inventory.
+#[path = "support/day_library.rs"]
+mod day_library;
 use nsh_core::prelude::*;
 use nsh_engine::{EngineConfig, HostCall, HostChannel};
 use nsh_testing::{Headless, compile_tsx};
@@ -73,18 +75,7 @@ fn entry() -> PathBuf {
     )
     .unwrap();
     // The component library lives in ui/; screens import it as "./ui".
-    std::fs::create_dir(dir.join("ui")).unwrap();
-    for file in std::fs::read_dir(app.join("ui")).unwrap() {
-        let path = file.unwrap().path();
-        std::fs::copy(&path, dir.join("ui").join(path.file_name().unwrap())).unwrap();
-    }
-    std::fs::create_dir(dir.join("icons")).unwrap();
-    for icon in std::fs::read_dir(app.join("icons")).unwrap() {
-        let icon = icon.unwrap().path();
-        if icon.extension().is_some_and(|ext| ext == "svg") {
-            std::fs::copy(&icon, dir.join("icons").join(icon.file_name().unwrap())).unwrap();
-        }
-    }
+    day_library::copy(&app, &dir);
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})

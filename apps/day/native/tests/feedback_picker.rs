@@ -1,4 +1,6 @@
 //! Real NSH picker and Day image controls. Hidden, offline, not native appearance or IME acceptance.
+#[path = "support/day_library.rs"]
+mod day_library;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nsh_core::{ImageData, picker::PickedFile};
 use nsh_engine::EngineConfig;
@@ -36,16 +38,7 @@ fn picker_cancel_keeps_words_and_a_picked_screenshot_can_retry_or_be_removed() {
         }
     }
     // The component library lives in ui/; screens import it as "./ui".
-    std::fs::create_dir(dir.join("ui")).unwrap();
-    for file in std::fs::read_dir(source.join("ui")).unwrap() {
-        let path = file.unwrap().path();
-        std::fs::copy(&path, dir.join("ui").join(path.file_name().unwrap())).unwrap();
-    }
-    std::fs::create_dir(dir.join("icons")).unwrap();
-    for icon in std::fs::read_dir(source.join("icons")).unwrap() {
-        let path = icon.unwrap().path();
-        std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
-    }
+    day_library::copy(&source, dir);
     std::fs::write(dir.join("nsh.json"), r#"{"name":"Picker fixture","id":"test.feedback.picker","theme":"theme.json","capabilities":{"picker":true}}"#).unwrap();
     let entry = dir.join("PickerFixture.tsx");
     std::fs::write(&entry, r#"
