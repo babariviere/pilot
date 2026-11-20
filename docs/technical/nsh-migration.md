@@ -26,8 +26,8 @@ model/account calls, service operations, installation, default switch, release,
 feed/signing changes or visible benchmarks are part of this work.
 
 Read this map with [DESIGN.md](../../DESIGN.md), the
-[design system](../../apps/desktop/docs/design-system.md), and the older
-[finish checklist](../../apps/desktop/docs/finish-checklist.md). The latter is
+[design system](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/design-system.md), and the older
+[finish checklist](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/finish-checklist.md). The latter is
 historical evidence, not an up-to-date list of missing features: later deliveries
 include schedules, memory search, MCP sign-in, diagnostic repair, Slack triage
 and one-shot lifecycle/delivery recovery. Revision/default-model/energy tasks
@@ -276,7 +276,7 @@ Missing mission management remains missing, not framework-provided: membership
 join/move/leave/coordinator administration, assignment/dependencies/task start,
 phase definition/order/gating, resource writes and managed-ticket delivery
 roles. Review actual endpoint side effects before enabling writes. The phase
-[contract audit](../../apps/desktop/docs/mission-phase-editing.md) found non-exact
+[contract audit](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mission-phase-editing.md) found non-exact
 targeting and coordinator/publication effects; NSH cannot fix this with a dialog
 or postflight check. Separate narrow backend approval remains necessary.
 

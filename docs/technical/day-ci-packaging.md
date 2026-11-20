@@ -2,7 +2,9 @@
 
 **Pre-cutover record.** This documents the former GUI workflows and the original unsigned
 Day qualification. Paths and selection flags below describe that baseline, not the current
-build, shipping selection or publication policy. See [Day development](../../apps/day/README.md)
+build, shipping selection or publication policy. See the
+[pre-cutover source](https://github.com/babariviere/pilot/tree/094f295850010f2217bdd7f47f1397ab0319d1f0/apps/desktop)
+for those commands, or see [Day development](../../apps/day/README.md)
 and the [private install path](../getting-started.md#private-install).
 
 For the separate opt-in credential setup and qualification limits,
@@ -157,17 +159,17 @@ qualification on those platforms. Never distribute GPUI with a Day label.
 
 ## Shared inputs that must survive Swift GUI removal
 
-| Shared input                                                                        | Current consumer                                                           |
-| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `apps/macos/scripts/bundle-runtime.sh`, `check-runtime.sh` and their shared helpers | `bundle_runtime.snapshot_build`, GPUI release and relocated runtime checks |
-| `apps/macos/scripts/release_metadata.py`, `finalize-release.sh`, release tests      | Current release publication/metadata contracts                             |
-| `apps/macos/Resources/AppIcon.icns` and required license/attribution assets         | Immutable runtime/package assets, not a new Day identity                   |
-| `apps/macos/Sources/PilotSystemEvents/{main.swift,SystemPowerMonitor.swift}`        | `build-native-helpers.sh`, authenticated system-event accessory            |
-| `apps/macos/Sources/PilotVisualEngine` (C source and headers)                       | Existing isolated `pilot-visual-worker` build                              |
-| `apps/power`, `apps/desktop/updater`, `apps/desktop/visual-worker`                  | Shared native power, verification/update and artifact execution inputs     |
+| Shared input                                                                                                                                                      | Current consumer                                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `apps/macos/scripts/bundle-runtime.sh`, `check-runtime.sh` and their shared helpers                                                                               | `bundle_runtime.snapshot_build`, GPUI release and relocated runtime checks |
+| `apps/macos/scripts/release_metadata.py`, `finalize-release.sh`, release tests                                                                                    | Current release publication/metadata contracts                             |
+| `apps/macos/Resources/AppIcon.icns` and required license/attribution assets                                                                                       | Immutable runtime/package assets, not a new Day identity                   |
+| `apps/macos/Sources/PilotSystemEvents/{main.swift,SystemPowerMonitor.swift}`                                                                                      | `build-native-helpers.sh`, authenticated system-event accessory            |
+| [`apps/macos/Sources/PilotVisualEngine`](https://github.com/babariviere/pilot/tree/753b2f5cca1119d4c185c04fe60844d21431c928/apps/macos/Sources/PilotVisualEngine) | Former isolated `pilot-visual-worker` build, now retired                   |
+| `apps/power`, `apps/desktop/updater`, `apps/desktop/visual-worker`                                                                                                | Shared native power, verification/update and artifact execution inputs     |
 
-Keep these consumers intact or update them together if paths move. Directory
-names alone do not identify obsolete GUI-only code.
+This inventory describes the pre-cutover baseline. For the current inputs, see
+[Day package inputs](day-package-inputs.md).
 
 ## Gates that remain open
 

@@ -53,6 +53,8 @@
 
 - Run the relevant commands in [README.md](README.md) and the matching TSX
   or native tests. Use isolated fixtures and faux providers, not real accounts.
+- For updater or power helper changes, use the
+  [standalone crate checks](../../crates/README.md#checks).
 - For wrapper changes, run from the repository root:
   `shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,typecheck.sh}`.
 - Headless tests do not prove native appearance, focus, scrolling or IME.

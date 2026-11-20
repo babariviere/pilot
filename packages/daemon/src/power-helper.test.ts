@@ -8,11 +8,11 @@ import { developmentPowerHelperPath, packagedPowerHelperPath } from "./power-hel
 test("development power resolution uses standalone Rust on both platforms", async () => {
 	const root = await mkdtemp(join(tmpdir(), "power-helper-path-"));
 	try {
-		assert.equal(developmentPowerHelperPath(root, "darwin"), join(root, "apps/power/target/release/PilotPower"));
-		assert.equal(developmentPowerHelperPath(root, "linux"), join(root, "apps/power/target/release/PilotPower"));
+		assert.equal(developmentPowerHelperPath(root, "darwin"), join(root, "crates/power/target/release/PilotPower"));
+		assert.equal(developmentPowerHelperPath(root, "linux"), join(root, "crates/power/target/release/PilotPower"));
 		for (const profile of ["debug", "release"]) {
-			const binary = join(root, "apps/power/target", profile, "PilotPower");
-			await mkdir(join(root, "apps/power/target", profile), { recursive: true });
+			const binary = join(root, "crates/power/target", profile, "PilotPower");
+			await mkdir(join(root, "crates/power/target", profile), { recursive: true });
 			await writeFile(binary, "synthetic helper, never executed");
 			assert.equal(developmentPowerHelperPath(root), binary);
 		}

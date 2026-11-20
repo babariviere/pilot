@@ -25,7 +25,7 @@ test("native paste keeps image bytes on a disconnected host and leaves text past
 		host: { params: { day: { version: 1, window: "fixture" } } },
 	});
 	await app.press("id:feedback-open");
-	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.paste("id:feedback-text", { files: ["./macos/Resources/LegacyApp/HomeSky.png"] });
 	await app.waitFor("id:feedback-image-retry");
 	expect(app.shows("Image not attached")).toBe(true);
 	expect(app.enabled("id:feedback-send")).toBe(false);
@@ -35,7 +35,7 @@ test("native paste keeps image bytes on a disconnected host and leaves text past
 });
 
 test("pasted screenshots retry the same upload, survive reopening, and clear only with the exact Send receipt", async () => {
-	const file = "../macos/Resources/LegacyApp/HomeSky.png";
+	const file = "./macos/Resources/LegacyApp/HomeSky.png";
 	const reference = { uploadId: "00000000-0000-4000-8000-000000000001", sha256: "a".repeat(64), bytes: 70 };
 	const uploads: unknown[] = [];
 	let reservations = 0;
@@ -122,7 +122,7 @@ test("uploaded previews can be removed without changing the feedback words", asy
 	await app.press("id:feedback-open");
 	await app.paste("id:feedback-text", {
 		text: "Keep these words",
-		files: ["../macos/Resources/LegacyApp/HomeSky.png"],
+		files: ["./macos/Resources/LegacyApp/HomeSky.png"],
 	});
 	await app.waitFor(`id:feedback-image-preview-${uploadId}`);
 	await app.press("label:Remove image 1");
@@ -153,7 +153,7 @@ test("removing an image from a rejected active draft does not delete a kept draf
 	});
 	await app.press("id:feedback-open");
 	await app.type("id:feedback-text", "Keep this screenshot");
-	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.paste("id:feedback-text", { files: ["./macos/Resources/LegacyApp/HomeSky.png"] });
 	await app.waitFor("Image 1 attached");
 	await app.press("Next unknown");
 	await app.press("id:feedback-send");
@@ -289,7 +289,7 @@ test("an image-only draft keeps its mission when reopened from the header", asyn
 	});
 	await app.press("id:mission-search");
 	await app.press("id:mission-feedback");
-	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.paste("id:feedback-text", { files: ["./macos/Resources/LegacyApp/HomeSky.png"] });
 	await app.waitFor("id:feedback-image-retry");
 	await app.keyboard.press("escape");
 	await app.press("id:feedback-open");

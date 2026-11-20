@@ -77,10 +77,10 @@ fixture: 480 tasks with 1.92 MB of bodies, 400 members, 60 decisions and 400 art
 one warmup pair and reports five pairs, checking identical published context content and order.
 One macOS arm64 / Node 24.21.0 run measured these medians per log-only change:
 
-| Projection | Wall | Main-thread CPU |
-| --- | ---: | ---: |
-| Previous full detail per member | 934.82 ms | 929.43 ms |
-| Narrow context inputs | 117.59 ms | 117.28 ms |
+| Projection                      |      Wall | Main-thread CPU |
+| ------------------------------- | --------: | --------------: |
+| Previous full detail per member | 934.82 ms |       929.43 ms |
+| Narrow context inputs           | 117.59 ms |       117.28 ms |
 
 In the matching two-write burst regression, substituting the previous reads failed the CPU budget:
 2,063.90 ms main-thread CPU, 2,087.18 ms heartbeat gap, 2,088.21 ms unrelated local HTTP latency,
@@ -91,8 +91,9 @@ coordinator changes. Existing mission durability, lifecycle, planning and servic
 
 These measurements prove this synthetic CPU path improved, not that all observed live stalls are fixed.
 The running daemon/app were not installed, restarted, profiled, loaded or mutated by the investigation.
-The current GUI is Rust/GPUI in `apps/desktop`; historical Swift observations below are not current
-native performance evidence. Remaining unlabeled live CPU work still has unknown attribution.
+The GUI at the time was Pilot Next (Rust/GPUI). Neither that app nor the historical
+Swift observations below provide current Day performance evidence. The remaining unlabeled live CPU
+work had unknown attribution.
 
 ## Mission store
 
@@ -141,10 +142,10 @@ node scripts/bench/daemon-stalls.ts --baseline <commit> --seconds 3 --writer-mbp
 
 One saturated run (two writers flushing 256 MiB batches) on an 11-core M3 Pro:
 
-| Store | Packet p50 | Packet p99 | Packets ≥ 100 ms | Loop delay max | Packet CPU p50 | Durable after p50 / p99 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Disk-backed (before) | 33 ms | 257 ms | 2 / 33 | 255 ms | 1.1 ms | at return |
-| In memory (now) | 1.0 ms | 4.9 ms | 0 / 58 | 5 ms | 1.0 ms | 18 ms / 320 ms |
+| Store                | Packet p50 | Packet p99 | Packets ≥ 100 ms | Loop delay max | Packet CPU p50 | Durable after p50 / p99 |
+| -------------------- | ---------- | ---------- | ---------------- | -------------- | -------------- | ----------------------- |
+| Disk-backed (before) | 33 ms      | 257 ms     | 2 / 33           | 255 ms         | 1.1 ms         | at return               |
+| In memory (now)      | 1.0 ms     | 4.9 ms     | 0 / 58           | 5 ms           | 1.0 ms         | 18 ms / 320 ms          |
 
 Before, each packet spent about 1 ms computing and the rest waiting for the disk. Now the event loop pays only the
 CPU, and the disk wait moves to the worker. An earlier, unthrottled run of the old store measured 340 ms at p99.

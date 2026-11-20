@@ -4,6 +4,9 @@ Status: host-only adapter and isolated tests. No production dispatcher, endpoint
 reviewer/provider call, approval, acceptance gate or live validation uses it. Returned observations
 are not durable review completions and are not automatically projected into mission checks.
 
+This adapter uses the retained [Node worker](../../packages/daemon/src/retained-visual-worker.ts).
+It does not use the retired native visual renderer or Day's NSH artifact host.
+
 ## Inputs and custody
 
 `prepareRetainedVisualPrecheck({ now, timeoutMs }, expectedEngine)` reads the installed checker

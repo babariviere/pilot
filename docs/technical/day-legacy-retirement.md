@@ -8,7 +8,7 @@ app on Apple Silicon macOS, with a [private install](../getting-started.md#priva
 Linux desktop is deferred. This is not proof of parity, Linux or accessibility qualification,
 or approval to publish Day. It does not remove installed apps, services, or user data.
 
-Keep [shared desktop tools](../../apps/desktop/README.md) and [macOS support](../../apps/macos/README.md),
+Keep [shared Rust crates](../../crates/README.md) and [macOS support](../../apps/day/macos/README.md),
 Day's legacy readers and [explicit mission migration](day-mission-migration.md), and the daemon
 behavior they depend on. No broad backend retirement follows from deleting the GPUI client.
 
@@ -46,15 +46,15 @@ itself proves neither that they persist nor that they are fixed in a package.
   Mission decision #1 deferred removal of the GPUI database question code to #35.
   Do not reopen database access or change saved GPUI drafts as a side effect.
 - **Build and update:** [Day's native manifest](../../apps/day/native/Cargo.toml)
-  depends on the updater under `apps/desktop` on Mac and Linux.
-  [Day qualification CI](../../.github/workflows/day-qualification.yml) calls shared
-  build, helper, packaging, and verification scripts there. Its unsigned qualification
+  uses [the standalone updater](../../crates/updater/README.md).
+  [Day qualification CI](../../.github/workflows/day-qualification.yml) calls scripts in
+  [`apps/day/scripts`](../../apps/day/scripts/) and [`crates/scripts`](../../crates/scripts/). Its unsigned qualification
   bundle is not a signed install package. The [former packaging and release workflows](day-ci-packaging.md#shipping-workflow-audit)
   also called tooling under `apps/desktop` or `apps/macos`.
 - **Swift GUI and helpers:** The obsolete Swift GUI was removed in `632281f4`.
-  [The helper-only Swift package](../../apps/macos/Package.swift) and
-  [bundle tooling](../../apps/desktop/scripts/bundle_runtime.py) still support
-  SystemEvents, power, and visual artifacts. Keep the Swift and C helper sources,
+  [The helper-only Swift package](../../apps/day/macos/Package.swift) and
+  [bundle tooling](../../apps/day/scripts/bundle_runtime.py) still support
+  SystemEvents, power, and the NSH artifact host. Keep the helper sources,
   assets, notices, and packaging Day uses. A minimal connected candidate is not
   the full helper inventory.
 - **Remote-backed mode:** [Remote devbox execution is already retired](devboxes.md).

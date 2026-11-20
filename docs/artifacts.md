@@ -46,8 +46,7 @@ Other clients can still show source without running it.
 
 Agents can no longer create or update native visual, shader, HTML, React or SwiftUI
 artifacts. Their existing sources, revisions and provenance remain in history for
-read-only inspection and copying. The desktop app still shows older native visuals;
-unsupported Mermaid syntax in them shows its source and a reason.
+read-only inspection and copying. Day does not execute older native visuals.
 
 Artifacts are outputs to review, not proof that code was applied, tests passed,
 or an external action succeeded.

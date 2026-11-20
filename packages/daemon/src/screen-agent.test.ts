@@ -164,7 +164,7 @@ test("a screen chat asks its bound window and gets the answer, a picture, a refu
 	assert.equal((await w.result("act")).error, "Needs a person: Send sends the message.");
 
 	// Screenshot: the window uploads the PNG; the kernel gets it as base64.
-	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	const png = await readFile(new URL("../../../apps/day/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
 	const ref = { uploadId: randomUUID(), sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
 	const uploaded = await fetch(`${f.root}/api/attachments/${ref.uploadId}`, {
 		method: "PUT",

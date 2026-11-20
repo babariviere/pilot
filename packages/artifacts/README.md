@@ -3,7 +3,7 @@
 `ArtifactStore` owns immutable session-local revisions and the durable latest pointer.
 The store accepts images, NSH source, native visuals and the standalone shader contract.
 The kernel's agent `artifact` tool writes only images and NSH; visual and shader writes
-stay in the store for compatibility and fixtures. Shader rendering is still deferred in Pilot Next.
+stay in the store for compatibility and fixtures.
 
 HTML, React and SwiftUI publication and preview are removed. Unsupported writes fail
 before compilation, rendering or persistence. Browser-library bundling, Chromium
@@ -15,7 +15,7 @@ provenance without compiling or executing legacy bodies. No migration or deletio
 is performed. Images retain their existing derived prepared-document read contract.
 The prepared HTML field remains a compatibility DTO, not a browser execution host.
 
-Native visuals use the bounded offline QuickJS evaluator and shared schema/checker.
-Publication preserves validation, resource limits, revision checks, immutable storage
-and durability. See [native visuals](../../docs/technical/native-visuals.md) and the
-[bundled artifact skill](../kernel/skills/pilot-artifacts/SKILL.md).
+The [host-only retained-visual precheck](../../docs/technical/retained-visual-precheck.md)
+keeps the Node QuickJS evaluator and shared schema/checker. It does not use the
+retired native visual worker or the [NSH artifact host](../../docs/technical/nsh-artifact-source.md).
+For current publication, see the [bundled artifact skill](../kernel/skills/pilot-artifacts/SKILL.md).

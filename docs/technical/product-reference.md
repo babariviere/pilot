@@ -1,7 +1,7 @@
 # Historical product reference
 
-Preserved from the previous README for implementation context. Some sections describe the retired
-Swift app or earlier behavior. Use the [user guides](../README.md) for current instructions.
+Preserved from the previous README for implementation context. The descriptions of the
+Swift and Pilot Next apps are historical. Use the [user guides](../README.md) for current instructions.
 
 **Background coding agents. A native macOS app. You stay in control.**
 
@@ -38,7 +38,7 @@ stored notes and summary ranges in a separate read-only window. Text remains
 selectable; forgetting, editing and other memory writes are not offered.
 Its case-sensitive literal filter searches only text loaded in the current range,
 not unopened notes or the full project, and typing never issues reads.
-See the [Local memory browser contract](../../apps/desktop/docs/project-memory.md).
+See the [Local memory browser contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/project-memory.md).
 
 Projects keep lasting research and component documentation as **knowledge**: agents in writable
 project chats register entries with readable Markdown bodies and cited sources, append corrections
@@ -48,27 +48,27 @@ project's overview opens a read-only window, and Mission Overview lists the miss
 Meaningful deliveries, decisions and research changes coalesce into stored **Needs a check** work.
 Writers explicitly observe registered sources and record scoped checks; coordinators reuse existing
 documentation tasks. Refresh stays passive. This never launches agents or writes repository docs automatically.
-See [project knowledge](../../apps/desktop/docs/project-knowledge.md) and the
+See [project knowledge](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/project-knowledge.md) and the
 [catalog design](project-knowledge-catalog.md).
 
 Settings → **MCP connections** shows Local’s last reported global Pi MCP status,
 with read-only details and explicit stale/unavailable states. Refresh only reads
 the daemon report; check, sign-in and setup actions are not included. See the
-[MCP observation contract](../../apps/desktop/docs/mcp-status.md).
+[MCP observation contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mcp-status.md).
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Finish a mission explicitly in Pilot Next.** Mission detail offers **Mark done** when all remaining
   tasks are done (dropped tasks excluded, at least one done task required). Done or archived missions archive
   their coordinator after current work finishes. Archiving a coordinator archives its mission. Member chats
-  and history stay intact. See [mission lifecycle](../../apps/desktop/docs/mission-lifecycle.md).
+  and history stay intact. See [mission lifecycle](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mission-lifecycle.md).
 - **Choose pi’s scoped models.** Settings → Scoped models has a searchable multi-select and an All option.
   Save changes pi’s global model list on this Mac, with conflict detection and exact readback.
   Project overrides, sign-ins, default models and running chats are unchanged. Advanced literal patterns
   and unavailable models are preserved.
 - **Save a failed chat's next model in Pilot Next.** Supported Local failed chats can save model/thinking
   preferences without retrying work or clearing the failure. Applying the choice requires a separate explicit
-  recovery. Older daemons fail closed. See [the passive contract](../../apps/desktop/docs/failed-chat-model.md).
+  recovery. Older daemons fail closed. See [the passive contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/failed-chat-model.md).
 - **Work locally.** Chats, projects and setup run on this Mac. Remote devboxes are retired.
   Existing cached remote history and unsent drafts are retained without reconnecting or moving work.
   See [retained remote data](devboxes.md).
@@ -172,7 +172,7 @@ the daemon report; check, sign-in and setup actions are not included. See the
   layers at worker checkpoints, separately from task acceptance. Opening Review never captures live work or
   submits approvals. Existing legacy work isn't enrolled or backfilled. See [native Review](mission-native-review.md).
   Pilot Next also browses existing mission/task links read-only, with guarded Open, exact Copy and task navigation,
-  without claiming PR binding or current external status. See [reported resources](../../apps/desktop/docs/mission-resources.md).
+  without claiming PR binding or current external status. See [reported resources](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mission-resources.md).
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
   open issues), readable through `mission get` with the task ID. Members may self-claim two additional
   tasks over a chat lifetime, excluding starting assignments. Completion, release and deletion do not
@@ -196,7 +196,7 @@ the daemon report; check, sign-in and setup actions are not included. See the
   missions and tasks.
   Pilot Next can preview supported inline images already stored in loaded Local conversations, with
   bounded decoding and explicit unsupported/over-limit states. This does not add attachment creation;
-  see [stored conversation images](../../apps/desktop/docs/conversation-images.md).
+  see [stored conversation images](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/conversation-images.md).
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
   messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
   mission from an item. A chat started from a Slack message shows that message's status in its toolbar (and ⌘K),
@@ -217,17 +217,17 @@ and `Pilot-Next-linux-x64.zip` for Wayland Linux. See [the pre-cutover Pilot Nex
 Pilot Next uses the native macOS menu bar for application, editing and navigation commands.
 Packaged managed Local connections also expose **Pilot Next → Daemon → Start / Stop / Restart**.
 These explicit controls preserve the existing runtime and login settings. Active or uninspectable work
-blocks stopping; uncertain outcomes remain inspect-only. See [daemon controls](../../apps/desktop/docs/daemon-upgrades.md).
+blocks stopping; uncertain outcomes remain inspect-only. See [daemon controls](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/daemon-upgrades.md).
 With a paged-history daemon, chats open on recent messages and load older history on scroll.
-Find can explicitly load the full history. See [lazy Local history](../../apps/desktop/docs/lazy-history.md).
-Pilot Next supports explicit [source-pinned UI iteration updates](../../apps/desktop/docs/ui-iteration.md),
+Find can explicitly load the full history. See [lazy Local history](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/lazy-history.md).
+Pilot Next supports explicit [source-pinned UI iteration updates](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/ui-iteration.md),
 preserving durable drafts and the running daemon, including externally managed connections.
 Pilot-project Build chats can use `pilot_update` to propose a signed local build. Native
 **Accept update** in the proposing chat authorizes a separate coordinated drain, durable GUI
 restart, verified daemon handoff and resume. Jobs, terminals and unknown children block it;
 uncertain lifecycle outcomes remain inspect-only. Ordinary GUI-only updates are unchanged.
 Settings → Updates retains the same proposal and recovery controls.
-See [coordinated project updates](../../apps/desktop/docs/daemon-upgrades.md#project-proposed-coordinated-updates).
+See [coordinated project updates](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/daemon-upgrades.md#project-proposed-coordinated-updates).
 The legacy Swift app is no longer built or published by CI. Its source and existing releases remain available.
 
 For the last legacy Swift release, download `Pilot-arm64.zip` from
@@ -265,14 +265,14 @@ Pending child work also reopens automatically after a daemon restart or a sleep 
 
 The experimental Rust desktop in `apps/desktop` also implements guarded bundled
 Local startup for x86-64 Wayland Linux. Its [runtime contract and qualification
-boundaries](../../apps/desktop/docs/linux-local-runtime.md) are separate from Swift and
+boundaries](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/linux-local-runtime.md) are separate from Swift and
 from Linux installer, updater and native visual confinement qualification.
 Pilot Next's initial packaged connection is read-only. After durable GUI startup,
 macOS checks the verified managed daemon and upgrades an older runtime at safe tool
 boundaries, without delaying the GUI app swap. Equal/newer runtimes stay running;
 failures remain visible for recovery. First registration/login enablement is explicit;
 launchd executes one verified runtime copy independently of GUI lifetime
-(Linux retains its separate runtime). Separately confirmed [daemon upgrades](../../apps/desktop/docs/daemon-upgrades.md)
+(Linux retains its separate runtime). Separately confirmed [daemon upgrades](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/daemon-upgrades.md)
 can replace a proven Swift launch agent while preserving its label, profile and PilotPower.
 Active jobs or failed inspection defer the switch; GUI installation itself never pauses agents.
 Drained, job-free subagents checkpoint and exit before the daemon switch, then resume their
@@ -283,9 +283,10 @@ active runtime copy so a GUI swap cannot change files under running jobs. Only o
 candidate is staged during replacement. One interrupted-update record and the exchanged
 app remain until the new GUI and daemon are verified, then obsolete update files are
 cleaned up instead of accumulating history.
-An explicit [stopped legacy service migration](../../apps/desktop/docs/daemon-upgrades.md#stopped-legacy-service-migration)
+An explicit [stopped legacy service migration](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/daemon-upgrades.md#stopped-legacy-service-migration)
 can also select Next's runtime when the old Swift app is gone, without moving chat data.
-To install it on Linux, follow [Install Pilot Next on Linux](../../apps/desktop/docs/linux-install.md).
+See the [former Pilot Next Linux install guide](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/linux-install.md)
+for historical context. Pilot Day does not ship on Linux.
 
 ### Headless Linux runtime (development)
 
@@ -409,7 +410,7 @@ the previous run is cancelled before it can recover.
 Pilot Next shows the selected chat's reported failure reason in a contextual header region,
 with selectable multiline details and **Copy reason**. Missing detail says **No failure reason was reported**.
 Historical and disconnected reports are labeled rather than presented as a new failure. This read-only
-view does not retry or repair anything. See the [public failure-report contract](../../apps/desktop/docs/session-failure.md).
+view does not retry or repair anything. See the [public failure-report contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/session-failure.md).
 
 ## Working with Pilot
 
@@ -455,13 +456,13 @@ queued user messages. Save preserves the original delivery mode unless explicitl
 changed; Remove asks for confirmation. Safe editing requires a daemon advertising
 captured-row queue guards. Missing/changed messages never become new sends, and
 uncertain writes cannot be retried automatically. Structured/image-bearing messages
-remain intact and cannot be edited as text. See [queued messages](../../apps/desktop/docs/queued-messages.md).
+remain intact and cannot be edited as text. See [queued messages](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/queued-messages.md).
 
 Pilot Next's **Changes** inspector can open a row's current workspace file in a
 bounded, read-only native detail. Refresh is explicit; capped previews offer
 **Copy shown portion**, not whole-file copy. Binary/unsupported files and server
 refusals remain explicit, with no filesystem fallback. See the
-[file viewer contract](../../apps/desktop/docs/session-file-view.md).
+[file viewer contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/session-file-view.md).
 
 ### Stopping and system messages
 
@@ -706,7 +707,7 @@ including archived chats, without starting or restoring them.
 Pilot Next's project selector also opens **Archive**, with all registered archived
 summaries, project/mission filters and passive history reading. Offline rows are
 labelled as last reported; deleted/unregistered data is not enumerated. See
-[Archive coverage and limits](../../apps/desktop/docs/archive.md).
+[Archive coverage and limits](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/archive.md).
 Archiving a mission also archives its coordinator chat. If the coordinator is still working, it finishes
 first, including running children and background-job follow-ups. Other member chats are left unchanged.
 Chat inspector panes open at a compact width, leaving the conversation most of the space. Drag the
@@ -879,7 +880,7 @@ Pilot Next offers **Preferred model…** in a task's details. Its explicit Save 
 task-preference support: only future-chat preferences change, without task reconciliation or agent starts.
 Default thinking follows the model configuration at start time. Pending or uncertain saves remain retained
 in that window and are never retried automatically; a later matching read is not a save receipt.
-See the [task preference contract](../../apps/desktop/docs/task-model.md) for scope and safety details.
+See the [task preference contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/task-model.md) for scope and safety details.
 
 Decisions have an audience: **All chats**, **Coordinator only**, or **Reference** (the default).
 Choose it when recording or editing a decision, or change it from the row's context menu.
@@ -980,7 +981,7 @@ or release an old assignment. Assignments are advisory and never prevent updates
 Pilot Next shows these public chat todos in a compact, read-only strip above the composer.
 Its explicit disclosure keeps the current chat's assignment first, reports bounded/partial coverage,
 and labels retained snapshots when unavailable. It never edits tasks or infers mission tasks from tools.
-See [the native task-strip contract](../../apps/desktop/docs/session-todos.md).
+See [the native task-strip contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/session-todos.md).
 
 Lists hold at most 256 items, each with up to 64 KiB of Markdown, and at most 1 MiB in total. Writes
 over these limits fail without losing existing items; delete obsolete items to make room. Historical

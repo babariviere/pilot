@@ -318,8 +318,9 @@ sections whenever an agent changes state are hard to find again. The Swift sideb
 
 ## Consistency
 
-The rules hold for every app. The named components are Swift's (historical); Pilot Next's are indexed in
-`apps/desktop/docs/design-system.md` and Day's in [apps/day/ui/README.md](apps/day/ui/README.md).
+For current components, see [Day's UI library](apps/day/ui/README.md).
+The names below are from the Swift app. The retired GPUI app had its own
+[Pilot Next design system](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/design-system.md).
 
 - Reuse shared components and `Theme` tokens (color, type, spacing, radius, motion). Add missing tokens or
   components centrally instead of styling a screen on its own.

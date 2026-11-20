@@ -1,6 +1,6 @@
 # Recurring schedules (design)
 
-**Status: implemented (daemon steps 1–3, desktop step 4; see [the Automations page](../../apps/desktop/docs/scheduled-messages.md)).** Recurring time triggers such as "every Monday at 9:00, run a
+**Status: implemented (daemon steps 1–3, desktop step 4; see [the Automations page](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/scheduled-messages.md)).** Recurring time triggers such as "every Monday at 9:00, run a
 database performance analysis". When the computer was off or asleep at the due time, the run happens once
 Pilot is back. Scope is the daemon (`pilotd`) and the Rust desktop app (`apps/desktop`); the Swift app is no
 longer supported and gets no work.
@@ -27,13 +27,13 @@ Rules are rows in the existing `ScheduleStore`, dispatched by `ScheduleService`.
 the project automation definitions (`Project.automations` in `projects.json`, see
 [automations.md](automations.md)).
 
-| Concern | ScheduleStore (chosen) | Project automation definitions |
-| --- | --- | --- |
-| Actions | Already has new-chat (`SpawnRequest`) and fixed-chat message targets | Shell and follow-up actions on a chat's own workspace; no chat creation |
-| Durable per-occurrence claim | SQLite revision/state compare-and-swap, interrupted claims never replayed | Would need a second state store beside `projects.json` |
-| One host | A row lives in one daemon's `schedules.sqlite`, so it runs exactly there | Definitions are meant to sync to every linked host, which would need a home-host filter |
-| Fixed-chat target | Chat IDs are host-local, which fits a host-local row | A synced definition cannot point at a host-local chat |
-| UI and timers | Existing roster, nearest-deadline timer, online gate | None yet |
+| Concern                      | ScheduleStore (chosen)                                                    | Project automation definitions                                                          |
+| ---------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Actions                      | Already has new-chat (`SpawnRequest`) and fixed-chat message targets      | Shell and follow-up actions on a chat's own workspace; no chat creation                 |
+| Durable per-occurrence claim | SQLite revision/state compare-and-swap, interrupted claims never replayed | Would need a second state store beside `projects.json`                                  |
+| One host                     | A row lives in one daemon's `schedules.sqlite`, so it runs exactly there  | Definitions are meant to sync to every linked host, which would need a home-host filter |
+| Fixed-chat target            | Chat IDs are host-local, which fits a host-local row                      | A synced definition cannot point at a host-local chat                                   |
+| UI and timers                | Existing roster, nearest-deadline timer, online gate                      | None yet                                                                                |
 
 Automation definitions stay for workspace and run lifecycle hooks. Project settings may show both lists on one
 Automations page, read from their own endpoints. A later flow format can start a flow from a recurring rule by
@@ -192,13 +192,13 @@ up under the rules above when it returns.
   loopback access cannot add one.
 - Create and edit carry `expectedHome: { daemonId, lineageId }`, checked before the row is written, so the app
   never creates a rule on a different daemon than it checked (the gap described in
-  [schedule-creation.md](../../apps/desktop/docs/schedule-creation.md)). One-shot creation can adopt the same field.
+  [schedule-creation.md](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/schedule-creation.md)). One-shot creation can adopt the same field.
 - `GET` stays passive. The roster and WebSocket `schedules` message carry the new fields unchanged.
 
 ## 7. Presentation (apps/desktop)
 
 **Automations page** (sidebar below Missions, replacing Settings → Scheduled messages; one-time rows and Cancel
-are described in [apps/desktop/docs/scheduled-messages.md](../../apps/desktop/docs/scheduled-messages.md)), following
+are described in [apps/desktop/docs/scheduled-messages.md](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/scheduled-messages.md)), following
 the calm settings list pattern:
 
 ```text
@@ -222,12 +222,12 @@ One-time
 
 **Inbox.** A rule with a `notice` appears as one row in Needs you, linking to its chat or the rule:
 
-| Notice | Row | Counts in the badge |
-| --- | --- | --- |
-| late | `Weekly DB performance analysis ran late · due Mon 09:00, started 14:12` | no |
-| skipped_running | `… skipped: the previous run is still working` | yes |
-| missed | `… missed 2 runs: Pilot was off` | yes |
-| failed | `… failed to start: <error>` | yes |
+| Notice          | Row                                                                      | Counts in the badge |
+| --------------- | ------------------------------------------------------------------------ | ------------------- |
+| late            | `Weekly DB performance analysis ran late · due Mon 09:00, started 14:12` | no                  |
+| skipped_running | `… skipped: the previous run is still working`                           | yes                 |
+| missed          | `… missed 2 runs: Pilot was off`                                         | yes                 |
+| failed          | `… failed to start: <error>`                                             | yes                 |
 
 A notice is replaced by the next noteworthy run, and cleared by Dismiss or by the next on-time successful run.
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 test("packaged dependency verification archives, relocates, checks and cleans up on success or failure", async (t) => {
 	const directory = await mkdtemp(join(tmpdir(), "packaged-dependencies-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
-	const native = join(directory, "apps/macos/scripts");
+	const native = join(directory, "apps/day/macos/scripts");
 	const bin = join(directory, "bin");
 	const temp = join(directory, "temp");
 	for (const path of [native, bin, temp]) await mkdir(path, { recursive: true });

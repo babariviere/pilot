@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE"
-          python3 apps/desktop/scripts/day_ci_policy.py --source "$SOURCE"
+          python3 apps/day/scripts/day_ci_policy.py --source "$SOURCE"
           test "$(uname -m)" = arm64
           test -d "$DEVELOPER_DIR"
           test "$(xcodebuild -version | head -1)" = 'Xcode 26.2'
@@ -99,22 +99,21 @@ jobs:
           SOURCE: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          apps/day/scripts/cargo fetch --locked --target aarch64-apple-darwin --manifest-path apps/power/Cargo.toml
-          python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$RUNNER_TEMP/day-runtime"
-          python3 apps/desktop/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$RUNNER_TEMP/day-helpers"
+          apps/day/scripts/cargo fetch --locked --target aarch64-apple-darwin --manifest-path crates/power/Cargo.toml
+          python3 apps/day/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$RUNNER_TEMP/day-runtime"
+          python3 apps/day/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$RUNNER_TEMP/day-helpers"
       - name: Prepare locked offline input dependencies
-        run: python3 apps/desktop/scripts/prepare-day-qualification.py
+        run: python3 apps/day/scripts/prepare-day-qualification.py
       - name: Build and qualify source-matched Day inputs
         env:
           SOURCE: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          export PILOT_DAY_QUICKJS_ARCHIVE="$PWD/apps/desktop/.tools/downloads/quickjs-ng-0.17.0.tar.gz"
-          python3 apps/desktop/scripts/day_build_inputs.py --source "$SOURCE" --output "$RUNNER_TEMP/day-inputs"
-          python3 apps/desktop/scripts/day_qualification.py --source "$SOURCE" --inputs "$RUNNER_TEMP/day-inputs" --runtime "$RUNNER_TEMP/day-runtime" --native "$RUNNER_TEMP/day-helpers" --output "$RUNNER_TEMP/day-qualification.json"
+          python3 apps/day/scripts/day_build_inputs.py --source "$SOURCE" --output "$RUNNER_TEMP/day-inputs"
+          python3 apps/day/scripts/day_qualification.py --source "$SOURCE" --inputs "$RUNNER_TEMP/day-inputs" --runtime "$RUNNER_TEMP/day-runtime" --native "$RUNNER_TEMP/day-helpers" --output "$RUNNER_TEMP/day-qualification.json"
           mkdir "$RUNNER_TEMP/day-bundle"
-          python3 apps/desktop/scripts/bundle_runtime.py bundle --unsigned-day --source "$SOURCE" --runtime "$RUNNER_TEMP/day-runtime" --executables "$RUNNER_TEMP/day-inputs" --native "$RUNNER_TEMP/day-helpers" --gui-resources "$RUNNER_TEMP/day-inputs/nsh" --output "$RUNNER_TEMP/day-bundle/Pilot.app"
-          python3 apps/desktop/scripts/bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot.app"
+          python3 apps/day/scripts/bundle_runtime.py bundle --unsigned-day --source "$SOURCE" --runtime "$RUNNER_TEMP/day-runtime" --executables "$RUNNER_TEMP/day-inputs" --native "$RUNNER_TEMP/day-helpers" --gui-resources "$RUNNER_TEMP/day-inputs/nsh" --output "$RUNNER_TEMP/day-bundle/Pilot.app"
+          python3 apps/day/scripts/bundle_runtime.py verify --unsigned-day "$RUNNER_TEMP/day-bundle/Pilot.app"
           ditto -c -k --keepParent "$RUNNER_TEMP/day-bundle/Pilot.app" "$RUNNER_TEMP/Pilot-Day-unsigned.zip"
           echo 'Unsigned Day bundle inventory checked. No signature, launch, release, native acceptance or cutover.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload unsigned Day bundle evidence

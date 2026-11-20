@@ -16,8 +16,6 @@ import subprocess
 import sys
 import tempfile
 
-DESKTOP = Path(__file__).resolve().parents[2] / "desktop/scripts"
-sys.path.insert(0, str(DESKTOP))
 import bundle_runtime as bundle
 import day_build_inputs as day
 

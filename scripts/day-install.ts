@@ -90,7 +90,7 @@ export async function verifyApp(s: Selection, app = s.app) {
 		await canonical(s.trustFrom);
 		trust = (await json(join(s.trustFrom, "Contents/Resources/updater-inputs.json"))).configuration;
 		run("/usr/bin/codesign", ["--verify", "--deep", "--strict", `-R=${trust.code_requirement}`, s.trustFrom]);
-		run("python3", [join(root, "apps/desktop/scripts/bundle_runtime.py"), "verify", s.trustFrom]);
+		run("python3", [join(root, "apps/day/scripts/bundle_runtime.py"), "verify", s.trustFrom]);
 	}
 	for (const key of ["repository", "application_id", "code_requirement"]) {
 		requireThat(trust[key] && inputs.configuration[key] === trust[key], `Candidate changes existing trust: ${key}`);
@@ -102,7 +102,7 @@ export async function verifyApp(s: Selection, app = s.app) {
 		"Bundle does not match the explicitly selected public updater key/build.",
 	);
 	run("/usr/bin/codesign", ["--verify", "--deep", "--strict", `-R=${trust.code_requirement}`, app]);
-	run("python3", [join(root, "apps/desktop/scripts/bundle_runtime.py"), "verify", app]);
+	run("python3", [join(root, "apps/day/scripts/bundle_runtime.py"), "verify", app]);
 	const resources = await json(join(app, "Contents/Resources/gui-resources.json"));
 	requireThat(resources.source === s.source, "Full distribution is missing source-matched NSH resources.");
 	requireThat(

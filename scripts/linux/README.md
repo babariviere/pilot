@@ -27,8 +27,9 @@ the exact manifest bytes. Verification must use an independently trusted public 
 The Mac app no longer embeds or consumes this headless key.
 
 The stable release workflow packages GUI assets instead. It does not call the headless signing CLI
-or publish these PR artifacts. See [the GUI release contract](../../apps/desktop/docs/releases.md)
-and `.github/workflows/release.yaml` for the current publication path.
+or publish these PR artifacts. See [the release workflow](../../.github/workflows/release.yaml)
+for current publication and the [Pilot Next release contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/releases.md)
+for historical context only.
 No source or package verification here proves deployment on a user's machine.
 
 ## Same-machine service

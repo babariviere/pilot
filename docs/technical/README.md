@@ -9,7 +9,7 @@ Read its status and platform limitations. For usage, start with the [user guides
 - `README.md`: a short introduction, setup entry point, and links.
 - `docs/`: concise feature guides explaining what users can do and important limits.
 - `docs/technical/`: APIs, storage, architecture, security details, plans, and evidence.
-- Component-local docs hold implementation contracts. `apps/desktop/docs/` is the historical Pilot Next collection.
+- Component-local docs hold implementation contracts. See the historical desktop references below for retired Pilot Next.
 
 Update the relevant guide when behavior changes. Keep implementation journals and test inventories
 out of user guides. Link to an existing contract rather than duplicating it.
@@ -34,7 +34,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Source-matched Day executable and package inputs](day-package-inputs.md)
 - [Connected native candidate preparation and launch](day-connected-candidate.md)
 - [Private Day installation and setup](../getting-started.md#private-install)
-- [Shared desktop tools](../../apps/desktop/README.md) and [macOS support](../../apps/macos/README.md)
+- [Shared Rust crates](../../crates/README.md) and [macOS support](../../apps/day/macos/README.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)
 - [Skill and prompt review index](skill-prompt-review.md)
@@ -196,10 +196,11 @@ out of user guides. Link to an existing contract rather than duplicating it.
 ## Historical desktop references
 
 These records preserve former behavior and qualification evidence. They are not current
-installation or release instructions. Keep Pilot Next contracts in place so incoming links
-continue to work; review links before any later move or cleanup.
+installation or release instructions. Pilot Next contracts and evidence are linked to
+the last revision that contained them.
 
-- [Pilot Next contracts](../../apps/desktop/docs/), including the [GPUI design system](../../apps/desktop/docs/design-system.md)
+- Pilot Next before removal: [implementation contracts](https://github.com/babariviere/pilot/tree/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs),
+  [test evidence](https://github.com/babariviere/pilot/tree/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/evidence), and the [GPUI design system](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/design-system.md).
 - [Former packaging and release selection](day-ci-packaging.md)
 - [Pre-cutover legacy retirement audit](day-legacy-retirement.md)
 - [First Day handoff and legacy recovery](day-install.md)

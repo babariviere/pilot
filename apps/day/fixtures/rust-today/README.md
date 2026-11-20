@@ -4,8 +4,7 @@ An optional fixture: the same mock Today screen as the TSX app
 ([`apps/day`](../../README.md)), written in Rust only, for the stack
 comparison. It is stack evidence, not part of the app: no Day entry point,
 script or workspace build uses it. It runs no JS VM and connects to no daemon,
-account or user data. The GPUI and Swift apps, their build and
-`apps/desktop/nsh`'s pin do not change.
+account or user data.
 
 Its dependencies now pin the same upstream NSH **v0.5.0** release as the TSX app
 (`f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`), with no patches, forks, Cargo

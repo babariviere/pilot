@@ -1,9 +1,9 @@
 # Native agent visuals (retired design)
 
 Status: retired for new artifacts. Agents now create NSH and image artifacts only; the artifact tool refuses
-`visual` and `shader` writes. Stored visuals stay readable, and the desktop app still renders them with the runtime
-in `packages/artifacts/src/visual` (fixtures in `packages/protocol/fixtures/visual`). The rest of this page records
-the original design and its decisions.
+`visual` and `shader` writes. Stored visuals stay readable as source. Day does not run the
+retired native visual worker. The [Node retained-visual precheck](retained-visual-precheck.md)
+is a separate host-only adapter. The rest of this page records the original design and its decisions.
 
 ## Goal
 
@@ -18,13 +18,13 @@ canvases and shaders retain their explicit heights. The expanded viewer still sc
 HTML, React and shader artifacts stay as they are. Visuals are a new artifact kind for the common cases
 where native rendering is smoother, lighter and better integrated:
 
-| | Web artifacts today | Native visuals |
-| --- | --- | --- |
-| Process and memory | One WebKit content process per view (tens of MB) | A small script VM per live visual (a few MB) |
-| Height | Measured after the page renders | Known from the node tree before drawing (D3, D8) |
-| Theme | Light documents only | Theme tokens, light and dark |
-| Motion | Page timers and `requestAnimationFrame` | The app's shared clock, paused when hidden (D2) |
-| Accessibility | WebKit's tree inside a web view | Native Text, controls and Swift Charts |
+|                    | Web artifacts today                              | Native visuals                                   |
+| ------------------ | ------------------------------------------------ | ------------------------------------------------ |
+| Process and memory | One WebKit content process per view (tens of MB) | A small script VM per live visual (a few MB)     |
+| Height             | Measured after the page renders                  | Known from the node tree before drawing (D3, D8) |
+| Theme              | Light documents only                             | Theme tokens, light and dark                     |
+| Motion             | Page timers and `requestAnimationFrame`          | The app's shared clock, paused when hidden (D2)  |
+| Accessibility      | WebKit's tree inside a web view                  | Native Text, controls and Swift Charts           |
 
 The reference is Zeron's `show_visual`: a sandboxed Luau script returns a tree of `ui.*` nodes that the
 client renders natively, with every draw and control exercised before the reader sees it.
@@ -39,17 +39,19 @@ is a plain JavaScript function. The agent defines it in its script and passes it
 const rows = JSON.parse(await tools.read({ path: "latency.json" }));
 
 function visual({ ui, state, data }) {
-  const s = state({ metric: "p95" });
-  return () =>
-    ui.column({ gap: 16 }, [
-      ui.text("Latency by region", { size: "lg", weight: 600 }),
-      ui.tabs({ options: ["p95", "p99"], value: s.metric, onChange: (v) => (s.metric = v) }),
-      ui.chart({
-        type: "bar", height: 220, unit: "ms",
-        x: data.map((d) => d.region),
-        series: [{ name: s.metric, values: data.map((d) => d[s.metric]) }],
-      }),
-    ]);
+	const s = state({ metric: "p95" });
+	return () =>
+		ui.column({ gap: 16 }, [
+			ui.text("Latency by region", { size: "lg", weight: 600 }),
+			ui.tabs({ options: ["p95", "p99"], value: s.metric, onChange: (v) => (s.metric = v) }),
+			ui.chart({
+				type: "bar",
+				height: 220,
+				unit: "ms",
+				x: data.map((d) => d.region),
+				series: [{ name: s.metric, values: data.map((d) => d[s.metric]) }],
+			}),
+		]);
 }
 
 await tools.artifact({ action: "create", kind: "visual", title: "Latency", source: String(visual), data: rows });
@@ -85,7 +87,6 @@ await tools.artifact({ action: "create", kind: "visual", title: "Latency", sourc
   fonts or other assets, no hover/drag states and no generated code. Target the 760 pt column and
   160-600 pt heights for data visuals (D7, D8).
 
-
 ## Where the script runs
 
 Interaction has to feel instant, including for chats on a devbox. That rules out running handlers
@@ -106,14 +107,14 @@ flowchart LR
 
 ### Runtime options
 
-| Option | Pre-check matches runtime | Limits | Interactivity | Cost and risk |
-| --- | --- | --- | --- | --- |
-| **QuickJS-NG on both sides (decided)**: quickjs-wasi in the kernel, QuickJS-NG C embedded in the app's helper, same pinned release | Yes, same engine version and deterministic mode | Public C APIs: `JS_SetMemoryLimit`, `JS_SetMaxStackSize`, `JS_SetInterruptHandler` | Local, no network | Interpreter only (no JIT); vendored C sources to build and keep in lockstep |
-| JavaScriptCore in the app, quickjs-wasi in the kernel | No, different engines and number formatting | No public memory limit; time limit only through private SPI | Local, JIT fast | JIT for untrusted code in Pilot's process; a pre-check can pass and the app still fail |
-| Luau (Zeron's choice), C++ in the app, WASM in the kernel | Yes | Memory cap, interrupts | Local | A second language for agents and a new toolchain; nothing reused from codemode |
-| Kernel-only QuickJS, app receives node trees | Yes, trivially | Codemode's existing limits and snapshots | Round trip per event (local ms, devbox 50-200 ms); no animated canvas | Kernel must stay alive to read old chats |
-| The same `quickjs.wasm` in the app through WasmKit | Bit-identical, snapshots portable | As in the kernel | Local but slow | An interpreter running an interpreter; too slow for per-frame draws |
-| Declarative JSON, no script | Schema validation only | None needed | Canned bindings only | Cannot express handlers or computed views; useful as the node-tree format, not as the API |
+| Option                                                                                                                             | Pre-check matches runtime                       | Limits                                                                             | Interactivity                                                         | Cost and risk                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| **QuickJS-NG on both sides (decided)**: quickjs-wasi in the kernel, QuickJS-NG C embedded in the app's helper, same pinned release | Yes, same engine version and deterministic mode | Public C APIs: `JS_SetMemoryLimit`, `JS_SetMaxStackSize`, `JS_SetInterruptHandler` | Local, no network                                                     | Interpreter only (no JIT); vendored C sources to build and keep in lockstep               |
+| JavaScriptCore in the app, quickjs-wasi in the kernel                                                                              | No, different engines and number formatting     | No public memory limit; time limit only through private SPI                        | Local, JIT fast                                                       | JIT for untrusted code in Pilot's process; a pre-check can pass and the app still fail    |
+| Luau (Zeron's choice), C++ in the app, WASM in the kernel                                                                          | Yes                                             | Memory cap, interrupts                                                             | Local                                                                 | A second language for agents and a new toolchain; nothing reused from codemode            |
+| Kernel-only QuickJS, app receives node trees                                                                                       | Yes, trivially                                  | Codemode's existing limits and snapshots                                           | Round trip per event (local ms, devbox 50-200 ms); no animated canvas | Kernel must stay alive to read old chats                                                  |
+| The same `quickjs.wasm` in the app through WasmKit                                                                                 | Bit-identical, snapshots portable               | As in the kernel                                                                   | Local but slow                                                        | An interpreter running an interpreter; too slow for per-frame draws                       |
+| Declarative JSON, no script                                                                                                        | Schema validation only                          | None needed                                                                        | Canned bindings only                                                  | Cannot express handlers or computed views; useful as the node-tree format, not as the API |
 
 Measured here with quickjs-wasi 3.6.2 (QuickJS-NG 0.17.0) under Node 24: a VM starts in 9 ms, a
 million `Math.sin` iterations take 172 ms, and a fresh VM's snapshot is 1.3 MB (110 KB gzipped). Native
@@ -167,18 +168,18 @@ Visuals share codemode's engine, not its script protocol.
 
 ## Sandbox limits
 
-| Limit | Value | On breach |
-| --- | --- | --- |
-| Visual source | 256 KiB | Rejected at publish |
-| `data` | 1 MiB of JSON | Rejected at publish |
-| Heap per VM | 32 MiB | Script error |
-| Stack | 512 KiB | `RangeError`, reported with its line |
-| Setup and view | 250 ms each | Interrupted, error |
-| Handler | 100 ms | Interrupted, error |
-| Canvas draw | 8 ms per frame (one 120 Hz frame) | Two misses in a row stop the animation and show the error |
-| Tree size | 5,000 nodes, 64 KiB of text | Error |
-| Draw commands | 20,000 per frame | Error |
-| Live VMs in the app | 8, least recently visible released first | The visual keeps its last tree and JSON state |
+| Limit               | Value                                    | On breach                                                 |
+| ------------------- | ---------------------------------------- | --------------------------------------------------------- |
+| Visual source       | 256 KiB                                  | Rejected at publish                                       |
+| `data`              | 1 MiB of JSON                            | Rejected at publish                                       |
+| Heap per VM         | 32 MiB                                   | Script error                                              |
+| Stack               | 512 KiB                                  | `RangeError`, reported with its line                      |
+| Setup and view      | 250 ms each                              | Interrupted, error                                        |
+| Handler             | 100 ms                                   | Interrupted, error                                        |
+| Canvas draw         | 8 ms per frame (one 120 Hz frame)        | Two misses in a row stop the animation and show the error |
+| Tree size           | 5,000 nodes, 64 KiB of text              | Error                                                     |
+| Draw commands       | 20,000 per frame                         | Error                                                     |
+| Live VMs in the app | 8, least recently visible released first | The visual keeps its last tree and JSON state             |
 
 Native heap-exhaustion diagnostics retain the memory error and limit even when a source location is
 unavailable. QuickJS can throw `null` when it cannot allocate its out-of-memory Error; that existing

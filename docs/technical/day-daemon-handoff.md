@@ -100,7 +100,7 @@ apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml 
   --features macos-host --lib daemon_handoff::tests
 apps/day/scripts/cargo test --locked --manifest-path apps/day/native/Cargo.toml \
   --features macos-host --lib host::official_root::tests
-apps/day/scripts/cargo test --locked --manifest-path apps/desktop/updater/Cargo.toml \
+bash crates/scripts/cargo.sh test --locked --manifest-path updater/Cargo.toml \
   --features native-macos --lib daemon_upgrade::macos::bundled_service
 ```
 

@@ -91,8 +91,8 @@ console.log("Native Git digest updates schedule pnpm-lock.yaml regeneration.");
 // Real Cargo file matching/extraction, without fetching crates or running Cargo.
 assert.ok(config.enabledManagers.includes("cargo"));
 const manifests = [
-	["apps/desktop/visual-worker/Cargo.toml", "apps/desktop/Cargo.lock", "cc"],
-	["apps/desktop/updater/Cargo.toml", "apps/desktop/updater/Cargo.lock", "ring"],
+	["crates/power/Cargo.toml", "crates/power/Cargo.lock", "libc"],
+	["crates/updater/Cargo.toml", "crates/updater/Cargo.lock", "ring"],
 ];
 const matched = getMatchingFiles(
 	{ ...cargo.defaultConfig, ...config, ...config.cargo, manager: "cargo" },
@@ -131,4 +131,4 @@ for (const [packageFile, lockFile, representative] of manifests) {
 		}
 	}
 }
-console.log("Cargo discovers desktop/helper manifests and lockfiles; intentional baselines remain paused.");
+console.log("Cargo discovers native helper manifests and lockfiles; intentional baselines remain paused.");

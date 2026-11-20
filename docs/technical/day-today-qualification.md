@@ -119,14 +119,14 @@ from the coordinator and is still pending. These checks do not waive it.
 
 ## Ownership before any future removal
 
-| Keep independently                                                     | Current consumer                                                                                                            |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Daemon/kernel/protocol, durable history and ownership records          | Both desktop clients; canonical work is not owned by a renderer.                                                            |
-| `apps/desktop/updater` and native daemon credential reader             | Day's native bootstrap, update helper and service controls.                                                                 |
-| `apps/desktop/visual-worker`, shared C engine and artifact host        | Full Day bundle and artifact pipeline. A minimal connected candidate omits unused helpers, not their full-app requirements. |
-| `apps/power`, SystemEvents Swift helper, PowerSupport/tests            | Daemon power, sleep and platform notifications; not obsolete Swift GUI.                                                     |
-| `apps/macos/Package.swift`, runtime/release scripts and assets/notices | Helper-only package and shared package/runtime consumers. Preserve attribution.                                             |
-| GPUI renderer, its launcher and exclusive probes                       | Current usable fallback until separately qualified and approved retirement. Preserve its saved state.                       |
+| Keep independently                                                                 | Current consumer                                                                                      |
+| ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Daemon/kernel/protocol, durable history and ownership records                      | Both desktop clients; canonical work is not owned by a renderer.                                      |
+| `crates/updater` and native daemon credential reader                               | Day's native bootstrap, update helper and service controls.                                           |
+| Day's [NSH artifact host](nsh-artifact-source.md#availability-and-remaining-gates) | Full Day bundle and artifact pipeline. A minimal connected candidate omits this helper.               |
+| `crates/power`, SystemEvents Swift helper, PowerSupport/tests                      | Daemon power, sleep and platform notifications; not obsolete Swift GUI.                               |
+| `apps/day/macos/Package.swift`, runtime/release scripts and assets/notices         | Helper-only package and shared package/runtime consumers. Preserve attribution.                       |
+| GPUI renderer, its launcher and exclusive probes                                   | Current usable fallback until separately qualified and approved retirement. Preserve its saved state. |
 
 No directory or legacy path was removed. Complete Mac daily-use acceptance,
 signed update/recovery qualification, IME, accessibility and physical Linux

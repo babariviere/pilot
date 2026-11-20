@@ -13,7 +13,7 @@ import { KernelSession } from "./session.ts";
 
 test("screen tools send one operation each and return the window's answer, picture or refusal", async () => {
 	const calls: ScreenOperation[] = [];
-	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	const png = await readFile(new URL("../../../apps/day/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
 	const picture = {
 		attachment: { uploadId: "6c1f2b9e-1111-4222-8333-944455556666", sha256: "a".repeat(64), bytes: png.length },
 		width: 800,

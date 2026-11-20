@@ -162,9 +162,9 @@ separate follow-up, not fixed or hidden by these scoped results.
 
 Historical investigations 458/459/461 explain earlier costs/capacity and their
 evidence limits. Task 460 was an opacity change, not updater evidence. The current
-source supersedes those installed-state descriptions. See [timing evidence](../../apps/desktop/docs/update-timings.md),
-[app exit](../../apps/desktop/docs/application-quit.md),
-[app updates](../../apps/desktop/docs/updates.md) and
-[daemon upgrades](../../apps/desktop/docs/daemon-upgrades.md).
+source supersedes those installed-state descriptions. See [timing evidence](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/update-timings.md),
+[app exit](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/application-quit.md),
+[app updates](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/updates.md) and
+[daemon upgrades](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/daemon-upgrades.md).
 No Linux native qualification, full-payload speed measurement, hardware IME matrix,
 installed availability or user acceptance is claimed here.

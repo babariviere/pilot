@@ -64,7 +64,7 @@ Line anchors refer to the baseline above; named symbols are the navigation ancho
 | [`nonCodePolicyAuthority` and exact lookup](../../packages/daemon/src/missions.ts#L3717)                                                                                                                                                                                                                                  | Even a matching decision digest/event yields unavailable authority; lookup reauthorizes before/after durability                                      | Reuse conservative refusal and exact recovery ordering. A saved policy or coordinator decision cannot grant its own authority                                                          |
 
 The Rust native client is the relevant app path. Swift is not the target for a future boundary.
-The existing [scoped-model contract](../../apps/desktop/docs/scoped-models.md#authority-and-truthful-outcomes)
+The existing [scoped-model contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/scoped-models.md#authority-and-truthful-outcomes)
 is settings-specific, not a broader approval API.
 
 ## Attacker and trust model

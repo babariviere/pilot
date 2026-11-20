@@ -1,8 +1,8 @@
 # Development reference
 
 Start with [Day development](../../apps/day/README.md). It is the sole desktop app,
-for Apple Silicon macOS. [Shared desktop tools](../../apps/desktop/README.md) and
-[macOS support](../../apps/macos/README.md) are not app entry points.
+for Apple Silicon macOS. [Shared Rust crates](../../crates/README.md) and
+[macOS support](../../apps/day/macos/README.md) are not app entry points.
 
 ### Build from source
 
@@ -77,7 +77,7 @@ success or failure on every update PR.
 Automerge is disabled. Renovate PRs also check an isolated production runtime before and after ZIP
 relocation in the macOS Node CI job. Review those checks and the existing tests before merging.
 
-Cargo covers Day's native host, the visual-worker workspace and the independent updater.
+Day's native host, the updater, and the power helper each use a separate Cargo manifest and lockfile.
 Review toolchain updates and the updater's parser-specific ZIP pin separately. See
 [dependency update policy](renovate.md) for the inventory and intentional exceptions.
 
@@ -97,15 +97,15 @@ Kernel worker
     └── native pi SDK: tools, prompts, extensions and provider authentication
 ```
 
-| Path                                             | Responsibility                                                      |
-| ------------------------------------------------ | ------------------------------------------------------------------- |
-| [`apps/desktop`](../../apps/desktop/README.md)   | Visual-worker workspace, standalone updater and packaging helpers   |
-| [`apps/day`](../../apps/day/README.md)           | Native Shell app and typed native host                              |
-| [`apps/macos`](../../apps/macos)                 | Shared helpers, C visual engine, assets and runtime/release scripts |
-| [`packages/daemon`](../../packages/daemon)       | HTTP/WebSocket API, sessions, workspaces and worker supervision     |
-| [`packages/kernel`](../../packages/kernel)       | Durable agent worker and native pi SDK integration                  |
-| [`packages/protocol`](../../packages/protocol)   | Shared client/daemon types                                          |
-| [`packages/artifacts`](../../packages/artifacts) | Artifact storage, preview rendering and bundled libraries           |
+| Path                                             | Responsibility                                                  |
+| ------------------------------------------------ | --------------------------------------------------------------- |
+| [`crates`](../../crates/README.md)               | Standalone updater and power helper                             |
+| [`apps/day`](../../apps/day/README.md)           | Native Shell app and typed native host                          |
+| [`apps/day/macos`](../../apps/day/macos)         | Shared helpers, assets and runtime/release scripts              |
+| [`packages/daemon`](../../packages/daemon)       | HTTP/WebSocket API, sessions, workspaces and worker supervision |
+| [`packages/kernel`](../../packages/kernel)       | Durable agent worker and native pi SDK integration              |
+| [`packages/protocol`](../../packages/protocol)   | Shared client/daemon types                                      |
+| [`packages/artifacts`](../../packages/artifacts) | Artifact storage, preview rendering and bundled libraries       |
 
 The Harness owns history and the model loop. The native SDK supplies tools and extensions, not a second
 model loop. Keep native client decoders in sync with the shared protocol.
@@ -230,7 +230,7 @@ diagnostic export. Separate [background completions](background-inference-accoun
 memory compaction (including historical Control usage), Slack classification and triage workers record observed usage before output validation
 or application. Capture and dashboard projections remain partial; neither establishes complete historical coverage
 or waives the dashboard performance/release gates. Pilot Next’s historical
-[Local Usage overview](../../apps/desktop/docs/usage-overview.md) filtered historical totals
+[Local Usage overview](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/usage-overview.md) filtered historical totals
 and daily trends by exact ledger project or Unattributed records, with a bounded
 project list. On-demand retained request pages expose exact selectable/copyable
 records without deriving totals from pages. Subscription limits remain global

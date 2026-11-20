@@ -94,7 +94,7 @@ after the exclusion. The compiler lane was already released.
 - Keep native arm64 macOS and macOS 15 deployment requirements. Static or mocked
   checks do not establish other-platform acceptance.
 - Keep the shared Swift power comparison fixtures, C visual engine, image credits
-  and license notices. Live consumers are documented in `apps/macos/README.md`.
+  and license notices. See [current macOS support](../../apps/day/macos/README.md) for live consumers.
 - Keep exact Day debug executable size exceptions, immutable source staging,
   helper containment, signature checks, offline relocated-runtime checks and
   native dependency verification.

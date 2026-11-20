@@ -1,9 +1,8 @@
 # Visual API 1 fixtures
 
-Shared by the kernel's pre-check and the app's visual helper. Both run the same runtime,
-[`packages/artifacts/src/visual/runtime.js`](../../../artifacts/src/visual/runtime.js), in QuickJS-NG
-(quickjs-wasi in the kernel, the C library in the app), so a visual that passes the pre-check renders the same tree
-in the app. Design: [docs/technical/native-visuals.md](../../../../docs/technical/native-visuals.md).
+These fixtures cover the kept [Node QuickJS evaluator](../../../artifacts/src/visual/runtime.js).
+They also record the contract of the [retired native visual renderer](../../../../docs/technical/native-visuals.md).
+Day's NSH artifact host does not use this contract.
 
 - `api-1.schema.json`: JSON Schema (2020-12) of the tree the runtime returns, `{"api":1,"root":Node}`. Generated
   from `packages/artifacts/src/visual/schema.ts`, the source of truth. Every object is closed
@@ -15,8 +14,8 @@ in the app. Design: [docs/technical/native-visuals.md](../../../../docs/technica
   draws after the last step with their input and the recorded `commands`, `ops` and `strings` (see Canvas below).
   `errors` gives the first error of failing visuals as `line N: message` (seed text `""`, now 0), after the first
   view, its `draws` (with the per-frame limit `drawMs` when set, else 8 ms) and its `events`, in that order.
-- `mockup-mobile.js`, `mockup-desktop.js`: two complete UI mockup visuals. The desktop app's visual pane probe renders
-  them, and `packages/artifacts/src/visual/mockups.test.ts` runs the publication check on them. Agents no longer
+- `mockup-mobile.js`, `mockup-desktop.js`: two complete UI mockup visuals. The former desktop visual pane probe rendered
+  them, and `packages/artifacts/src/visual/mockups.test.ts` still checks them. Agents no longer
   create visuals; these files stay as examples of stored revisions.
 
 Regenerate the schema and conformance cases after an intended change, then review the diff:
@@ -27,6 +26,8 @@ pnpm fmt
 ```
 
 ## Host contract
+
+This is the historical Visual API 1 host contract, not Day's NSH preview API.
 
 1. Create a VM with a 32 MiB heap limit, a 512 KiB stack limit, an interrupt handler, UTC as the time zone and no
    `WeakRef`/`FinalizationRegistry`. Do not run promise jobs: visuals are synchronous.
@@ -56,13 +57,13 @@ pnpm fmt
 Controls carry `id`, their path of child indices from the root (`"0"` is the root, `"0.2.1"` the second child of
 its third child). Send events to ids from the latest tree:
 
-| Node | Event value |
-| --- | --- |
-| `tabs` | the chosen option's `value` (string) |
-| `toggle` | the new boolean |
-| `slider` | a number; the runtime clamps it to `min...max` and snaps it to `step` |
-| `button` | `null` (ignored when `disabled`) |
-| `column`, `row`, `grid` with an `id` (the visual set `onClick`) | `null` |
+| Node                                                            | Event value                                                           |
+| --------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `tabs`                                                          | the chosen option's `value` (string)                                  |
+| `toggle`                                                        | the new boolean                                                       |
+| `slider`                                                        | a number; the runtime clamps it to `min...max` and snaps it to `step` |
+| `button`                                                        | `null` (ignored when `disabled`)                                      |
+| `column`, `row`, `grid` with an `id` (the visual set `onClick`) | `null`                                                                |
 
 Coalesce slider drags to one event per display frame. A handler only assigns to state; the next `render` reflects it.
 
@@ -87,20 +88,20 @@ as wide as the column, or its `width` when narrower. Draw it with `draw(id, widt
 animated and visible (`t` in seconds since it started; 0 when not animated). Two misses of the 8 ms limit in a row
 stop the canvas and show the error. `ops` is a flat list of commands, each starting with its op code:
 
-| Op | Command | Numbers after the op |
-| --- | --- | --- |
-| 1, 2 | save, restore | none |
-| 3 | translate | x, y |
-| 4 | rotate | radians |
-| 5 | scale | x, y |
-| 6 | opacity (multiplies until restore) | factor |
-| 10 | rect | paint, x, y, w, h, corner radius |
-| 11 | circle | paint, cx, cy, r |
-| 12 | line | paint, x1, y1, x2, y2 |
-| 13 | path | paint, closed (0 or 1), n, then n x, y pairs |
-| 14 | arc | paint, cx, cy, r, inner, start, end (radians, clockwise from 3 o'clock) |
-| 15 | paths (SVG path data) | paint, m, then m subpaths of closed (0 or 1), n, n x, y pairs; fills use the nonzero rule |
-| 20 | text | color, opacity, x, y, string index, size index, weight, align index, baseline index, mono |
+| Op   | Command                            | Numbers after the op                                                                      |
+| ---- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| 1, 2 | save, restore                      | none                                                                                      |
+| 3    | translate                          | x, y                                                                                      |
+| 4    | rotate                             | radians                                                                                   |
+| 5    | scale                              | x, y                                                                                      |
+| 6    | opacity (multiplies until restore) | factor                                                                                    |
+| 10   | rect                               | paint, x, y, w, h, corner radius                                                          |
+| 11   | circle                             | paint, cx, cy, r                                                                          |
+| 12   | line                               | paint, x1, y1, x2, y2                                                                     |
+| 13   | path                               | paint, closed (0 or 1), n, then n x, y pairs                                              |
+| 14   | arc                                | paint, cx, cy, r, inner, start, end (radians, clockwise from 3 o'clock)                   |
+| 15   | paths (SVG path data)              | paint, m, then m subpaths of closed (0 or 1), n, n x, y pairs; fills use the nonzero rule |
+| 20   | text                               | color, opacity, x, y, string index, size index, weight, align index, baseline index, mono |
 
 `paint` is four numbers: mode (1 fill, 2 stroke), color, opacity and line width (0 for fills). A color is a token
 index in schema order (0-12), or 256 + 0xRRGGBBAA for a literal color; sizes are `xs`...`xl`, align `start`, `center`, `end`, baseline `top`,

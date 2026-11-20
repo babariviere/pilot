@@ -8,8 +8,7 @@ bootstrap, sole `NativeHost` and deferred close owner. NSH stays at unmodified
 ## Prepare without assembly or signing
 
 Use current main, the installed NSH and Rust tools, and
-the frozen pnpm dependency tree. This app-only lane does not need the visual
-worker's QuickJS archive. The environment/tool paths are described in
+the frozen pnpm dependency tree. The environment/tool paths are described in
 [Day package inputs](day-package-inputs.md#entry-points).
 
 ```sh
@@ -24,10 +23,9 @@ The explicit trust source supplies the existing **public** updater configuration
 The script checks its real code seal, bundle inventory, app ID and build. It does
 not generate keys, reuse a private key, change policy or select a profile/model.
 It builds only the configured source-matched `pilot-desktop` executable and the
-exact connected NSH resource closure. It does not build the unused update helper,
-visual worker or artifact host. Its `connected-candidate-inputs` receipt records
-only these products, not full-distribution evidence. The default distribution
-builder still builds all four binaries and checks the pinned QuickJS inputs.
+exact connected NSH resource closure. It does not build the update helper or
+the NSH artifact host. Its `connected-candidate-inputs` receipt records only
+these products, not full-distribution evidence.
 Preparation prints the one separate assembly/signing command.
 
 ## Local development assembly

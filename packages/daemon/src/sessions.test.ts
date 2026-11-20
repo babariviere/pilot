@@ -7976,7 +7976,7 @@ test("feedback jj source-only Ask keeps its exact trusted attachment read grant"
 	const uploadId = randomUUID();
 	const imagePath = join(f.home, "attachments", `${uploadId}.png`);
 	await mkdir(join(f.home, "attachments"), { recursive: true });
-	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	const png = await readFile(new URL("../../../apps/day/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
 	await writeFile(imagePath, png);
 	const sessionId = randomUUID();
 	await sessions.spawnDurable(

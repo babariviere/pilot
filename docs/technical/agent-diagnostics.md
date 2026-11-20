@@ -139,7 +139,7 @@ or pre-upgrade hosts report missing/not-recorded rather than pretending retained
 
 The historical Pilot Next writer used `~/Library/Application Support/Pilot Next/diagnostics/events-{0,1,2}.jsonl`,
 three 64 KiB private slots and a 256-command queue. Its version 2 closed numeric schema and Local
-settings-control bridge are documented in [native diagnostic coverage](../../apps/desktop/docs/diagnostic-coverage.md).
+settings-control bridge are documented in [native diagnostic coverage](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/diagnostic-coverage.md).
 Disable/clear persists a new numeric privacy epoch; only the native writer invalidates/drains queued bound
 writes and selectively clears old-epoch bound rows in its slots. The daemon never unlinks an active writer's files, and
 its clear response does not acknowledge native physical clearing. Independent manual unbound

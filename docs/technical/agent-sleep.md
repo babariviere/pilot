@@ -92,11 +92,11 @@ grant, first turn closed-lid work off, then remove `/etc/sudoers.d/pilot-power` 
 
 ## Verification
 
-Pilot Next builds the standalone Rust helper in `apps/power`, retaining the same
+Day builds the standalone Rust helper in `crates/power`, retaining the same
 `Contents/Helpers/PilotPower` identity and daemon wire/grant/ownership contracts.
-The legacy Swift helper remains for coexistence. Next's native helper build no
-longer resolves/builds the Swift GUI; the independent `PilotSystemEvents` helper
-is still required. See [port mapping and verification boundaries](../../apps/power/PORTING.md).
+The legacy Swift helper remains for coexistence. Day's native helper build does not
+build the Swift GUI; the independent `PilotSystemEvents` helper
+is still required. See [port mapping and verification boundaries](../../crates/power/PORTING.md).
 Rust compilation and injected pipe/override/authorization tests do not qualify
 physical sleep/lid behavior or authorize changing this host's power settings.
 
@@ -224,7 +224,7 @@ and known connectivity (or the existing explicit disable-policy action). This co
 restart limitation is not advertised as physical wake recovery qualification. AC/Wi-Fi sensors
 are not implemented on Linux; their false wire placeholders cannot authorize a lid override.
 
-The immutable Linux GUI runtime producer builds the archived `apps/power` source and lockfile,
+The historical Linux GUI runtime producer built the archived `apps/power` source and lockfile,
 copies its executable plus a source/target/hash `power-inputs.json` into the runtime, then
 inventories that entire closure. Existing ELF dependency auditing and full-payload verification
 include the helper. Discovery stays inside the selected retained runtime, so removing/closing the

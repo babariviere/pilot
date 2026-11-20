@@ -31,9 +31,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B -m unittest discover -s apps/day/scripts -p 'test_*.py'
-          for suite in day_ci_policy day_build_inputs day_qualification bundle_runtime ci verify_update_lifecycle; do
-            python3 -B -m unittest discover -s apps/desktop/scripts -p "test_$suite.py"
-          done
+          python3 -B -m unittest discover -s crates/scripts -p 'test_*.py'
 
   # Portable tests use Linux so they do not compete for macOS runner capacity.
   node:
@@ -110,9 +108,9 @@ jobs:
       - run: pnpm test -- --lane=macos
       - name: Packaging and release metadata tests
         run: |
-          for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
-          python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_*.py'
-          node --test apps/macos/scripts/tests/*.test.mjs
+          for script in apps/day/macos/scripts/*.sh; do bash -n "$script"; done
+          python3 -B -m unittest discover -s apps/day/macos/scripts/tests -p 'test_*.py'
+          node --test apps/day/macos/scripts/tests/*.test.mjs
       - name: Verify packaged dependency updates
         if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/')
         run: bash scripts/check-packaged-dependencies.sh
@@ -135,22 +133,20 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Validate workflow schema
-        run: python3 apps/desktop/scripts/validate-workflows.py
+        run: python3 scripts/validate-workflows.py
       - name: Install shared helper dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes build-essential clang lld pkg-config libssl-dev libudev-dev acl dbus-daemon
       - name: Prepare pinned Rust and nextest
-        run: bash apps/desktop/scripts/ci.sh bootstrap
+        run: bash crates/scripts/ci.sh bootstrap
       - name: Test shared updater
         run: |
-          bash apps/desktop/scripts/ci.sh updater-check
-          bash apps/desktop/scripts/ci.sh updater-linux-tests
-          python3 apps/desktop/scripts/verify_update_lifecycle.py
+          bash crates/scripts/ci.sh updater-check
+          bash crates/scripts/ci.sh updater-linux-tests
+          python3 crates/scripts/verify_update_lifecycle.py
       - name: Test shared power helper
-        run: bash apps/desktop/scripts/ci.sh power-check
-      - name: Check shared visual worker
-        run: bash apps/desktop/scripts/ci.sh visual-check
+        run: bash crates/scripts/ci.sh power-check
 
   rust-macos-native:
     name: Shared macOS updater and power security
@@ -164,10 +160,8 @@ jobs:
         with:
           python-version: '3.13'
       - name: Prepare pinned Rust and nextest
-        run: bash apps/desktop/scripts/ci.sh bootstrap
+        run: bash crates/scripts/ci.sh bootstrap
       - name: Test shared macOS updater security and lifecycle
-        run: bash apps/desktop/scripts/ci.sh updater-mac-tests
+        run: bash crates/scripts/ci.sh updater-mac-tests
       - name: Test shared power helper
-        run: bash apps/desktop/scripts/ci.sh power-check
-      - name: Check shared visual worker
-        run: bash apps/desktop/scripts/ci.sh visual-check
+        run: bash crates/scripts/ci.sh power-check

@@ -182,7 +182,7 @@ test("connected sends carry screenshots and reconcile only their item while unre
 	});
 	await app.waitFor("id:feedback-text");
 	await app.type("id:feedback-text", "First screenshot report");
-	await app.paste("id:feedback-text", { files: ["../macos/Resources/LegacyApp/HomeSky.png"] });
+	await app.paste("id:feedback-text", { files: ["./macos/Resources/LegacyApp/HomeSky.png"] });
 	await app.waitFor("Image 1 attached");
 	await app.press("id:feedback-send");
 	await app.waitFor("id:feedback-unknown");

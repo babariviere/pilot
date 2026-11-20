@@ -140,7 +140,7 @@ test("the Swift loopback fixture supports lost-reply retry and older-runtime neg
 	for (const mode of ["legacy", "current"]) {
 		const child = spawn(
 			process.execPath,
-			[join(root, "apps/macos/Tests/Fixtures/workspace-terminal.cjs"), root, mode],
+			[join(root, "apps/day/macos/Tests/Fixtures/workspace-terminal.cjs"), root, mode],
 			{ stdio: ["pipe", "pipe", "inherit"] },
 		);
 		const exited = once(child, "exit");

@@ -7,7 +7,7 @@ Matching shell checks now run through the same bounded runner. Check failures us
 `<automation>` follow-up, a shared three-message attempt limit and visible no-progress/limit attention.
 Continue-on-todos actions share that limit and require closed-todo or changed-file progress before repeating.
 Failed checks win over continuation. The Rust desktop shows hook results in the chat timeline, the `automation` Needs you
-reason, and a Hooks section on the Automations page ([automation-hooks.md](../../apps/desktop/docs/automation-hooks.md));
+reason, and a Hooks section on the Automations page ([automation-hooks.md](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/automation-hooks.md));
 the working line and **Run setup again** remain planned. Enable Automations in desktop Settings → Chats to expose the
 `automations: 1` capability and editing endpoint. This host-owned switch defaults off, persists in
 `chat-settings.json`, and applies to new admissions immediately, without restarting the daemon.
@@ -29,11 +29,11 @@ definitions: see [recurring schedules](recurring-schedules.md).
 
 An automation is **trigger → conditions → action**, defined per project in the daemon's project settings.
 
-| Use | Trigger | Conditions | Action |
-| --- | --- | --- | --- |
-| Setup (install dependencies, generate code) | `workspace.created`, `workspace.restored` | none | shell command, failures reported |
-| Post-run checks (lint, tests) | `run.finished` | the run changed files, optionally matching paths | shell command, failures sent to the agent |
-| Continue on open todos | `run.finished` | the chat has open todos | follow-up message to the agent |
+| Use                                         | Trigger                                   | Conditions                                       | Action                                    |
+| ------------------------------------------- | ----------------------------------------- | ------------------------------------------------ | ----------------------------------------- |
+| Setup (install dependencies, generate code) | `workspace.created`, `workspace.restored` | none                                             | shell command, failures reported          |
+| Post-run checks (lint, tests)               | `run.finished`                            | the run changed files, optionally matching paths | shell command, failures sent to the agent |
+| Continue on open todos                      | `run.finished`                            | the chat has open todos                          | follow-up message to the agent            |
 
 Principles:
 
@@ -48,20 +48,20 @@ Principles:
 
 ## What this builds on
 
-| Existing piece | How automations use it |
-| --- | --- |
-| `ProjectStore` and `projects.json` (validated sub-objects such as `tracking`, atomic writes, change listeners) | Definitions are a validated `automations` object on `Project` |
-| Workspace preparation in `SessionManager.start` (`meta.preparing`, then `meta.workspace` saved) | `workspace.created` fires right after `meta.workspace` is saved |
-| Workspace restore (`restoreWorkspaceHeld`) and legacy clone pruning, both setting `meta.workspaceReset` | `workspace.restored` fires when a chat with a reset workspace is restored |
-| PR follow-ups (`meta.prFollowUp`, `onlyIfIdle` outbox input, busy refunds, reset by user input) | Admission, attempt limit and durability rules for automation follow-ups |
-| Held system messages on Stop (Send now, Discard) | Automation follow-ups are system messages and are held the same way |
-| `pilot.activity` entries with a `ChatEventSummary` (passive writes, no model turn) | Result events in the chat timeline |
-| `AutomaticEvents.swift` and `InputOrigin` from request ID prefixes | A new `automation` origin and a parser for the `<automation>` opening line |
-| `NeedsYouReason` and `sessionNeedsYouReason` | A new `automation` reason kind |
-| `SubprocessPool` (`subprocess.ts`): worker-thread spawns, detached process groups, timeouts, bounded output | The shell runner, off the event loop |
-| Sleep pause (`power-pause.json`), `UpdateGate` and runtime blockers | No new work while paused; running commands block runtime updates like jobs do |
-| Per-chat durable todos (`openTodoCount`) | The open todos condition |
-| `redactDiagnosticText` | Applied to every output excerpt |
+| Existing piece                                                                                                 | How automations use it                                                        |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `ProjectStore` and `projects.json` (validated sub-objects such as `tracking`, atomic writes, change listeners) | Definitions are a validated `automations` object on `Project`                 |
+| Workspace preparation in `SessionManager.start` (`meta.preparing`, then `meta.workspace` saved)                | `workspace.created` fires right after `meta.workspace` is saved               |
+| Workspace restore (`restoreWorkspaceHeld`) and legacy clone pruning, both setting `meta.workspaceReset`        | `workspace.restored` fires when a chat with a reset workspace is restored     |
+| PR follow-ups (`meta.prFollowUp`, `onlyIfIdle` outbox input, busy refunds, reset by user input)                | Admission, attempt limit and durability rules for automation follow-ups       |
+| Held system messages on Stop (Send now, Discard)                                                               | Automation follow-ups are system messages and are held the same way           |
+| `pilot.activity` entries with a `ChatEventSummary` (passive writes, no model turn)                             | Result events in the chat timeline                                            |
+| `AutomaticEvents.swift` and `InputOrigin` from request ID prefixes                                             | A new `automation` origin and a parser for the `<automation>` opening line    |
+| `NeedsYouReason` and `sessionNeedsYouReason`                                                                   | A new `automation` reason kind                                                |
+| `SubprocessPool` (`subprocess.ts`): worker-thread spawns, detached process groups, timeouts, bounded output    | The shell runner, off the event loop                                          |
+| Sleep pause (`power-pause.json`), `UpdateGate` and runtime blockers                                            | No new work while paused; running commands block runtime updates like jobs do |
+| Per-chat durable todos (`openTodoCount`)                                                                       | The open todos condition                                                      |
+| `redactDiagnosticText`                                                                                         | Applied to every output excerpt                                               |
 
 ## 1. Definitions and project settings
 
@@ -249,13 +249,13 @@ setup automations for that chat. It never holds a turn that has already started.
 
 ## 3. Conditions
 
-| Condition | Holds when | Notes |
-| --- | --- | --- |
-| `filesChanged: true` | the run changed at least one file | The usual guard for checks |
-| `filesChanged: { paths }` | a changed path matches one of the globs | Paths are relative to the workspace root |
-| `openTodos: true` | `openTodoCount > 0` | Counts the chat's own list, including items its subagents added |
-| run outcome | always `done` | Fixed rule, not configurable |
-| attempt limit | the chat's automation follow-up attempt limit is not reached | Fixed rule, section 4 |
+| Condition                 | Holds when                                                   | Notes                                                           |
+| ------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------- |
+| `filesChanged: true`      | the run changed at least one file                            | The usual guard for checks                                      |
+| `filesChanged: { paths }` | a changed path matches one of the globs                      | Paths are relative to the workspace root                        |
+| `openTodos: true`         | `openTodoCount > 0`                                          | Counts the chat's own list, including items its subagents added |
+| run outcome               | always `done`                                                | Fixed rule, not configurable                                    |
+| attempt limit             | the chat's automation follow-up attempt limit is not reached | Fixed rule, section 4                                           |
 
 ## 4. Actions and limits
 
@@ -303,15 +303,15 @@ At most **one** automation follow-up per `run.finished`. Failed checks (`onFailu
 failures go into one message. Otherwise the first matching follow-up action (for example, open todos) sends
 its message. The limits follow PR follow-ups:
 
-| Rule | PR follow-ups | Automation follow-ups |
-| --- | --- | --- |
-| Admission | idle only (`onlyIfIdle`), no queued user input, not Ask, not stopped | same |
-| Attempt limit | 3 per chat, shared by all PR problems | 3 per chat, shared by all automations, separate from the PR limit |
-| Repeat needs progress | an agent push attempt since the last follow-up | checks: the next run changed files; open todos: the next run closed a todo or changed files |
-| Cooldown | 5 minutes, waiting for remote CI | none: local checks give fresh results at once, and the progress rule stops loops |
-| Busy rejection | refunds the attempt | refunds the attempt; the next `run.finished` re-evaluates |
-| Reset | a user message, deduplicated across transport retries | same, with its own reset list |
-| Durability | `meta.prFollowUp`, stable request IDs, outbox before delivery | `meta.automation.followUps`, request ID `automation:<runId>` |
+| Rule                  | PR follow-ups                                                        | Automation follow-ups                                                                       |
+| --------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Admission             | idle only (`onlyIfIdle`), no queued user input, not Ask, not stopped | same                                                                                        |
+| Attempt limit         | 3 per chat, shared by all PR problems                                | 3 per chat, shared by all automations, separate from the PR limit                           |
+| Repeat needs progress | an agent push attempt since the last follow-up                       | checks: the next run changed files; open todos: the next run closed a todo or changed files |
+| Cooldown              | 5 minutes, waiting for remote CI                                     | none: local checks give fresh results at once, and the progress rule stops loops            |
+| Busy rejection        | refunds the attempt                                                  | refunds the attempt; the next `run.finished` re-evaluates                                   |
+| Reset                 | a user message, deduplicated across transport retries                | same, with its own reset list                                                               |
+| Durability            | `meta.prFollowUp`, stable request IDs, outbox before delivery        | `meta.automation.followUps`, request ID `automation:<runId>`                                |
 
 When the attempt limit is reached or a repeat shows no progress, nothing more is sent and the chat gets the
 `automation` Needs you reason (section 6) with the stop reason. The attempt limit counts messages to the agent; it
@@ -324,12 +324,22 @@ Small state lives on the session metadata, saved before any side effect:
 ```ts
 interface SessionAutomationState {
 	/** Triggers not yet fully handled, oldest first. At most 8; a newer run.finished replaces an older one. */
-	queue: { triggerId: string; trigger: AutomationTrigger | "manual"; at: number; holdUntil?: number;
-		run?: { outcome: SessionOutcome; changedFiles: string[] | "many"; openTodos: number } }[];
+	queue: {
+		triggerId: string;
+		trigger: AutomationTrigger | "manual";
+		at: number;
+		holdUntil?: number;
+		run?: { outcome: SessionOutcome; changedFiles: string[] | "many"; openTodos: number };
+	}[];
 	/** Newest last, at most 20. */
 	runs: AutomationRunRecord[];
-	followUps: { attempts: number; generation: number; requestId?: string; deliveredAt?: number;
-		progress?: { openTodos: number } };
+	followUps: {
+		attempts: number;
+		generation: number;
+		requestId?: string;
+		deliveredAt?: number;
+		progress?: { openTodos: number };
+	};
 	attention?: { automationId: string; detail: string; at: number };
 }
 
@@ -360,16 +370,16 @@ Results are `pilot.activity` entries, written passively (no model turn) with sta
 carries the full detail as `text` and a `ChatEventSummary` with one of two new kinds, `automation_finished` or
 `automation_failed`. One event per trigger, not per command, keeps the timeline calm:
 
-| Situation | Event line |
-| --- | --- |
-| Setup succeeded | `Workspace set up · 2 steps · 41 s` |
-| Setup after restore | `Workspace set up again after restore · 38 s` |
-| Setup failed | `Setup failed: Install dependencies · exit 1` |
-| Setup still running when the turn started | `Setup still running: Install dependencies` |
-| Checks passed | `Checks passed · Lint, Tests · 18 s` |
-| Checks failed | `Checks failed: Tests · exit 1` (the follow-up event follows) |
-| Cancelled | `Setup cancelled`, `Checks cancelled` |
-| Interrupted | `Setup interrupted · will run again` |
+| Situation                                 | Event line                                                    |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| Setup succeeded                           | `Workspace set up · 2 steps · 41 s`                           |
+| Setup after restore                       | `Workspace set up again after restore · 38 s`                 |
+| Setup failed                              | `Setup failed: Install dependencies · exit 1`                 |
+| Setup still running when the turn started | `Setup still running: Install dependencies`                   |
+| Checks passed                             | `Checks passed · Lint, Tests · 18 s`                          |
+| Checks failed                             | `Checks failed: Tests · exit 1` (the follow-up event follows) |
+| Cancelled                                 | `Setup cancelled`, `Checks cancelled`                         |
+| Interrupted                               | `Setup interrupted · will run again`                          |
 
 **Show** reveals each command, its outcome, duration and output excerpt. Failure events use the destructive
 style. While a command runs, the working line shows `Setting up workspace · Install dependencies` or
@@ -426,15 +436,15 @@ the agent dependencies are gone. Environment setup adds its own readiness line (
 
 A new `NeedsYouReasonKind`, `automation`, with a one-line detail:
 
-| Situation | Detail |
-| --- | --- |
-| Setup command failed, timed out or could not start | `Setup failed: Install dependencies (exit 1)` |
-| A report-only `run.finished` command failed | `Notify failed (exit 2)` |
-| Check attempt limit reached | `Checks still failing after 3 follow-ups: Tests` |
-| Check failed and the next run changed no matching files | `Checks failing, agent made no changes: Tests` |
-| Open todos, attempt limit reached | `4 open todos after 3 follow-ups` |
-| Open todos, no progress since the last follow-up | `2 open todos, agent made no progress` |
-| Invalid at run time (cwd missing, queue full, interrupted twice) | `Couldn't run Lint: apps/web is missing` |
+| Situation                                                        | Detail                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------ |
+| Setup command failed, timed out or could not start               | `Setup failed: Install dependencies (exit 1)`    |
+| A report-only `run.finished` command failed                      | `Notify failed (exit 2)`                         |
+| Check attempt limit reached                                      | `Checks still failing after 3 follow-ups: Tests` |
+| Check failed and the next run changed no matching files          | `Checks failing, agent made no changes: Tests`   |
+| Open todos, attempt limit reached                                | `4 open todos after 3 follow-ups`                |
+| Open todos, no progress since the last follow-up                 | `2 open todos, agent made no progress`           |
+| Invalid at run time (cwd missing, queue full, interrupted twice) | `Couldn't run Lint: apps/web is missing`         |
 
 - Stored as `automation.attention` and projected into `attentionReason` after failure and question outcomes,
   and ahead of `pr_stuck`: a broken workspace blocks everything else.
@@ -445,16 +455,16 @@ A new `NeedsYouReasonKind`, `automation`, with a one-line detail:
 
 ## 7. Stop, archive, pauses and restarts
 
-| Event | Running command | Queued trigger work | Follow-ups |
-| --- | --- | --- | --- |
-| **Stop** | cancelled (process group terminated), recorded `cancelled`, no Needs you | dropped | waiting ones are held like other system messages (Send now, Discard); Stop never restarts the chat |
-| Stop during the first-turn hold | setup cancelled | dropped | queued user messages return to the composer as today; the agent's prompt notes the cancellation; **Run setup again** reruns it |
-| **Archive** | cancelled | dropped | dropped. No archive-time hooks |
-| **Restore** | none | `workspace.restored` queued when the workspace was reset | none |
-| **Sleep pause** | cancelled during pause preparation and recorded `interrupted` before sleep is acknowledged; acknowledgement never waits for process exit | kept, starts nothing | admission waits like PR follow-ups |
-| Wake | interrupted runs rerun once | resumes | resumes |
-| **Update pause** | keeps running; reported as a runtime blocker (`kind: "automation"`), so the update waits as it does for jobs | starts nothing while the gate is paused | admission waits |
-| Daemon crash or restart | `running` records become `interrupted` on load and rerun once | resumes from the saved queue | resume from the outbox with stable request IDs |
+| Event                           | Running command                                                                                                                          | Queued trigger work                                      | Follow-ups                                                                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Stop**                        | cancelled (process group terminated), recorded `cancelled`, no Needs you                                                                 | dropped                                                  | waiting ones are held like other system messages (Send now, Discard); Stop never restarts the chat                             |
+| Stop during the first-turn hold | setup cancelled                                                                                                                          | dropped                                                  | queued user messages return to the composer as today; the agent's prompt notes the cancellation; **Run setup again** reruns it |
+| **Archive**                     | cancelled                                                                                                                                | dropped                                                  | dropped. No archive-time hooks                                                                                                 |
+| **Restore**                     | none                                                                                                                                     | `workspace.restored` queued when the workspace was reset | none                                                                                                                           |
+| **Sleep pause**                 | cancelled during pause preparation and recorded `interrupted` before sleep is acknowledged; acknowledgement never waits for process exit | kept, starts nothing                                     | admission waits like PR follow-ups                                                                                             |
+| Wake                            | interrupted runs rerun once                                                                                                              | resumes                                                  | resumes                                                                                                                        |
+| **Update pause**                | keeps running; reported as a runtime blocker (`kind: "automation"`), so the update waits as it does for jobs                             | starts nothing while the gate is paused                  | admission waits                                                                                                                |
+| Daemon crash or restart         | `running` records become `interrupted` on load and rerun once                                                                            | resumes from the saved queue                             | resume from the outbox with stable request IDs                                                                                 |
 
 An interrupted run never counts as success. A second interruption of the same run records `failed` with
 "interrupted twice" and raises Needs you. Automatic reruns are limited to one per trigger, as in environment
@@ -464,14 +474,14 @@ setup.
 
 Environment setup's assumptions are adopted as follows:
 
-| Assumption | Adopted as |
-| --- | --- |
-| A1 Bounded shell runner | `runAction` (section 4), plus `{ shell }` for user-authored automations. Repository steps keep `argv` or reviewed script copies |
-| A2 Setup triggers | `workspace.created` and `workspace.restored` (section 2), durable, never for Ask chats or coordinators, no archive trigger. Environment setup is the first setup participant, before project setup automations, sharing the 10-minute first-turn hold |
-| A3 Run finished | The changed-file list in the `run.finished` payload |
-| A4 Shared error surface | Same event format and Needs you plumbing; `automation` and `environment` are separate reason kinds |
-| A5 Configuration | `Project.automations` beside `Project.environment`, same validation-before-mutation, revisions, native capability for writes, shared sync |
-| A6 Post-run checks | `ShellAction.requires`; before a check runs, its required items are evaluated as environment setup's section 7 describes, and an environment problem skips the check without spending an attempt |
+| Assumption              | Adopted as                                                                                                                                                                                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A1 Bounded shell runner | `runAction` (section 4), plus `{ shell }` for user-authored automations. Repository steps keep `argv` or reviewed script copies                                                                                                                       |
+| A2 Setup triggers       | `workspace.created` and `workspace.restored` (section 2), durable, never for Ask chats or coordinators, no archive trigger. Environment setup is the first setup participant, before project setup automations, sharing the 10-minute first-turn hold |
+| A3 Run finished         | The changed-file list in the `run.finished` payload                                                                                                                                                                                                   |
+| A4 Shared error surface | Same event format and Needs you plumbing; `automation` and `environment` are separate reason kinds                                                                                                                                                    |
+| A5 Configuration        | `Project.automations` beside `Project.environment`, same validation-before-mutation, revisions, native capability for writes, shared sync                                                                                                             |
+| A6 Post-run checks      | `ShellAction.requires`; before a check runs, its required items are evaluated as environment setup's section 7 describes, and an environment problem skips the check without spending an attempt                                                      |
 
 The trigger stays generic: participants register with the workspace setup coordinator, which owns the queue,
 the hold, ordering and result events. Nothing in it knows about installers.

@@ -56,7 +56,7 @@ For old Pilot Next installations, the fixed `next_app` reader admits only closed
 capture rows with exact current daemon/lineage and persisted diagnostic-specialist role. The
 separate Swift `app` schema, confirmed-repair grants and linked-host forwarding are unchanged.
 No new exported resource/event fields are authorized. See the full
-[native coverage/schema/control contract](../../apps/desktop/docs/diagnostic-coverage.md).
+[native coverage/schema/control contract](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/diagnostic-coverage.md).
 
 Verified Local settings controls gate bound collection/disclosure; unknown or disabled controls
 cannot enable it. Disable/clear persists a fresh numeric privacy epoch, also captured in bound v2 rows. Native control application

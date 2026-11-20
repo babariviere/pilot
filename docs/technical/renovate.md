@@ -33,10 +33,10 @@ PR #1100's ZIP resolution error was not reproduced with its manifest updates and
 Renovate's `cargo update --workspace` command against crates.io. The updater's
 exact ZIP pin stays unchanged; a failed hosted artifact update still needs a retry.
 
-The shared tools under `apps/desktop` have two Cargo workspaces:
-`visual-worker` is a member of the parent workspace, and `updater` is standalone.
-They retain separate committed lockfiles. Day's native host also has its own lockfile. Ordinary exact dependency
-requirements remain exact when updated. Native artifact generation keeps
+The [shared Rust crates](../../crates/README.md) have no parent Cargo workspace.
+`crates/updater`, `crates/power`, and Day's native host each
+keep their own committed lockfile. Ordinary exact dependency requirements remain
+exact when updated. Native artifact generation keeps
 `Cargo.lock` and `pnpm-lock.yaml` in sync with manifest updates. Lockfile
 maintenance also refreshes locked versions without requiring manifest changes,
 using Renovate's default weekly schedule (before 04:00 on Monday, UTC).

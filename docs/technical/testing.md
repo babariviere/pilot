@@ -85,8 +85,9 @@ compilation so independent workspaces do not compete for the compiler lane.
 
 The obsolete Swift GUI and its lint/test/cache tooling are removed. A dependency-free
 helper-only SwiftPM package, shared SystemEvents sources and Rust sleep-parity inputs remain;
-see [shared macOS support](../../apps/macos/README.md). Use [Day verification](../../apps/day/README.md#check)
-for the native app. The [shared tools](../../apps/desktop/README.md) are separate from the GUI.
+see [shared macOS support](../../apps/day/macos/README.md). Use [Day verification](../../apps/day/README.md#check)
+for the native app and [crate CI](../../crates/README.md#checks) for the shared Rust crates.
+Run `python3 scripts/validate-workflows.py` from the repository root after editing workflows.
 
 ### Local measurements
 
@@ -121,7 +122,7 @@ providers and mocked transport responses. It checks the default profile, reload,
 of package/symlink duplicates, unrelated personal extensions, direct/nested jobs, a real child worker's
 inherited profile/auth and repeated IPC input/stop, static model configuration and API-key/OAuth request
 shaping. Ask tests ensure personal, project and inline extension factories never execute.
-`apps/macos/scripts/check-runtime.sh` also exercises parent/child profile loading, Ask web and daemon
+`apps/day/macos/scripts/check-runtime.sh` also exercises parent/child profile loading, Ask web and daemon
 auth from the isolated production install, both before and after ZIP extraction.
 
 To compare profile overhead on synthetic large history and streaming, without account access:

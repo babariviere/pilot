@@ -4,8 +4,8 @@ The artifact tool captures and compiles source, then runs it once headless the
 way Day's preview would (see [Publish-time check](#publish-time-check)). The native
 Day app offers a separate local-state-only preview of saved NSH revisions.
 Passive readers still return source with `rendering: "unsupported"`; that wire
-value is not authority to execute code. Existing visual/Mermaid publication and
-all historical readers remain available.
+value is not authority to execute code. Historical readers still return saved
+source; Day does not run legacy native visuals.
 
 ## Publication and exact bytes
 
@@ -227,8 +227,8 @@ The native target is `pilot-artifact-host` with the `artifact-host` feature.
 The kernel looks only for the trusted installed code location
 `packages/artifacts/native/pilot-artifact-host`, relative to its own module.
 It never accepts an executable path from a tool/artifact, nor searches PATH or
-scratch. The Day-only immutable input recipe now builds this fourth native
-executable through the Day Cargo wrapper and checks its compiled
+scratch. The immutable Day input recipe builds this helper from Day's native
+crate and checks its compiled
 source/recipe identity through its existing source-only Compile operation.
 No new helper command or authored JS execution is added.
 
@@ -240,8 +240,8 @@ archived build, the transport module must match the requested Git source exactly
 
 Only assembly with explicit Day NSH resources copies it into runtime. The existing
 native closure/signing/inventory covers it; a binding records the final signed
-bytes before the unchanged outer app seal. GPUI assembly and release selection
-do not gain it. Connected-only candidates still contain no daemon runtime and
+bytes before the outer app seal. This NSH helper is separate from the retired
+GPUI visual worker. Connected-only candidates still contain no daemon runtime and
 therefore no source-helper binding. Packaging tests use synthetic inputs, not
 actual signing/native acceptance.
 The assembler compares the copied helper with the captured manifest digest and

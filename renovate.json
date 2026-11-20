@@ -40,7 +40,7 @@
 		{
 			"description": "ZIP admission mirrors zip 8.6.0 parser behavior; re-audit before upgrading",
 			"matchManagers": ["cargo"],
-			"matchFileNames": ["apps/desktop/updater/Cargo.toml"],
+			"matchFileNames": ["crates/updater/Cargo.toml"],
 			"matchPackageNames": ["zip"],
 			"enabled": false
 		},

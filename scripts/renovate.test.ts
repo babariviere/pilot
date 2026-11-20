@@ -99,7 +99,7 @@ test("Cargo keeps ordinary crates enabled and pauses only documented baselines",
 	);
 	assert.equal(rules.length, 2);
 	assert.deepEqual(rules[0].matchPackageNames, ["zip"]);
-	assert.deepEqual(rules[0].matchFileNames, ["apps/desktop/updater/Cargo.toml"]);
+	assert.deepEqual(rules[0].matchFileNames, ["crates/updater/Cargo.toml"]);
 	assert.deepEqual(rules[1].matchPackageNames, ["nsh-*"], "NSH crates must match the installed CLI release");
 	for (const rule of rules) {
 		assert.equal(rule.enabled, false);

@@ -474,12 +474,12 @@ queue is inferred from this documentation.
 - [Retirement](mission-worker-retirement.md), [review preference memory](mission-review-preference-memory.md),
   [native Review](mission-native-review.md), [retained snapshots](review-snapshots.md),
   [delivery evidence](delivery-evidence.md), [allocation](contribution-allocation.md).
-- [Desktop design system](../../apps/desktop/docs/design-system.md),
-  [mission creation](../../apps/desktop/docs/standalone-mission-creation.md),
-  [brief workspace](../../apps/desktop/docs/mission-brief.md),
-  [Tasks](../../apps/desktop/docs/mission-tasks.md),
-  [context inspector](../../apps/desktop/docs/mission-inspector.md),
-  [navigation](../../apps/desktop/docs/contextual-navigation.md).
+- [Desktop design system](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/design-system.md),
+  [mission creation](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/standalone-mission-creation.md),
+  [brief workspace](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mission-brief.md),
+  [Tasks](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mission-tasks.md),
+  [context inspector](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/mission-inspector.md),
+  [navigation](https://github.com/babariviere/pilot/blob/753b2f5cca1119d4c185c04fe60844d21431c928/apps/desktop/docs/contextual-navigation.md).
 - Source: `apps/desktop/src/mission_browser_view.rs::{choose_tab,tab_bar}`,
   `mission_overview_view.rs::{needs_you_view,working_view}`, `mission_tasks_view.rs`,
   `native_review_render.rs::Pane::render`, `native_review_view.rs::{refresh,back}`,

@@ -1,0 +1,588 @@
+#!/usr/bin/env python3
+"""Immutable macOS runtime staging and Day bundle assembly, never installation."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[3]
+APP_ID = "com.babariviere.pilot-next"
+CAP_FILES = 30_000
+CAP_BYTES = 2 * 1024**3
+# Exact Day debug executables only. Shared shipping/resources stay at 256 MiB.
+DAY_DEBUG_FILE_CAPS = {name: 1024**3 for name in (
+    "pilot-desktop", "pilot-desktop-update-helper", "pilot-artifact-host")}
+DAY_DEBUG_BUNDLE_CAPS = {
+    "Contents/MacOS/pilot-desktop": DAY_DEBUG_FILE_CAPS["pilot-desktop"],
+    # Read back unsigned bundles built before the worker was retired.
+    "Contents/MacOS/pilot-visual-worker": 1024**3,
+    "Contents/Helpers/pilot-desktop-update-helper": DAY_DEBUG_FILE_CAPS["pilot-desktop-update-helper"],
+    "Contents/Resources/runtime/packages/artifacts/native/pilot-artifact-host": DAY_DEBUG_FILE_CAPS["pilot-artifact-host"],
+}
+MANIFEST = "Contents/Resources/bundled-runtime.json"
+REQUIRED = [
+    "node/bin/node", "node/LICENSE", "package.json", "pnpm-lock.yaml",
+    "packages/daemon/src/main.ts", "packages/daemon/src/runtime-launch.ts",
+    "packages/daemon/src/runtime-owner.ts", "packages/kernel/src/worker-entry.ts",
+    "packages/protocol/src/hello.ts", "packages/kernel/skills/pilot-artifacts/SKILL.md",
+    "packages/daemon/src/usage-history-worker.mjs",
+    "node_modules/@earendil-works/pi-coding-agent/package.json",
+    "node_modules/@earendil-works/pi-durable/package.json",
+    "node_modules/node-pty/package.json", "node_modules/ws/package.json",
+    "runtime-build.json",
+    "desktop-assets/AppIcon.icns",
+]
+
+# Public UI runtime release, not the unrelated command shell or a floating main.
+NSH_RELEASE = dict(tag="v0.5.0", source="f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1")
+
+
+def subprocess_env(env=None):
+    """Discovery credentials are not build or native-verification capabilities."""
+    return {key: value for key, value in (os.environ if env is None else env).items()
+            if key not in ("GH_TOKEN", "GITHUB_TOKEN")}
+
+
+def run(*args, cwd=None, env=None, timeout=30):
+    return subprocess.check_output(args, cwd=cwd, env=subprocess_env(env), timeout=timeout, text=True).strip()
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def source(value):
+    if not re.fullmatch(r"[a-f0-9]{40}", value):
+        raise ValueError("Expected a full immutable source commit")
+    return value
+
+
+def read_json(path, cap=8 * 1024**2):
+    with path.open("rb") as stream:
+        raw = stream.read(cap + 1)
+    if len(raw) > cap:
+        raise ValueError("Manifest exceeds its bound")
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Duplicate manifest key")
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
+def write_json(path, value):
+    path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
+
+
+def inventory(root, *, unsigned_day=False):
+    """Bound the entire closure, including relative symlinks. Never traverse directory links."""
+    result, total = [], 0
+    root = root.resolve(strict=True)
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        for name in sorted(dirs + files):
+            path = Path(directory) / name
+            relative = path.relative_to(root).as_posix()
+            info = path.lstat()
+            if not path.is_symlink() and info.st_mode & 0o6022:
+                raise ValueError(f"Unsafe bundle permissions: {relative}")
+            mode = stat.S_IMODE(info.st_mode)
+            if path.is_symlink():
+                target = os.readlink(path)
+                if os.path.isabs(target) or not path.resolve(strict=True).is_relative_to(root):
+                    raise ValueError(f"Runtime link escapes bundle: {relative}")
+                item = dict(path=relative, kind="link", target=target)
+            elif path.is_dir():
+                item = dict(path=relative, kind="directory", mode=mode)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                total += info.st_size
+                cap = DAY_DEBUG_BUNDLE_CAPS.get(relative, 256 * 1024**2) if unsigned_day and mode & 0o111 else 256 * 1024**2
+                if info.st_size > cap or total > CAP_BYTES:
+                    raise ValueError("Runtime exceeds expanded byte policy")
+                item = dict(path=relative, kind="file", bytes=info.st_size, mode=mode, sha256=digest(path))
+            else:
+                raise ValueError(f"Unsupported bundle object: {relative}")
+            result.append(item)
+            if len(result) > CAP_FILES:
+                raise ValueError("Bundle exceeds entry policy")
+    return sorted(result, key=lambda item: item["path"])
+
+
+def capsule_identity(root):
+    """Return the Rust runtime::identity SHA-256 hex digest, without modifying root.
+
+    Structural admission and hashing only. Callers must separately verify native
+    signatures and ACL policy, as the updater does. Filesystem errors propagate;
+    unsupported, unsafe or changing trees raise ValueError. Never follow directory
+    symlinks while enumerating, and never hash the inventory's per-file digests.
+    """
+    root = Path(root)
+    if root.is_symlink():
+        raise ValueError("Capsule root must not be a symlink")
+    # Normalize ancestor aliases (notably /var -> /private/var on macOS) before
+    # comparing canonical link destinations with the capsule boundary.
+    root = root.resolve(strict=True)
+    pending, paths = [root], []
+    while pending:
+        path = pending.pop()
+        if len(paths) + len(pending) >= CAP_FILES:
+            raise ValueError("Capsule exceeds entry policy")
+        info = path.lstat()
+        relative = path.relative_to(root)
+        if len(relative.parts) > 128:
+            raise ValueError("Capsule exceeds depth policy")
+        if stat.S_ISDIR(info.st_mode):
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    pending.append(path / entry.name)
+                    if len(pending) + len(paths) >= CAP_FILES:
+                        raise ValueError("Capsule exceeds entry policy")
+        paths.append(relative)
+
+    # Rust Path::Ord compares components, not slash-separated strings. Encoding
+    # strictly also rejects non-UTF-8 Unix names, as relative.to_str() does.
+    paths.sort(key=lambda relative: tuple(part.encode("utf-8") for part in relative.parts))
+    identity, total = hashlib.sha256(), 0
+
+    def sized(value):
+        identity.update(len(value).to_bytes(8, "little"))
+        identity.update(value)
+
+    for relative in paths:
+        path = root / relative
+        info = path.lstat()
+        sized((relative.as_posix() if relative.parts else "").encode("utf-8"))
+        if stat.S_ISLNK(info.st_mode):
+            target = os.readlink(path)
+            if os.path.isabs(target) or not path.resolve(strict=True).is_relative_to(root):
+                raise ValueError(f"Capsule link escapes root: {relative}")
+            identity.update(b"link")
+            sized(target.encode("utf-8"))
+            continue
+        if info.st_mode & 0o6022:
+            raise ValueError(f"Unsafe capsule permissions: {relative}")
+        identity.update((info.st_mode & 0o777).to_bytes(4, "little"))
+        if stat.S_ISDIR(info.st_mode):
+            identity.update(b"directory")
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 256 * 1024**2:
+            raise ValueError(f"Unsupported capsule file: {relative}")
+        total += info.st_size
+        if total > CAP_BYTES:
+            raise ValueError("Capsule exceeds expanded byte policy")
+        identity.update(b"file")
+        identity.update(info.st_size.to_bytes(8, "little"))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+                raise ValueError(f"Capsule file changed: {relative}")
+            read = 0
+            while block := stream.read(64 * 1024):
+                read += len(block)
+                if read > info.st_size:
+                    raise ValueError(f"Capsule file changed: {relative}")
+                identity.update(block)
+            if read != info.st_size:
+                raise ValueError(f"Capsule file changed: {relative}")
+    return identity.hexdigest()
+
+
+def supports_macos_15(load_commands):
+    versions = []
+    for block in re.split(r"Load command \d+\s*\n", load_commands)[1:]:
+        if re.search(r"\bcmd LC_BUILD_VERSION\b", block):
+            if not re.search(r"\bplatform (?:1|MACOS)\s*\n", block):
+                return False
+            field = "minos"
+        elif re.search(r"\bcmd LC_VERSION_MIN_MACOSX\b", block):
+            field = "version"
+        else:
+            continue
+        match = re.search(rf"\b{field} (\d+(?:\.\d+){{0,2}})\s*\n", block)
+        if not match:
+            return False
+        value = tuple(map(int, match[1].split(".")))
+        versions.append(value + (0,) * (3 - len(value)))
+    return bool(versions) and all(v <= (15, 0, 0) for v in versions)
+
+
+def thin_universal(root):
+    """Keep only the arm64 slice of universal npm prebuilds (fsevents ships x86_64+arm64)."""
+    for directory, _, files in os.walk(root, followlinks=False):
+        for name in files:
+            path = Path(directory) / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            with path.open("rb") as stream:
+                if stream.read(4) not in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                    continue
+            archs = run("/usr/bin/lipo", "-archs", str(path)).split()
+            if "arm64" not in archs or archs == ["arm64"]:
+                continue  # native_closure still rejects anything without an arm64 slice.
+            thin = path.with_name(path.name + ".arm64")
+            run("/usr/bin/lipo", str(path), "-thin", "arm64", "-output", str(thin))
+            thin.chmod(stat.S_IMODE(path.stat().st_mode))
+            os.replace(thin, path)
+
+
+def native_closure(root, *, unsigned_day=False):
+    if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
+        raise ValueError("App bundles require native arm64 macOS verification")
+    root = root.resolve()
+    binaries = []
+    required = {
+        "Contents/MacOS/pilot-desktop",
+        "Contents/Helpers/pilot-desktop-update-helper",
+        "Contents/Resources/runtime/node/bin/node", "Contents/Helpers/PilotPower",
+        "Contents/Helpers/PilotSystemEvents.app/Contents/MacOS/PilotSystemEvents",
+    }
+    for item in inventory(root, unsigned_day=unsigned_day):
+        if item["kind"] != "file":
+            continue
+        path = root / item["path"]
+        with path.open("rb") as stream:
+            magic = stream.read(4)
+        if magic not in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+            if item["path"] in required:
+                raise ValueError(f"Required executable is not Mach-O: {item['path']}")
+            continue
+        if run("/usr/bin/lipo", "-archs", str(path)) != "arm64":
+            raise ValueError(f"Non-arm64 Mach-O: {item['path']}")
+        if any(ord(c) < 32 for c in str(path)) or not supports_macos_15(run("/usr/bin/otool", "-l", str(path))):
+            raise ValueError(f"Unverified macOS 15 deployment metadata: {item['path']}")
+        for line in run("/usr/bin/otool", "-L", str(path)).splitlines()[1:]:
+            dependency = line.strip().split(" (", 1)[0]
+            if dependency.startswith(("/usr/lib/", "/System/Library/")):
+                continue
+            if dependency.startswith("@loader_path/"):
+                target = (path.parent / dependency.removeprefix("@loader_path/")).resolve(strict=True)
+                if target.is_relative_to(root):
+                    continue
+            # No unexplained @rpath or absolute Homebrew/checkout escape is admitted.
+            raise ValueError(f"Unresolved native dependency: {dependency}")
+        binaries.append(path)
+    return binaries
+
+
+def validate_runtime(runtime, expected_source, *, protocol=1):
+    build = read_json(runtime / "runtime-build.json", 4096)
+    if (build.get("schema") != 1 or build.get("source") != source(expected_source)
+            or build.get("platform") != "darwin" or build.get("arch") != "arm64"
+            or type(protocol) is not int or protocol < 1
+            or type(build.get("protocol")) is not int or build["protocol"] != protocol
+            or not re.fullmatch(r"24\.\d+\.\d+", build.get("node", ""))
+            or build.get("version") != read_json(runtime / "package.json")["version"]):
+        raise ValueError("Runtime build identity mismatch")
+    for relative in REQUIRED:
+        if not (runtime / relative).is_file():
+            raise ValueError(f"Required runtime resource missing: {relative}")
+    return build
+
+
+def receipt(directory, expected_source, names):
+    value = read_json(directory / "manifest.json")
+    if value.get("tested_sha", value.get("source")) != source(expected_source) or value.get("target") != "aarch64-apple-darwin":
+        raise ValueError("Executable receipt source/target mismatch")
+    entries = value.get("binaries", [])
+    for name in names:
+        matches = [entry for entry in entries if entry.get("name") == name]
+        path = directory / name
+        if len(matches) != 1 or not path.is_file() or digest(path) != matches[0].get("sha256") or path.stat().st_size != matches[0].get("bytes"):
+            raise ValueError(f"Executable receipt mismatch: {name}")
+
+
+def checked_gui_resources(resources, executables, expected_source):
+    """Bind Day's NSH resource closure to the exact compiled GUI receipt.
+
+    This consumes build evidence; it does not build, install or attest the native
+    input-capture lifecycle. The existing app/helper identity stays unchanged.
+    """
+    resources = Path(resources)
+    if resources.name != "nsh" or resources.is_symlink() or not resources.is_dir():
+        raise ValueError("GUI resources require a real directory named nsh")
+    value = read_json(executables / "gui-resources.json")
+    if (value.get("schema") != 1 or value.get("kind") != "nsh-ui-resources"
+            or value.get("source") != source(expected_source)
+            or value.get("target") != "aarch64-apple-darwin"
+            or value.get("nsh_release") != NSH_RELEASE):
+        raise ValueError("GUI resource receipt source/target/release mismatch")
+    main = executables / "pilot-desktop"
+    expected = dict(name="pilot-desktop", bytes=main.stat().st_size, sha256=digest(main))
+    if value.get("executable") != expected:
+        raise ValueError("GUI resource receipt executable mismatch")
+    actual = inventory(resources)
+    if value.get("files") != actual:
+        raise ValueError("GUI resource inventory mismatch")
+    required = {"bundle.nshc", "capabilities.json", "app.json"}
+    if not required.issubset({entry["path"] for entry in actual if entry["kind"] == "file"}):
+        raise ValueError("GUI resources are incomplete")
+    return value
+
+
+def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None, *, gui_resources, unsigned_day=False):
+    if gui_resources is None:
+        raise ValueError("Day assembly requires its explicit resource closure")
+    if unsigned_day:
+        if production is not None or accepted_capsules:
+            raise ValueError("Unsigned Day assembly requires explicit Day resources and no shipping configuration")
+        inputs = read_json(executables / "manifest.json")
+        if (inputs.get("kind") != "development-rust-inputs" or inputs.get("profile") != "dev"
+                or inputs.get("installable_update") is not False):
+            raise ValueError("Unsigned Day assembly requires development inputs, not a release")
+    if output.exists() or output.is_symlink() or output.name != "Pilot.app":
+        raise ValueError("Use a fresh output named Pilot.app")
+    build = validate_runtime(runtime, expected_source)
+    bundle_build = bundle_build or build["version"]
+    if not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", bundle_build):
+        raise ValueError("Bundle build must be 1-4 bounded numeric components")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", build["version"]):
+        raise ValueError("Bundle short version must be numeric")
+    if len(accepted_capsules) > 4 or len(set(accepted_capsules)) != len(accepted_capsules) or any(not re.fullmatch(r"[0-9a-f]{64}", v) for v in accepted_capsules):
+        raise ValueError("Runtime compatibility must list exact bounded capsule identities")
+    receipt(executables, expected_source, ["pilot-desktop"])
+    updater = updater or executables
+    receipt(updater, expected_source, ["pilot-desktop-update-helper"])
+    app_config = read_json(executables / "manifest.json").get("updater_configuration")
+    helper_config = read_json(updater / "manifest.json").get("updater_configuration")
+    if app_config != helper_config:
+        raise ValueError("App/helper updater configuration receipts differ")
+    if production is not None:
+        if app_config != production or app_config.get("build") != bundle_build:
+            raise ValueError("Production compiled updater configuration/build mismatch")
+        for directory in (executables, updater):
+            inputs = read_json(directory / "manifest.json")
+            if inputs.get("profile") != "release" or inputs.get("kind") != "production-rust-inputs":
+                raise ValueError("Production requires optimized source-matched Rust inputs")
+    elif app_config != dict(schema=1, mode="unconfigured"):
+        raise ValueError("Development assembly requires explicit unconfigured app/helper input receipts")
+    receipt(native, expected_source, ["PilotPower", "PilotSystemEvents"])
+    resources = checked_gui_resources(gui_resources, executables, expected_source)
+    inventory(runtime)  # Admission before any recursive copy can follow external input.
+    output.mkdir(mode=0o755)
+    try:
+        contents = output / "Contents"
+        contents.mkdir()
+        (contents / "MacOS").mkdir()
+        (contents / "Helpers").mkdir()
+        (contents / "Resources").mkdir()
+        shutil.copyfile(updater / "pilot-desktop-update-helper", contents / "Helpers/pilot-desktop-update-helper")
+        (contents / "Helpers/pilot-desktop-update-helper").chmod(0o755)
+        main = contents / "MacOS/pilot-desktop"
+        shutil.copyfile(executables / "pilot-desktop", main)
+        main.chmod(0o755)
+        shutil.copytree(runtime, contents / "Resources/runtime", symlinks=True)
+        from day_build_inputs import artifact_host
+        host_input = artifact_host(executables, expected_source)
+        host_directory = contents / "Resources/runtime/packages/artifacts/native"
+        for parent in (host_directory.parent.parent, host_directory.parent):
+            if not stat.S_ISDIR(parent.lstat().st_mode):
+                raise ValueError("Artifact helper parents must be real runtime directories")
+        if host_directory.exists() or host_directory.is_symlink():
+            raise ValueError("Artifact helper destination must be absent")
+        host_directory.mkdir(mode=0o755)
+        host = host_directory / "pilot-artifact-host"
+        shutil.copyfile(executables / "pilot-artifact-host", host)
+        host.chmod(0o755)
+        if host.stat().st_size != host_input["bytes"] or digest(host) != host_input["sha256"]:
+            raise ValueError("Artifact helper copy changed")
+        destination = contents / "Resources/nsh"
+        shutil.copytree(gui_resources, destination, symlinks=True)
+        # A changed input or copy is never signed as the reviewed closure.
+        if inventory(destination) != resources["files"]:
+            raise ValueError("GUI resource copy changed")
+        write_json(contents / "Resources/gui-resources.json", resources)
+        shutil.copyfile(runtime / "desktop-assets/AppIcon.icns", contents / "Resources/AppIcon.icns")
+        for name, directory in (("rust-inputs.json", executables), ("native-inputs.json", native)):
+            value = read_json(directory / "manifest.json")
+            write_json(contents / "Resources" / name, dict(schema=1, source=expected_source, binaries=value["binaries"]))
+        write_json(contents / "Resources/updater-inputs.json", dict(schema=1, source=expected_source,
+                   binaries=read_json(updater / "manifest.json")["binaries"], configuration=helper_config))
+        write_json(contents / "Resources/update-runtime-policy.json", dict(schema=1, accepted_capsules=list(accepted_capsules)))
+        shutil.copyfile(native / "PilotPower", contents / "Helpers/PilotPower")
+        (contents / "Helpers/PilotPower").chmod(0o755)
+        helper = contents / "Helpers/PilotSystemEvents.app/Contents"
+        (helper / "MacOS").mkdir(parents=True)
+        shutil.copyfile(native / "PilotSystemEvents", helper / "MacOS/PilotSystemEvents")
+        (helper / "MacOS/PilotSystemEvents").chmod(0o755)
+        with (helper / "Info.plist").open("wb") as stream:
+            plistlib.dump(dict(CFBundleIdentifier=APP_ID + ".system-events", CFBundleName="Pilot System Events",
+                               CFBundleExecutable="PilotSystemEvents", CFBundlePackageType="APPL", CFBundleVersion="1",
+                               LSUIElement=True, LSMinimumSystemVersion="15.0"), stream)
+        with (contents / "Info.plist").open("wb") as stream:
+            plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName="Pilot", CFBundleDisplayName="Pilot",
+                               CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion=bundle_build,
+                               CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True,
+                               CFBundleURLTypes=[dict(CFBundleURLName=APP_ID + ".chat", CFBundleURLSchemes=["pilot"], CFBundleTypeRole="Viewer")]), stream)
+        # Production private distribution requires an explicitly approved ad-hoc
+        # policy plus independently signed update metadata. No ambient signing identity.
+        binaries = native_closure(output, unsigned_day=unsigned_day)
+        for binary in (() if unsigned_day else binaries):
+            # Signing the bundle's main executable by its file path can also
+            # create the enclosing app resource seal. Seal that only at the end.
+            if binary != (contents / "MacOS/pilot-desktop").resolve():
+                run("/usr/bin/codesign", "--force", "--sign", "-", str(binary))
+        if not unsigned_day:
+            run("/usr/bin/codesign", "--force", "--sign", "-", str(helper.parent))
+        if host_input["identity"]["source"] != build["source"]:
+            raise ValueError("Artifact helper/runtime source mismatch")
+        # Signing changes bytes, not the source identity already checked on the
+        # exact copied image. Write one final binding before the outer seal.
+        write_json(host_directory / "artifact-host.json", dict(host_input,
+                   bytes=host.stat().st_size, sha256=digest(host)))
+        # Only a signed main executable cannot hash itself. Unsigned evidence
+        # includes its exact bytes, rather than relying on a nonexistent seal.
+        payload = [item for item in inventory(output, unsigned_day=unsigned_day) if (unsigned_day or item["path"] != "Contents/MacOS/pilot-desktop")
+                   and not item["path"].startswith("Contents/_CodeSignature")]
+        kind = "unsigned-day-bundled-runtime" if unsigned_day else "production-bundled-runtime" if production else "development-bundled-runtime"
+        write_json(output / MANIFEST, dict(schema=1, kind=kind, build=build, files=payload))
+        if not unsigned_day:
+            run("/usr/bin/codesign", "--force", "--sign", "-", str(output))
+            run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(output))
+        verify(output, unsigned_day=unsigned_day)
+    except BaseException:
+        shutil.rmtree(output)  # Only our fresh, never-installed staging directory.
+        raise
+
+
+def verify(output, *, protocol=1, unsigned_day=False):
+    """Verify inventory bytes, including legacy signed bundle layouts.
+
+    Callers relying on a signature must also verify the outer code seal.
+    """
+    value = read_json(output / MANIFEST)
+    kinds = ("unsigned-day-bundled-runtime",) if unsigned_day else ("development-bundled-runtime", "production-bundled-runtime")
+    if value.get("schema") != 1 or value.get("kind") not in kinds:
+        raise ValueError("Bundle inventory kind mismatch")
+    actual = [item for item in inventory(output, unsigned_day=unsigned_day) if item["path"] != MANIFEST
+              and (unsigned_day or item["path"] != "Contents/MacOS/pilot-desktop")
+              and not item["path"].startswith("Contents/_CodeSignature")]
+    if value.get("files") != actual:
+        expected = {item["path"]: item for item in value.get("files", [])}
+        observed = {item["path"]: item for item in actual}
+        changed = [name for name in sorted(expected.keys() | observed.keys()) if expected.get(name) != observed.get(name)]
+        raise ValueError("Bundle inventory/hash mismatch: " + ", ".join(changed[:4]))
+    if validate_runtime(output / "Contents/Resources/runtime", value["build"]["source"], protocol=protocol) != value["build"]:
+        raise ValueError("Runtime manifest/build identity mismatch")
+
+
+def snapshot_build(expected_source, output, native=False):
+    source(expected_source)
+    if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
+        raise ValueError("Runtime/helper staging requires native arm64 macOS")
+    if run("git", "cat-file", "-t", expected_source, cwd=ROOT) != "commit":
+        raise ValueError("Runtime source must identify a commit, not a tree or tag")
+    if output.exists() or output.is_symlink():
+        raise ValueError("Staging output must not already exist")
+    with tempfile.TemporaryDirectory(prefix="day-runtime-source-") as temporary:
+        temporary = Path(temporary)
+        archive, checkout = temporary / "source.tar", temporary / "source"
+        checkout.mkdir()
+        with archive.open("wb") as stream:
+            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, env=subprocess_env(), check=True, timeout=60)
+        with tarfile.open(archive) as tar:
+            tar.extractall(checkout, filter="data")
+        if native:
+            checkout = checkout.resolve(strict=True)
+            bin_path = checkout / "apps/day/target/native-helpers"
+            # Older Day source commits still put the helper builder under apps/desktop.
+            builder = checkout / "apps/day/scripts/build-native-helpers.sh"
+            if not builder.is_file():
+                builder = checkout / "apps/desktop/scripts/build-native-helpers.sh"
+            # Older Day source commits need --day to select stock Cargo.
+            command = ["/bin/bash", str(builder), str(bin_path), "--day"]
+            subprocess.run(command, env=subprocess_env(), check=True, timeout=1200)
+            bin_path = bin_path.resolve(strict=True)
+            if not bin_path.is_relative_to(checkout) or not bin_path.is_dir():
+                raise ValueError("Native helper bin path escapes the source snapshot or is not a directory")
+            helpers = []
+            for name in ("PilotPower", "PilotSystemEvents"):
+                helper = (bin_path / name).resolve(strict=True)
+                if not helper.is_relative_to(checkout) or not helper.is_file() or not os.access(helper, os.X_OK):
+                    raise ValueError("Native helper must be a source-contained executable file: " + name)
+                helpers.append(helper)
+            output.mkdir()
+            binaries = []
+            for helper, name in zip(helpers, ("PilotPower", "PilotSystemEvents")):
+                shutil.copyfile(helper, output / name)
+                (output / name).chmod(0o755)
+                binaries.append(dict(name=name, bytes=(output / name).stat().st_size, sha256=digest(output / name)))
+            write_json(output / "manifest.json", dict(schema=1, source=expected_source, target="aarch64-apple-darwin", binaries=binaries))
+        else:
+            # Same production workspace closure as Swift, from git objects, never live node_modules.
+            env = {key: value for key, value in subprocess_env().items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
+            env["HOME"] = str(temporary / "home")
+            Path(env["HOME"]).mkdir()
+            env["XDG_CONFIG_HOME"] = str(temporary / "config")
+            env["XDG_DATA_HOME"] = str(temporary / "data")
+            macos = checkout / "apps/day/macos"
+            if not macos.is_dir():
+                macos = checkout / "apps/macos"  # Archived sources before the move.
+            subprocess.run(["/bin/bash", str(macos / "scripts/bundle-runtime.sh"), str(output)], env=env, check=True, timeout=1200)
+            thin_universal(output)
+            (output / "desktop-assets").mkdir()
+            # Shared plane asset from the same immutable source, not a development mark.
+            shutil.copyfile(macos / "Resources/AppIcon.icns",
+                            output / "desktop-assets/AppIcon.icns")
+            version = read_json(checkout / "package.json")["version"]
+            node = run(str(output / "node/bin/node"), "--version").removeprefix("v")
+            write_json(output / "runtime-build.json", dict(schema=1, source=expected_source, version=version, protocol=1, platform="darwin", arch="arm64", node=node))
+            validate_runtime(output, expected_source)
+
+
+def snapshot_rust(expected_source, output):
+    from day_build_inputs import snapshot_day
+    return snapshot_day(expected_source, output)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="action", required=True)
+    for name in ("runtime", "native", "rust"):
+        command = commands.add_parser(name)
+        command.add_argument("--source", required=True)
+        command.add_argument("--output", type=Path, required=True)
+        if name in ("rust", "native"):
+            command.add_argument("--gui", choices=("day",), help=argparse.SUPPRESS)
+    bundle = commands.add_parser("bundle")
+    for name in ("runtime", "executables", "native", "output"):
+        bundle.add_argument("--" + name, type=Path, required=True)
+    bundle.add_argument("--source", required=True)
+    bundle.add_argument("--updater", type=Path)
+    bundle.add_argument("--bundle-build")
+    bundle.add_argument("--accepted-capsule", action="append", default=[])
+    bundle.add_argument("--gui-resources", type=Path, required=True)
+    mode = bundle.add_mutually_exclusive_group()
+    mode.add_argument("--production", action="store_true", help="Use explicit public updater environment configuration, matching day_build_inputs.py --production; signs the bundle")
+    mode.add_argument("--unsigned-day", action="store_true", help="Unsigned Day development bundle only; no shipping/signing policy changes")
+    check = commands.add_parser("verify")
+    check.add_argument("output", type=Path)
+    check.add_argument("--unsigned-day", action="store_true", help="Inspect unsigned Day development inventory, not shipping acceptance")
+    args = parser.parse_args()
+    if args.action == "rust":
+        snapshot_rust(args.source, args.output.absolute())
+    elif args.action in ("runtime", "native"):
+        snapshot_build(args.source, args.output.absolute(), args.action == "native")
+    elif args.action == "bundle":
+        config = None
+        if args.production:
+            from day_build_inputs import configuration
+            config = configuration(os.environ)
+        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, production=config, gui_resources=args.gui_resources, unsigned_day=args.unsigned_day)
+    else:
+        verify(args.output, unsigned_day=args.unsigned_day)
+
+
+if __name__ == "__main__":
+    main()

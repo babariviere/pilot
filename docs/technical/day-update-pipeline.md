@@ -19,20 +19,20 @@ service as part of this qualification.
 
 ## Reuse, not replacement
 
-The existing independent `apps/desktop/updater` crate owns signed manifests, staged payload verification,
+The existing independent `crates/updater` crate owns signed manifests, staged payload verification,
 native process watches, profile leases, registration, daemon replacement and GUI helper handoff. Its
 `lifecycle::DaemonLifecycle` is already independent of GPUI and Swift. Keep that controller and the daemon's
 signed interrupt reservation. Do not adopt NSH's separate installer or add a service manager.
 
-| Boundary | Existing implementation | Remaining Day seam |
-| --- | --- | --- |
-| Profile and daemon | `app_update::Connection`, `coordination::Location`, native owner proof | Construct only from explicit trusted root selection. Never accept a path, PID, credential or grant from TSX. |
-| Register | `daemon_upgrade::register` | Explicit one-use confirmation, journal before entry, exact lookup after uncertainty. Startup does not register. |
-| Daemon update | `DaemonLifecycle::needed/upgrade/upgrade_coordinated` | Worker-thread adapter; immutable published capsule; preserve exact operation/target binding. |
-| Agent checkpoint | `SessionManager.checkpointLifecycle`, kernel close, per-session manifest | Durable update notice, direct-job cleanup before registry detachment, refusal without descendant-exit proof. |
-| GUI update | `Updater<Worker>`, `ExitGuard::prepare_external`, helper READY/COMMIT | Root-owned all-form save/restore, fresh flush generations, joined native close and executable packaging. |
-| Startup | `ExitGuard::external_startup/acknowledge_startup`, `coordinated::startup` | Restore state before exact native startup ACK. Launch or hello alone is not success. |
-| Shutdown | `NativeHost::close` joins HTTP/WS/journal worker; `Worker::close` joins updater work | Call both off the UI thread. Helper handoff has separate lifetime; neither join proves a committed helper exited. |
+| Boundary           | Existing implementation                                                              | Remaining Day seam                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| Profile and daemon | `app_update::Connection`, `coordination::Location`, native owner proof               | Construct only from explicit trusted root selection. Never accept a path, PID, credential or grant from TSX.      |
+| Register           | `daemon_upgrade::register`                                                           | Explicit one-use confirmation, journal before entry, exact lookup after uncertainty. Startup does not register.   |
+| Daemon update      | `DaemonLifecycle::needed/upgrade/upgrade_coordinated`                                | Worker-thread adapter; immutable published capsule; preserve exact operation/target binding.                      |
+| Agent checkpoint   | `SessionManager.checkpointLifecycle`, kernel close, per-session manifest             | Durable update notice, direct-job cleanup before registry detachment, refusal without descendant-exit proof.      |
+| GUI update         | `Updater<Worker>`, `ExitGuard::prepare_external`, helper READY/COMMIT                | Root-owned all-form save/restore, fresh flush generations, joined native close and executable packaging.          |
+| Startup            | `ExitGuard::external_startup/acknowledge_startup`, `coordinated::startup`            | Restore state before exact native startup ACK. Launch or hello alone is not success.                              |
+| Shutdown           | `NativeHost::close` joins HTTP/WS/journal worker; `Worker::close` joins updater work | Call both off the UI thread. Helper handoff has separate lifetime; neither join proves a committed helper exited. |
 
 `Safety.active_work` means entered **client** work, not unrelated daemon agents. App-only updates use
 `Runtime::Independent` and an external guard. They must not acquire daemon reservations, pause its agents
@@ -137,20 +137,20 @@ implementation. It does not clear the self-update or joined-update acceptance bl
   Build workers. Linux service generation in `pilot-service-journal.ts` uses `KillMode=mixed` but
   does not request cgroup delegation. Stopping the whole service is too late to prove the prior
   per-session checkpoint, and cannot implement selective mission/job Stop.
-- macOS `apps/desktop/updater/src/daemon_upgrade_macos.rs` manages one launch agent and verifies the
+- macOS `crates/updater/src/daemon_upgrade_macos.rs` manages one launch agent and verifies the
   daemon identity/profile lease. No per-job lifetime enclosure is supplied. launchd's documented
   `AbandonProcessGroup` default kills remaining **same-PGID** processes, not escaped descendants.
   A daemon exit watch or profile-lease release is not their exit receipt.
 
 #### Options and platform costs
 
-| Option | Enforcement and exit claim | Compatibility, permission and delivery cost | Verdict |
-| --- | --- | --- | --- |
-| More group/census tracking, PID handles, launchd/XPC or coalition ownership | Groups are mutable; handles name individual processes; observations are not closed membership. launchd group cleanup does not cover `setsid`. No documented coalition-wide job enclosure/drain contract was established. | Ordinary shells work; a user launch agent needs no new root helper. Better cleanup does not solve this prerequisite. | Keep current cleanup, never promote it to subtree proof. |
-| Tighten Seatbelt/App Sandbox, deny fork, interpose `setsid` | Inherited resource restrictions are useful, but do not supply a documented kill-all-and-join primitive. Denying fork breaks normal shell/build execution; library interposition does not constrain arbitrary executables/direct syscalls. | App Sandbox changes filesystem/service entitlements and host-tool access. `sandbox-exec` is deprecated. A shell-text allowlist is not syscall enforcement. | Not an arbitrary-job lifetime solution. |
-| Endpoint Security custody on macOS 27+ | `es_new_descendants_client` observes recursive descendants, with auth for supported operations. Fork/exit are notifications, with possible drops. Fail-closed AUTH_EXEC does not stop a running process from forking without exec. No kernel-owned final-owner-loss termination or atomic subtree-empty receipt is documented. | Preserves host toolchains better, but needs Apple's restricted ES entitlement and a new signed custody component. The 27+ descendant client needs **neither root nor TCC approval**, unlike a full system-wide client. Its non-root setuid/setgid execution restriction changes compatibility. A full client adds root/Full Disk Access and broader monitoring authority. | A conditional monitoring/custody design, not qualified containment. Do not request entitlement/privileges as this task's side effect. |
-| Linux per-job PID namespace plus cgroup v2 | Namespace init exit causes kernel termination of namespace processes, including detached sessions. A protected cgroup inherits descendants; `cgroup.kill` handles concurrent forks/migrations, then `cgroup.events: populated=0` reports no live subtree processes. Neither a kill write nor freezer ACK alone is final exit. | Native Linux shell/toolchain support, but background daemons cannot outlive the job. Requires usable namespaces and a supervisor-owned cgroup subtree. Existing bubblewrap is reusable on Linux only; per-job ownership/receipts are new. User-service delegation can avoid a root host helper where supported, but jobs must not inherit its control authority. | Feasible Linux adapter, not shipped/qualified by current coordinator isolation. |
-| macOS VM execution realm (Linux guest, or separately scoped macOS guest) | Put all payload processes inside an OS boundary they cannot leave. Linux guest can use the same per-job namespace/cgroup owner. Successful **actual VM stop completion**, followed by host broker/I/O drain, is an outer fallback for that VM, not proof of command success. `requestStop`, pause, saved VM state or owner disappearance are not stop receipts. | Virtualization.framework requires a signed executable with `com.apple.security.virtualization`, not a system-wide ES/root helper. Linux guest changes OS paths/toolchains; host Xcode/Keychain/GUI tools do not transfer. macOS guest is Apple-silicon-only in Apple's documented path, with OS image/provisioning, licensing and larger resource costs. Both need explicit file/network/credential grants and new package/update support. | Documented enforceable route on Mac, but a material product/execution change requiring approval. |
+| Option                                                                      | Enforcement and exit claim                                                                                                                                                                                                                                                                                                                                      | Compatibility, permission and delivery cost                                                                                                                                                                                                                                                                                                                                                                                                | Verdict                                                                                                                               |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| More group/census tracking, PID handles, launchd/XPC or coalition ownership | Groups are mutable; handles name individual processes; observations are not closed membership. launchd group cleanup does not cover `setsid`. No documented coalition-wide job enclosure/drain contract was established.                                                                                                                                        | Ordinary shells work; a user launch agent needs no new root helper. Better cleanup does not solve this prerequisite.                                                                                                                                                                                                                                                                                                                       | Keep current cleanup, never promote it to subtree proof.                                                                              |
+| Tighten Seatbelt/App Sandbox, deny fork, interpose `setsid`                 | Inherited resource restrictions are useful, but do not supply a documented kill-all-and-join primitive. Denying fork breaks normal shell/build execution; library interposition does not constrain arbitrary executables/direct syscalls.                                                                                                                       | App Sandbox changes filesystem/service entitlements and host-tool access. `sandbox-exec` is deprecated. A shell-text allowlist is not syscall enforcement.                                                                                                                                                                                                                                                                                 | Not an arbitrary-job lifetime solution.                                                                                               |
+| Endpoint Security custody on macOS 27+                                      | `es_new_descendants_client` observes recursive descendants, with auth for supported operations. Fork/exit are notifications, with possible drops. Fail-closed AUTH_EXEC does not stop a running process from forking without exec. No kernel-owned final-owner-loss termination or atomic subtree-empty receipt is documented.                                  | Preserves host toolchains better, but needs Apple's restricted ES entitlement and a new signed custody component. The 27+ descendant client needs **neither root nor TCC approval**, unlike a full system-wide client. Its non-root setuid/setgid execution restriction changes compatibility. A full client adds root/Full Disk Access and broader monitoring authority.                                                                  | A conditional monitoring/custody design, not qualified containment. Do not request entitlement/privileges as this task's side effect. |
+| Linux per-job PID namespace plus cgroup v2                                  | Namespace init exit causes kernel termination of namespace processes, including detached sessions. A protected cgroup inherits descendants; `cgroup.kill` handles concurrent forks/migrations, then `cgroup.events: populated=0` reports no live subtree processes. Neither a kill write nor freezer ACK alone is final exit.                                   | Native Linux shell/toolchain support, but background daemons cannot outlive the job. Requires usable namespaces and a supervisor-owned cgroup subtree. Existing bubblewrap is reusable on Linux only; per-job ownership/receipts are new. User-service delegation can avoid a root host helper where supported, but jobs must not inherit its control authority.                                                                           | Feasible Linux adapter, not shipped/qualified by current coordinator isolation.                                                       |
+| macOS VM execution realm (Linux guest, or separately scoped macOS guest)    | Put all payload processes inside an OS boundary they cannot leave. Linux guest can use the same per-job namespace/cgroup owner. Successful **actual VM stop completion**, followed by host broker/I/O drain, is an outer fallback for that VM, not proof of command success. `requestStop`, pause, saved VM state or owner disappearance are not stop receipts. | Virtualization.framework requires a signed executable with `com.apple.security.virtualization`, not a system-wide ES/root helper. Linux guest changes OS paths/toolchains; host Xcode/Keychain/GUI tools do not transfer. macOS guest is Apple-silicon-only in Apple's documented path, with OS image/provisioning, licensing and larger resource costs. Both need explicit file/network/credential grants and new package/update support. | Documented enforceable route on Mac, but a material product/execution change requiring approval.                                      |
 
 Apple DTS explicitly distinguishes ES custody from a kernel-owned lifetime boundary in the
 [current platform discussion][containment-dts]. Its suggested two-level custodians improve a live
@@ -327,14 +327,14 @@ quietly retain the snapshot. A production packaged entry remains unqualified.
 
 At release `e626a8dd` the exact limits are:
 
-| Public API/source | Observed behavior |
-| --- | --- |
-| `nsh-platform-macos/src/app.rs:264`, `AppView::new(mtm, AppOptions)` | Creates a private `Surface`; no `EngineConfig` or typed context argument. |
-| `app.rs:332`, `AppView::load(App)` | Constructs its own engine configuration and defaults the typed context at line 353. `App` is `Rust(Root)` or `Js(Bundle)`, not a configured engine. |
-| `app.rs:661`, `run_app(AppSource, AppOptions)` | Creates an `AppView` and calls the same `load` path. There is no engine-configuration callback. |
-| `nsh-macos-app/src/lib.rs:13`, `main()` | Reads its own signed bundle resources through private `setup()`, then calls `run_app`. No app-specific bootstrap callback. |
-| `nsh-core/src/element/component.rs:535`, `Root::new` | Can capture typed props for a Rust root. It does not wrap a JS bundle or inject `EngineContext` for a TSX app. Switching the app to a Rust UI is not a fix for this seam. |
-| `nsh-platform-macos/src/surface.rs`, `Surface::start` | Accepts `EngineConfig`, but the module, surface accessor and start method are crate-private. Not an application extension point. |
+| Public API/source                                                    | Observed behavior                                                                                                                                                         |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nsh-platform-macos/src/app.rs:264`, `AppView::new(mtm, AppOptions)` | Creates a private `Surface`; no `EngineConfig` or typed context argument.                                                                                                 |
+| `app.rs:332`, `AppView::load(App)`                                   | Constructs its own engine configuration and defaults the typed context at line 353. `App` is `Rust(Root)` or `Js(Bundle)`, not a configured engine.                       |
+| `app.rs:661`, `run_app(AppSource, AppOptions)`                       | Creates an `AppView` and calls the same `load` path. There is no engine-configuration callback.                                                                           |
+| `nsh-macos-app/src/lib.rs:13`, `main()`                              | Reads its own signed bundle resources through private `setup()`, then calls `run_app`. No app-specific bootstrap callback.                                                |
+| `nsh-core/src/element/component.rs:535`, `Root::new`                 | Can capture typed props for a Rust root. It does not wrap a JS bundle or inject `EngineContext` for a TSX app. Switching the app to a Rust UI is not a fix for this seam. |
+| `nsh-platform-macos/src/surface.rs`, `Surface::start`                | Accepts `EngineConfig`, but the module, surface accessor and start method are crate-private. Not an application extension point.                                          |
 
 The platform's registration functions (`set_ui_sets`, `set_components`, development `set_root`) register
 process-wide factories. They are not per-engine typed root injection, and must not hold Day's host or
@@ -364,9 +364,9 @@ does not assemble Pilot's daemon capsule, updater helper, compiled trust or sour
 
 The existing verifier expects `Pilot Next.app/Contents/MacOS/pilot-desktop`, a separately compiled helper,
 matching app/helper trust, the signed desktop manifest and the bundled runtime inventory. `Trust::validate`,
-`layout::running_root`, helper self-verification and installer verification all participate. Existing
-`bundle_runtime.py` additionally requires the existing visual-worker receipt. Renaming a binary alone does not
-qualify the package. Do not weaken any verifier to accept an arbitrary NSH runner.
+`layout::running_root`, helper self-verification and installer verification all participate.
+Day assembly checks the NSH artifact-host receipt, not the retired GPUI visual-worker receipt.
+Renaming a binary alone does not qualify the package. Do not weaken any verifier to accept an arbitrary NSH runner.
 
 The minimal packaging route is an app-owned assembly adapter around the generated, unmodified native host:
 keep the existing verified distribution layout and compiled trust, add NSH bytecode/assets to its inventory,
@@ -387,8 +387,8 @@ This closes resource assembly, not generation of trustworthy compiler evidence, 
 signature acceptance or production update qualification. A stock `PilotDay` runner is still refused.
 
 The [Day input builder](day-package-inputs.md) now compiles the Day-owned
-bootstrap and separate helper from immutable source, reads their real compiled
-evidence, builds the existing visual worker without GPUI, and generates the
+bootstrap and updater helper from immutable source, reads their real compiled
+evidence, builds the NSH artifact host, and generates the
 exact released connected resource closure. It does not run the signing
 assembler or supply a signed production payload. Unconfigured inputs remain
 unavailable for real updates.
@@ -402,14 +402,14 @@ path, a runtime version, `/api/hello`, an unsigned compiler receipt or a user
 clicking Confirm. Missing either input leaves service update unavailable,
 including after reopening the native journal.
 
-| Input or operation | Existing owner and constraint |
-| --- | --- |
-| Source-matched app/helper/runtime inputs | `day_build_inputs.py`; even configured output has `installable_update: false`. It neither assembles nor signs a distribution. |
-| Verified immutable service capsule | `runtime::publish_service`; verifies the signed source and complete inventory before publishing into the private service store. A GUI root is not a published service root. |
-| Proposal-bound capsule receipt | `coordinated::prepare`, reached through staged `iteration::ExpectedTarget` verification. Its private `coordinated-update.json` records the exact source, GUI build, runtime stamp and published capsule. Callers must not write a replacement receipt. |
-| Read-only post-swap receipt verification | `coordinated::startup`; checks transaction phase, installed target, compiled configuration, signed manifest, exact source/build, capsule stamp and complete capsule identity. It is not a service-only target supplier or execution grant. |
-| Fresh coordinated daemon handoff | Existing native proposal controller in `coordinated_update.rs`: verifies the exact receipt/proposal, then freshly arms the daemon phase. Retained `daemon-installing` intent is completion-only, never permission to launch another handoff. |
-| Service replacement | `DaemonLifecycle::upgrade_coordinated_report` and `daemon_upgrade::execute`. The signed reservation rechecks the daemon's exact durable proposal target and phase. |
+| Input or operation                       | Existing owner and constraint                                                                                                                                                                                                                          |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Source-matched app/helper/runtime inputs | `day_build_inputs.py`; even configured output has `installable_update: false`. It neither assembles nor signs a distribution.                                                                                                                          |
+| Verified immutable service capsule       | `runtime::publish_service`; verifies the signed source and complete inventory before publishing into the private service store. A GUI root is not a published service root.                                                                            |
+| Proposal-bound capsule receipt           | `coordinated::prepare`, reached through staged `iteration::ExpectedTarget` verification. Its private `coordinated-update.json` records the exact source, GUI build, runtime stamp and published capsule. Callers must not write a replacement receipt. |
+| Read-only post-swap receipt verification | `coordinated::startup`; checks transaction phase, installed target, compiled configuration, signed manifest, exact source/build, capsule stamp and complete capsule identity. It is not a service-only target supplier or execution grant.             |
+| Fresh coordinated daemon handoff         | Existing native proposal controller in `coordinated_update.rs`: verifies the exact receipt/proposal, then freshly arms the daemon phase. Retained `daemon-installing` intent is completion-only, never permission to launch another handoff.           |
+| Service replacement                      | `DaemonLifecycle::upgrade_coordinated_report` and `daemon_upgrade::execute`. The signed reservation rechecks the daemon's exact durable proposal target and phase.                                                                                     |
 
 The user updated the installed app/daemon during this audit. The earlier
 build `834.1` capability and capsule observations are stale and must not justify
@@ -652,16 +652,16 @@ while keeping newer user holds and uncertain jobs. Do not reset the transaction 
 
 Required isolated evidence, with real controllers and owned processes:
 
-| Case | Required proof |
-| --- | --- |
-| Target/profile/signature substitution | Rejection before native mutation; unchanged package and profile. |
-| Running and queued tools/jobs/children | Durable notice, admission fence, exact final census and joined exits; effect counts do not increase on recovery. |
-| Active and already-held agents | Only upgrade-owned matching generations resume; Stop/holds remain effective. |
-| Draft or native capture failure | Exact unsaved bytes remain available; no COMMIT or daemon stop. |
-| Lost reply and stage interruption | Retained exact operation recovers by lookup; no duplicate registration/launch/job. |
-| GUI plus daemon | Both actual resulting executable versions and startup ACKs, restored forms and selective resume. |
-| Rollback | Verified compatible old startup and preserved data, not just a retained directory. |
-| Close | Entered HTTP, journal, updater worker and precommit helper drained; committed helper ownership explicitly transferred. |
+| Case                                   | Required proof                                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Target/profile/signature substitution  | Rejection before native mutation; unchanged package and profile.                                                       |
+| Running and queued tools/jobs/children | Durable notice, admission fence, exact final census and joined exits; effect counts do not increase on recovery.       |
+| Active and already-held agents         | Only upgrade-owned matching generations resume; Stop/holds remain effective.                                           |
+| Draft or native capture failure        | Exact unsaved bytes remain available; no COMMIT or daemon stop.                                                        |
+| Lost reply and stage interruption      | Retained exact operation recovers by lookup; no duplicate registration/launch/job.                                     |
+| GUI plus daemon                        | Both actual resulting executable versions and startup ACKs, restored forms and selective resume.                       |
+| Rollback                               | Verified compatible old startup and preserved data, not just a retained directory.                                     |
+| Close                                  | Entered HTTP, journal, updater worker and precommit helper drained; committed helper ownership explicitly transferred. |
 
 Existing daemon/kernel fixtures cover independent census, Stop races, target-bound recovery and real child
 effects. Existing updater fixtures cover signed native packages, atomic swaps and startup ACKs. These are

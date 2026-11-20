@@ -11,9 +11,9 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - `packages/daemon`: `pilotd`. HTTP + WebSocket API, session registry and worker supervision.
 - `apps/day`: Pilot Day, the only desktop app, on Apple Silicon macOS. See the [Day guide](apps/day/README.md)
   for Native Shell builds, fixtures and checks.
-- `apps/desktop`: [shared tools](apps/desktop/README.md), not an app. Keep the workspace visual worker,
-  standalone updater and Day packaging helpers.
-- `apps/macos`: shared native helpers, C visual engine, assets and runtime/release scripts, not a GUI app.
+- `crates`: [shared Rust crates](crates/README.md). The updater and power helper have
+  separate manifests and lockfiles. Day packaging scripts live in `apps/day/scripts`.
+- [`apps/day/macos`](apps/day/macos/README.md): shared native helpers, assets and runtime/release scripts, not a GUI app.
 
 Docs to use when the task touches them:
 
@@ -39,8 +39,8 @@ Docs to use when the task touches them:
 - The Harness owns history and the model loop. The native SDK session never runs its own loop.
 - Native tools are replay-unsafe: a crash during a tool yields an interrupted result.
 - Keep the daemon bound to loopback until authentication exists.
-- Shared Swift helpers build through `apps/desktop/scripts/build-native-helpers.sh`; the obsolete Swift GUI
-  is removed. `apps/macos/Package.swift` now covers helpers only. Preserve shared consumers in `apps/macos`.
+- Shared Swift helpers build through `apps/day/scripts/build-native-helpers.sh`.
+  `apps/day/macos/Package.swift` covers helpers only. Preserve their shared consumers.
 - Before building a user-visible UI change, show the design as an NSH mockup built from mock data, and say it is a
   mockup. After it lands, show the real Day views before and after with `apps/day/scripts/before-after.sh`
   ([apps/day/README.md](apps/day/README.md#before-and-after-captures)) as image artifacts (the `pilot-artifacts`

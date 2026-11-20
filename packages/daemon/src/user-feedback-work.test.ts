@@ -71,7 +71,7 @@ test("feedback triage, fix, mission link and resolved marks are exact, saved ste
 	const general = await feedback("Unscoped feedback is not chosen-project context");
 	// A recognizable image, not a one-pixel placeholder. Check the actual
 	// read tool's image payload, not just the path handed to triage.
-	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	const png = await readFile(new URL("../../../apps/day/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
 	const image = { uploadId: randomUUID(), sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
 	const uploaded = await fetch(`${f.root}/api/attachments/${image.uploadId}`, {
 		method: "PUT",
@@ -698,7 +698,7 @@ test("remove deletes the feedback, its steps and its unread images, never its ch
 			bindingGeneration: 1,
 		} as DurableOperation;
 	};
-	const png = await readFile(new URL("../../../apps/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
+	const png = await readFile(new URL("../../../apps/day/macos/Resources/LegacyApp/HomeSky.png", import.meta.url));
 	const image = { uploadId: randomUUID(), sha256: createHash("sha256").update(png).digest("hex"), bytes: png.length };
 	const uploaded = await fetch(`${f.root}/api/attachments/${image.uploadId}`, {
 		method: "PUT",

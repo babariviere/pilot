@@ -1,4 +1,5 @@
 ---
+
 name: update-pilot
 description: Build Pilot Day from this checkout and install it as the user's own ~/Applications/Pilot.app. Use when asked to build, install, update or restart the user's Pilot, or to ship working-copy changes to it.
 ---
@@ -37,8 +38,7 @@ bash .agents/skills/update-pilot/scripts/build.sh [<source-commit>] [<build>]
 
 The build number defaults to today's next `YYYYMMDD.N` after the installed one. Output goes to
 `${PILOT_BUILD_ROOT:-/tmp/day-build}/<build>/app/Pilot.app`. The build uses stock Rust 1.99.1 Cargo from
-`rustup which`, even if your local `cargo` is the fork. The pinned QuickJS-NG archive is cached in
-`~/.cache/pilot-build` and downloaded once, checked against `apps/desktop/scripts/prepare-visual-worker.py`.
+`rustup which`, even if your local `cargo` is the fork.
 Done when the log ends with `BUILT <build>`.
 
 ## 4. Install

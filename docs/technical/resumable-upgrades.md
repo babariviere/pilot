@@ -80,7 +80,7 @@ mission controls without wiring their durable generation fence.
 
 ## Native host APIs
 
-The reusable crate is `apps/desktop/updater` (`pilot-desktop-updater`), independent of GPUI and Swift UI.
+The reusable crate is `crates/updater` (`pilot-desktop-updater`), independent of GPUI and Swift UI.
 `lifecycle::DaemonLifecycle` accepts an existing `app_update::Connection`, which pins `Location`, daemon ID
 and storage lineage. It extracts the backend selection previously held in the desktop integration:
 

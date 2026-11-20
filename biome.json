@@ -31,7 +31,7 @@
 			"!skills-lock.json",
 			"!**/.pi",
 			"!**/.nsh",
-			"!apps/macos",
+			"!apps/day/macos",
 			"!.agents/skills/impeccable",
 			"!.agents/skills/intent"
 		]

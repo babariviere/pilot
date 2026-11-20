@@ -10,3 +10,9 @@ apps/macos/Vendor/
 *.log
 .DS_Store
 __pycache__/
+
+# Local build caches from before the native crates moved.
+/apps/desktop/.patched/
+/apps/desktop/.tools/
+/apps/desktop/target/
+/apps/power/target/

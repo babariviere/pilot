@@ -29,7 +29,7 @@ Do not combine this with macOS lifetime changes or Swift fixture reorganization.
   `guardian.rs` owns the independent override-restoration lease and recovery loop.
 - `linux.rs` owns asynchronous KDE/logind connections, inhibition cookies and delay
   FDs. `serve` closes both connections even after errors from `serve_connected`.
-- `apps/macos` still supplies pure Swift comparison fixtures and shared packaging
+- `apps/day/macos` still supplies pure Swift comparison fixtures and shared packaging
   helpers. This audit does not authorize deleting that directory or its consumers.
 
 ## Backend differences to preserve

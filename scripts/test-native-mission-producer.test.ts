@@ -12,12 +12,12 @@ import {
 } from "../packages/daemon/src/mission-catalog.ts";
 import { ModelCatalog } from "../packages/daemon/src/models.ts";
 import { ProjectStore } from "../packages/daemon/src/projects.ts";
-import { createDaemonFixtureServer as createDaemonServer } from "../packages/daemon/src/testing/daemon-server.ts";
 import { SessionManager } from "../packages/daemon/src/sessions.ts";
 import { TerminalManager } from "../packages/daemon/src/terminals.ts";
+import { createDaemonFixtureServer as createDaemonServer } from "../packages/daemon/src/testing/daemon-server.ts";
 import type { Mission, OperationHost } from "../packages/protocol/src/index.ts";
 
-const fixtureURL = new URL("../apps/macos/Tests/Fixtures/logical-mission-producer.json", import.meta.url);
+const fixtureURL = new URL("../apps/day/macos/Tests/Fixtures/logical-mission-producer.json", import.meta.url);
 const home: OperationHost = { hostId: "daemon", daemonId: "producer", lineageId: "producer-lineage" };
 const remote: OperationHost = { hostId: "alias", daemonId: "remote", lineageId: "remote-lineage" };
 function mission(id = "same", patch: Partial<Mission> = {}): Mission {
