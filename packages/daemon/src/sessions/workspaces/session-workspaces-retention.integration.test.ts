@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { LegacyArtifactFixture } from "@pilot/artifacts/testing";
+import { ArtifactStore } from "@pilot/artifacts";
 import { Conflict } from "../../runtime/contracts/errors.ts";
 
 import { DAY, fixture, seedHistory } from "../../testing/session-workspace.ts";
@@ -14,8 +14,9 @@ test("coordinator organization retains actual workspace outputs, history and art
 	const created = await f.spawn();
 	const directory = join(f.home, "sessions", created.id);
 	await seedHistory(directory);
-	const store = new LegacyArtifactFixture(directory, { sessionId: created.id, projectId: f.project.id });
-	const artifact = await store.create({ title: "Retained", kind: "html", source: "historical content" });
+	const source = "export default () => 'historical content';";
+	const store = new ArtifactStore(directory, { sessionId: created.id, projectId: f.project.id });
+	const artifact = await store.create({ title: "Retained", kind: "nsh", source, entry: "retained.tsx" });
 	await mkdir(join(created.cwd, "node_modules"));
 	await writeFile(join(created.cwd, "node_modules", "retain"), "not disposable by coordinator authority");
 	await writeFile(join(created.cwd, "ignored-secret"), "retained ignored input");
@@ -31,7 +32,7 @@ test("coordinator organization retains actual workspace outputs, history and art
 	);
 	const history = await f.sessions.history(created.id, Number.MAX_SAFE_INTEGER, 100);
 	assert.deepEqual(history.entries[0]?.data, { text: "retained conversation" });
-	assert.equal((await f.sessions.artifact(created.id, artifact.id)).source, "historical content");
+	assert.equal((await f.sessions.artifact(created.id, artifact.id)).source, source);
 	assert.equal(f.workers.length, before);
 	await f.sessions.shutdown();
 	const restarted = await f.manager();

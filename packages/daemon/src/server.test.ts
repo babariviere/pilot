@@ -344,7 +344,7 @@ test("app-wide diagnostic native endpoints require protected capability and reje
 	assert.equal(forged.status, 409);
 	await forged.arrayBuffer();
 	const stale = await post("read-response", { id: randomUUID(), result: {} }, true);
-	assert.equal(stale.status, 409);
+	assert.equal(stale.status, 404, "the former app-wide response callback is not routed");
 	await stale.arrayBuffer();
 	assert.equal(sessions.list().length, 0, "native evidence reads never create a target or Control chat");
 });
@@ -592,7 +592,7 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 			operationId: randomUUID(),
 			producerId: randomUUID(),
 			sequence,
-			origin: { hostId: "origin", daemonId: "origin-daemon", lineageId: "origin-lineage" },
+			origin: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
 			destination: { hostId: "local", daemonId: "daemon", lineageId: "lineage" },
 			kind,
 			targetId: randomUUID(),
@@ -650,7 +650,7 @@ test("dedicated diagnostics and repair operations admit only their matching chat
 			headers: { "content-type": "application/json", "x-pilot-github-capability": "native-fixture" },
 			body: JSON.stringify(op),
 		});
-		assert.equal(response.status, 200);
+		assert.equal(response.status, 200, await response.clone().text());
 		assert.equal((await response.json()).state, "accepted");
 	}
 	const rejected = operation("diagnostics-create", { message: "Ordinary", mode: "build" }, 3);

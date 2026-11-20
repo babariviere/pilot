@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { once } from "node:events";
-import { watch } from "node:fs";
+import { unwatchFile, watchFile } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -29,25 +29,24 @@ function journalBarrier(
 	dir: string,
 	predicate: (state: Record<string, { generation: number; revoked?: boolean }>) => boolean,
 ): Promise<void> {
+	const path = join(dir, ".pilot-credential-journal.json");
 	return new Promise((resolve, reject) => {
 		let done = false;
 		const close = (error?: Error) => {
 			if (done) return;
 			done = true;
-			watcher.close();
+			unwatchFile(path, check);
 			clearTimeout(timer);
 			error ? reject(error) : resolve();
 		};
 		const check = async () => {
 			try {
-				if (predicate(JSON.parse(await readFile(join(dir, ".pilot-credential-journal.json"), "utf8")))) close();
+				if (predicate(JSON.parse(await readFile(path, "utf8")))) close();
 			} catch {
 				close(new Error("Journal read failed"));
 			}
 		};
-		const watcher = watch(dir, (_, file) => {
-			if (file === ".pilot-credential-journal.json") void check();
-		});
+		watchFile(path, { interval: 20 }, check);
 		const timer = setTimeout(() => close(new Error("Credential fence was not committed")), 5000);
 		void check();
 	});

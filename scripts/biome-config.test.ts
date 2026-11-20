@@ -11,9 +11,18 @@ test("formatting skips target caches and installer-owned skill lock metadata", a
 	t.after(() => rm(directory, { recursive: true, force: true }));
 	const project = join(directory, "project");
 	const cache = join(directory, "shared-cache");
-	for (const path of [join(project, "apps/day"), join(project, "nested/helper"), cache])
+	for (const path of [
+		join(project, "apps/day/sources"),
+		join(project, "apps/day/scripts"),
+		join(project, "nested/helper"),
+		cache,
+	])
 		await mkdir(path, { recursive: true });
 	await copyFile(new URL("../biome.json", import.meta.url), join(project, "biome.json"));
+	await copyFile(
+		new URL("../apps/day/scripts/forge-screens.grit", import.meta.url),
+		join(project, "apps/day/scripts/forge-screens.grit"),
+	);
 	const unformatted = '{"cache":true}';
 	const lock = '{\n  "skills": { "fixture": { "hash": "unchanged" } }\n}\n';
 	await writeFile(join(project, "skills-lock.json"), lock);

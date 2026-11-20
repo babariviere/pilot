@@ -333,11 +333,12 @@ test("a confirmed outage spares a stream receiving data and stops it once silent
 	await save(true);
 	let reachable = 0,
 		calls = 0,
-		aborted = false;
+		aborted = false,
+		now = 0;
 	const gate = new OfflineGate(
 		path,
 		async () => {},
-		{ activeMs: 150, tickMs: 20, stallMs: 60_000 },
+		{ activeMs: 150, tickMs: 20, stallMs: 60_000, now: () => now },
 		async () => {
 			reachable++;
 		},
@@ -367,13 +368,24 @@ test("a confirmed outage spares a stream receiving data and stops it once silent
 		stop.signal,
 	);
 	await until(() => calls === 1);
+	const events = stream[Symbol.asyncIterator]();
 	const partial = fauxAssistantMessage("");
 	sources[0]!.push({ type: "start", partial });
+	assert.equal((await events.next()).value?.type, "start");
+	const wait = gate.wait.bind(gate);
+	const held = new Promise<void>((resolve) => {
+		t.mock.method(gate, "wait", (signal?: AbortSignal, after?: number) => {
+			resolve(); // The monitor evaluated the outage and is now waiting for recovery.
+			return wait(signal, after);
+		});
+	});
 	await save(false);
-	await delay(60);
+	await held;
 	assert.equal(aborted, false, "data arriving within activeMs proves this stream works");
 	sources[0]!.push({ type: "text_start", contentIndex: 0, partial });
 	await until(() => reachable === 1);
+	assert.equal(aborted, false);
+	now += 150;
 	await until(() => aborted);
 	await save(true);
 	assert.equal((await stream.result()).stopReason, "stop");

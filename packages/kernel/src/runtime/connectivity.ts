@@ -136,6 +136,8 @@ export function isTransportFailure(error: unknown): boolean {
 }
 
 export interface OfflineTiming {
+	/** Monotonic milliseconds for stream activity. */
+	now?: () => number;
 	/** A stream silent this long asks the daemon for a check. Stopping it still needs a confirmed outage. */
 	stallMs?: number;
 	/** A stream that received data this recently is working, so a confirmed outage does not stop it yet. */
@@ -149,6 +151,7 @@ export class OfflineGate {
 	readonly stallMs: number;
 	readonly activeMs: number;
 	readonly tickMs: number;
+	readonly now: () => number;
 	private readonly requestCheck: (origin?: string) => Promise<void>;
 	private readonly reportReachable: () => Promise<void>;
 	constructor(
@@ -164,6 +167,7 @@ export class OfflineGate {
 		this.stallMs = timing.stallMs ?? 30_000;
 		this.activeMs = timing.activeMs ?? 5_000;
 		this.tickMs = timing.tickMs ?? 5_000;
+		this.now = timing.now ?? (() => performance.now());
 	}
 
 	/** Ask the daemon for one shared check, including the provider's own server. */
@@ -212,6 +216,7 @@ export class OfflineGate {
 				wake = resolve;
 			});
 			let watcher: ReturnType<typeof watch> | undefined;
+			let fileWatcher: ReturnType<typeof watch> | undefined;
 			try {
 				watcher = watch(dirname(this.path!), (_event, file) => {
 					if (!file || file === basename(this.path!)) wake();
@@ -219,6 +224,16 @@ export class OfflineGate {
 				watcher.on("error", wake);
 			} catch {
 				/* A coarse fallback also covers unavailable filesystem notifications. */
+			}
+			if (process.platform === "darwin") {
+				try {
+					// Directory watches use FSEvents. A direct vnode watch can still see replacement
+					// when directory notifications are unavailable. Reattach after every wake.
+					fileWatcher = watch(this.path!, wake);
+					fileWatcher.on("error", wake);
+				} catch {
+					/* The directory watch still covers first creation. */
+				}
 			}
 			const timer = setTimeout(wake, 60_000);
 			const abort = () => wake();
@@ -230,6 +245,7 @@ export class OfflineGate {
 				await changed;
 			} finally {
 				clearTimeout(timer);
+				fileWatcher?.close();
 				watcher?.close();
 				signal?.removeEventListener("abort", abort);
 			}
@@ -281,9 +297,9 @@ export function offlineRequestStream(
 					checked = false,
 					reported = false,
 					lastData = Number.NEGATIVE_INFINITY,
-					lastActivity = Date.now();
+					lastActivity = gate.now();
 				const evaluate = () => {
-					const now = Date.now();
+					const now = gate.now();
 					if (held) {
 						if (!offline && now - lastData >= gate.activeMs) {
 							offline = true;
@@ -295,7 +311,7 @@ export function offlineRequestStream(
 					}
 				};
 				const received = () => {
-					lastData = lastActivity = Date.now();
+					lastData = lastActivity = gate.now();
 					checked = false;
 					if (held && !reported) {
 						reported = true;

@@ -95,6 +95,8 @@ export async function startupResponsiveness(
 					title: "Synthetic",
 					createdAt: 1,
 					updatedAt: 1,
+					// Recover existing chats rather than testing first-turn coding slot admission.
+					lastCompletionAt: 1,
 					initializing: true,
 					pending: [{ type: "input", requestId: `input:${id}`, content, mode: "followUp" }],
 				}),

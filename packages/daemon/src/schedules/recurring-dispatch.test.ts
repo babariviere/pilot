@@ -352,21 +352,26 @@ test("calendar detector listens to helper wake without probes or wake subprocess
 	assert.equal(powerActive, false);
 });
 
-test("a setting change during durable claim consumes it without admitting work", async (t) => {
+test("disabling a recurring chat during claim holds the occurrence for resume", async (t) => {
 	const f = await fixture(t);
 	const row = await f.service.create(f.request);
 	const replace = f.store.replace.bind(f.store);
+	let disableOnce = true;
 	f.store.replace = async (old, next) => {
 		const saved = await replace(old, next);
-		if (next.state === "dispatching") f.enable(false);
+		if (disableOnce && next.state === "dispatching") {
+			disableOnce = false;
+			f.enable(false);
+		}
 		return saved;
 	};
 	f.start();
 	f.setNow(ms("2026-11-02T10:00Z"));
 	await f.settle();
 	assert.equal(f.calls.length, 0);
-	assert.equal(f.service.require(row.id).notice?.outcome, "failed");
+	assert.equal(f.service.require(row.id).handledThrough, row.handledThrough);
 	f.enable(true);
 	await f.settle();
-	assert.equal(f.calls.length, 0, "the consumed occurrence is never retried");
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.service.require(row.id).handledThrough, row.at);
 });

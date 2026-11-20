@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -32,9 +32,17 @@ function until(service: McpStatusService, predicate: (status: McpStatus) => bool
 /** A probe whose checks finish when the test says so. */
 function manualProbe() {
 	const calls: Array<{ only?: string; finish: (result: McpProbeResult) => void }> = [];
-	const probe: McpProbe = ({ only }) =>
+	const probe: McpProbe = ({ only, signal }) =>
 		new Promise((resolve) => {
-			calls.push({ ...(only !== undefined ? { only } : {}), finish: resolve });
+			const abort = () => resolve({ cancelled: true });
+			signal.addEventListener("abort", abort, { once: true });
+			calls.push({
+				...(only !== undefined ? { only } : {}),
+				finish: (result) => {
+					signal.removeEventListener("abort", abort);
+					resolve(result);
+				},
+			});
 		});
 	return { probe, calls };
 }
@@ -179,10 +187,11 @@ test("sign-in runs only for servers that use it, reports progress and rechecks t
 	await service.close();
 });
 
-test("edits to mcp.json or a sign-in elsewhere trigger one debounced check; the service never polls", async (t) => {
+test("config edits and sign-in replacements trigger one debounced check", { timeout: 8_000 }, async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-mcp-watch-"));
 	const { probe, calls } = manualProbe();
-	const service = new McpStatusService({ probe, watchDir: dir, debounceMs: 20 });
+	await writeFile(join(dir, "mcp-auth.json"), "{}");
+	const service = new McpStatusService({ probe, watchDir: dir, debounceMs: 100 });
 	t.after(async () => {
 		await service.close();
 		await rm(dir, { recursive: true, force: true });
@@ -195,13 +204,22 @@ test("edits to mcp.json or a sign-in elsewhere trigger one debounced check; the 
 	await delay(100);
 	assert.equal(calls.length, 1, "other files are ignored");
 
-	await writeFile(join(dir, "mcp.json"), "{}");
-	await writeFile(join(dir, "mcp-auth.json"), "{}");
+	await writeFile(join(dir, "mcp-auth.json.tmp"), "{}");
+	await Promise.all([
+		writeFile(join(dir, "mcp.json"), "{}"),
+		rename(join(dir, "mcp-auth.json.tmp"), join(dir, "mcp-auth.json")),
+	]);
 	await until(service, () => calls.length === 2);
 	calls[1]!.finish({ complete: true, configProblems: 0, servers: [server("datadog", "connected")] });
 	await until(service, (status) => !status.checking);
-	await delay(100);
+	await delay(650);
 	assert.equal(calls.length, 2, "a burst of writes costs one check");
+
+	await writeFile(join(dir, "mcp-auth.json.tmp"), '{"changed":true}');
+	await rename(join(dir, "mcp-auth.json.tmp"), join(dir, "mcp-auth.json"));
+	await until(service, () => calls.length === 3);
+	calls[2]!.finish({ complete: true, configProblems: 0, servers: [] });
+	await until(service, (status) => !status.checking);
 });
 
 test("pinned SDK check reports connected, signed-out, failing and disabled servers without their error text", async (t) => {

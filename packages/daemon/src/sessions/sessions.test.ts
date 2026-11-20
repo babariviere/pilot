@@ -1854,27 +1854,34 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 	const f = await insightsFixture(t);
 	const { sessions, id, worker } = f;
 	const meta = sessions["metas"].get(id)!;
-	for (const type of [
-		"mission.call",
-		"memory.call",
-		"knowledge.call",
-		"slack.call",
+	const methods = [
+		"mission",
+		"planning",
+		"knowledge",
+		"slack",
 		"liveUpdate.propose",
-		"diagnostics.call",
-		"diagnostics.history.call",
-		"diagnostics.logs.call",
+		"diagnostics.history",
+		"diagnostics.logs",
 		"diagnostics.proposal",
-		"artifact.reference.get",
+		"artifact.reference",
 		"source.scope",
 		"source.references",
 		"publication.source",
-	])
+	] as const satisfies readonly (keyof HostCalls)[];
+	for (const method of methods) {
 		sessions["onPacket"](meta, worker, {
-			type,
-			callId: type,
-			request: { action: "spawn" },
+			type: "host.call",
+			method,
+			callId: method,
+			args: { request: { action: "spawn" } },
 		} as unknown as KernelPacket);
-	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 13);
+		assert.ok(
+			worker.sent.some(
+				(p) => p.type === "host.result" && p.callId === method && p.error === "Insights denies this capability",
+			),
+			method,
+		);
+	}
 	assert.equal(f.broadCalls(), 0);
 	const count = f.workers.length;
 	for (const type of [

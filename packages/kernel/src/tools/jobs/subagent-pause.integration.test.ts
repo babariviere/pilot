@@ -30,7 +30,7 @@ async function until(check: () => boolean | Promise<boolean>) {
 // The provider runs in the real bundled child process. All files and effects belong to a temp fixture.
 function childProvider(root: string, mode: string): string {
 	return `
-import { existsSync, watch, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, writeFileSync, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -102,12 +102,12 @@ export default pi => {
 				writeFileSync(join(root, "child-pid"), String(child.pid));
 			}
 			if (updating && step === 1) await new Promise((resolve, reject) => {
-				const watcher = watch(root, () => {
+				const timer = setInterval(() => {
 					if (existsSync(join(root, "release"))) finish();
-				});
+				}, 20);
 				const abort = () => finish(new Error("Interrupted synthetic tool"));
 				function finish(error) {
-					watcher.close(); signal?.removeEventListener("abort", abort);
+					clearInterval(timer); signal?.removeEventListener("abort", abort);
 					if (error) reject(error); else resolve();
 				}
 				signal?.addEventListener("abort", abort, {once:true});

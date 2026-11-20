@@ -349,7 +349,9 @@ test("archives and restores durably, retaining history, workspace and project as
 		sessions.onChange((session) => changes.push(session));
 		const archived = await sessions.archive(id);
 		assert.ok(archived.archivedAt);
-		assert.deepEqual(archived, { ...original, archivedAt: archived.archivedAt });
+		const { canReply, ...readOnly } = original;
+		assert.equal(canReply, true);
+		assert.deepEqual(archived, { ...readOnly, archivedAt: archived.archivedAt });
 		assert.deepEqual(await sessions.archive(id), archived);
 		assert.equal(changes.length, 1);
 		assert.equal(sessions.list().length, 2);
@@ -778,7 +780,9 @@ test("age sweep archives at one week since activity, retains files and grants a 
 		assert.equal(sessions.get(old)?.archivedAt, now, "exact one-week boundary is eligible");
 		assert.equal(sessions.get(recent)?.archivedAt, undefined);
 		assert.equal(sessions.get(direct)?.archivedAt, now, "direct chats do not require GitHub");
-		assert.deepEqual(sessions.get(old), { ...before, archivedAt: now });
+		const { canReply, ...readOnly } = before;
+		assert.equal(canReply, true);
+		assert.deepEqual(sessions.get(old), { ...readOnly, archivedAt: now });
 		assert.equal(await readFile(join(home, "sessions", old, "durable", "history"), "utf8"), "retained transcript");
 		assert.equal(await readFile(join(before.cwd, "work.txt"), "utf8"), "retained changes");
 		await sessions.restore(old);

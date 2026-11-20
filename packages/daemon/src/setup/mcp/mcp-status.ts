@@ -1,4 +1,5 @@
-import { type FSWatcher, watch } from "node:fs";
+import { type Stats, unwatchFile, watch, watchFile } from "node:fs";
+import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { McpServerState, McpServerStatus, McpSignInState, McpStatus } from "@pilot/protocol";
 import { NotFound } from "../../runtime/contracts/errors.ts";
@@ -65,7 +66,7 @@ interface McpStatusOptions {
 
 /**
  * The shared view of the user's pi MCP servers: checked at startup, when mcp.json or mcp-auth.json changes (a
- * sign-in or config edit anywhere, including `pi mcp login` in a terminal) and on request. Never polls.
+ * sign-in or config edit anywhere, including `pi mcp login` in a terminal) and on request. No periodic server probes.
  * One check runs at a time; requests during a check merge into one follow-up check.
  */
 export class McpStatusService {
@@ -82,7 +83,7 @@ export class McpStatusService {
 	private running?: AbortController;
 	/** Follow-up after the running check: every server, or these names. */
 	private queued?: "all" | Set<string>;
-	private watcher?: FSWatcher;
+	private stopWatching?: () => void;
 	private debounce?: ReturnType<typeof setTimeout>;
 	private stopped = false;
 	private settled: Promise<void> = Promise.resolve();
@@ -115,20 +116,34 @@ export class McpStatusService {
 		if (this.stopped) return;
 		this.started = true;
 		this.check();
-		if (!this.watchDir || this.watcher) return;
-		try {
-			this.watcher = watch(this.watchDir, { persistent: false }, (_event, file) => {
-				const name = file?.toString();
-				if (name !== "mcp.json" && name !== "mcp-auth.json") return;
-				// Our own checks refresh tokens through mcp-auth.json. Config edits always count.
-				if (name === "mcp-auth.json" && this.running) return;
-				clearTimeout(this.debounce);
-				this.debounce = setTimeout(() => this.check(), this.debounceMs);
-				this.debounce.unref();
+		if (!this.watchDir || this.stopWatching) return;
+		const changed = (name: string) => {
+			if (this.stopped || (name !== "mcp.json" && name !== "mcp-auth.json")) return;
+			// Our own checks refresh tokens through mcp-auth.json. Config edits always count.
+			if (name === "mcp-auth.json" && this.running) return;
+			clearTimeout(this.debounce);
+			this.debounce = setTimeout(() => this.check(), this.debounceMs);
+			this.debounce.unref();
+		};
+		if (process.platform === "darwin") {
+			// FSEvents can miss creation and atomic replacement. Watch only these two paths.
+			const stops = ["mcp.json", "mcp-auth.json"].map((name) => {
+				const path = join(this.watchDir!, name);
+				const listener = (current: Stats, previous: Stats) => {
+					if (current.ino !== previous.ino || current.ctimeMs !== previous.ctimeMs) changed(name);
+				};
+				watchFile(path, { interval: 500, persistent: false }, listener);
+				return () => unwatchFile(path, listener);
 			});
-			this.watcher.on("error", () => {
-				this.watcher?.close();
-				this.watcher = undefined;
+			this.stopWatching = () => stops.forEach((stop) => stop());
+			return;
+		}
+		try {
+			const watcher = watch(this.watchDir, { persistent: false }, (_event, file) => changed(file ?? ""));
+			this.stopWatching = () => watcher.close();
+			watcher.on("error", () => {
+				watcher.close();
+				this.stopWatching = undefined;
 			});
 		} catch {
 			// No agent directory yet: checks on request still work.
@@ -198,8 +213,8 @@ export class McpStatusService {
 	async close(): Promise<void> {
 		this.stopped = true;
 		clearTimeout(this.debounce);
-		this.watcher?.close();
-		this.watcher = undefined;
+		this.stopWatching?.();
+		this.stopWatching = undefined;
 		this.queued = undefined;
 		this.running?.abort();
 		await Promise.all([this.signIns.stop(), this.settled]);

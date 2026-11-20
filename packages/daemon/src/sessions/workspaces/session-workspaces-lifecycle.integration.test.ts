@@ -7,7 +7,6 @@ import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { ArtifactStore } from "@pilot/artifacts";
-import { LegacyArtifactFixture } from "@pilot/artifacts/testing";
 import type { SessionSummary } from "@pilot/protocol";
 import { loadConfig } from "../../config.ts";
 import { Conflict } from "../../runtime/contracts/errors.ts";
@@ -42,8 +41,9 @@ test("archive immediately discards private work without snapshots, keeping histo
 	await writeFile(join(created.cwd, "ignored-secret"), "discard too");
 	const directory = join(f.home, "sessions", created.id);
 	await seedHistory(directory);
-	const store = new LegacyArtifactFixture(directory, { sessionId: created.id, projectId: f.project.id });
-	const artifact = await store.create({ title: "Saved", kind: "html", source: "<p>published</p>" });
+	const source = "export default () => 'published';";
+	const store = new ArtifactStore(directory, { sessionId: created.id, projectId: f.project.id });
+	const artifact = await store.create({ title: "Saved", kind: "nsh", source, entry: "published.tsx" });
 	const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "snapshot", async () => {
 		throw new Error("must not snapshot");
 	});
@@ -55,7 +55,7 @@ test("archive immediately discards private work without snapshots, keeping histo
 	assert.equal((await f.stored(created.id)).workspaceRecovery, undefined);
 	assert.equal((await f.stored(created.id)).workspaceDiscard?.phase, "discarded");
 	await assertHistory(f.sessions, created.id);
-	assert.equal((await f.sessions.artifact(created.id, artifact.id)).source, "<p>published</p>");
+	assert.equal((await f.sessions.artifact(created.id, artifact.id)).source, source);
 	await f.sessions.shutdown();
 	const restarted = await f.manager();
 	await assertHistory(restarted, created.id);

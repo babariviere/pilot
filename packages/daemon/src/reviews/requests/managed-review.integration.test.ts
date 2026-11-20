@@ -209,8 +209,8 @@ for (const legacyMission of [false, true])
 		const selected = first.comparisons[0]!;
 		jj(chat.cwd, "describe", "-r", selected.request.changeId, "-m", "Exact revised change");
 		const revisedHead = agent.revision(selected.request.changeId);
-		// A fresh completion can arrive after the idle edge (for example a job follow-up).
-		agent.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+		// A stopped completion can arrive after the idle edge and still capture the latest work.
+		agent.onPacket({ type: "working", working: false, completion: { outcome: "stopped", outcomeAt: Date.now() } });
 		await f.sessions["workerReviewDelivery"]["tail"];
 		const revised = await get<NativeReviewPage>(route);
 		assert.ok(revised.comparisons.some((c) => c.request.head.commitId === revisedHead.commitId));

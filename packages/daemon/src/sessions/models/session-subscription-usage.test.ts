@@ -335,7 +335,7 @@ test("provider-reported limits acknowledge only a persisted resumable pause, and
 		callId: "limit",
 		args: { limit: { provider: "openai" } },
 	});
-	assert.deepEqual(await ack, { type: "host.result", callId: "limit" });
+	assert.deepEqual(await ack, { type: "host.result", callId: "limit", result: undefined });
 	assert.equal(f.sessions.get(id)?.state, "working");
 	assert.equal(f.sessions.get(id)?.working, false);
 	assert.equal(f.sessions.get(id)?.outcome, undefined, "no failure or completion is synthesized");

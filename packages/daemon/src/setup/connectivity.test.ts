@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -235,8 +235,14 @@ test("checks include the provider server a request failed to reach, until a chec
 	});
 	await service.start();
 	await until(() => seen.length === 1);
-	await writeFile(`${file}.check.abc`, "https://api.example.test");
-	await writeFile(`${file}.check.def`, "http://portal.test");
+	for (const [suffix, origin] of [
+		["abc", "https://api.example.test"],
+		["def", "http://portal.test"],
+	]) {
+		const path = `${file}.check.${suffix}`;
+		await writeFile(`${path}.tmp`, origin);
+		await rename(`${path}.tmp`, path);
+	}
 	await until(() => seen.length === 2);
 	assert.deepEqual(seen[1], ["https://api.example.test"], "only HTTPS origins are checked");
 	await detector.refreshOnline();

@@ -79,8 +79,8 @@ test("create/edit/resume cursors, daemon-owned fields, home and live setting che
 	assert.equal(f.store.pendingItems().length, 0);
 	f.setNow(Date.parse("2026-11-05T10:00Z"));
 	const resumed = await patch({ paused: false });
-	assert.equal(resumed.handledThrough, Date.parse("2026-11-05T10:00Z"));
-	assert.equal(resumed.at, Date.parse("2026-11-06T09:00Z"));
+	assert.equal(resumed.handledThrough, created.handledThrough);
+	assert.equal(resumed.at, created.at);
 	f.setNow(Date.parse("2026-11-06T08:00Z"));
 	assert.equal((await patch({ title: "Rename" })).handledThrough, resumed.handledThrough);
 	assert.equal(
@@ -93,8 +93,8 @@ test("create/edit/resume cursors, daemon-owned fields, home and live setting che
 	await assert.rejects(patch({ expectedHome: { ...f.identity, daemonId: "elsewhere" } }), /home changed/);
 	await assert.rejects(f.service.create({ ...f.request, expectedHome: undefined }), /expectedHome/);
 	f.enable(false);
-	await assert.rejects(f.service.create(f.request), /disabled/);
-	await assert.rejects(patch({ title: "No" }), /disabled/);
+	assert.equal((await f.service.create(f.request)).state, "pending");
+	assert.equal((await patch({ title: "Edit while held" })).title, "Edit while held");
 });
 test("recurring targets are project-bound, without mission, cwd or tickets", async (t) => {
 	const f = await fixture(t);

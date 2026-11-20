@@ -2065,7 +2065,7 @@ test("oversized imported mission text survives tool and HTTP reads without rewri
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
 	const response = await fetch(base);
 	assert.equal(response.status, 200);
-	assert.deepEqual(await response.json(), before);
+	assert.deepEqual(await response.json(), { ...before, taskModels: [] });
 	for (const path of ["/brief", "/brief?revision=1"]) {
 		const response = await fetch(`${base}${path}`);
 		assert.equal(response.status, 200);

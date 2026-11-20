@@ -76,7 +76,8 @@ test("sleep preparation persists every recovery marker without waiting for batch
 	await sessions.load();
 	const ids: string[] = [];
 	for (let index = 0; index < 9; index++) {
-		ids.push((await sessions.spawn({ cwd: home, title: `Worker ${index}`, message: "work" })).id);
+		// Read-only workers can all run together without exceeding the new-chat coding limit.
+		ids.push((await sessions.spawn({ mode: "ask", cwd: home, title: `Worker ${index}`, message: "work" })).id);
 	}
 	await until(() => workers.length === 9 && ids.every((id) => sessions.get(id)?.state === "working"));
 	const pausing = sessions.pauseForSleep("100:1");

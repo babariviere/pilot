@@ -46,20 +46,29 @@ class FakeWorker implements SessionWorker {
 		this.onPacket = onPacket;
 	}
 	guardError?: string;
+	private guardReply?: () => void;
 	send(command: KernelCommand): void {
-		if (command.type === "host.result") this.guardError = command.error;
+		if (command.type === "host.result") {
+			this.guardError = command.error;
+			this.guardReply?.();
+		}
 	}
 	async request(command: Command): Promise<void> {
 		this.commands.push(command);
 		await this.gate;
 		if (command.type === "changeModel" || command.type === "changeModelConfiguration") {
 			if (command.type === "changeModelConfiguration") {
+				const replied = new Promise<void>((resolve) => {
+					this.guardReply = resolve;
+				});
 				this.onPacket({
 					type: "host.call",
 					method: "model.configuration.guard",
 					callId: "synthetic",
 					args: { requestId: command.requestId },
 				});
+				await replied;
+				this.guardReply = undefined;
 				if (this.guardError) throw new CommandRejected(this.guardError);
 			}
 			if (this.rejectBusy) throw new CommandRejected("Conversation is busy", "busy");

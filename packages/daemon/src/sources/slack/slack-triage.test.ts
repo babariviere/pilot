@@ -131,7 +131,7 @@ test("project labels are bounded and validated, and classifier labels must belon
 	);
 });
 
-test("legacy global boolean cache migrates without calls or budget charges; new results are project-specific", async (t) => {
+test("legacy global boolean cache migrates without fresh reservations; new results are project-specific", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "slack-migration-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
 	const path = join(home, "items.sqlite");
@@ -149,7 +149,7 @@ test("legacy global boolean cache migrates without calls or budget charges; new 
 	const db = new DatabaseSync(path);
 	db.exec(
 		`PRAGMA user_version=0;
-		DROP INDEX slack_reaction_reads_unfinished; DROP INDEX slack_waiting_reads;
+		DROP INDEX slack_waiting_reads;
 		ALTER TABLE tracked_items DROP COLUMN slack_status; ALTER TABLE tracked_items DROP COLUMN slack_overrides`,
 	);
 	const legacy = {
@@ -194,7 +194,4 @@ test("legacy global boolean cache migrates without calls or budget charges; new 
 	} finally {
 		disk.close();
 	}
-	const check = new DatabaseSync(path);
-	assert.equal(check.prepare("SELECT COUNT(*) AS n FROM slack_budget").get()!.n, 0);
-	check.close();
 });

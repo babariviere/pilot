@@ -1,7 +1,7 @@
 /** Agents pause only on evidence of an outage and resume on the first sign of recovery. */
 import { randomUUID } from "node:crypto";
-import { type FSWatcher, watch } from "node:fs";
-import { open, rename, rm, writeFile } from "node:fs/promises";
+import { watch } from "node:fs";
+import { lstat, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { type ConnectivityState, connectivityHints, providerOrigin } from "@pilot/kernel";
 import type { ScheduleDetection } from "../schedules/schedule-detection.ts";
@@ -29,7 +29,7 @@ export class ConnectivityService {
 	private tail: Promise<void> = Promise.resolve();
 	private dispose?: () => void;
 	private stopped = false;
-	private watcher?: FSWatcher;
+	private stopHints?: () => void | Promise<void>;
 	private checkTimer?: NodeJS.Timeout;
 	private pathTimer?: NodeJS.Timeout;
 	private nextCheck = 0;
@@ -60,17 +60,78 @@ export class ConnectivityService {
 	async start(): Promise<void> {
 		// Unknown admits requests: a failure decides. Never reuse a pre-crash offline hold either.
 		await this.save({ version: 1, online: true, checkedAt: 0 });
-		const hints = connectivityHints(basename(this.file));
-		this.watcher = watch(dirname(this.file), (_event, name) => {
-			if (this.stopped) return;
-			if (name === hints.reachable) this.recovered();
-			if (name === hints.check) this.requestCheck();
-			else if (name && hints.isOrigin(name))
-				void this.readOrigin(join(dirname(this.file), name)).finally(() => this.requestCheck());
-		});
-		this.watcher.on("error", (error) => console.warn(`pilotd: connectivity hints: ${error}`));
 		this.dispose = this.detection.subscribeConnectivity((state) => this.checked(state));
+		this.stopHints = this.watchHints();
 		this.detection.setAgentsActive(true);
+	}
+
+	private watchHints(): () => void | Promise<void> {
+		const directory = dirname(this.file);
+		const names = connectivityHints(basename(this.file));
+		const originHint = (name: string) => this.readOrigin(join(directory, name));
+		if (process.platform !== "darwin") {
+			const watcher = watch(directory, (_event, name) => {
+				if (this.stopped) return;
+				if (name === names.reachable) this.recovered();
+				if (name === names.check) this.requestCheck();
+				else if (name && names.isOrigin(name)) void originHint(name).finally(() => this.requestCheck());
+			});
+			watcher.on("error", (error) => console.warn(`pilotd: connectivity hints: ${error}`));
+			return () => watcher.close();
+		}
+		// FSEvents can miss writes and replacements. Stat the two fixed files and the directory.
+		// Named hints are always renamed into place, so only a directory change needs a scan.
+		const paths = connectivityHints(this.file);
+		const startedAt = BigInt(Date.now()) * 1_000_000n;
+		const seen = new Map<string, bigint>();
+		const changed = async (path: string) => {
+			const info = await (path === directory ? stat(path, { bigint: true }) : lstat(path, { bigint: true })).catch(
+				() => undefined,
+			);
+			if (!info || !(path === directory ? info.isDirectory() : info.isFile())) return false;
+			if (info.ctimeNs < startedAt || seen.get(path) === info.ctimeNs) return false;
+			seen.set(path, info.ctimeNs);
+			return true;
+		};
+		let scan: Promise<void> | undefined;
+		let active = true;
+		const poll = async () => {
+			const [reachable, check, origins] = await Promise.all([
+				changed(paths.reachable),
+				changed(paths.check),
+				changed(directory),
+			]);
+			if (!active) return;
+			let hinted = check;
+			if (origins) {
+				const entries = (await readdir(directory)).filter(names.isOrigin);
+				const live = new Set(entries.map((name) => join(directory, name)));
+				for (const path of seen.keys()) if (paths.isOrigin(path) && !live.has(path)) seen.delete(path);
+				for (const name of entries) {
+					if (!active) return;
+					if (await changed(join(directory, name))) {
+						await originHint(name);
+						hinted = true;
+					}
+				}
+			}
+			if (!active) return;
+			if (reachable) this.recovered();
+			if (hinted) this.requestCheck();
+		};
+		const timer = setInterval(() => {
+			scan ??= poll()
+				.catch((error) => console.warn(`pilotd: connectivity hints: ${error}`))
+				.finally(() => {
+					scan = undefined;
+				});
+		}, 500);
+		timer.unref();
+		return async () => {
+			active = false;
+			clearInterval(timer);
+			await scan;
+		};
 	}
 
 	/** Network path from the macOS helper. `undefined` means unknown (no helper, or it disconnected). */
@@ -162,9 +223,9 @@ export class ConnectivityService {
 	}
 
 	async stop(): Promise<void> {
+		await this.stopHints?.();
 		clearTimeout(this.checkTimer);
 		clearTimeout(this.pathTimer);
-		this.watcher?.close();
 		this.dispose?.();
 		this.detection.setAgentsActive(false);
 		await this.tail;
@@ -194,7 +255,7 @@ export class ConnectivityService {
 				const buffer = Buffer.alloc(2048);
 				const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
 				const origin = providerOrigin(buffer.subarray(0, bytesRead).toString("utf8").trim());
-				if (!origin || this.origins.includes(origin)) return;
+				if (this.stopped || !origin || this.origins.includes(origin)) return;
 				this.origins = [...this.origins, origin].slice(-MAX_ORIGINS);
 				this.detection.setProbeOrigins(this.origins);
 			} finally {

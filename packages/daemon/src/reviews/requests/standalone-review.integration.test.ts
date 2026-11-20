@@ -198,6 +198,7 @@ test("new Ask, direct, cwd override and legacy mission chats never acquire proje
 				undefined,
 			);
 		}
+		await f.sessions.stop(chat.id);
 	}
 });
 
@@ -308,7 +309,9 @@ test("interrupted real SQLite capture reopens the same request; shared quota ref
 		ledger: await ledger.get(request.repositoryId, request.changeId),
 		taskAttribution: "unknown",
 	};
-	const worker = new Worker(new URL("../snapshots/review-snapshot-worker.ts", import.meta.url), { workerData: { file } });
+	const worker = new Worker(new URL("../snapshots/review-snapshot-worker.ts", import.meta.url), {
+		workerData: { file },
+	});
 	try {
 		const cancelled = new Promise<{ error?: string }>((resolve, reject) => {
 			worker.on("error", reject);

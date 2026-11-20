@@ -572,7 +572,8 @@ test("archived owners retain project-visible artifacts and pinned revisions acro
 		source: "export default () => null; // Unassigned",
 		entry: "view.tsx",
 	});
-	const before = sessions.get(sessionId)!;
+	const { canReply, ...before } = sessions.get(sessionId)!;
+	assert.equal(canReply, true);
 	const response = await fetch(`${base}/api/sessions/${sessionId}/archive`, { method: "POST" });
 	assert.equal(response.status, 200);
 	const archived = sessions.get(sessionId)!;
