@@ -18,6 +18,8 @@ export const feedbackLater = signal<string[]>([]);
 
 /** Window-local history search, kept while navigating elsewhere. */
 export const feedbackSearch = signal("");
+export const feedbackSelection = signal<string | null>(null);
+export const feedbackShowAll = signal(false);
 
 /** Unsent feedback, exactly as typed, and the origin the user kept. */
 export type FeedbackDraft = {

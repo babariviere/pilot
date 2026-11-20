@@ -182,7 +182,7 @@ Paste a screenshot into the feedback field with Cmd+V/Ctrl+V, or use the + icon
 (up to four PNGs, 8 MiB each). Text paste works as usual.
 Pilot keeps the images with your feedback so its triage agent can read them after a restart.
 An upload failure keeps the image for Retry upload. Sending feedback still happens only with Send.
-Saved feedback lists open items before resolved history. Search filters the loaded history;
+Saved feedback lists open items before resolved history, five at a time until Show all. Select a row to read its full text and steps beside the list (below it in a narrow window). The state mark has a fixed place: a small square for new feedback and a tick for resolved feedback. Search filters the loaded history;
 Show earlier reads older items. A missing save reply holds only that item and its images.
 Check reads its receipt without sending again. Write another leaves it there while you send
 unrelated feedback. Put-aside drafts survive reopening; Resume draft swaps rather than

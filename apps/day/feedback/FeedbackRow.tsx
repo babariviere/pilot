@@ -35,8 +35,6 @@ import {
 	glide,
 	MarkedLine,
 	Picker,
-	Row,
-	RowDetail,
 } from "../ui";
 import { FeedbackQuestion } from "./FeedbackQuestion";
 import type {
@@ -335,9 +333,9 @@ function imagesLine(item: FeedbackItem): string {
  * One saved piece of feedback with its steps, without a frame: Today puts it in its Needs you section, where it is
  * the one thing asked, so its Start fix is the screen's commit.
  */
-export function FeedbackRow(props: FeedbackRowProps) {
+export function FeedbackRow(props: FeedbackRowProps & { history?: boolean }) {
 	return (
-		<View testID={`feedback-item-${props.item.id}`} class="gap-3">
+		<View testID={`feedback-${props.history ? "detail" : "item"}-${props.item.id}`} class="gap-3">
 			<View selectable class="gap-0.5">
 				<Body>{props.item.text}</Body>
 				<If when={imagesLine(props.item)}>
@@ -345,34 +343,8 @@ export function FeedbackRow(props: FeedbackRowProps) {
 				</If>
 				<Caption tone="faint">{props.when}</Caption>
 			</View>
-			<FeedbackSteps {...props} commit />
+			<FeedbackSteps {...props} commit={!props.history} />
 		</View>
-	);
-}
-
-/**
- * One saved piece of feedback as a row of the Feedback page's list: the words as its title, when it was saved as its
- * meta, and its images and steps under it. The page's commit is Send, so Start fix is a Secondary button here.
- */
-export function FeedbackListRow(props: FeedbackRowProps) {
-	return (
-		<Row
-			testID={`feedback-item-${props.item.id}`}
-			title={props.item.text}
-			meta={props.when}
-			wrap
-			selectable
-			detail={
-				<RowDetail>
-					<View class="gap-3">
-						<If when={imagesLine(props.item)}>
-							<Caption tone="faint">{imagesLine(props.item)}</Caption>
-						</If>
-						<FeedbackSteps {...props} commit={false} />
-					</View>
-				</RowDetail>
-			}
-		/>
 	);
 }
 

@@ -62,3 +62,22 @@ for (const [colorScheme, width] of LOOKS) {
 		await app.screenshot(`output/feeds-feedback-sent-${colorScheme}-${width}.png`);
 	});
 }
+
+for (const [colorScheme, width] of LOOKS) {
+	test(`history reader, ${colorScheme} ${width}`, async () => {
+		const app = await open("../FeedbackFixture.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.press("id:feedback-open");
+		for (const words of [
+			"Keep my place when I return to a chat.",
+			"Show which screenshot I attached.",
+			"Plan rows feel crowded.",
+		]) {
+			await app.type("id:feedback-text", words);
+			await app.press("id:feedback-send");
+			await app.waitFor("Saved. Thank you.");
+		}
+		await app.scroll("id:feedback-scroll", 360);
+		await app.wait(300);
+		await app.screenshot(`output/history-reader-${colorScheme}-${width}.png`);
+	});
+}

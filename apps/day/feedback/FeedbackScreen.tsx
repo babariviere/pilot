@@ -7,7 +7,7 @@
 // or the exact mission it was opened from). Send sends it once; only an
 // accepted receipt clears it. A Send whose answer was lost stays Unknown:
 // Check only reads its result. Leaving, closing or updating keeps the draft.
-import { effect, keymap, Scroll, type ScrollRef, signal, View } from "nsh";
+import { computed, effect, keymap, Scroll, type ScrollRef, signal, View } from "nsh";
 import { namedFeedbackPaths } from "../../../packages/kernel/src/diagnostics/feedback-paths";
 import type { Day } from "../app/day";
 import { keepField, keepScroll } from "../app/kept";
@@ -20,6 +20,7 @@ import {
 	Buttons,
 	Caption,
 	Column,
+	Columns,
 	EmptyLine,
 	glide,
 	Link,
@@ -28,12 +29,13 @@ import {
 	PageHead,
 	Panel,
 	Picker,
+	Row,
 	Rows,
 	Section,
 	TextField,
 } from "../ui";
 import { clearFeedbackImagePreviews, FeedbackImages } from "./FeedbackImages";
-import { FeedbackListRow } from "./FeedbackRow";
+import { FeedbackRow } from "./FeedbackRow";
 import {
 	type FeedbackItem,
 	type FeedbackMirror,
@@ -43,7 +45,7 @@ import {
 	type UserFeedbackOriginRef,
 	utf8Bytes,
 } from "./feedbackFeed";
-import { askingOf, stepsOf } from "./feedbackSteps";
+import { chatState, running, stepsOf } from "./feedbackSteps";
 import {
 	closeFeedback,
 	dayOf,
@@ -56,6 +58,8 @@ import {
 	feedbackOffer,
 	feedbackProject,
 	feedbackSearch,
+	feedbackSelection,
+	feedbackShowAll,
 	forgetKeptFeedback,
 	keepFeedbackDraft,
 	originKey,
@@ -168,7 +172,10 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 			...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
 			...(project ? { investigation: { projectId: project.projectId, contextDigest: project.contextDigest } } : {}),
 		});
-		if (r.status === "accepted") forgetKeptFeedback(draft);
+		if (r.status === "accepted") {
+			forgetKeptFeedback(draft);
+			if (r.saved) feedbackSelection.set(r.saved.id);
+		}
 		// Only an accepted receipt clears the words, and only the words that were sent.
 		if (r.status === "accepted" && feedbackDraft() === draft) {
 			glide();
@@ -376,6 +383,16 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 	);
 }
 
+function historyState(item: FeedbackItem) {
+	const s = stepsOf(item);
+	const step = s.fix ?? s.prototype ?? s.triage;
+	if (s.resolved) return { mark: "done", word: "Resolved", tone: "quiet" } as const;
+	if (step && chatState(step) === "question") return { mark: "needs", word: "Needs you", tone: "needs" } as const;
+	if (step && chatState(step) === "failed") return { mark: "failed", word: "Failed", tone: "failed" } as const;
+	if (running(step)) return { mark: "working", word: "Working", tone: "quiet" } as const;
+	return { mark: "new", word: item.work.length ? "Open" : "New", tone: "quiet" } as const;
+}
+
 /** Saved feedback, newest first, with each item's steps. Reading it changes nothing. */
 function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 	const v = (): FeedbackView => props.mirror.view();
@@ -385,88 +402,144 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 		() => !!v().reason,
 		() => v().availability === "live",
 	);
-	const items = () => {
+	const items = computed(() => {
 		const query = feedbackSearch().trim().toLocaleLowerCase();
 		return v()
 			.items.filter((i) => `${i.text}\n${i.origin?.title ?? ""}`.toLocaleLowerCase().includes(query))
 			.sort((a, b) => Number(stepsOf(a).resolved) - Number(stepsOf(b).resolved));
-	};
+	});
+	const visible = computed(() => (feedbackShowAll() ? items() : items().slice(0, 5)));
+	const selected = computed(() => items().find((i) => i.id === feedbackSelection()) ?? visible()[0]);
+	// Pin the default by ID: resolving or refreshing must not switch the reader.
+	effect(() => {
+		const id = selected()?.id;
+		if (id && feedbackSelection() !== id) feedbackSelection.set(id);
+		if (id && !visible().some((i) => i.id === id)) feedbackShowAll.set(true);
+	});
 	const loading = signal(false);
 	const more = async () => {
 		loading.set(true);
 		await props.mirror.source.more();
+		feedbackShowAll.set(true);
 		loading.set(false);
 	};
 	return (
-		<Section title="Sent" count={v().items.length} testID="feedback-sent">
-			<Block gap={3}>
-				<Caption>
-					Pilot keeps your feedback here, in your words. A fix or a mission link starts only when you press it, and
-					only you mark feedback resolved.
-				</Caption>
-				<TextField
-					testID="feedback-search"
-					value={feedbackSearch()}
-					accessibilityLabel="Search feedback history"
-					placeholder="Search feedback history"
-					onChange={({ value }) => feedbackSearch.set(value)}
-				/>
-				<Caption tone="faint">
-					{v().more
-						? "Open items first. Search covers loaded feedback; Show earlier searches older items."
-						: "Open items first, then resolved history."}
-				</Caption>
-			</Block>
-			<If when={v().reason && (v().availability !== "live" || reads.stale())}>
-				<Notice
-					testID="feedback-off"
-					placement="section"
-					text={
-						v().availability === "live"
-							? staleLine(reads.readAt() ?? 0)
-							: `Pilot cannot show your feedback. ${v().reason}`
+		<Columns
+			main={
+				<Section
+					title="Sent"
+					count={items().length}
+					testID="feedback-sent"
+					more={
+						items().length > 5
+							? {
+									label: feedbackShowAll() ? "Show fewer" : `Show all ${items().length}`,
+									onPress: () => {
+										if (
+											feedbackShowAll() &&
+											!items()
+												.slice(0, 5)
+												.some((i) => i.id === feedbackSelection())
+										)
+											feedbackSelection.set(items()[0]?.id ?? null);
+										feedbackShowAll.set(!feedbackShowAll());
+									},
+								}
+							: undefined
 					}
-					detail={v().availability === "live" ? undefined : "This is not the same as having none."}
-				/>
-			</If>
-			<If when={v().availability === "reading" && v().items.length === 0}>
-				<EmptyLine text="Reading your feedback…" />
-			</If>
-			<If when={v().availability === "live" && v().items.length === 0}>
-				<EmptyLine testID="feedback-empty" text="No feedback sent yet." />
-			</If>
-			<If when={v().availability === "live" && v().items.length > 0 && items().length === 0}>
-				<EmptyLine
-					testID="feedback-no-matches"
-					text="No matches in loaded feedback. Change your search or read earlier items."
-				/>
-			</If>
-			<Rows>
-				<Each of={items()} key={(i) => i.id}>
-					{(i) => (
-						<FeedbackListRow
-							day={props.day}
-							mirror={props.mirror}
-							item={i()}
-							when={savedLine(i())}
-							keyboardActive={items().find((item) => askingOf(stepsOf(item)))?.id === i().id}
+				>
+					<Block gap={3}>
+						<Caption>
+							Pilot keeps your feedback here, in your words. A fix or a mission link starts only when you press
+							it, and only you mark feedback resolved.
+						</Caption>
+						<TextField
+							testID="feedback-search"
+							value={feedbackSearch()}
+							accessibilityLabel="Search feedback history"
+							placeholder="Search feedback history"
+							onChange={({ value }) => feedbackSearch.set(value)}
 						/>
+						<Caption tone="faint">
+							{v().more
+								? "Open items first. Search covers loaded feedback; Show earlier searches older items."
+								: "Open items first, then resolved history."}
+						</Caption>
+					</Block>
+					<If when={v().reason && (v().availability !== "live" || reads.stale())}>
+						<Notice
+							testID="feedback-off"
+							placement="section"
+							text={
+								v().availability === "live"
+									? staleLine(reads.readAt() ?? 0)
+									: `Pilot cannot show your feedback. ${v().reason}`
+							}
+							detail={v().availability === "live" ? undefined : "This is not the same as having none."}
+						/>
+					</If>
+					<If when={v().availability === "reading" && v().items.length === 0}>
+						<EmptyLine text="Reading your feedback…" />
+					</If>
+					<If when={v().availability === "live" && v().items.length === 0}>
+						<EmptyLine testID="feedback-empty" text="No feedback sent yet." />
+					</If>
+					<If when={v().availability === "live" && v().items.length > 0 && items().length === 0}>
+						<EmptyLine
+							testID="feedback-no-matches"
+							text="No matches in loaded feedback. Change your search or read earlier items."
+						/>
+					</If>
+					<Rows>
+						<Each of={visible()} key={(i) => i.id}>
+							{(i) => (
+								<Row
+									testID={`feedback-item-${i().id}`}
+									title={i().text}
+									meta={savedLine(i())}
+									mark={historyState(i()).mark}
+									state={historyState(i()).word}
+									stateTone={historyState(i()).tone}
+									selected={selected()?.id === i().id}
+									accessibilityLabel={`${i().text}, ${historyState(i()).word}`}
+									onPress={() => feedbackSelection.set(i().id)}
+								/>
+							)}
+						</Each>
+					</Rows>
+					<If when={v().more}>
+						<Block>
+							<View class="flex-row">
+								<Link
+									label={loading() ? "Reading…" : "Show earlier"}
+									testID="feedback-more"
+									disabled={loading()}
+									onPress={() => void more()}
+								/>
+							</View>
+						</Block>
+					</If>
+				</Section>
+			}
+			side={
+				<Each of={selected() ? [selected()!] : []} key={(i) => i.id}>
+					{(i) => (
+						<Section title="Selected feedback">
+							<Block>
+								<FeedbackRow
+									day={props.day}
+									mirror={props.mirror}
+									item={i()}
+									when={savedLine(i())}
+									keyboardActive
+									history
+								/>
+							</Block>
+						</Section>
 					)}
 				</Each>
-			</Rows>
-			<If when={v().more}>
-				<Block>
-					<View class="flex-row">
-						<Link
-							label={loading() ? "Reading…" : "Show earlier"}
-							testID="feedback-more"
-							disabled={loading()}
-							onPress={() => void more()}
-						/>
-					</View>
-				</Block>
-			</If>
-		</Section>
+			}
+		/>
 	);
 }
 

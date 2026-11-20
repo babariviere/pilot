@@ -265,6 +265,20 @@ test("history lists open items first and keeps its search while navigating", asy
 	expect(counts(app)).toBe("Sends: 2 · Checks: 0");
 });
 
+test("history folds after five, and selecting another note sends nothing", async () => {
+	const app = await feedback();
+	for (let n = 1; n <= 6; n++) await sendWords(app, `Feedback note ${n}`);
+	expect(app.shows("id:feedback-item-f1")).toBe(false);
+	await app.press("Show all 6");
+	await app.press("id:feedback-item-f1");
+	await app.waitFor("id:feedback-detail-f1");
+	expect(app.shows("id:feedback-detail-f6")).toBe(false);
+	await app.press("Show fewer");
+	await app.waitFor("id:feedback-detail-f6");
+	expect(app.shows("id:feedback-item-f1")).toBe(false);
+	expect(counts(app)).toBe("Sends: 6 · Checks: 0");
+});
+
 test("remove asks once in place, Keep changes nothing, and Remove sends one step", async () => {
 	const app = await feedback();
 	await sendWords(app, "Report to keep");
@@ -816,13 +830,15 @@ test("Today shows only one question, switches without answering, and Later retur
 	expect(steps(app)).toBe("Steps: [triage,triage]");
 });
 
-test("only the touched feedback history form owns question shortcuts", async () => {
+test("only the selected feedback in history owns question shortcuts", async () => {
 	const app = await feedback();
 	await chooseProject(app);
 	await sendWords(app, "First question");
 	await app.press("Triage asks");
 	await sendWords(app, "Second question");
 	await app.press("Triage asks");
+	await app.press("id:feedback-item-f1");
+	expect(app.shows("id:feedback-question-f2")).toBe(false);
 	await app.press("id:feedback-question-f1 >> id:own-7");
 	await app.type("id:feedback-question-f1 >> id:answer-7", "Only first question");
 	await app.keyboard.press("mod+enter");
@@ -831,6 +847,7 @@ test("only the touched feedback history form owns question shortcuts", async () 
 	expect(steps(app)).toBe("Steps: [triage,triage]");
 	await app.press("id:feedback-question-f1 >> id:submit");
 	await app.waitFor("id:feedback-answered-f1");
+	await app.press("id:feedback-item-f2");
 	expect(app.shows("id:feedback-question-f2")).toBe(true);
 });
 
