@@ -5,7 +5,7 @@
 //! dependencies). Headless: no visible window, provider, source sync or
 //! external write.
 //!
-//! Linear's requests are counted on Today's Linear row, not shown as cards.
+//! Linear's saved issues have their own tab. New lists only Slack requests.
 //! Later, Bring back, Discard and Undo each send once. A Start whose answer
 //! is lost stays "not confirmed" across a native reopen; Check reads the
 //! saved receipt once and nothing is sent again.
@@ -95,6 +95,7 @@ const CHECK: &str =
 #[test]
 fn today_triage_and_start_send_once_and_a_lost_start_stays_check_only_across_reopen() {
     let mut f = Fixture::new();
+    f.stats("saved-linear");
     f.stats("slack-requests");
     let entry = entry();
     let bridge = f.bridge();
@@ -112,10 +113,17 @@ fn today_triage_and_start_send_once_and_a_lost_start_stays_check_only_across_reo
     ));
     assert!(has(&app, "“the Export button spins forever”"));
     assert!(has(&app, "id:request >> Northwind"));
-    // Linear's two requests are counted on the Linear row, never cards.
-    wait(&mut app, "id:linear-row");
-    assert!(has(&app, "text:/2 new$/"));
-    assert!(!has(&app, "Request one"));
+    assert!(!has(&app, "Same title"));
+    app.press("id:today-tab-new").unwrap();
+    wait(&mut app, "id:today-new >> text:Slack one");
+    assert!(has(&app, "id:today-tab-new >> text:2"));
+    assert!(!has(&app, "id:today-new >> text:Same title"));
+    wait(&mut app, "id:today-tab-linear");
+    app.press("id:today-tab-linear").unwrap();
+    wait(&mut app, "id:today-linear >> text:Same title");
+    assert!(!has(&app, "id:linear-panel"));
+    app.press("id:today-tab-overview").unwrap();
+    wait(&mut app, &card("Slack one"));
     // This window has no browser opener, so the card offers no link.
     assert!(!has(&app, "Open in Slack"));
     assert_eq!(posts(&mut f), 0);

@@ -6,8 +6,8 @@ comparison. It is stack evidence, not part of the app: no Day entry point,
 script or workspace build uses it. It runs no JS VM and connects to no daemon,
 account or user data.
 
-Its dependencies now pin the same upstream NSH **v0.5.0** release as the TSX app
-(`f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`), with no patches, forks, Cargo
+Its dependencies now pin the same upstream NSH **v0.6.1** release as the TSX app
+(`2f51d8611677c8a6bbad937b39756e8d0cc45350`), with no patches, forks, Cargo
 cache edits or WebViews. Use the matching installed CLI through `nsh.sh`;
 never build `nsh-cli` locally. Its lock must be resolved for that release,
 not relabeled from the former main snapshot. See the

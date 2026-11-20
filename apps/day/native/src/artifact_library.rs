@@ -26,6 +26,7 @@ macro_rules! day {
 pub const FILES: &[(&str, &str, &str)] = &[
     ("agent", "ts", day!("ui/agent.ts")),
     ("button", "tsx", day!("ui/button.tsx")),
+    ("canvas", "tsx", day!("ui/canvas.tsx")),
     ("chat", "tsx", day!("ui/chat.tsx")),
     ("choice", "tsx", day!("ui/choice.tsx")),
     ("data", "tsx", day!("ui/data.tsx")),
@@ -46,7 +47,6 @@ pub const FILES: &[(&str, &str, &str)] = &[
     ("path", "tsx", day!("ui/path.tsx")),
     ("picker", "tsx", day!("ui/picker.tsx")),
     ("question", "tsx", day!("ui/question.tsx")),
-    ("quiet", "tsx", day!("ui/quiet.tsx")),
     ("section", "tsx", day!("ui/section.tsx")),
     ("state", "tsx", day!("ui/state.tsx")),
     ("text", "tsx", day!("ui/text.tsx")),

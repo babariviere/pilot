@@ -71,7 +71,7 @@ in a drawing. Screens never use them directly; parts do.
 | `needs`, `needs-ink`, `needs-soft`             | amber                              | Needs you: mark, words, soft fill; Unconfirmed's hollow mark (`needs` only)          |
 | `failed`, `failed-ink`, `failed-soft`          | red                                | Failed: mark, words, soft fill (`failed-soft` is new: a failed notice or state pill) |
 | `ok`, `ok-ink`, `ok-soft`                      | green                              | Ready to merge                                                                       |
-| `progress`                                     | = primary                          | The dither sky's ink, a chart's bar                                                  |
+| `progress`                                     | = primary                          | A chart's bar                                                                       |
 | `soft`                                         | foreground at 7%                   | New: a chip's fill, the composer, a hovered path segment                             |
 | `grid`                                         | foreground at 4.5% / white at 3.5% | New: the canvas grid lines (GridBackdrop only)                                       |
 | `added`, `added-ink`, `removed`, `removed-ink` | green, red                         | Diff lines and their words (`-ink` forms are new)                                    |
@@ -99,8 +99,8 @@ the panel's columns stack.
 `Display`, `Title`, `Heading`, `Body`, `BodyStrong`, `Caption` and `Num` (the Number role; named so it does not
 hide JavaScript's `Number`). Rule: a screen picks a role and never sets size, weight or family.
 
-- Display: the page's one headline (PageHead uses it). Title: the thing that asks (a Question's title, the Quiet
-  line). Heading: a section's name (Section uses it). Body: rows' titles and sentences. BodyStrong: body one step
+- Display: the page's one headline (PageHead uses it). Title: the thing that asks (a Question's title).
+  Heading: a section's name (Section uses it). Body: rows' titles and sentences. BodyStrong: body one step
   heavier (a row title, an option). Caption: meta and help. Num: times, counts, ids, in mono.
 - Props: `tone` (`default`, `muted`, `faint`, `needs`, `failed`, `ok`, `accent`, `onAccent`, and `added` and
   `removed` for a diff's counts only; each role has its own default: Caption is muted, Num faint), `role` (`header`,
@@ -363,11 +363,9 @@ Rule: one question shows at a time; the others queue under it as `Row`s.
   Picker, a `Spacer`, `KeyHints` and Send.
 - `Quote text? code?`: quoted words or code on a muted block (a planner's last message, opened help).
 
-### Quiet and the canvas (`quiet.tsx`)
+### Window canvas (`quiet.tsx`)
 
-- `Quiet title text? height?`: when nothing needs the user, the section says so under Pilot's dithered sky (ordered
-  Bayer dither, 3-point square pixels, accent ink and an amber sun at 60%). 300 high, full section width. It is the
-  only decoration in the app. It draws once per size and appearance.
+- Today uses `EmptyLine` when nothing needs the user.
 - `GridBackdrop`: the canvas's 32-point grid. The window root (`DayScreen`) draws it once; screens keep their
   `Scroll` transparent so it shows.
 - `WindowCanvas`: a window's root, the background colour with the grid behind its children. `DayScreen`, the

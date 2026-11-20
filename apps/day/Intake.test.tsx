@@ -57,7 +57,7 @@ test("a Slack request is a card: where it came from, its own words and facts; Li
 	expect(app.shows(`Up next, Slack request: ${STRIPE}`)).toBe(true);
 	// Linear's requests wait on the Linear page, not in Needs you.
 	expect(app.shows("CSV export times out for large accounts")).toBe(false);
-	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("id:today-no-attention")).toBe(false);
 	expect(app.shows("Sends: 0 · Checks: 0")).toBe(true);
 });
 

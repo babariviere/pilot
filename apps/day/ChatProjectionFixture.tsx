@@ -4,7 +4,7 @@ import { ConnectedSessionChat, mirrorSessionChat, type SessionChat } from "./ses
 // Parts come file by file, not from "./ui": this fixture loads as its own app (fixtures/recovery/Projection.tsx),
 // and the library's index imports font and icon files that sit outside that app's folder.
 import { Button } from "./ui/button";
-import { WindowCanvas } from "./ui/quiet";
+import { WindowCanvas } from "./ui/canvas";
 import { Block } from "./ui/section";
 import { Body } from "./ui/text";
 

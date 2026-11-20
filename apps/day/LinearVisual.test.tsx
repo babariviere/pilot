@@ -1,4 +1,4 @@
-// Mock data, native visual evidence only: the Linear page and the Linear publisher on the new parts
+// Mock data, native visual evidence only: Today's Linear tab and the Linear publisher on the shared parts
 // (ui/README.md), in light and dark, wide and narrow. Run with `nsh test LinearVisual.test.tsx --target macos`;
 // headless runs draw nothing.
 import { open, test } from "nsh/test";
@@ -11,18 +11,18 @@ const SIZES = [
 	["dark", 480],
 ] as const;
 
-test("Linear: the saved issues and one open issue, in light and dark, wide and narrow", async () => {
+test("Today's Linear tab: the saved issues and one open issue, in light and dark, wide and narrow", async () => {
 	for (const [colorScheme, width] of SIZES) {
 		const app = await open("./LinearFixture.tsx", { platform: "macos", width, height: 900, colorScheme });
-		await app.waitFor("id:linear-row");
-		await app.press("id:linear-open");
-		await app.waitFor("Your issues in cycle 42");
+		await app.waitFor("id:today-tab-linear");
+		await app.press("id:today-tab-linear");
+		await app.waitFor("id:today-linear >> text:Your issues in cycle 42");
 		await app.wait(500);
-		await app.screenshot(`output/linear-parts-${colorScheme}-${width}.png`);
+		await app.screenshot(`output/today-linear-${colorScheme}-${width}.png`);
 		await app.press("id:linear-issue-ln-219");
 		await app.waitFor("id:linear-detail-ln-219");
 		await app.wait(500);
-		await app.screenshot(`output/linear-parts-open-${colorScheme}-${width}.png`);
+		await app.screenshot(`output/today-linear-open-${colorScheme}-${width}.png`);
 	}
 });
 

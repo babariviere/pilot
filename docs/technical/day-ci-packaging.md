@@ -51,7 +51,7 @@ The source-matched unsigned steps:
 1. Checks out the supplied full commit, checks equality with HEAD, and uses
    that commit's tools. It does not overlay current helpers on older app source.
 2. Uses Rust and Cargo 1.99.1 and frozen, ignore-scripts pnpm inputs.
-   Downloads the complete official Longbridge NSH v0.5.0 distribution, verifying
+   Downloads the complete official Longbridge NSH v0.6.1 distribution, verifying
    both archive and CLI digests. It preserves its `nsh/bin/nsh` layout and bundled
    runtime. No CLI rebuild, runtime patch or tool-cache repair is permitted.
 3. Runs NSH/native and TypeScript checks, native library tests, then focused

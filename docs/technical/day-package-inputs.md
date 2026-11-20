@@ -13,8 +13,8 @@ The input is a full immutable Pilot commit, not a working tree or bookmark.
 The builder extracts Git objects into a fresh private directory, then:
 
 1. Checks the native macOS arm64 host, installed stock Rust/Cargo 1.99.1,
-   and official Longbridge NSH 0.5.0. The installed CLI checksum
-   is pinned. Day's lock must select only release f4d68f7 NSH crates and
+   and official Longbridge NSH 0.6.1. The installed CLI checksum
+   is pinned. Day's lock must select only release 2f51d86 NSH crates and
    must not contain GPUI. There is no CLI-build or source-patch fallback.
 2. Builds Day's own `pilot-desktop`, with `macos-host`, and the existing
    `pilot-desktop-update-helper`, with `native-macos`. Cargo JSON identifies
@@ -202,7 +202,7 @@ runtime package version, not Day's development `0.1.0`. Do not edit the assemble
 bundle or its input receipt to add it. This missing update-resource wiring is
 separate from the installer full-runtime producer seam.
 
-For a later authorized official distribution, use upstream NSH 0.5.0
+For a later authorized official distribution, use upstream NSH 0.6.1
 `update-manifest`, not `gui-release-manifest.mjs`'s legacy envelope. Prerequisites:
 a prepared `RELEASE_ENTRY/nsh.json` matching the actual sealed app ID/version
 and updater source/key; an existing matching Day key in NSH's base64 32-byte
@@ -249,8 +249,8 @@ install, hand off a daemon or prove update acceptance. No signing command above
 was run. See [daemon handoff](day-daemon-handoff.md) for the separate installer
 entry and [global updates](day-global-updates.md) for runtime acceptance gates.
 
-Manifest format/signature references: upstream [CLI producer](https://github.com/longbridge/nsh/blob/f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1/crates/nsh-cli/src/updater.rs)
-and [signature framing](https://github.com/longbridge/nsh/blob/f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1/crates/nsh-updater/src/lib.rs).
+Manifest format/signature references: upstream [CLI producer](https://github.com/longbridge/nsh/blob/2f51d8611677c8a6bbad937b39756e8d0cc45350/crates/nsh-cli/src/updater.rs)
+and [signature framing](https://github.com/longbridge/nsh/blob/2f51d8611677c8a6bbad937b39756e8d0cc45350/crates/nsh-updater/src/lib.rs).
 
 ## Connected launch
 

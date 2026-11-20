@@ -1,7 +1,11 @@
 //! Passive Today reads across the authenticated profile's configured projects.
 //! A temporary transport view shares the existing client/identity, never a host,
 //! worker, model selection or admission. It cannot change New or the root source.
-use super::{Error, Journal, Shared, Source, Transport, attention, intake, new_chat, valid_id};
+use super::{
+    Error, Journal, Shared, Source, Transport, attention, intake, new_chat,
+    ritual::{self, LocalDay},
+    valid_id,
+};
 use crate::{
     attention_host,
     bridge::Gate,
@@ -111,6 +115,7 @@ fn projection(
     overview: Option<&DayOverview>,
     read: Option<&Value>,
     live: bool,
+    day: Option<&LocalDay>,
 ) -> Today {
     let mut desk = Desk::native();
     if let Some(overview) = overview {
@@ -153,6 +158,7 @@ fn projection(
     today.decisions = view.decisions;
     today.actions = view.actions;
     today.attention = view.attention;
+    today.finished_today = super::finished_today::project(overview, day, live);
     today
 }
 
@@ -229,6 +235,9 @@ fn label_sections(row: &mut Value, project: &Value) {
     }
     if let Some(intake) = row["today"].get_mut("intake") {
         label_rows(intake, "requests", project);
+    }
+    if let Some(finished) = row["today"].get_mut("finishedToday") {
+        label_rows(finished, "items", project);
     }
     label_rows(&mut row["planning"], "plans", project);
     for key in ["intake", "later", "discarded", "claimed"] {
@@ -378,12 +387,14 @@ async fn read_inner(
     let live = shared.connected.load(Ordering::SeqCst);
     // A project list that changed during the reads (a name, a digest) is read
     // again at once, one time; the newest generation still wins.
-    let mut value = match read_projects_from(t, journal, request, live, check, catalog).await {
-        Err(Error::Stale) if check().is_ok() => {
-            read_projects(t, journal, request, live, check).await?
-        }
-        other => other?,
-    };
+    let day = ritual::local_day(shared);
+    let mut value =
+        match read_projects_from(t, journal, request, live, check, catalog, day.as_ref()).await {
+            Err(Error::Stale) if check().is_ok() => {
+                read_projects_from(t, journal, request, live, check, None, day.as_ref()).await?
+            }
+            other => other?,
+        };
     let own = match &t.source.project {
         Some(p) => Some(p.project_id.clone()),
         None => shared
@@ -405,6 +416,7 @@ async fn read_inner(
     Ok(value)
 }
 
+#[cfg(test)]
 async fn read_projects(
     t: &Transport,
     journal: &Journal,
@@ -412,7 +424,7 @@ async fn read_projects(
     live: bool,
     check: impl Fn() -> Result<(), Error>,
 ) -> Result<Value, Error> {
-    read_projects_from(t, journal, request, live, check, None).await
+    read_projects_from(t, journal, request, live, check, None, None).await
 }
 
 /// As `read_projects`, starting from a project list already read, when there is one.
@@ -423,6 +435,7 @@ async fn read_projects_from(
     live: bool,
     check: impl Fn() -> Result<(), Error>,
     catalog: Option<Value>,
+    day: Option<&LocalDay>,
 ) -> Result<Value, Error> {
     check()?;
     let catalog = match catalog {
@@ -451,7 +464,7 @@ async fn read_projects_from(
                     // Read in the second, complete read: unknown here, never zero.
                     Ok(reading_row(project))
                 } else {
-                    project_row(t, journal, project, selected, live, check).await
+                    project_row(t, journal, project, selected, live, check, day).await
                 };
                 (at, row)
             }
@@ -526,6 +539,7 @@ async fn project_row(
     selected: bool,
     live: bool,
     check: &impl Fn() -> Result<(), Error>,
+    day: Option<&LocalDay>,
 ) -> Result<Value, Error> {
     check()?;
     let pt = t.for_project(project)?;
@@ -562,6 +576,7 @@ async fn project_row(
         overview.as_ref().ok(),
         attention.as_ref().ok(),
         live,
+        if selected { day } else { None },
     );
     let planning = planning.and_then(|v| {
         if v["projectId"] != pt.source.project()?.project_id {

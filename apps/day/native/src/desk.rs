@@ -231,6 +231,12 @@ impl Desk {
     /// stale, offline or unreadable, with `reason` in a few words.
     pub fn lose_read(&mut self, state: FreshnessState, reason: &str) {
         self.freshness = (state, reason.to_owned());
+        if self.native
+            && state != FreshnessState::Live
+            && self.today.finished_today.status == crate::model::FinishedTodayStatus::Complete
+        {
+            self.today.finished_today.status = crate::model::FinishedTodayStatus::Partial;
+        }
         self.changed();
     }
 
@@ -288,6 +294,15 @@ impl Desk {
     /// Native reads used only for a fresh, host-qualified control intent.
     pub(crate) fn native_overview(&self) -> Option<&DayOverview> {
         self.overview.as_ref()
+    }
+
+    /// Reproject only on a new read or a change of local date or zone.
+    pub(crate) fn project_finished_day(&mut self, day: Option<&crate::host::ritual::LocalDay>) {
+        self.today.finished_today = crate::host::finished_today::project(
+            self.overview.as_ref(),
+            day,
+            self.freshness.0 == FreshnessState::Live,
+        );
     }
 
     pub(crate) fn native_capability(&mut self, allowed: bool) {

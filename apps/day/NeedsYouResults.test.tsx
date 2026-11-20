@@ -23,7 +23,7 @@ test("with nothing to decide, a result to check is the card in front", async () 
 	expect(app.shows("text:/^Up next, result to check: /")).toBe(true);
 	// The results are cards now: the old list heading is gone.
 	expect(app.shows("text:/^To check · \\d+$/")).toBe(false);
-	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("id:today-no-attention")).toBe(false);
 });
 
 test("Later puts the result in front after the others; J brings the next one; ⌘↩ opens it", async () => {

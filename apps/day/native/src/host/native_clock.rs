@@ -35,13 +35,7 @@ fn at(time: SystemTime, name: &str) -> Result<LocalDay, Error> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| Error::Unavailable)?;
     let unix_ms = u64::try_from(elapsed.as_millis()).map_err(|_| Error::Unavailable)?;
-    autoreleasepool(|_| {
-        let zone =
-            NSTimeZone::timeZoneWithName(&NSString::from_str(name)).ok_or(Error::Unavailable)?;
-        // SAFETY: Apple's immutable exported Gregorian calendar identifier.
-        let calendar = NSCalendar::calendarWithIdentifier(unsafe { NSCalendarIdentifierGregorian })
-            .ok_or(Error::Unavailable)?;
-        calendar.setTimeZone(&zone);
+    in_calendar(name, |calendar| {
         let date = NSDate::dateWithTimeIntervalSince1970(elapsed.as_secs_f64());
         let parts = calendar.components_fromDate(
             NSCalendarUnit::Year
@@ -63,6 +57,21 @@ fn at(time: SystemTime, name: &str) -> Result<LocalDay, Error> {
         };
         day.validate()?;
         Ok(day)
+    })
+}
+
+pub(super) fn in_calendar<T>(
+    name: &str,
+    read: impl FnOnce(&NSCalendar) -> Result<T, Error>,
+) -> Result<T, Error> {
+    autoreleasepool(|_| {
+        let zone =
+            NSTimeZone::timeZoneWithName(&NSString::from_str(name)).ok_or(Error::Unavailable)?;
+        // SAFETY: Apple's immutable exported Gregorian calendar identifier.
+        let calendar = NSCalendar::calendarWithIdentifier(unsafe { NSCalendarIdentifierGregorian })
+            .ok_or(Error::Unavailable)?;
+        calendar.setTimeZone(&zone);
+        read(&calendar)
     })
 }
 

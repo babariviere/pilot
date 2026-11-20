@@ -54,7 +54,7 @@ export async function readArtifactHostBinding(executable = INSTALLED_HOST): Prom
 		runtime.arch !== "arm64" ||
 		identity?.schema !== 1 ||
 		identity.kind !== "nsh-source-host" ||
-		identity.runtime !== "nsh 0.5.0" ||
+		identity.runtime !== "nsh 0.6.1" ||
 		typeof identity.source !== "string" ||
 		!/^[a-f0-9]{40}$/.test(identity.source) ||
 		identity.source !== runtime.source ||

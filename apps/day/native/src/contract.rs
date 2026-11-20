@@ -35,6 +35,9 @@ pub struct DayOverview {
     /// Absent on older services: unknown activity, not an empty list.
     #[serde(default)]
     pub working_now: Option<Vec<WorkingChat>>,
+    /// Successful chat outcomes, without filtering by review state.
+    #[serde(default, deserialize_with = "recent_section")]
+    pub recent_done: Option<Section<RecentChat>>,
     /// Chats waiting for a coding slot, first in line first. Absent on
     /// older services: unknown, not an empty list.
     #[serde(default)]
@@ -118,6 +121,27 @@ pub struct Dashboard {
     /// Passive schedule preview; absent on older services is unknown.
     #[serde(default)]
     pub scheduled: Option<Section<ScheduleSummary>>,
+    /// Older Day services only have the dashboard's review-filtered section.
+    #[serde(default, deserialize_with = "recent_section")]
+    pub recent: Option<Section<RecentChat>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentChat {
+    pub session_id: String,
+    pub title: String,
+    pub mission_id: Option<String>,
+    pub outcome: String,
+    pub outcome_at: u64,
+}
+
+fn recent_section<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Section<RecentChat>>, D::Error> {
+    // This additive read cannot make the rest of Today unreadable.
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

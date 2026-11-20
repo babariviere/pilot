@@ -89,7 +89,7 @@ function role(style: TextStyle, tone: Tone, family = "") {
 
 /** The page's one headline (its title). One per page, in the PageHead. */
 export const Display = role(TYPE.display, "default");
-/** The thing that asks: a Question's title, the Quiet sky's line. */
+/** The thing that asks: a Question's title. */
 export const Title = role(TYPE.title, "default");
 /** A section's name. Use it through `Section`; on its own only in a part that has no section. */
 export const Heading = role(TYPE.heading, "default");

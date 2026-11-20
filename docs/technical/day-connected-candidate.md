@@ -3,7 +3,7 @@
 This is a local acceptance candidate, not a demo, release, update payload or
 default-app switch. It uses the actual `Connected.tsx`, production native
 bootstrap, sole `NativeHost` and deferred close owner. NSH stays at unmodified
-0.5.0. It connects to an explicitly selected existing daemon; it never starts one.
+0.6.1. It connects to an explicitly selected existing daemon; it never starts one.
 
 ## Prepare without assembly or signing
 

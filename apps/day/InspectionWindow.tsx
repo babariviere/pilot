@@ -5,9 +5,9 @@ import type { Shown } from "./artifactReads";
 // its own folder, where the library's font and icon files (imported by ui/index.ts) are outside the app and cannot
 // ship. In Day's window the index has already loaded them.
 import { Link } from "./ui/button";
+import { WindowCanvas } from "./ui/canvas";
 import { Page, PageHead } from "./ui/layout";
 import { Column, Panel } from "./ui/panel";
-import { WindowCanvas } from "./ui/quiet";
 import { Block } from "./ui/section";
 import { Body, Caption } from "./ui/text";
 

@@ -16,28 +16,30 @@ import tomllib
 import bundle_runtime as bundle
 
 TARGET = "aarch64-apple-darwin"
-CLI_VERSION = "nsh 0.5.0 (f4d68f7)"
-CLI_SHA256 = "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8"
+NSH_VERSION = bundle.NSH_RELEASE["tag"].removeprefix("v")
+ARTIFACT_RUNTIME = f"nsh {NSH_VERSION}"
+CLI_VERSION = f"{ARTIFACT_RUNTIME} ({bundle.NSH_RELEASE['source'][:7]})"
+CLI_SHA256 = "96066fadf2a578216cf5d2692be56b1db1af7523c2ddeab6e1bf951b352b75d5"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
 ARTIFACT_HOST = "pilot-artifact-host"
 HOST_MODULE = "packages/artifacts/src/nsh-host.ts"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
-# crates.io 0.5.0 archive SHA-256s. Each archive's .cargo_vcs_info.json names
+# crates.io 0.6.1 archive SHA-256s. Each archive's .cargo_vcs_info.json names
 # the peeled release commit bundle.NSH_RELEASE["source"].
 NSH_CHECKSUMS = {
-    "nsh-base": "c7bae08ed29b11f2595cf5b4ce406430b14493d24f07f2f4a9f068188fb35079",
-    "nsh-bundler": "b50ea11808a4253e9a821b287b06665b23deee9d2d5da8477bcce2258753817a",
-    "nsh-core": "6f93e2fa3cc4e18b393b7935d5551deba8330968f69f2a1b2ff1928cb125782a",
-    "nsh-dev": "fc746247e56b895185300d03794e5e0f5b2e8a9cc956f320fe97c5006725aaa6",
-    "nsh-engine": "4c0dda64a09a18ae35ba04be534f140d6f3cbcdb30a81b1926dc4718fefaefd2",
-    "nsh-i18n": "b4570770dee21d88d2c364e091aa64a53af38480a39d75ee0feec0811a2c0dec",
-    "nsh-js": "fda1d0dd5fff1c92ce576cae439317a0d30116a3d260c862eeeccb1dd6a3e713",
-    "nsh-macros": "eefb6467662ffb652997c7c252919488aa4723807e3a0f17fff3a8c01c29b22f",
-    "nsh-package": "0e292d17debb97b13445c7861dbeb8d39ea424d82426a1b11f60b2703f49b261",
-    "nsh-platform-apple": "c21f951bd6b8b53be180f15c9405bd4a952c9ff731d5776a754871e9169de1cf",
-    "nsh-platform-macos": "552bfc935c49f1f3fa72f7ad264f5794f65f73c972d943ec28eaa7d824a653ad",
-    "nsh-testing": "54ac8c9e9d8205b03748bf3485689b3ea3bd1f8f1b8fbc0b6f66ff19c67d655f",
-    "nsh-updater": "8b6df81dce14aadfd08fd2aaf9d6754e922e8537d360bc69dcb28a6e478921bd",
+    "nsh-base": "e083cbd14b906efbd94076939c7effd43fa3d1574f1d555919d099e9e0ec3e1c",
+    "nsh-bundler": "80ecc1a77d328a278f75365e841324db31805b8da948f54a7ceb5f3840973b15",
+    "nsh-core": "4b45a8b194c6879bcb26c6e430b804e49e97ec0fea5fad8c78d7710fd41f74a6",
+    "nsh-dev": "5a5a74aadf76568a5ee98a2d96e429e93c99bec736d54172bdc734a68cbe5bd0",
+    "nsh-engine": "b4de944c36204b3f778b4fcf90373496d29507e8d38fb5e92a6e29a4cce637d7",
+    "nsh-i18n": "f9cfb1cfa50808fc3d66147cfb03f5075269157ff392fbda6104eeb3c3b25ee5",
+    "nsh-js": "27702dc84976d755e24f736d0022689429c421549401b7fd3fa5f1a8cd49dc72",
+    "nsh-macros": "6f1b3ce01247cac072395d42177725e7972de498eb148d37443196d870cdaf2b",
+    "nsh-package": "200354039215917efcfadb5d73605a3a9d611753755da3cf99c40601f0677e3b",
+    "nsh-platform-apple": "e3a094eee9e29979fd0fd1bcc8fca568c386d5ab10a46a67c72409c1c257561f",
+    "nsh-platform-macos": "8fe81366570211925b77823c8210868d0943976da55944bb327eaa27f215d49e",
+    "nsh-testing": "f59bc508ad121ed0d924cfd99cff0061f78c467d5815d54eaec74c9667fb5b4d",
+    "nsh-updater": "c263483a4e5c6977dcade98dd1865b0bbdfbf4ff8dafbacaa3ad198e7bf1e2fe",
 }
 
 
@@ -114,8 +116,9 @@ def host_methods(day):
 def release_lock(path):
     packages = tomllib.loads(path.read_text())["package"]
     nsh = [item for item in packages if item["name"].startswith("nsh-")]
-    if not nsh or any(item["version"] != "0.5.0" or item.get("source") != REGISTRY
-                      or item.get("checksum") != NSH_CHECKSUMS.get(item["name"]) for item in nsh):
+    if not nsh or any(item["version"] != NSH_VERSION or item.get("source") != REGISTRY
+                      or item["name"] not in NSH_CHECKSUMS
+                      or item.get("checksum") != NSH_CHECKSUMS[item["name"]] for item in nsh):
         raise ValueError("Day lock must use only the exact unmodified NSH release")
     if any(item["name"].startswith("gpui") for item in packages):
         raise ValueError("Day input closure must not depend on GPUI")
@@ -172,12 +175,12 @@ def artifact_identity(binary, source, recipe, *, module=None):
             raise ValueError("Artifact transport must match the immutable source")
     node = tool(shutil.which("node") or "")
     # Fixed trusted program, not artifact source. callArtifactHost owns empty env,
-    # five-second deadline, 8KiB output ceiling, identity validation and child join.
+    # its deadline, 8KiB output ceiling, identity validation and child join.
     program = """
 try {
- const [module, binary, source, recipe] = process.argv.slice(1);
+ const [module, binary, runtime, source, recipe] = process.argv.slice(1);
  const {callArtifactHost} = await import(module);
- const identity = {schema:1,kind:'nsh-source-host',runtime:'nsh 0.5.0',source,recipe};
+ const identity = {schema:1,kind:'nsh-source-host',runtime,source,recipe};
  const text = 'export default function Artifact() { return null; }';
  const value = await callArtifactHost({action:'compile',entry:'Artifact.tsx',source:text},
   undefined,binary,identity,8192);
@@ -185,11 +188,12 @@ try {
 } catch { process.exitCode = 1; }
 """
     try:
-        execute([node, "--input-type=module", "-e", program, Path(module).resolve().as_uri(), binary, source, recipe],
+        execute([node, "--input-type=module", "-e", program, Path(module).resolve().as_uri(),
+                 binary, ARTIFACT_RUNTIME, source, recipe],
                 cwd=Path(binary).parent, env={})
     except subprocess.CalledProcessError as error:
         raise ValueError("Artifact helper compiled source identity mismatch") from error
-    return dict(schema=1, kind="nsh-source-host", runtime="nsh 0.5.0", source=source, recipe=recipe)
+    return dict(schema=1, kind="nsh-source-host", runtime=ARTIFACT_RUNTIME, source=source, recipe=recipe)
 
 
 def artifact_host(inputs, source, *, module=None):
@@ -218,8 +222,8 @@ INSPECTION_WINDOW = dict(kinds=["normal"], levels=["normal"], max=1)
 
 
 def compiled_capabilities(names):
-    # Exact NSH 0.5.0 Capabilities::to_json form. Explicit empty/false defaults
-    # are denials, not additional authority. Unknown keys still fail equality.
+    # Exact NSH 0.6.1 Capabilities::to_json form. It omits ungranted optional
+    # capabilities. Explicit empty/false defaults are denials. Unknown keys fail equality.
     return dict(host=names, network=dict(hosts=[], http=[]),
                 process=dict(execute=[], exit=False, env=[]), fs=dict(read=[], write=[]),
                 statusBar=False, clipboard=True, picker=True, openUrl=False, windows=INSPECTION_WINDOW)
@@ -265,10 +269,10 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     cargo_version = execute([tools["cargo"], "--version"], cwd=checkout, env=env).strip()
     if not re.fullmatch(r"cargo 1\.99\.1 \([^)]+\)", cargo_version):
         raise ValueError("Expected stock Cargo 1.99.1 from rustup which --toolchain 1.99.1 cargo")
-    if execute([tools["nsh"], "--version"], cwd=checkout, env=env).strip() != CLI_VERSION:
-        raise ValueError("Expected installed unmodified Longbridge NSH 0.5.0")
     if bundle.digest(tools["nsh"]) != CLI_SHA256:
         raise ValueError("Installed NSH release executable checksum mismatch")
+    if execute([tools["nsh"], "--version"], cwd=checkout, env=env).strip() != CLI_VERSION:
+        raise ValueError(f"Expected installed unmodified Longbridge NSH {NSH_VERSION}")
     recipe = bundle.digest(Path(__file__))
     env.update(PILOT_BUILD_SOURCE=expected, PILOT_BUILD_RECIPE=recipe)
     profile = "release" if production is not None else "debug"

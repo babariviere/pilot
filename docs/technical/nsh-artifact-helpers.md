@@ -74,7 +74,7 @@ the runtime work and must qualify them; nothing here grants them.
 
 ## Checks
 
-From `packages/kernel/skills/pilot-artifacts/nsh`, with the installed NSH 0.5.0 CLI:
+From `packages/kernel/skills/pilot-artifacts/nsh`, with the installed NSH 0.6.1 CLI:
 
 ```sh
 NSH_TSC=<workspace>/node_modules/.bin/tsgo nsh check

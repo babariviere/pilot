@@ -4,7 +4,7 @@
 //! needs the repository's Node dependencies). Headless: no visible window,
 //! provider, live source poll or external write.
 //!
-//! The page opens from Today's Linear row and shows only the saved own issues and
+//! The palette opens the standalone Linear page, which shows only the saved own issues and
 //! saved cycle: exact links, the count it does not show, source trouble with
 //! the earlier saved copy, a lost read, and a replaced checkpoint that hides
 //! every row. Reading never polls Linear and sends nothing.
@@ -81,7 +81,21 @@ fn gone(app: &mut Headless, selector: &str) {
     }
 }
 
-const READ: &str = "id:linear-read";
+fn open_linear_page(app: &mut Headless) {
+    wait(app, "id:search-open");
+    app.press("id:search-open").unwrap();
+    wait(app, "id:palette");
+    app.type_text("label:Search work and places", "Linear issues")
+        .unwrap();
+    wait(app, "id:palette >> text:Linear issues");
+    app.press("id:palette >> text:Linear issues").unwrap();
+    wait(app, "id:linear");
+}
+
+fn reopen_linear_page(app: &mut Headless) {
+    app.press("role:button[Back to Today]").unwrap();
+    open_linear_page(app);
+}
 
 #[test]
 fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
@@ -91,10 +105,7 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
     let entry = entry();
     let bridge = f.bridge();
     let mut app = open(&entry, &bridge);
-    wait(&mut app, "id:linear-row");
-    wait(&mut app, "id:linear-open");
-    app.press("id:linear-open").unwrap();
-    wait(&mut app, "id:linear");
+    open_linear_page(&mut app);
     wait(&mut app, "Your issues in cycle 12");
     assert!(!has(&app, "Mock data"));
     assert!(has(
@@ -130,23 +141,24 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
 
     // A failed refresh keeps the earlier saved copy and says so.
     f.stats("linear-error");
-    app.press(READ).unwrap();
+    reopen_linear_page(&mut app);
     wait(
         &mut app,
         "Linear needs you to sign in again. These are the issues it saved before.",
     );
     assert!(has(&app, linked));
 
-    // A read that cannot reach the service keeps the last read and says so.
+    // A read that cannot reach the service keeps the last read. A brief
+    // failure does not warn about stale data.
     f.stats("offline");
-    app.press(READ).unwrap();
-    wait(&mut app, "text:/What shows is from Pilot's last read\\.$/");
-    assert!(has(&app, linked));
+    reopen_linear_page(&mut app);
+    wait(&mut app, linked);
+    assert!(!has(&app, "id:linear-off"));
     f.stats("allow");
 
     // Settings replaced since the last sync: no rows, and not the same as none.
     f.stats("linear-stale");
-    app.press(READ).unwrap();
+    reopen_linear_page(&mut app);
     wait(
         &mut app,
         "Pilot has not saved issues for this project's current Linear settings yet.",
@@ -156,7 +168,7 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
     assert!(!has(&app, "id:linear-cycle"));
 
     app.press("role:button[Back to Today]").unwrap();
-    wait(&mut app, "id:linear-row");
+    wait(&mut app, "id:today-tab-linear");
     let stats = f.stats("stats");
     assert_eq!(
         stats["linearReads"], 2,
@@ -195,8 +207,7 @@ fn a_close_saves_the_linear_page_its_project_and_open_issue_and_sends_nothing() 
     let entry = entry();
     let bridge = f.bridge();
     let mut app = open(&entry, &bridge);
-    wait(&mut app, "id:linear-open");
-    app.press("id:linear-open").unwrap();
+    open_linear_page(&mut app);
     wait(&mut app, "Your issues in cycle 12");
     let linked = "label:/^Same title, Done\\. In a mission\\./";
     app.press(linked).unwrap();
@@ -212,7 +223,6 @@ fn a_close_saves_the_linear_page_its_project_and_open_issue_and_sends_nothing() 
     let saved = host.saved_window().unwrap();
     assert_eq!(host.close().recv_blocking().unwrap(), Ok(()));
     assert_eq!(saved.view["place"], "today");
-    assert_eq!(saved.view["todayRow"], "linear-open");
     // The exact project and the issue open in place, by their saved IDs.
     let bridge = f.bridge();
     let read = f.call(&bridge, "day.linear.read", json!({}))["value"]["snapshot"].clone();

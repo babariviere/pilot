@@ -64,14 +64,14 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal
           echo "NSH_DAY_REAL_CARGO=$(rustup which --toolchain 1.99.1 cargo)" >> "$GITHUB_ENV"
           echo "RUSTC=$(rustup which --toolchain 1.99.1 rustc)" >> "$GITHUB_ENV"
-          stage="$RUNNER_TEMP/nsh-0.5.0"
+          stage="$RUNNER_TEMP/nsh-0.6.1"
           mkdir "$stage"
-          curl --fail --location --output "$stage/nsh.tar.gz" https://github.com/longbridge/nsh/releases/download/v0.5.0/nsh-macos-arm64.tar.gz
-          echo "e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d  $stage/nsh.tar.gz" | shasum -a 256 --check
+          curl --fail --location --output "$stage/nsh.tar.gz" https://github.com/longbridge/nsh/releases/download/v0.6.1/nsh-macos-arm64.tar.gz
+          echo "ee1aed2a4d111fe90e6cceca4b9d5f834c9e11cfda525f8be984261a329c06de  $stage/nsh.tar.gz" | shasum -a 256 --check
           tar -xzf "$stage/nsh.tar.gz" -C "$stage"
+          echo "96066fadf2a578216cf5d2692be56b1db1af7523c2ddeab6e1bf951b352b75d5  $stage/nsh/bin/nsh" | shasum -a 256 --check
+          test "$("$stage/nsh/bin/nsh" --version)" = 'nsh 0.6.1 (2f51d86)'
           echo "NSH_DAY_CLI=$stage/nsh/bin/nsh" >> "$GITHUB_ENV"
-          echo "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8  $stage/nsh/bin/nsh" | shasum -a 256 --check
-          test "$("$stage/nsh/bin/nsh" --version)" = 'nsh 0.5.0 (f4d68f7)'
           pnpm install --frozen-lockfile --ignore-scripts
       - name: Day typecheck and focused hidden behavior tests
         run: |

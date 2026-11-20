@@ -37,7 +37,7 @@ test("a disconnected last empty read never claims nothing needs you", async () =
 	await app.waitFor("Nothing needs you today.");
 	await app.keyboard.press("mod+shift+8");
 	await app.waitFor("What needs you is not fully known.");
-	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("id:today-no-attention")).toBe(false);
 });
 
 test("an identical refresh keeps the empty Needs you state while the reply is pending", async () => {

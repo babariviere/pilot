@@ -106,6 +106,7 @@ import { PROJECT_ACTION } from "./native-projects.ts";
 import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PlanningActivityNotices } from "./planning-activity.ts";
+import { dayRecentDone } from "./project-dashboard.ts";
 import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { ResultReviews } from "./result-reviews.ts";
@@ -3150,7 +3151,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					return says ? { ...item, says } : item;
 				}),
 			);
-			const chats = sessions.list({ projectId });
+			const chats = sessions.list({ projectId, archived: "false" });
 			const overview: import("@pilot/protocol").DayOverview = {
 				version: 1,
 				projectId,
@@ -3173,6 +3174,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					list.filter((m) => m.status === "active").flatMap((m) => missions.store.tasks(m.id)),
 					new Set(list.filter((m) => missions.store.controls.current(m.id).held).map((m) => m.id)),
 				),
+				recentDone: dayRecentDone(chats),
 				waitingNow: dayWaiting(projectId, chats, list),
 				missionAgents: dayMissionAgents(
 					projectId,

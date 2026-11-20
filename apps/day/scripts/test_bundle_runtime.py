@@ -605,7 +605,7 @@ class BundleRuntimeTests(unittest.TestCase):
         bundle.write_json(self.executables / "manifest.json", manifest)
         (self.runtime / "packages/artifacts").mkdir(parents=True)
         binding = patch.object(day, "artifact_identity", return_value=dict(schema=1,kind="nsh-source-host",
-            runtime="nsh 0.5.0",source=self.source,recipe="b" * 64))
+            runtime="nsh 0.6.1",source=self.source,recipe="b" * 64))
         binding.start()
         self.addCleanup(binding.stop)
         resources = self.root / "nsh"

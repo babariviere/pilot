@@ -36,7 +36,7 @@ Legacy app paths and stored profiles are not changed by this source cutover.
 ## Run
 
 Prerequisites: macOS arm64, Command Line Tools, Rust 1.99.1, Cargo on `PATH`,
-and installed NSH 0.5.0 (`f4d68f7`). `NSH_DAY_CLI` can
+and installed NSH 0.6.1 (`2f51d86`). `NSH_DAY_CLI` can
 select a local official distribution without changing a global installation. Prepare the
 workspace dependencies before running checks. Cargo may download locked crates.
 Local commands use the Cargo on `PATH`, including [huacnlee/cargo](https://github.com/huacnlee/cargo)

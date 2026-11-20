@@ -3,8 +3,8 @@
 // Each is drawn once, on the popover surface or the canvas, with the panel's hairline and radius.
 import { type JSX, View } from "nsh";
 import { Dialog } from "nsh/base";
+import { GridBackdrop } from "./canvas";
 import { narrow } from "./layout";
-import { GridBackdrop } from "./quiet";
 import { Caption, Title } from "./text";
 
 /**

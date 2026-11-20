@@ -506,14 +506,15 @@ test("mission page scroll on a real platform: what is at the top of the screen s
 }, 60_000);
 test("capture Linear linked work", async () => {
 	const app = await open("./LinearFixture.tsx", { platform: "macos", width: 1100, height: 1200 });
-	await app.waitFor("id:linear-row");
-	await app.press("id:linear-open");
+	await app.waitFor("id:today-tab-linear");
+	await app.press("id:place-menu");
+	await app.press("id:place-linear");
 	await app.press("id:linear-issue-ln-231");
 	await app.waitFor("id:linear-detail-ln-231");
 	await app.screenshot("output/linear-linked-work.png");
 });
 
-// Where new requests show on Today: Slack requests as Needs you cards, Linear as one row.
+// Where new Slack requests show on Today: as Needs you cards.
 // The same steps run on the revision before, where they showed in the New section.
 test("capture Today's Slack request card", async () => {
 	const app = await open("./IntakeFixture.tsx", { platform: "macos", width: 1100, height: 1400 });
@@ -521,14 +522,17 @@ test("capture Today's Slack request card", async () => {
 	await app.screenshot("output/today-slack-request.png");
 });
 
-test("capture Today's Linear row", async () => {
+test("capture Today's Linear tab", async () => {
 	const app = await open("./LinearFixture.tsx", { platform: "macos", width: 1100, height: 1000 });
-	await app.waitFor("Done since you looked");
-	await app.waitFor("id:linear-open");
-	// Before, Linear's requests were at the top in New; after, its row follows Missions.
-	await app.scroll("id:today-page", 1000);
+	await app.waitFor("id:today-tab-linear");
+	await app.press("id:today-tab-linear");
+	await app.waitFor("id:today-linear");
 	await app.wait(300);
-	await app.screenshot("output/today-linear-row.png");
+	await app.screenshot("output/today-linear-tab.png");
+	await app.press("id:linear-issue-ln-219");
+	await app.waitFor("id:linear-detail-ln-219");
+	await app.wait(300);
+	await app.screenshot("output/today-linear-tab-open.png");
 });
 
 // Headless runs do not hit-test overlays: pointing needs the real host.

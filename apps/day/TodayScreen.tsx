@@ -4,7 +4,7 @@
 // report is shown as such, never as not moving.
 // One panel under the page's head. Its tabs filter it: Overview shows every
 // section in two columns (what needs the user at the left, what moves at the
-// right); Needs you, New, Working and Missions show one part.
+// right); Needs you, New, Linear, Working and Missions show one part.
 import { effect, keymap, Scroll, type ScrollRef, signal } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
@@ -14,9 +14,11 @@ import { DayActions, DayDate, DayNotes, visitToday } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { FeedbackIncoming, feedbackFocus, incomingFeedback, newFeedback } from "./FeedbackIncoming";
+import { FinishedToday } from "./FinishedToday";
 import { everRead, todayWarning } from "./freshness";
-import { LinearRow, RequestNotes, requestChecks, requestLine, todayRequests } from "./Incoming";
+import { RequestNotes, requestChecks, requestLine, todayRequests } from "./Incoming";
 import { todayScrollTo } from "./kept";
+import { LinearTabContent, todayLinear } from "./LinearScreen";
 import { goSchedules } from "./nav";
 import { PlannerInterviewCards, type PlannerInterviews, plannerInterviews } from "./PlannerInterviews";
 import { stageMark, stageWord } from "./PlanScreen";
@@ -28,7 +30,6 @@ import { ResultCard } from "./ResultCard";
 import type { Rituals } from "./ritualFeed";
 import {
 	bindScopeReads,
-	OtherDone,
 	OtherMissions,
 	OtherNeeds,
 	OtherNotShown,
@@ -48,11 +49,9 @@ import {
 	Arrive,
 	Button,
 	Caption,
-	Chips,
 	Column,
 	Columns,
 	EmptyLine,
-	EvidenceChip,
 	Link,
 	Notice,
 	Num,
@@ -61,7 +60,6 @@ import {
 	PageHead,
 	Panel,
 	Progress,
-	Quiet,
 	Quote,
 	Row,
 	RowDetail,
@@ -335,10 +333,7 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 						}
 					>
 						<If when={quiet()}>
-							<If
-								when={checks() > 0}
-								else={<Quiet title="Nothing needs you." text="Pilot keeps going on its own." />}
-							>
+							<If when={checks() > 0} else={<EmptyLine testID="today-no-attention" text="Nothing needs you." />}>
 								<EmptyLine text="Nothing else waits for you. Check the notes below." />
 							</If>
 						</If>
@@ -389,20 +384,15 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 }
 
 /**
- * New: what came in from Slack and Linear. Slack requests also wait in Needs you, as cards in its queue; the New
- * tab lists them on their own, and a press brings one forward there. Linear's issues are one row to the Linear page.
+ * New Slack requests also wait in Needs you, as cards in its queue. A press brings one forward there.
  */
 function New(props: { day: Day; filtered: boolean }) {
 	const requests = () => (props.filtered ? todayRequests(props.day) : []);
 	const waiting = () => todayRequests(props.day).length;
+	const live = () => props.day.intake?.view().availability === "live";
 	return (
-		<If when={props.day.intake || props.day.linear}>
-			<Section
-				testID="today-new"
-				title="New"
-				count={props.filtered ? requests().length : null}
-				note="From Slack and Linear"
-			>
+		<If when={props.filtered || props.day.intake}>
+			<Section testID="today-new" title="New" count={props.filtered ? requests().length : null} note="Slack">
 				<Rows>
 					<Each of={requests()} key={(r) => r.request.id}>
 						{(r) => (
@@ -420,7 +410,6 @@ function New(props: { day: Day; filtered: boolean }) {
 							/>
 						)}
 					</Each>
-					<LinearRow day={props.day} />
 				</Rows>
 				<RequestNotes day={props.day} />
 				<If when={!props.filtered && waiting() > 0}>
@@ -428,8 +417,11 @@ function New(props: { day: Day; filtered: boolean }) {
 						text={`${waiting() === 1 ? "One Slack request waits" : `${countWord(waiting())} Slack requests wait`} in Needs you.`}
 					/>
 				</If>
-				<If when={waiting() === 0}>
+				<If when={live() && waiting() === 0}>
 					<EmptyLine text="No new requests from Slack." />
+				</If>
+				<If when={!props.day.intake}>
+					<EmptyLine text="Slack requests are not available here." />
 				</If>
 			</Section>
 		</If>
@@ -685,52 +677,6 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 	);
 }
 
-function DoneSince(props: { day: Day; ctx: TodayScope }) {
-	const today = () => props.day.today();
-	return (
-		<Section title="Done since you looked" note={today().lastLooked}>
-			<If when={props.ctx.tagged() && today().done.length > 0}>
-				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
-			</If>
-			<Rows>
-				<Each of={today().done} key={(e) => e.id}>
-					{(e) => (
-						<Row
-							mark={
-								e().evidence.some((x) => x.tone === "bad")
-									? "failed"
-									: e().evidence.some((x) => x.tone === "warn")
-										? "needs"
-										: "done"
-							}
-							title={e().text}
-							meta={e().missionTitle}
-							wrap
-							selectable
-							detail={
-								<RowDetail>
-									<Chips>
-										<Each of={e().evidence} key={(x) => x.label}>
-											{(x) => <EvidenceChip evidence={x()} />}
-										</Each>
-									</Chips>
-								</RowDetail>
-							}
-						/>
-					)}
-				</Each>
-			</Rows>
-			<If when={today().doneHidden > 0}>
-				<EmptyLine text={`${today().doneHidden} earlier results are not shown here.`} />
-			</If>
-			<If when={today().finished.length > 0}>
-				<EmptyLine text={`Finished: ${today().finished.join(", ")}`} />
-			</If>
-			<OtherDone ctx={props.ctx} />
-		</Section>
-	);
-}
-
 function ComingUp(props: { day: Day; ctx: TodayScope }) {
 	const rows = () =>
 		[
@@ -816,9 +762,7 @@ function OtherProject(props: { day: Day; ctx: TodayScope; interviews: PlannerInt
 							<OtherNeeds ctx={props.ctx} day={props.day} />
 							<OtherToCheck ctx={props.ctx} day={props.day} nested />
 						</Section>
-						<Section title="Done since you looked">
-							<OtherDone ctx={props.ctx} />
-						</Section>
+						<FinishedToday day={props.day} ctx={props.ctx} />
 					</>
 				}
 				side={
@@ -841,7 +785,7 @@ function OtherProject(props: { day: Day; ctx: TodayScope; interviews: PlannerInt
 }
 
 /** Today's tabs: Overview shows every section; the others filter the panel to one part. */
-export type TodayTab = "overview" | "needs" | "new" | "working" | "missions";
+export type TodayTab = "overview" | "needs" | "new" | "linear" | "working" | "missions";
 
 /** The tab this window's Today shows. Kept while the window lives; a new window starts on Overview. */
 export const todayTab = signal<TodayTab>("overview");
@@ -862,7 +806,12 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 			? "What needs you is not fully known."
 			: scoped;
 	};
-	const tab = () => (ctx.showsOwn() ? todayTab() : "overview");
+	const linear = todayLinear(
+		props.day,
+		() => (ctx.on() ? ctx.own() : props.day.today().project || null),
+		ctx.showsOwn,
+	);
+	const tab = () => (ctx.showsOwn() && (todayTab() !== "linear" || linear.shown()) ? todayTab() : "overview");
 	bindScopeReads(props.day, ctx);
 	visitToday(props.day, props.rituals);
 	bindTriage(
@@ -974,6 +923,15 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 										selected={tab() === "new"}
 										onPress={() => todayTab.set("new")}
 									/>
+									<If when={linear.shown()}>
+										<Tab
+											testID="today-tab-linear"
+											label="Linear"
+											count={linear.count()}
+											selected={tab() === "linear"}
+											onPress={() => todayTab.set("linear")}
+										/>
+									</If>
 									<Tab
 										testID="today-tab-working"
 										label="Working"
@@ -1003,7 +961,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 											{problems()}
 											<NeedsYou day={props.day} ctx={ctx} interviews={interviews} />
 											<New day={props.day} filtered={false} />
-											<DoneSince day={props.day} ctx={ctx} />
+											<FinishedToday day={props.day} ctx={ctx} />
 										</>
 									}
 									side={
@@ -1027,6 +985,9 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 								<Column centered>
 									<New day={props.day} filtered />
 								</Column>
+							</If>
+							<If when={tab() === "linear"}>
+								<LinearTabContent day={props.day} project={linear.project} />
 							</If>
 							<If when={tab() === "working"}>
 								<Column centered>

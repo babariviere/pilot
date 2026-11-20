@@ -4,8 +4,8 @@ Today intake uses canonical tracked items, not the dashboard's five-row preview.
 No source sync, sign-in, model call or external write runs during a read or Check.
 The connected window's Today consumes these methods: each new Slack request is a
 card in Needs you after the results to check (`RequestCard.tsx`), and the writes
-live in `Incoming.tsx`. Linear requests are counted on Today's one Linear row and
-start from the Linear page. Mock windows have no request source and show no cards.
+live in `Incoming.tsx`. Linear issues start from Today's Linear tab or the
+standalone Linear page, not from New. Ordinary mock windows have no request source.
 
 ## Read
 
@@ -171,11 +171,10 @@ prove access to live Linear/Slack. No alternate routes or stores are needed.
 
 ### The Linear page
 
-Day's connected window shows this saved read on the Linear page, opened from
-Today's Linear row (after Missions) when Linear is set up or one of the project's
-request sources. `linearFeed.ts` reads once when that row first shows, to count
-the user's open issues (only from a complete read of the current settings), when
-the page opens, on Read again and when Today's requests change while it is open.
+Day's connected window shows this saved read in the Linear tab when Linear is set up.
+The tab's count comes from a complete read of the current settings. The standalone
+Linear page is still available from the path menu and Command+K. Both views read
+Pilot's saved copy, not the live Linear API.
 
 - Title and scope: "Your issues in cycle N" (or "Your open Linear issues" for
   `no_active_cycle`), and always "Not your team's other issues or other cycles".

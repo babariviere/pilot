@@ -11,7 +11,7 @@ test("NSH preparation carries exact source metadata without producing a document
 		libraries: [],
 		nsh: {
 			api: 1,
-			runtime: "nsh 0.5.0",
+			runtime: "nsh 0.6.1",
 			entry: "view.tsx",
 			sourceSha256: createHash("sha256").update(source).digest("hex"),
 			sourceBytes: Buffer.byteLength(source),

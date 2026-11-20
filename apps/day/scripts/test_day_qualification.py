@@ -228,13 +228,26 @@ class WorkflowTests(unittest.TestCase):
                   and not item["name"].startswith("nsh-app-")]
         self.assertTrue(actual)
         for item in actual:
-            self.assertEqual(item["version"], "0.5.0")
+            self.assertEqual(item["version"], "0.6.1")
             self.assertEqual(item["source"], day.REGISTRY)
             if item["name"] in native:
                 self.assertEqual(item["checksum"], native[item["name"]]["checksum"])
         self.assertIn("nsh-testing", {item["name"] for item in actual})
-        self.assertEqual(bundle.NSH_RELEASE, dict(tag="v0.5.0",
-                         source="f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1"))
+        self.assertEqual(bundle.NSH_RELEASE, dict(tag="v0.6.1",
+                         source="2f51d8611677c8a6bbad937b39756e8d0cc45350"))
+        archive_sha = "ee1aed2a4d111fe90e6cceca4b9d5f834c9e11cfda525f8be984261a329c06de"
+        self.assertEqual(day.CLI_SHA256, "96066fadf2a578216cf5d2692be56b1db1af7523c2ddeab6e1bf951b352b75d5")
+        workflow = (ROOT / ".github/workflows/day-qualification.yml").read_text()
+        checks = [
+            'https://github.com/longbridge/nsh/releases/download/v0.6.1/nsh-macos-arm64.tar.gz',
+            f'echo "{archive_sha}  $stage/nsh.tar.gz" | shasum -a 256 --check',
+            'tar -xzf "$stage/nsh.tar.gz" -C "$stage"',
+            f'echo "{day.CLI_SHA256}  $stage/nsh/bin/nsh" | shasum -a 256 --check',
+            f"""test "$("$stage/nsh/bin/nsh" --version)" = '{day.CLI_VERSION}'""",
+            'echo "NSH_DAY_CLI=$stage/nsh/bin/nsh" >> "$GITHUB_ENV"',
+        ]
+        offsets = [workflow.index(check) for check in checks]
+        self.assertEqual(offsets, sorted(offsets))
 
     def test_qualification_has_exact_source_callers_without_production_effects(self):
         workflow = (ROOT / ".github/workflows/day-qualification.yml").read_text()

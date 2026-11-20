@@ -28,12 +28,33 @@ test("Today's tabs filter the panel", async () => {
 	}
 });
 
+test("Today shows a finished chat and its local time", async () => {
+	for (const [colorScheme, width] of [
+		["light", 1100],
+		["dark", 1100],
+		["light", 480],
+		["dark", 480],
+	] as const) {
+		const app = await open("./MockApp.tsx", { platform: "macos", width, height: 780, colorScheme });
+		await app.waitFor("id:today-panel");
+		await app.scroll("id:today-page", 900);
+		await app.waitFor("id:finished-today >> text:Check CSV import edge cases");
+		await app.wait(300);
+		await app.screenshot(`output/today-finished-after-${colorScheme}-${width}.png`);
+	}
+});
+
 test("Today on a quiet day and offline", async () => {
-	for (const colorScheme of ["light", "dark"] as const) {
-		const quiet = await open("./Quiet.tsx", { platform: "macos", width: 1100, height: 900, colorScheme });
-		await quiet.waitFor("Pilot keeps going on its own.");
+	for (const [colorScheme, width] of [
+		["light", 1100],
+		["dark", 1100],
+		["light", 480],
+		["dark", 480],
+	] as const) {
+		const quiet = await open("./Quiet.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await quiet.waitFor("id:today-no-attention");
 		await quiet.wait(500);
-		await quiet.screenshot(`output/today-parts-quiet-${colorScheme}-1100.png`);
+		await quiet.screenshot(`output/today-parts-quiet-${colorScheme}-${width}.png`);
 	}
 	const offline = await open("./Offline.tsx", { platform: "macos", width: 1100, height: 900, colorScheme: "light" });
 	await offline.waitFor("id:today-panel");

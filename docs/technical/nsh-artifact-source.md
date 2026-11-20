@@ -143,7 +143,7 @@ shaders (no GPU time limit, and they can sample what is drawn behind), `setColor
 deny-all policy stops the same capabilities at run time; the list says so first.
 Day's preview and the publish-time check both start from `artifact_runtime::config_for`,
 so they install the same UI set (NSH's base registry, with `nsh/base/plot`).
-The host then uses pinned unmodified NSH 0.5.0 `compile_module` on the in-memory
+The host then uses pinned unmodified NSH 0.6.1 `compile_module` on the in-memory
 string. It does not use `bundle`, `nsh.json`, aliases, package discovery or a
 filesystem resolver. Generated code is limited to 2 MiB, then discarded by the
 helper. Syntax diagnostics name virtual

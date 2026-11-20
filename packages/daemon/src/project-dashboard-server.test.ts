@@ -46,7 +46,11 @@ async function fixture(t: TestContext) {
 		piReload: { onChange: () => () => {}, status: () => ({ state: "idle" }) },
 		setWorkspaceProcessGuard() {},
 		list: (query: { projectId?: string; archived?: string } = {}) =>
-			[...chats.values()].filter((chat) => !query.projectId || chat.projectId === query.projectId),
+			[...chats.values()].filter(
+				(chat) =>
+					(!query.projectId || chat.projectId === query.projectId) &&
+					(query.archived === "all" || (chat.archivedAt !== undefined) === (query.archived === "true")),
+			),
 		get: (id: string) => chats.get(id),
 	} as unknown as SessionManager;
 	const put = (chat: Partial<SessionSummary> & { id: string }) => {
@@ -177,6 +181,28 @@ test("Day returns complete existing projections without inferring progress from 
 	});
 	assert.equal(denied.status, 503, "missing native authority never admits a control");
 	assert.equal(f.store.controls.current(id).revision, 0);
+});
+
+test("Day lists successful outcomes without reviewing them or changing the dashboard preview", async (t) => {
+	const f = await fixture(t);
+	const url = `/projects/${f.project.id}`;
+	for (let i = 0; i < 201; i++) f.put({ id: `done-${i}`, outcome: "done", outcomeAt: i + 1 });
+	f.put({ id: "failed", outcome: "failed", outcomeAt: 300 });
+	f.put({ id: "still-working", outcome: "done", outcomeAt: 400, state: "working" });
+	f.put({ id: "foreign", outcome: "done", outcomeAt: 500, projectId: "different-project" });
+	f.put({ id: "archived", outcome: "done", outcomeAt: 600, archivedAt: 700 });
+	const dashboard = async (): Promise<ProjectDashboard> => (await f.api(`${url}/dashboard`)).json();
+	const before = await dashboard();
+	assert.equal(before.needsYou.total, 202);
+	assert.equal(before.recent.total, 0);
+
+	const day: import("@pilot/protocol").DayOverview = await (await f.api(`${url}/day`)).json();
+	assert.equal(day.recentDone?.total, 201);
+	assert.equal(day.recentDone?.items.length, 200);
+	assert.equal(day.recentDone?.items[0]?.sessionId, "done-200");
+	assert.equal(day.recentDone?.items[199]?.sessionId, "done-1");
+	assert.equal(day.dashboard.needsYou.total, 202);
+	assert.deepEqual(await dashboard(), before);
 });
 
 test("Today working chats include exact mission tasks and standalone chats, never held or finished activity", async (t) => {

@@ -106,6 +106,8 @@ the reference). The parts, their props and their exact sizes are in the [library
   With two columns, what needs the user goes in the main (left) column. Under 880 points the columns stack.
 - **Tabs attach to the panel.** They sit on its top edge and are the page's sub-pages, or on Today its filters.
   A tab's count is the same number its section shows.
+- **Today separates sources from outcomes.** New is for Slack requests. Connected Linear issues get a tab.
+  Finished today shows completed runs in local time, not reviewed or merged results.
 - **One question at a time.** The thing that waits for an answer leads its section. The others queue under it as rows.
 - **One row for every list:** mark, title, meta, state and trailing, each slot filled or empty, never restyled.
   A section shows at most five rows, then Show all or a tab.
@@ -152,11 +154,7 @@ word and the accessible name always carry the state, so colour is never the only
 - Unconfirmed never looks empty or done. It is not Needs you and does not ask for the user by itself.
 - Progress is a row of squares and a mono count ("■■■□□ 2/5"): done squares dark, stopped ones red, the rest faint.
 
-### Decoration
-
-When nothing needs the user, Today's Needs you says so in one line under Pilot's dithered sky: ordered (Bayer)
-dither with 3-point square pixels, accent ink and a low amber sun. It is the only decoration in Day. It draws once
-per size and appearance and does not move.
+When nothing needs the user, Today's Needs you says so in a plain line. An unread list never says all is clear.
 
 ## Views
 

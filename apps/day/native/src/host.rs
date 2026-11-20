@@ -12,6 +12,7 @@ pub(crate) mod delivery_work;
 pub(crate) mod diagnosis;
 mod enrollment;
 pub(crate) mod feedback;
+pub(crate) mod finished_today;
 pub(crate) mod insights;
 pub(crate) mod intake;
 mod inventory;
@@ -1330,12 +1331,14 @@ fn restore_project(journal: &Journal, shared: &Shared, source: &Source) -> Resul
     }
     changes::restore(journal, source, shared);
     if let Some(cache) = journal.cached(source) {
+        let day = ritual::local_day(shared);
         shared.change(|desk| {
             desk.native_read(cache.overview, cache.details);
             desk.lose_read(
                 FreshnessState::Cached,
                 "Saved read. Not checked with the daemon yet.",
             );
+            desk.project_finished_day(day.as_ref());
         });
     }
     // Even a crash before POST is lookup-only.
@@ -1693,6 +1696,7 @@ async fn refresh(
         details: details.clone(),
     })?;
     shared.current(epoch)?;
+    let day = ritual::local_day(shared);
     shared.change(|desk| {
         desk.native_capability(t.controls.load(Ordering::SeqCst));
         desk.native_replanning(t.replanning.load(Ordering::SeqCst));
@@ -1708,6 +1712,7 @@ async fn refresh(
                 "Daemon read received. Update stream is disconnected.",
             );
         }
+        desk.project_finished_day(day.as_ref());
     });
     // WS only invalidates. A fresh authenticated GET, never the event body,
     // advances a preparing bootstrap to the coordinator's complete round.

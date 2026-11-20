@@ -1,18 +1,17 @@
 // Requests nobody started in Pilot yet, and their one set of writes. Today
 // shows each new Slack request as a card in Needs you (RequestCard.tsx),
-// after decisions, actions and results to check. Linear's requests stay on
-// the Linear page, which Today's one Linear row opens. Choosing where work
+// after decisions, actions and results to check. Linear requests wait in
+// the Linear list instead. Choosing where work
 // goes, opening a request or reading again records and starts nothing; only
 // Start, Later, Discard, Bring back and Undo send, each once, naming the
 // exact request and revision shown. A write whose answer is lost stays "not
 // confirmed" until Check reads its saved receipt. The words come from
 // outside Pilot and show as text only.
-import { effect, signal, untracked, View, type ViewRef } from "nsh";
+import { effect, signal, View, type ViewRef } from "nsh";
 import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
 import { findingWork } from "./insightsWork";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
-import { groupOf, openLinear } from "./linearView";
 import { goalDraft, linkedMission, openNew, replacesDraft, requestDraft } from "./planView";
 import {
 	Block,
@@ -30,7 +29,7 @@ import {
 	RowGroup,
 	Rows,
 } from "./ui";
-import { focused, focusFront, placeRow, releaseFront } from "./view";
+import { focused, focusFront, releaseFront } from "./view";
 
 /**
  * A request chosen from another project's row on Today. Its card comes to
@@ -80,13 +79,12 @@ export function openMissions(today: Today): MissionRow[] {
 }
 
 /**
- * The requests that wait in Needs you as cards: new ones read for this
- * window's project, except Linear's, which wait on the Linear page.
+ * New Slack requests for this window's project. They wait in Needs you as cards.
  */
 export function todayRequests(day: Day): IntakeRow[] {
 	const v = day.intake?.view();
 	if (v?.availability !== "live") return [];
-	return v.fresh.filter((r) => r.request.source !== "linear");
+	return v.fresh.filter((r) => r.request.source === "slack");
 }
 
 /** Whether a write about request `id` is on its way or not confirmed. */
@@ -711,64 +709,6 @@ function LiveNotes(props: { day: Day; mirror: IntakeMirror }) {
 				<Kept mirror={props.mirror} state="later" rows={v().later} busy={busy} />
 				<Kept mirror={props.mirror} state="discarded" rows={v().discarded} busy={busy} />
 			</View>
-		</If>
-	);
-}
-
-/** How many new Linear requests Pilot read for this window's project, or null when it does not know. */
-function linearNew(day: Day): number | null {
-	const v = day.intake?.view();
-	if (v) return v.availability === "live" ? v.fresh.filter((r) => r.request.source === "linear").length : null;
-	return day.today().intake.requests.filter((r) => r.source === "linear").length;
-}
-
-/**
- * Today's one Linear row: how many of the user's issues Pilot saved and how
- * many are new, and the way to the Linear page. Shown only when Linear is
- * set up or its requests were read. Opening it, and the passive read that
- * counts the issues, change nothing.
- */
-export function LinearRow(props: { day: Day }) {
-	const linear = props.day.linear;
-	if (!linear) return null;
-	// Read Pilot's saved copy once, to count the user's issues. It asks Linear nothing.
-	if (untracked(() => linear.view().availability) === "idle") void linear.source.read();
-	const place = placeRow("linear-open", openLinear);
-	const read = () => {
-		const r = linear.view().read;
-		return r?.source.configured && r.source.status !== "not_configured" ? r : null;
-	};
-	const sources = () => props.day.intake?.view().intake.sources ?? props.day.today().intake.sources;
-	const shown = () => !!read() || sources().includes("Linear");
-	// Counted only from a complete read of the current settings: a partial count would look complete.
-	const assigned = () => {
-		const r = read();
-		if (!r?.configurationCurrent || !r.complete) return null;
-		return r.items.filter((i) => groupOf(i) !== "done" && groupOf(i) !== "closed").length;
-	};
-	const fresh = () => linearNew(props.day) ?? 0;
-	const head = () => (assigned() === null ? "Linear" : `Linear · ${assigned()}`);
-	const tail = () => {
-		const parts = [assigned() === null ? "" : "assigned to you", fresh() > 0 ? `${fresh()} new` : ""].filter(Boolean);
-		if (parts.length === 0) return "";
-		return `${assigned() === null ? " · " : " "}${parts.join(" · ")}`;
-	};
-	return (
-		<If when={shown()}>
-			<Row
-				testID="linear-row"
-				mark="new"
-				title={`${head()}${tail()}`}
-				trailing={
-					<Link
-						label="Open"
-						testID="linear-open"
-						accessibilityLabel="Your Linear issues. Opens Pilot's saved copy; it changes nothing."
-						anchor={place.anchor}
-						onPress={place.press}
-					/>
-				}
-			/>
 		</If>
 	);
 }

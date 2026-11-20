@@ -97,6 +97,30 @@ function ref(pr: SessionPullRequest | undefined): DashboardPullRequestRef | unde
 	return pr ? { number: pr.number, url: pr.url, state: pr.state } : undefined;
 }
 
+function recentItem(session: SessionSummary): DashboardRecentItem {
+	return {
+		sessionId: session.id,
+		title: session.title,
+		outcome: session.outcome!,
+		outcomeAt: session.outcomeAt!,
+		...(session.missionId ? { missionId: session.missionId } : {}),
+		...(session.branch ? { branch: session.branch } : {}),
+		...(session.pullRequest ? { pullRequest: ref(session.pullRequest)! } : {}),
+	};
+}
+
+const newestOutcome = (a: DashboardRecentItem, b: DashboardRecentItem) =>
+	b.outcomeAt - a.outcomeAt || a.sessionId.localeCompare(b.sessionId);
+
+const DAY_RECENT_DONE_LIMIT = 200;
+
+/** Use the dashboard's existing outcome facts, without its review filter. Day passes its existing active chat read. */
+export function dayRecentDone(sessions: SessionSummary[]): DashboardSection<DashboardRecentItem> {
+	const done = sessions.filter((s) => !isWorking(s) && s.outcome === "done" && Number.isSafeInteger(s.outcomeAt));
+	done.sort((a, b) => b.outcomeAt! - a.outcomeAt! || a.id.localeCompare(b.id));
+	return { total: done.length, items: done.slice(0, DAY_RECENT_DONE_LIMIT).map(recentItem) };
+}
+
 function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | undefined {
 	return pr.readiness
 		? { state: pr.readiness.state, reasons: pr.readiness.reasons.map(readinessReasonLabel) }
@@ -301,16 +325,8 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			(session) =>
 				!isWorking(session) && !reviewing.has(session.id) && session.outcome && session.outcomeAt !== undefined,
 		)
-		.map((session) => ({
-			sessionId: session.id,
-			title: session.title,
-			outcome: session.outcome!,
-			outcomeAt: session.outcomeAt!,
-			...(session.missionId ? { missionId: session.missionId } : {}),
-			...(session.branch ? { branch: session.branch } : {}),
-			...(session.pullRequest ? { pullRequest: ref(session.pullRequest)! } : {}),
-		}))
-		.sort((a, b) => b.outcomeAt - a.outcomeAt || a.sessionId.localeCompare(b.sessionId));
+		.map(recentItem)
+		.sort(newestOutcome);
 
 	const pending = scheduled.filter((item) => item.state === "pending");
 	return {

@@ -26,6 +26,7 @@ fn overview() -> DayOverview {
         controls: Vec::new(),
         mission_agents: None,
         working_now: None,
+        recent_done: None,
         waiting_now: None,
     }
 }
@@ -292,6 +293,7 @@ impl Peer {
                             json!({"version":1,"status":"available","projectId":project,"limit":100,"total":0,"items":[]})
                         } else if route.ends_with("/day") {
                             let mut v = overview();
+                            v.observed_at = crate::fixture::NOW;
                             v.project_id = project.into();
                             v.dashboard.missions = Section {
                                 total: 1,
@@ -303,6 +305,8 @@ impl Peer {
                             };
                             let mut value = serde_json::to_value(v).unwrap();
                             value["dashboard"]["projectId"] = json!(project);
+                            value["recentDone"] = json!({"total":1,"items":[{"sessionId":format!("done-{project}"),
+                                "title":"Finished chat","outcome":"done","outcomeAt":1_794_222_480_000u64}]});
                             value["workingNow"] = json!([{"sessionId":format!("chat-{project}"),"title":"Working chat","missionId":null,"missionTitle":null,"purpose":null,"status":"working"}]);
                             value["waitingNow"] = json!([{"sessionId":format!("queued-{project}"),"title":"Queued chat","missionId":null,"missionTitle":null,
                             "queue":{"kind":"slots","position":2,"holders":["Working chat"]}}]);
@@ -414,6 +418,48 @@ async fn a_switch_checks_the_selected_project_once_for_all_its_reads() {
     // One for the project list, one for the row: before, each of the row's reads checked again.
     assert_eq!(count("GET /api/hello"), 2, "{calls:?}");
     assert_eq!(count("GET /api/projects/two"), 1, "{calls:?}");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn finished_today_only_uses_the_selected_projects_existing_day_read() {
+    let peer = Peer::new(false, false);
+    let journal = Journal::open(peer.path.join("journal")).unwrap();
+    let day = LocalDay {
+        date: "2026-11-09".into(),
+        time_zone: "UTC".into(),
+        hour: 13,
+        unix_ms: crate::fixture::NOW,
+    };
+    let mut first = request("two", 1);
+    first.selected_only = true;
+    let scope = read_projects_from(
+        &peer.transport,
+        &journal,
+        &first,
+        true,
+        || Ok(()),
+        None,
+        Some(&day),
+    )
+    .await
+    .unwrap();
+    assert!(scope["projects"][0]["today"].is_null());
+    let shown = &scope["projects"][1]["today"]["finishedToday"];
+    assert_eq!(shown["status"], "complete");
+    assert_eq!(shown["date"], "2026-11-09");
+    assert_eq!(shown["items"][0]["sessionId"], "done-two");
+    assert_eq!(shown["items"][0]["localTime"], "11:08");
+    assert_eq!(shown["items"][0]["projectId"], "two");
+    let calls = peer.calls.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(route, _)| route.ends_with("/day"))
+            .map(|(route, _)| route.as_str())
+            .collect::<Vec<_>>(),
+        ["GET /api/projects/two/day"]
+    );
 }
 
 #[tokio::test]

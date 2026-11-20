@@ -183,11 +183,29 @@ impl Record {
 #[derive(Default)]
 pub(super) struct State {
     pub view: RitualSnapshot,
+    day: Option<LocalDay>,
     selected: Option<(Identity, String, String)>,
     record: Option<Record>,
     baseline: Option<u64>,
     observed_at: u64,
     results_epoch: Option<u64>,
+}
+
+pub(super) fn local_day(shared: &Shared) -> Option<LocalDay> {
+    shared
+        .ritual
+        .lock()
+        .expect("ritual state poisoned")
+        .day
+        .clone()
+}
+
+fn same_date(a: Option<&LocalDay>, b: Option<&LocalDay>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.date == b.date && a.time_zone == b.time_zone,
+        (None, None) => true,
+        _ => false,
+    }
 }
 pub(super) enum Work {
     Read,
@@ -255,20 +273,14 @@ pub(super) fn refresh_clock(
     journal: &mut Journal,
     shared: &Shared,
 ) {
-    let before = shared
-        .ritual
-        .lock()
-        .expect("ritual state poisoned")
-        .view
-        .clone();
+    let snapshot = || {
+        let state = shared.ritual.lock().expect("ritual state poisoned");
+        (state.view.clone(), state.day.clone())
+    };
+    let (before, before_day) = snapshot();
     let _ = apply(source, Some(day), journal, shared, Work::Read);
-    let after = shared
-        .ritual
-        .lock()
-        .expect("ritual state poisoned")
-        .view
-        .clone();
-    if before != after {
+    let (after, after_day) = snapshot();
+    if before != after || !same_date(before_day.as_ref(), after_day.as_ref()) {
         shared.change(|_| ());
     }
 }
@@ -292,6 +304,15 @@ fn apply(
         time.validate()?;
         Ok((day, time))
     })();
+    let day = sample.as_ref().ok().map(|(_, time)| time);
+    if !same_date(state.day.as_ref(), day) {
+        shared
+            .desk
+            .lock()
+            .expect("native Desk poisoned")
+            .project_finished_day(day);
+    }
+    state.day = day.cloned();
     let (day, time) = match sample {
         Ok(value) => value,
         Err(e) => {

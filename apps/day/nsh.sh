@@ -16,13 +16,13 @@ if [[ -z "$cli" && -x "$HOME/.nsh/bin/nsh" ]]; then
 	cli="$HOME/.nsh/bin/nsh"
 fi
 if [[ ! -x "$cli" ]]; then
-	echo 'nsh.sh: longbridge/nsh 0.5.0 is missing; set NSH_DAY_CLI to its installed executable' >&2
+	echo 'nsh.sh: longbridge/nsh 0.6.1 is missing; set NSH_DAY_CLI to its installed executable' >&2
 	exit 127
 fi
 cli="$(cd "$(dirname "$cli")" && pwd)/$(basename "$cli")"
 version="$("$cli" --version)"
-if [[ "$version" != 'nsh 0.5.0 (f4d68f7)' ]]; then
-	echo 'nsh.sh: expected longbridge/nsh 0.5.0 (f4d68f7); qualify another release before use' >&2
+if [[ "$version" != 'nsh 0.6.1 (2f51d86)' ]]; then
+	echo 'nsh.sh: expected longbridge/nsh 0.6.1 (2f51d86); qualify another release before use' >&2
 	exit 1
 fi
 export CARGO="$here/scripts/cargo"
@@ -60,7 +60,7 @@ case "$command" in
 				echo 'nsh.sh: use stock Cargo via NSH_DAY_REAL_CARGO to set CARGO_TARGET_DIR.' >&2
 				exit 2
 			fi
-			# NSH 0.5.0 tries CARGO_TARGET_DIR first, then Cargo metadata and
+			# NSH 0.6.1 tries CARGO_TARGET_DIR first, then Cargo metadata and
 			# the generated workspace's target. Make the first lookup miss so
 			# an old app/target never takes precedence over the fork's output.
 			export CARGO_TARGET_DIR="$here/.nsh/cargo-fork-target"

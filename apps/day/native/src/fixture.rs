@@ -16,7 +16,8 @@ use crate::{
     },
     model::{
         Bar, DayPart, Decision, DecisionKind, DecisionOption, Delivery, DoneBasis, DoneEntry,
-        Evidence, FreshnessState, Scenario, Scheduled, Today, Tone, Visit, Visual,
+        Evidence, FinishedChat, FinishedToday, FinishedTodayStatus, FreshnessState, Scenario,
+        Scheduled, Today, Tone, Visit, Visual,
     },
     project::MINUTE,
 };
@@ -301,11 +302,13 @@ fn overview(
             },
             tracked: Vec::new(),
             scheduled: None,
+            recent: None,
         },
         reports,
         controls,
         mission_agents: None,
         working_now: None,
+        recent_done: None,
         waiting_now: None,
     }
 }
@@ -887,6 +890,17 @@ fn decisions() -> World {
         done: base_done(),
         done_hidden: 0,
         finished: vec![s("Tidy shell setup")],
+        finished_today: FinishedToday {
+            status: FinishedTodayStatus::Complete,
+            date: Some(s(DATE)),
+            items: vec![FinishedChat {
+                session_id: s("csv-edges"),
+                title: s("Check CSV import edge cases"),
+                mission_id: None,
+                outcome_at: 1_794_222_480_000,
+                local_time: s("11:08"),
+            }],
+        },
         coming_up: base_coming_up(),
         ..Today::default()
     };
@@ -1007,6 +1021,11 @@ fn quiet() -> World {
         done: base_done(),
         done_hidden: 0,
         finished: vec![s("Tidy shell setup")],
+        finished_today: FinishedToday {
+            status: FinishedTodayStatus::Complete,
+            date: Some(s(DATE)),
+            items: Vec::new(),
+        },
         coming_up: base_coming_up(),
         ..Today::default()
     };

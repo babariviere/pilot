@@ -16,7 +16,7 @@
 // - notice: Notice
 // - question: Question
 // - chat: Bubble, Reply, Steps, Event, Tray, WorkingLine, Composer, Quote
-// - quiet: Quiet, GridBackdrop, WindowCanvas
+// - canvas: GridBackdrop, WindowCanvas
 // - layout: Page, PageHead, PageFoot, Spacer, narrow, panelWidth
 // - overlay: Confirm, FullWindow, FloatingCard, Ring
 // - path: PathBar, Logo, PathSegment, PathSlash, PathMenu, SearchButton
@@ -31,6 +31,7 @@ import "./images";
 
 export * from "./agent";
 export * from "./button";
+export * from "./canvas";
 export * from "./chat";
 export * from "./choice";
 export * from "./data";
@@ -48,7 +49,6 @@ export * from "./panel";
 export * from "./path";
 export * from "./picker";
 export * from "./question";
-export * from "./quiet";
 export * from "./section";
 export * from "./state";
 export * from "./text";

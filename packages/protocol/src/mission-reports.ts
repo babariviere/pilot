@@ -1,4 +1,10 @@
-import type { CodingQueueView, MissionCodeCompletion, ProjectDashboard } from "./index.ts";
+import type {
+	CodingQueueView,
+	DashboardRecentItem,
+	DashboardSection,
+	MissionCodeCompletion,
+	ProjectDashboard,
+} from "./index.ts";
 import type { MissionControl } from "./mission-controls.ts";
 
 /** One screen captured from the real app: image artifact IDs, Before at the landed commit's parent. No Before: new. */
@@ -88,6 +94,9 @@ export interface DayOverview {
 	missionAgents?: DayMissionAgent[];
 	/** Authoritative working chats, including standalone chats. Absent on older services means unknown. */
 	workingNow?: DayWorkingChat[];
+	/** Newest 200 successful, non-working chat outcomes, including unreviewed ones.
+	 * The total counts all matching active chats of the project. Absent on older services. */
+	recentDone?: DashboardSection<DashboardRecentItem>;
 	/** Chats waiting for a coding slot, in line order. Absent on older services means unknown. */
 	waitingNow?: DayWaitingChat[];
 }

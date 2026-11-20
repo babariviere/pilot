@@ -87,7 +87,7 @@ fn unknown_empty_attention_is_not_a_fresh_headline_or_an_all_clear_footer() {
             .iter()
             .any(|text| text.starts_with("Nothing needs you"))
     );
-    assert!(!contains(&app, "Pilot keeps going on its own"));
+    assert!(!has(&app, "id:today-no-attention"));
     assert!(!contains(&app, "That is everything for now"));
     drop(app);
     std::fs::remove_dir_all(entry.parent().unwrap()).unwrap();
@@ -186,7 +186,7 @@ fn automatic_refresh_races_and_outage_recovery_keep_today_stable_and_send_nothin
                 "automatic refresh changed layout or identity"
             );
             if contains(&app, "What needs you is not current") {
-                assert!(!app.shows("Nothing needs you. Pilot keeps going on its own."));
+                assert!(!has(&app, "id:today-no-attention"));
             }
         }
     }

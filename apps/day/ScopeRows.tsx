@@ -519,25 +519,6 @@ export function OtherPlanning(props: { ctx: TodayScope }) {
 	);
 }
 
-/** Other projects' results since the user looked. */
-export function OtherDone(props: { ctx: TodayScope }) {
-	const shown = () => props.ctx.others().filter((p) => (p.today?.done.length ?? 0) > 0);
-	return (
-		<Each of={shown()} key={(p) => p.id}>
-			{(p) => (
-				<View testID={`scope-done-${p().id}`}>
-					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
-					<Rows>
-						<Each of={p().today?.done ?? []} key={(e) => e.id}>
-							{(e) => <Row mark="done" title={e().text} meta={e().missionTitle} wrap />}
-						</Each>
-					</Rows>
-				</View>
-			)}
-		</Each>
-	);
-}
-
 /** Other projects' delivered results. Reading does not retarget this window or grant actions. */
 export function OtherToCheck(props: { ctx: TodayScope; day: Day; nested?: boolean }) {
 	const rows = (p: ScopeProject) =>

@@ -38,7 +38,7 @@ fn main() {
     };
     // Compiled build evidence, not a command, signature or execution grant.
     response["identity"] = serde_json::json!({
-        "schema": 1, "kind": "nsh-source-host", "runtime": "nsh 0.5.0",
+        "schema": 1, "kind": "nsh-source-host", "runtime": "nsh 0.6.1",
         "source": option_env!("PILOT_BUILD_SOURCE"),
         "recipe": option_env!("PILOT_BUILD_RECIPE"),
     });

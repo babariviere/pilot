@@ -1073,6 +1073,36 @@ pub struct Intake {
     pub more: String,
 }
 
+/// Coverage of the Finished today read, not review or acceptance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FinishedTodayStatus {
+    #[default]
+    Unavailable,
+    Partial,
+    Complete,
+}
+
+/// A successful chat outcome, not a reviewed or accepted result.
+#[derive(Debug, Clone, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishedChat {
+    pub session_id: String,
+    pub title: String,
+    pub mission_id: Option<String>,
+    pub outcome_at: u64,
+    pub local_time: String,
+}
+
+/// The latest successful, non-working chat outcomes on one local date.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FinishedToday {
+    pub status: FinishedTodayStatus,
+    pub date: Option<String>,
+    pub items: Vec<FinishedChat>,
+}
+
 /// Everything the Today screen shows. Rust owns it; TSX keeps a mirror.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1123,6 +1153,9 @@ pub struct Today {
     pub done_hidden: u32,
     /// Missions that finished.
     pub finished: Vec<String>,
+    /// Chat outcomes on the local date. Independent of kept results above.
+    #[prop(default)]
+    pub finished_today: FinishedToday,
     /// What happens next, by time.
     pub coming_up: Vec<Scheduled>,
     /// How fresh the read of decisions and actions is. It can differ from

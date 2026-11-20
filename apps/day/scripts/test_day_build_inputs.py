@@ -157,7 +157,7 @@ class RecipeTests(unittest.TestCase):
         (generated / "target").symlink_to(retired)
         (app / "target").mkdir()
         (app / "target/runner").write_text("stale")
-        # Model the fork's workspace-local output and NSH 0.5's lookup order.
+        # Model the fork's workspace-local output and NSH's target lookup.
         self.tools["cargo"].write_text("""#!/bin/sh
 set -eu
 if [ "$1" = --version ]; then
@@ -171,7 +171,7 @@ fi
         self.tools["nsh"].write_text("""#!/bin/sh
 set -eu
 if [ "$1" = --version ]; then
-    echo 'nsh 0.5.0 (f4d68f7)'
+    echo 'nsh 0.6.1 (2f51d86)'
     exit
 fi
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$PWD/target}
@@ -206,7 +206,7 @@ fi
     def test_day_wrappers_preserve_cargo_debug_defaults_and_overrides(self):
         report = 'printf "%s:%s:%s\\n" "${CARGO_PROFILE_DEV_DEBUG-unset}" "${CARGO_PROFILE_TEST_DEBUG-unset}" "${CARGO_PROFILE_RELEASE_DEBUG-unset}"\n'
         self.tools["cargo"].write_text("#!/bin/sh\n" + report)
-        self.tools["nsh"].write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "nsh 0.5.0 (f4d68f7)"; else\n'
+        self.tools["nsh"].write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "nsh 0.6.1 (2f51d86)"; else\n'
                                      + report + 'fi\n')
         base = {"PATH": str(self.tools["cargo"].parent) + ":/usr/bin:/bin",
                 "NSH_DAY_CLI": str(self.tools["nsh"])}
@@ -263,18 +263,18 @@ fi
 
     def test_wrong_nsh_release_or_gpui_in_native_closure_refuses(self):
         lock = self.root / "Cargo.lock"
-        lock.write_text('[[package]]\nname="nsh-core"\nversion="0.4.0"\nsource="floating-main"\n')
-        with self.assertRaisesRegex(ValueError, "exact unmodified"):
-            day.release_lock(lock)
         text = (bundle.ROOT / "apps/day/native/Cargo.lock").read_text()
         checksum = day.NSH_CHECKSUMS["nsh-core"]
-        lock.write_text(text.replace(checksum, "0" * 64))
-        with self.assertRaisesRegex(ValueError, "exact unmodified"):
-            day.release_lock(lock)
         git = "git+https://github.com/longbridge/nsh?rev=" + bundle.NSH_RELEASE["source"]
-        lock.write_text(f'[[package]]\nname="nsh-core"\nversion="0.4.0"\nsource="{git}"\n')
-        with self.assertRaisesRegex(ValueError, "exact unmodified"):
-            day.release_lock(lock)
+        for invalid in (
+            text.replace('name = "nsh-core"\nversion = "0.6.1"', 'name = "nsh-core"\nversion = "0.5.0"'),
+            text.replace(checksum, "0" * 64),
+            f'[[package]]\nname="nsh-core"\nversion="0.6.1"\nsource="{git}"\nchecksum="{checksum}"\n',
+            f'[[package]]\nname="nsh-unknown"\nversion="0.6.1"\nsource="{day.REGISTRY}"\n',
+        ):
+            lock.write_text(invalid)
+            with self.assertRaisesRegex(ValueError, "exact unmodified"):
+                day.release_lock(lock)
         lock.write_text(text + '\n[[package]]\nname="gpui"\nversion="1.0.0"\n')
         with self.assertRaisesRegex(ValueError, "GPUI"):
             day.release_lock(lock)
@@ -335,13 +335,25 @@ fi
 
     def test_normalized_release_denials_do_not_admit_extra_capabilities(self):
         built = self.resources()
-        original = bundle.read_json(built / "capabilities.json")
-        self.assertEqual(original["fs"], {"read":[], "write":[]})
-        self.assertEqual(original["network"], {"hosts":[], "http":[]})
-        self.assertTrue(original["clipboard"])
-        self.assertTrue(original["picker"])
-        for changes in ({"clipboard":False}, {"picker":False}, {"openUrl":True}, {"extra":False}, {"process":{"execute":["sh"], "env":[], "exit":False}},
-                        {"fs":{"read":["/"], "write":[]}}):
+        # Same shape emitted by the official 0.6.1 CLI for this grant.
+        original = {
+            "network": {"hosts": [], "http": []},
+            "process": {"execute": [], "env": [], "exit": False},
+            "fs": {"read": [], "write": []},
+            "statusBar": False, "clipboard": True, "picker": True,
+            "host": ["day.today.read"], "openUrl": False,
+            "windows": {"kinds": ["normal"], "levels": ["normal"], "max": 1},
+        }
+        bundle.write_json(built / "capabilities.json", original)
+        day.resource_closure(built, self.root / "checked", ["day.today.read"])
+        for changes in (
+            {"clipboard": False}, {"picker": False}, {"openUrl": True}, {"extra": False},
+            {"process": {"execute": ["sh"], "env": [], "exit": False}},
+            {"fs": {"read": ["/"], "write": []}},
+            {"network": original["network"] | {"sockets": ["example.com:80"]}},
+            {"windows": original["windows"] | {"overlay": True}},
+            {"speech": True}, {"audio": True}, {"homeDir": True}, {"application": True},
+        ):
             bundle.write_json(built / "capabilities.json", original | changes)
             with self.assertRaisesRegex(ValueError, "capabilities"):
                 day.resource_closure(built, self.root / "nsh", ["day.today.read"])
@@ -406,6 +418,21 @@ fi
                 with self.assertRaisesRegex(ValueError, "stock Cargo 1.99.1"):
                     day.compile_snapshot(self.root, self.root, self.root / "out", self.source, self.tools, {})
                 self.assertEqual(run.call_count, 2)
+
+    def test_snapshot_checks_the_cli_digest_before_running_it(self):
+        app = self.root / "apps/day/native"
+        app.mkdir(parents=True)
+        shutil.copyfile(bundle.ROOT / "apps/day/native/Cargo.lock", app / "Cargo.lock")
+        versions = [self.compiler, "cargo 1.99.1 (fixture)"]
+        with patch.object(day, "execute", side_effect=versions) as run:
+            with self.assertRaisesRegex(ValueError, "NSH release executable checksum mismatch"):
+                day.compile_snapshot(self.root, self.root, self.root / "out", self.source, self.tools, {})
+            self.assertEqual(run.call_count, 2)
+        with patch.object(day, "CLI_SHA256", bundle.digest(self.tools["nsh"])), \
+                patch.object(day, "execute", side_effect=versions + ["nsh 0.5.0 (f4d68f7)"]) as run:
+            with self.assertRaisesRegex(ValueError, "Expected installed unmodified Longbridge NSH 0.6.1"):
+                day.compile_snapshot(self.root, self.root, self.root / "out", self.source, self.tools, {})
+            self.assertEqual(run.call_args.args[0], [self.tools["nsh"], "--version"])
 
     def compile_recipe(self, *, connected_only, configured=False):
         checkout = self.root / "source"
@@ -503,7 +530,7 @@ class ArtifactHostTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.binary = self.root / "pilot-artifact-host"
         self.source, self.recipe = "a" * 40, "b" * 64
-        self.identity = dict(schema=1, kind="nsh-source-host", runtime="nsh 0.5.0",
+        self.identity = dict(schema=1, kind="nsh-source-host", runtime="nsh 0.6.1",
                              source=self.source, recipe=self.recipe)
         self.module = bundle.ROOT / day.HOST_MODULE
 
@@ -523,6 +550,10 @@ class ArtifactHostTests(unittest.TestCase):
         for source, recipe in (("c" * 40, self.recipe), (self.source, "c" * 64)):
             with self.assertRaisesRegex(ValueError, "compiled source"):
                 day.artifact_identity(self.binary, source, recipe, module=self.module)
+        old = self.identity | {"runtime": "nsh 0.5.0"}
+        self.program("print(" + repr(json.dumps({"identity": old, "value": None})) + ")\n")
+        with self.assertRaisesRegex(ValueError, "compiled source"):
+            day.artifact_identity(self.binary, self.source, self.recipe, module=self.module)
 
     def test_node_transport_refuses_deadline_oversize_and_malformed_reply(self):
         for body in ("print('not json')", "print('x'*9000)", "import time\ntime.sleep(30)"):

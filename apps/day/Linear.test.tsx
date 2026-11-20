@@ -1,17 +1,23 @@
-// The read-only Linear page as a user opens it from Today's Linear row, on a
-// scripted saved read (LinearFixture.tsx). No daemon, provider or Linear.
+// Today's Linear tab and the standalone page over a scripted saved read. No daemon, provider or Linear.
 import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 
+type App = Awaited<ReturnType<typeof open>>;
+
+async function openPage(app: App) {
+	await app.press("id:place-menu");
+	await app.press("id:place-linear");
+	await app.waitFor("id:linear");
+}
+
 async function page(mode?: string, fresh = false) {
 	const app = await open("./LinearFixture.tsx", desktop);
-	await app.waitFor("id:linear-row");
+	await app.waitFor("id:today-tab-linear");
 	if (mode) await app.press(`role:button[Mode ${mode}]`);
-	// Today's Linear row read once already; start the page as a window that never read.
+	// Today read once for the tab badge. Forget that read to test a failed first read.
 	if (fresh) await app.press("Forget reads");
-	await app.press("id:linear-open");
-	await app.waitFor("id:linear");
+	await openPage(app);
 	return app;
 }
 
@@ -28,7 +34,7 @@ test("the page names its scope, the saved cycle and groups the user's issues by 
 	expect(app.shows("id:linear-group-other")).toBe(false);
 	expect(app.shows("All 7 saved issues are shown.")).toBe(true);
 	expect(app.shows("id:linear-more")).toBe(false);
-	// Today's Linear row read once to count the issues; opening the page read again.
+	// Today read once to count the issues; opening the page read again.
 	expect(app.shows("Reads: 2")).toBe(true);
 });
 
@@ -64,14 +70,14 @@ test("an issue opens its mission; Escape goes back to Today", async () => {
 	await app.waitFor("Show search results in under 200 ms for large workspaces.");
 	expect(app.shows("id:linear")).toBe(false);
 	await app.keyboard.press("escape");
-	await app.press("id:linear-open");
+	await openPage(app);
 	await app.press("id:linear-issue-ln-231");
 	await app.waitFor("id:linear-detail-ln-231");
 	// Escape closes the open issue first, then the page.
 	await app.keyboard.press("escape");
 	expect(app.shows("id:linear-detail-ln-231")).toBe(false);
 	await app.keyboard.press("escape");
-	await app.waitFor("id:linear-row");
+	await app.waitFor("id:today-tab-linear");
 	expect(app.shows("id:linear")).toBe(false);
 });
 
@@ -128,13 +134,47 @@ test("without an active cycle, the page says Pilot saved the open issues", async
 	expect(app.shows("All 3 saved issues are shown.")).toBe(true);
 });
 
-test("the mock window offers the page with demo issues; a new request says nobody started it", async () => {
-	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("id:linear-row");
-	await app.press("id:linear-open");
-	await app.waitFor("Your issues in cycle 42");
+test("Today embeds saved issues and their actions in its own panel", async () => {
+	const app = await open("./LinearFixture.tsx", desktop);
+	await app.waitFor("id:today-tab-linear >> text:7");
+	await app.press("id:today-tab-new");
+	await app.waitFor("id:today-new >> text:Slack");
+	expect(app.shows("id:new-ln-231")).toBe(false);
+	expect(app.shows("id:today-tab-new >> text:2")).toBe(false);
+	await app.press("id:today-tab-linear");
+	await app.waitFor("id:today-linear >> text:7");
+	expect(app.shows("id:linear-cycle")).toBe(true);
+	expect(app.shows("id:linear-saved")).toBe(true);
+	expect(app.shows("id:linear-panel")).toBe(false);
 	await app.press("id:linear-issue-ln-231");
 	await app.waitFor("Nobody started it in Pilot yet.");
+	await app.press("id:start-ln-231");
+	await app.waitFor("Pilot links the issue for context only. Its Linear status does not change.");
+	await app.press("Cancel");
+	await app.keyboard.press("escape");
+	expect(app.shows("id:linear-detail-ln-231")).toBe(false);
+	expect(app.shows("id:today-linear")).toBe(true);
+	expect(app.shows("Reads: 1")).toBe(true);
+});
+
+test("Today shows Linear without a count until a complete current copy is available", async () => {
+	const app = await open("./LinearFixture.tsx", desktop);
+	await app.waitFor("id:today-tab-linear >> text:7");
+	await app.press("id:today-tab-linear");
+	await app.press("role:button[Mode overflow]");
+	await app.press("Fixture read");
+	await app.waitFor("id:linear-more");
+	expect(app.shows("id:today-tab-linear >> text:7")).toBe(false);
+	expect(app.shows("id:today-tab-linear >> text:100")).toBe(false);
+	await app.press("role:button[Mode not current]");
+	await app.press("Fixture read");
+	await app.waitFor("id:linear-not-current");
+	expect(app.shows("id:linear-cycle")).toBe(false);
+	await app.press("role:button[Mode unset]");
+	await app.press("Fixture read");
+	await app.waitFor("id:today-tab-overview");
+	expect(app.shows("id:today-tab-linear")).toBe(false);
+	expect(app.shows("id:today-linear")).toBe(false);
 });
 
 test("a close or an update keeps the page, its project and the open issue; showing it again only reads", async () => {
@@ -156,11 +196,11 @@ test("a close or an update keeps the page, its project and the open issue; showi
 	expect(app.shows("id:linear")).toBe(true);
 	// Back on Today, nothing is kept for the page.
 	await app.keyboard.press("escape");
-	await app.waitFor("id:linear-row");
+	await app.waitFor("id:today-tab-linear");
 	await app.press("Save and reopen");
 	await app.waitFor("Kept: []");
 	expect(app.shows("id:linear")).toBe(false);
-	expect(app.shows("id:linear-row")).toBe(true);
+	expect(app.shows("id:today-tab-linear")).toBe(true);
 });
 
 test("a restored page never shows another project's issues in its place", async () => {
@@ -180,8 +220,8 @@ test("a restored page never shows another project's issues in its place", async 
 	await app.waitFor("Kept: [mock-project/ln-219]");
 	// Opening the page again from Today shows the project Pilot reads now.
 	await app.press("role:button[Back to Today]");
-	await app.waitFor("id:linear-row");
-	await app.press("id:linear-open");
+	await app.waitFor("id:today-tabs");
+	await openPage(app);
 	await app.waitFor("id:linear-issue-ln-219");
 	expect(app.shows("id:linear-other-project")).toBe(false);
 });

@@ -7,7 +7,8 @@ Linux desktop is deferred. For a development build that does not replace an app,
 In Day, each page is one panel, with tabs on its top edge where the page has parts. The top bar is a path:
 **Pilot** goes to Today, the part before the last goes back one level (as Escape does), and the last part
 opens a menu of places. **Search** (Command+K) sits at its right with Changes, Feedback, Artifacts, Settings
-and New. Today's tabs filter the page: Overview, Needs you, New, Working and Missions.
+and New. Today's tabs filter the page: Overview, Needs you, New, Working and Missions. When nothing needs you,
+the section says so in one line.
 Settings has tabs for AI, Project, Local projects, Tool connections, Allowances and Diagnostics & privacy;
 a tab this window cannot reach is hidden. In **Project**, choose **Project for preferences** to read and edit
 that project's preferences without switching the window. A draft for another project stays until you return
@@ -55,8 +56,10 @@ New Slack requests wait in Needs you after the results, one card each: the messa
 reporter when Pilot found them, and where work starts. **Start work** (⌘↩) asks once before it starts one Build
 chat; **Change** picks a mission instead or plans a new one. **Later** (L) and **Discard** set the request aside;
 the folded lists below Needs you bring it back. **Open in Slack** shows the message in your browser. Today's
-headline counts these cards and the results with the questions. Linear is one quiet row after Missions, with
-how many issues are yours and how many are new; **Open** shows the Linear page, where Linear issues start.
+headline counts these cards and the results with the questions. **New** lists Slack requests.
+When Linear is connected, its own Today tab shows Pilot's saved copy of your issues.
+**Finished today** lists completed chat runs in your local day. Finishing a run does not mark its result reviewed
+or merged. Results that need your review still wait in Needs you.
 On a Decide card, the Mission and Chat links below the question open its source.
 Standalone questions show only Chat. Back returns to the pending question and keeps your draft.
 Opening either link sends no answer and starts no work.

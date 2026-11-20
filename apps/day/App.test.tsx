@@ -28,7 +28,7 @@ test("Today shows decisions first, then moving and waiting missions", async () =
 		"Moving · 1",
 		"Not moving · 2",
 		"Waiting for you",
-		"Done since you looked",
+		"Finished today",
 		"Coming up",
 		"Mock data",
 	]) {
@@ -230,7 +230,7 @@ test("a lost confirmation stays unknown and is only checked, never resent", asyn
 
 test("nothing waiting is said calmly", async () => {
 	const app = await open("./Quiet.tsx", desktop);
-	await app.waitFor("Pilot keeps going on its own.");
+	await app.waitFor("id:today-no-attention");
 	expect(app.shows("You were reading the history slice in Native desktop app.")).toBe(true);
 });
 
@@ -615,7 +615,7 @@ test("offline keeps the last read visible and turns controls off", async () => {
 test("nothing readable is said plainly, with nothing guessed", async () => {
 	const app = await open("./Unreadable.tsx", desktop);
 	await app.waitFor("Today could not be read.");
-	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("id:today-no-attention")).toBe(false);
 	expect(app.shows("Missions")).toBe(false);
 });
 
@@ -692,24 +692,22 @@ test("the screen's sandbox refuses network, sockets, files and processes", async
 	}
 });
 
-test("Linear is one quiet row after Missions; it counts new issues and opens the Linear page", async () => {
+test("Today has a Linear tab for saved issues, separate from New", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("id:linear-row");
-	// The demo saved 5 open issues of yours; one is a new request.
-	await app.waitFor("Linear · 5 assigned to you · 1 new");
-	// The Linear request is not a card; Linear is one row of New, above Done since you looked.
+	await app.waitFor("id:today-tab-linear >> text:7");
 	expect(app.shows("CSV export times out for large accounts")).toBe(false);
-	expect(app.shows("id:incoming")).toBe(false);
-	const texts = app.texts();
-	expect(texts.indexOf("Done since you looked")).toBeGreaterThan(texts.indexOf("Linear · 5 assigned to you · 1 new"));
-	await app.press("id:linear-open");
-	await app.waitFor("id:linear");
+	await app.press("id:today-tab-new");
+	await app.waitFor("Slack requests are not available here.");
+	expect(app.shows("id:linear-issue-ln-231")).toBe(false);
+	await app.press("id:today-tab-linear");
+	await app.waitFor("id:today-panel >> id:linear-issue-ln-231");
+	expect(app.shows("id:linear-panel")).toBe(false);
 });
 
-test("without a request source Today shows no Linear row and no request notes", async () => {
+test("without a request source Today shows no Linear tab and no request notes", async () => {
 	const app = await open("./Quiet.tsx", desktop);
 	await app.waitFor("Coming up");
-	expect(app.shows("id:linear-row")).toBe(false);
+	expect(app.shows("id:today-tab-linear")).toBe(false);
 	expect(app.shows("id:requests")).toBe(false);
 });
 

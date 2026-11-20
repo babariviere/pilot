@@ -23,7 +23,7 @@ test("NSH installed helper binds exact runtime source and bytes, not a loose exe
 	const identity = {
 		schema: 1,
 		kind: "nsh-source-host",
-		runtime: "nsh 0.5.0",
+		runtime: "nsh 0.6.1",
 		source: "a".repeat(40),
 		recipe: "b".repeat(64),
 	};
@@ -232,7 +232,7 @@ test("NSH helper transport joins the owned helper before it releases a slot or s
 	const identity = {
 		schema: 1,
 		kind: "nsh-source-host",
-		runtime: "nsh 0.5.0",
+		runtime: "nsh 0.6.1",
 		source: "a".repeat(40),
 		recipe: "b".repeat(64),
 	};
