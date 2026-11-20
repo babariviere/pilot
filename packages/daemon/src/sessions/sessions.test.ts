@@ -41,7 +41,7 @@ import { WebSocket } from "ws";
 import { diagnosticContextResponse } from "../runtime/diagnostics/diagnostic-context.ts";
 import { Conflict, NotFound } from "../runtime/contracts/errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "../runtime/process/event-loop-watchdog.ts";
-import { admitInsightsOperation, INSIGHTS_DISCLOSURE, INSIGHTS_SETUP_MESSAGE } from "../insights/insights-native.ts";
+import { admitInsightsOperation, INSIGHTS_DISCLOSURE } from "../insights/insights-native.ts";
 import { initialInsightsSettings } from "../insights/insights-settings.ts";
 import { MissionService } from "../missions/mission-service.ts";
 import { MissionStore } from "../missions/missions.ts";
@@ -7030,36 +7030,9 @@ test("native Insights durable operations and passive HTTP pages use explicit aut
 		);
 	}
 	const spawns = t.mock.method(f.sessions, "spawnInsightsDurable");
-	const created = await (await post(create)).json();
-	assert.equal(created.state, "accepted");
-	assert.deepEqual(created.result, { sessionId: create.targetId });
-	assert.deepEqual(await (await post(create)).json(), created);
-	assert.deepEqual(await (await post(create, false, true)).json(), created);
-	await f.sessions["starting"].get(create.targetId);
-	assert.equal(spawns.mock.callCount(), 1);
-	assert.deepEqual(spawns.mock.calls[0]!.arguments, [
-		{
-			projectId: f.project.id,
-			missionId: f.missionId,
-			model: "test/offline",
-			thinking: undefined,
-			message: INSIGHTS_SETUP_MESSAGE,
-		},
-		create.targetId,
-		create.operationId,
-	]);
-	const changedPayload = JSON.stringify({ ...createPayload, model: "test/changed" });
-	assert.equal(
-		(await post({ ...create, payload: changedPayload, payloadHash: payloadHash(changedPayload) })).status,
-		400,
-	);
-	for (const payload of [
-		{ ...createPayload, message: "Injected" },
-		{ ...createPayload, disclosure: "other" },
-		{ ...createPayload, missionId: "absent" },
-	]) {
-		assert.equal((await (await post(operation("insights-create", payload, randomUUID()))).json()).state, "rejected");
-	}
+	assert.equal((await post(create)).status, 410);
+	assert.deepEqual(await (await post(create, false, true)).json(), { state: "unknown" });
+	assert.equal(spawns.mock.callCount(), 0);
 	const admission = f.sessions.insightsHostAdmission(f.id);
 	const draft = {
 		title: "Synthetic finding",
