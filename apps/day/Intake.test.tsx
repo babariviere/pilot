@@ -208,14 +208,14 @@ test("a project change closes a Start before it is sent", async () => {
 	expect(app.shows("Sends: 0 · Checks: 0")).toBe(true);
 });
 
-test("the headline and summary count the Slack cards, as Needs you does", async () => {
+test("the headline separates incoming requests from attention", async () => {
 	const app = await ready();
-	// Rust's own headline says nothing needs you: it counts only questions and actions.
-	await app.waitFor("Two things need you.");
+	// New requests have not started work. They do not become attention merely by arriving.
+	await app.waitFor("Two incoming requests.");
 	expect(app.shows("Nothing needs you today.")).toBe(false);
 	expect(app.shows("text:/ Two Slack requests wait for you\\.$/")).toBe(true);
 	await app.press("id:later-northwind");
-	await app.waitFor("One thing needs you.");
+	await app.waitFor("One incoming request.");
 	expect(app.shows("text:/ One Slack request waits for you\\.$/")).toBe(true);
 	await app.press("id:later-stripe");
 	await app.waitFor("Nothing needs you today.");

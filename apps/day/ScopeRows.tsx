@@ -335,14 +335,53 @@ export function otherNeedsCount(ctx: TodayScope): number {
 	return ctx.others().reduce((n, p) => n + needsOf(p).length + requestsOf(p).length, 0);
 }
 
+/** Incoming requests are separate from attention in Today's headline. */
+export function otherRequestsCount(ctx: TodayScope): number {
+	return ctx.others().reduce((n, p) => n + requestsOf(p).length, 0);
+}
+
+function resultsOf(p: ScopeProject) {
+	return (
+		p.results?.items.filter(
+			(i) => i.unsettled || i.snapshot?.pendingOperationId || waitsForCheck(i.snapshot, undefined),
+		) ?? []
+	);
+}
+
+/** Delivered results in other projects also need attention, but are not incoming requests. */
+export function otherResultsCount(ctx: TodayScope): number {
+	return ctx.others().reduce((n, p) => n + resultsOf(p).length, 0);
+}
+
 /** Other projects' attention. Opening the exact item does not switch the Today filter. */
 export function OtherNeeds(props: { ctx: TodayScope; day: Day }) {
+	const shown = () =>
+		props.ctx
+			.others()
+			.filter(
+				(p) =>
+					props.ctx.scope() !== "all" ||
+					needsOf(p).length > 0 ||
+					requestsOf(p).length > 0 ||
+					!complete(p, "needsYou") ||
+					requestTrouble(p).length > 0,
+			);
 	return (
-		<Each of={props.ctx.others()} key={(p) => p.id}>
+		<Each of={shown()} key={(p) => p.id}>
 			{(p) => (
 				<View testID={`scope-needs-${p().id}`}>
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
 					<Unread project={p()} section="needsYou" />
+					<If
+						when={
+							props.ctx.scope() !== "all" &&
+							complete(p(), "needsYou") &&
+							p().needsYou.count === 0 &&
+							needsOf(p()).length + requestsOf(p()).length + resultsOf(p()).length === 0
+						}
+					>
+						<EmptyLine text="Nothing needs you." />
+					</If>
 					<Rows>
 						<Each of={needsOf(p())} key={(n) => n.id}>
 							{(n) => (
@@ -401,6 +440,7 @@ export function OtherNeeds(props: { ctx: TodayScope; day: Day }) {
 									testID={`scope-request-${r().id}`}
 									mark="new"
 									title={r().title}
+									titleLines={2}
 									meta={[`${r().sourceLabel} request`, r().place, r().age].filter(Boolean).join(" · ")}
 									trailing={
 										<Button
@@ -435,8 +475,12 @@ export function otherMissionsCount(ctx: TodayScope): number {
 
 /** Other projects' missions: state and one line. Pressing one opens the mission. */
 export function OtherMissions(props: { ctx: TodayScope; day: Day }) {
+	const shown = () =>
+		props.ctx
+			.others()
+			.filter((p) => props.ctx.scope() !== "all" || missionsOf(p).length > 0 || !complete(p, "missions"));
 	return (
-		<Each of={props.ctx.others()} key={(p) => p.id}>
+		<Each of={shown()} key={(p) => p.id}>
 			{(p) => (
 				<View testID={`scope-missions-${p().id}`}>
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
@@ -521,10 +565,7 @@ export function OtherPlanning(props: { ctx: TodayScope }) {
 
 /** Other projects' delivered results. Reading does not retarget this window or grant actions. */
 export function OtherToCheck(props: { ctx: TodayScope; day: Day; nested?: boolean }) {
-	const rows = (p: ScopeProject) =>
-		p.results?.items.filter(
-			(i) => i.unsettled || i.snapshot?.pendingOperationId || waitsForCheck(i.snapshot, undefined),
-		) ?? [];
+	const rows = resultsOf;
 	const shown = () => props.ctx.others().filter((p) => rows(p).length > 0 || !p.results?.complete);
 	return (
 		<If when={shown().length > 0}>
@@ -601,22 +642,4 @@ export function OtherNotShown(props: { ctx: TodayScope }) {
 			</Block>
 		</If>
 	);
-}
-
-/** Today's headline when it shows another project, from that project's read. */
-export function scopedHeadline(ctx: TodayScope): string {
-	if (ctx.scope() === "all") {
-		const projects = ctx.others();
-		if (projects.length === 0) return "Your projects.";
-		if (projects.some((p) => p.needsYou.count === null || !complete(p, "needsYou")))
-			return "What needs you is not fully known.";
-		const n = projects.reduce((sum, p) => sum + (p.needsYou.count ?? 0), 0);
-		return n === 0 ? "Nothing needs you." : needsWords(n, "across your projects");
-	}
-	const p = ctx.chosen();
-	if (!p) return `${ctx.name(ctx.scope())} is not shown.`;
-	if (!p.today) return `${p.name} could not be read.`;
-	const n = p.needsYou.count;
-	if (n === null || !complete(p, "needsYou")) return `What needs you in ${p.name} is not fully known.`;
-	return n === 0 ? `Nothing needs you in ${p.name}.` : needsWords(n, `in ${p.name}`);
 }

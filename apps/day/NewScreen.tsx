@@ -9,8 +9,10 @@
 // field, planning setup, allowance and Plan. Its project is the proposal's;
 // New's other draft stays saved beside it until the user replaces it.
 // A form-width page: the goal and how it starts in one section, then what
-// started here and the missions in planning.
-import { cleanup, effect, keymap, Scroll, untracked, View } from "nsh";
+// started here, the missions in planning and the plans whose tasks exist.
+// New speaks about a project's capabilities only after the user chose it and
+// Pilot read its setup: before that, one hint asks for a project.
+import { cleanup, effect, keymap, Scroll, signal, untracked, View } from "nsh";
 import {
 	checkNewChat,
 	chooseChat,
@@ -82,6 +84,8 @@ import {
 	Section,
 	TextField,
 } from "./ui";
+import { openMission } from "./view";
+import { stateMark, stateTone, stateWord } from "./words";
 
 const MODES: { mode: ChatMode; label: string }[] = [
 	{ mode: "build", label: modeWords("build") },
@@ -222,11 +226,7 @@ function ProjectRow(props: { plans: Plans }) {
 	const chosen = () => view().projects.find((p) => p.projectId === chatPick()?.projectId) ?? null;
 	const items = () => view().projects.map((p) => ({ value: p.projectId, title: p.name }));
 	const placeholder = () => (view().availability === "reading" ? "Reading projects…" : "Choose a project");
-	const where = () => {
-		const c = chosen();
-		if (c) return c.projectPath;
-		return view().availability === "live" && !chatPick() ? "No project is chosen for you." : "";
-	};
+	const where = () => chosen()?.projectPath ?? "";
 	return (
 		<View testID="new-project" class="gap-1.5">
 			<View class="flex-row items-center gap-2.5">
@@ -406,20 +406,57 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 	const chats = props.plans.chats;
 	const chatView = () => chats.view();
 	const off = () => !planning().canCreate;
-	// The planning setup, read again on its own while it is missing (backoff up to a minute) and when the window comes back.
-	const setupReads = keepRead(
-		async () => {
-			await props.plans.feed.prepareNew?.();
-		},
-		() => off() && !(props.plans.feed.canCheckNew?.() ?? false) && !!props.plans.feed.prepareNew,
-		() => !off(),
-	);
 	const chatsOff = () => chatView().availability === "unavailable";
 	const empty = () => goalDraft().trim() === "";
 	const canCheck = () => {
 		planning();
 		return props.plans.feed.canCheckNew?.() === true;
 	};
+	// The chosen project's planning setup read. New says what the project can
+	// do only once this read answered for the current choice.
+	const setupRead = signal<{ projectId: string; state: "reading" | "read" | "failed"; message: string } | null>(null);
+	let setupOrder = 0;
+	const readSetup = async (c: ReturnType<typeof chatChoice>, tries = 0): Promise<void> => {
+		const order = ++setupOrder;
+		const before = untracked(setupRead);
+		if (!c) setupRead.set(null);
+		else if (before?.projectId !== c.projectId || before.state === "failed")
+			setupRead.set({ projectId: c.projectId, state: "reading", message: "" });
+		let status = "accepted";
+		let message = "";
+		try {
+			const outcome = await props.plans.feed.prepareNew?.();
+			if (outcome) ({ status, message } = outcome);
+		} catch (error) {
+			status = "unknown";
+			console.error("New: reading the project's planning setup failed", error);
+		}
+		// Only the newest read for the current project answers.
+		if (!c || order !== setupOrder || untracked(chatChoice)?.projectId !== c.projectId) return;
+		// Another read replaced this one: read once more for an answer of its own.
+		if (status === "stale" && tries === 0) return readSetup(c, 1);
+		setupRead.set(
+			status === "accepted"
+				? { projectId: c.projectId, state: "read", message: "" }
+				: { projectId: c.projectId, state: "failed", message },
+		);
+	};
+	const setupState = () => {
+		const c = chatChoice(),
+			s = setupRead();
+		return c && s?.projectId === c.projectId && !chatSelecting() ? s.state : null;
+	};
+	const settled = () => setupState() === "read";
+	const settledName = () => projectName(chatView(), chatChoice()?.projectId ?? "");
+	// The setup, read again on its own while the read failed or planning stays
+	// off for the chosen project (backoff up to a minute), and when the window comes back.
+	const setupReads = keepRead(
+		() => readSetup(untracked(chatChoice)),
+		() =>
+			setupState() === "failed" ||
+			(settled() && off() && !(props.plans.feed.canCheckNew?.() ?? false) && !!props.plans.feed.prepareNew),
+		() => settled() && !off(),
+	);
 	// The project the user chose, while Pilot still lists it. Null until they choose.
 	const picked = () => chatView().projects.find((p) => p.projectId === chatPick()?.projectId) ?? null;
 	// Legacy project-bound windows keep their scope. Profile-only windows
@@ -452,8 +489,8 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 	// A new or restored explicit choice only reads planning setup. Native code
 	// checks that same choice again at Plan; no enrollment happens here.
 	effect(() => {
-		chatChoice();
-		untracked(() => void props.plans.feed.prepareNew?.());
+		const c = chatChoice();
+		untracked(() => void readSetup(c));
 	});
 	// Leaving New without words drops the project choice: nothing keeps it.
 	// Words keep it, as their draft's project. A linked draft keeps its proposal's project.
@@ -481,6 +518,34 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 				? "Start a fix"
 				: "What do you want done?";
 	const started = () => chatView().settled.filter((o) => o.delivery === "accepted");
+	const inPlanning = () => planning().plans.filter((p) => p.stage !== "published");
+	const published = () => planning().plans.filter((p) => p.stage === "published");
+	// Today's row for a mission whose tasks exist: its state is the one Today shows.
+	const missionRow = (id: string) => {
+		const t = props.day?.today();
+		return t ? ([...t.moving, ...t.notMoving, ...t.unreported].find((m) => m.id === id) ?? null) : null;
+	};
+	// The panel's one notice. Nothing is said about a project before the user
+	// chose it and Pilot read its setup.
+	const panelNotice = () => {
+		if (off() && chatsOff())
+			return { testID: "planning-off", text: `${planning().createReason} Nothing can be sent from here.` };
+		if (setupState() === "failed")
+			return {
+				testID: "setup-unread",
+				text: `Pilot could not read what ${settledName()} can do.`,
+				detail: `${setupRead()?.message || "It tries again."} Nothing was sent.`,
+				retry: true,
+			};
+		if (off() && settled())
+			return {
+				testID: "planning-off",
+				text: `Pilot cannot plan a mission in ${settledName()}.`,
+				detail: `${planning().createReason}${canStartChat() ? ` You can still start this as one chat in ${settledName()}.` : ""}`,
+				retry: true,
+			};
+		return null;
+	};
 	return (
 		<Scroll class="flex-1" contentOffset={scroll.contentOffset} scrollEventThrottle={100} onScroll={scroll.onScroll}>
 			<Page width="form">
@@ -492,17 +557,23 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 							? `From Feedback: “${linked()?.title ?? ""}”. Plan links the feedback to the mission. Edit the goal first.`
 							: findingWork()
 								? `From Insights: “${findingWork()?.title}”. The finding and its source references stay linked when you edit the goal.`
-								: "Say it in your own words. A mission starts with questions to clarify what you want."
+								: "Say it in your own words."
 					}
 				/>
 				<Panel
 					testID="new-panel"
 					notice={
-						<If when={off()}>
+						<If when={panelNotice()}>
 							<Notice
-								testID="planning-off"
+								testID={panelNotice()?.testID}
 								placement="panel"
-								text={`${planning().createReason} ${chatsOff() ? "Nothing can be sent from here." : "You can still start one chat."}`}
+								text={panelNotice()?.text ?? ""}
+								detail={panelNotice()?.detail}
+								action={
+									<If when={panelNotice()?.retry && setupReads.warn() && props.plans.feed.prepareNew}>
+										<Link label="Try now" disabled={newBusy()} onPress={() => void setupReads.now()} />
+									</If>
+								}
 							/>
 						</If>
 					}
@@ -591,29 +662,14 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 							</Each>
 							<Unconfirmed plans={props.plans} />
 							<LinkedConfirm />
-							<If
-								when={
-									(canCheck() && creations().length === 0) ||
-									(setupReads.warn() && off() && !canCheck() && props.plans.feed.prepareNew)
-								}
-							>
+							<If when={canCheck() && creations().length === 0}>
 								<Block>
 									<Buttons>
-										<If when={canCheck() && creations().length === 0}>
-											<Button
-												label="Check status"
-												disabled={newBusy()}
-												onPress={() => void checkCreation(props.plans)}
-											/>
-										</If>
-										<If when={setupReads.warn() && off() && !canCheck() && props.plans.feed.prepareNew}>
-											<Button
-												label="Try now"
-												icon="refresh"
-												disabled={newBusy()}
-												onPress={() => void setupReads.now()}
-											/>
-										</If>
+										<Button
+											label="Check status"
+											disabled={newBusy()}
+											onPress={() => void checkCreation(props.plans)}
+										/>
 									</Buttons>
 								</Block>
 							</If>
@@ -675,7 +731,12 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 									</If>
 									<If when={!picked() && !linked()}>
 										<Caption testID="choose-first" tone="faint">
-											Plan a mission and Start as one chat wait for a project.
+											Choose a project to see what can start there.
+										</Caption>
+									</If>
+									<If when={!!picked() && !linked() && !chatNote() && !settled() && setupState() !== "failed"}>
+										<Caption testID="project-reading" tone="faint">
+											Reading what this project can do…
 										</Caption>
 									</If>
 									<If when={elsewhere()}>
@@ -683,19 +744,16 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 											{`Missions start in ${ownName()} here. Choose ${ownName()} to plan one, or start this as one chat.`}
 										</Caption>
 									</If>
-									<If when={canPlan()}>
+									<If when={canPlan() && settled() && !off()}>
 										<If when={!linked()}>
 											<If when={planning().setup.allowanceRequired}>
 												<MissionAllowance />
 											</If>
-											<If when={planning().canCreate}>
-												<Caption tone="faint">{`${planning().setup.access} · ${planning().setup.model}`}</Caption>
-											</If>
+											<Caption tone="faint">{`${planning().setup.access} · ${planning().setup.model}`}</Caption>
 										</If>
 										<Caption tone="faint">
-											Answer one question at a time, or use See all. Submit only when every question is
-											answered. Review and agree to the plan next; building needs a separate Start work
-											confirmation.
+											Pilot asks you questions first. Then you review the plan. Work starts only when you
+											confirm Start work.
 										</Caption>
 									</If>
 								</Block>
@@ -719,7 +777,7 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 											<Row
 												mark="done"
 												title={`A chat in ${projectName(chatView(), o().projectId)}`}
-												meta="Works on its own"
+												meta="Started. Open it to see its progress."
 												trailing={
 													<If when={o().sessionId && props.day?.chat}>
 														<OpenChatAction
@@ -735,10 +793,10 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 								</Rows>
 							</Section>
 						</If>
-						<If when={planning().plans.length > 0}>
-							<Section title="Missions in planning" count={planning().plans.length}>
+						<If when={inPlanning().length > 0}>
+							<Section title="Missions in planning" count={inPlanning().length}>
 								<Rows>
-									<Each of={planning().plans} key={(p) => p.missionId}>
+									<Each of={inPlanning()} key={(p) => p.missionId}>
 										{(p) => (
 											<Row
 												testID={`plan-${p().missionId}`}
@@ -751,6 +809,53 @@ export function NewScreen(props: { plans: Plans; day?: Day }) {
 												onPress={() => openPlan(p().missionId)}
 											/>
 										)}
+									</Each>
+								</Rows>
+							</Section>
+						</If>
+						<If when={published().length > 0}>
+							<Section title="Tasks created" count={published().length}>
+								<Rows>
+									<Each of={published()} key={(p) => p.missionId}>
+										{(p) => {
+											// Today's state when it has the mission; else only a way to see its status.
+											const m = () => missionRow(p().missionId);
+											return (
+												<If
+													when={m()}
+													else={
+														<Row
+															testID={`plan-${p().missionId}`}
+															title={p().title}
+															aside={
+																<Link
+																	label="View status"
+																	testID={`plan-status-${p().missionId}`}
+																	accessibilityLabel={`View the status of ${p().title}. Opening it starts nothing.`}
+																	onPress={() => openPlan(p().missionId)}
+																/>
+															}
+														/>
+													}
+												>
+													{(row) => (
+														<Row
+															testID={`plan-${p().missionId}`}
+															mark={stateMark(row())}
+															title={p().title}
+															meta={row().line}
+															state={stateWord(row())}
+															stateTone={stateTone(row())}
+															accessibilityLabel={`${p().title}, ${stateWord(row())}. Open the mission.`}
+															onPress={() => {
+																closePlanning();
+																openMission(p().missionId);
+															}}
+														/>
+													)}
+												</If>
+											);
+										}}
 									</Each>
 								</Rows>
 							</Section>

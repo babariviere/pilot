@@ -212,6 +212,7 @@ target when pressable, else on the whole row), `detail`.
   `aside` sits at the right outside the press target (its chat link); `detail` still always shows. Opening only
   shows what is read. A part of the page that opens on request (not a list item) is an `ExpandableRow`.
 - `titleTestID` and `metaTestID` name the title and the meta line for tests.
+- `titleLines={2}` lets an incoming request title wrap to two lines before cutting off. Meta stays on one line.
 - `Rows flush?` holds rows and draws the hairlines between them (from the row's content, 16 points in, to the right
   edge; none above the first). Always put rows in `Rows`. `flush` is for rows inside a `Question` or a `Block`:
   they reach the section's edges instead of indenting twice.

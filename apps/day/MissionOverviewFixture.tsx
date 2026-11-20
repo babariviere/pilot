@@ -3,7 +3,7 @@
 // on top picks a situation; Command-Shift-U applies the next live update
 // without moving the keyboard focus. Nothing here reads or sends anything real.
 import { keymap, mount, signal, View } from "nsh";
-import type { Freshness, MissionPage, TaskLine, TaskWorkState } from "pilot-day/native";
+import type { Freshness, MissionPage, Problem, TaskLine, TaskWorkState } from "pilot-day/native";
 import { TodayFeed } from "pilot-day/native";
 import { anchorOnScreen, type Span } from "./contentAnchor";
 import { type Day, mirrorDay } from "./day";
@@ -96,8 +96,46 @@ function running(): TaskLine[] {
 			ownerTitle: "Review · Opus",
 			workReason: "Commit 4be1c07 is ready for review.",
 		}),
+		// Waits for the same work as #5 in another state: Blockers groups them and keeps each state and reason.
+		task("search-9", 9, "Search filters", "blocked", "blocked", {
+			workReason: "Waiting for #4 Release pull request.\nMarked blocked until the filter design is agreed.",
+			prerequisites: [
+				{ id: "search-4", number: 4, title: "Release pull request", status: moved ? "inProgress" : "todo" },
+			],
+		}),
 	];
 }
+
+/** The attention row for #3's chat while it waits for the user: the same task Now shows. */
+const WAITING: Problem = {
+	id: "session:w-search",
+	title: "Integration tests on Linux",
+	cause: "Its chat ended its turn without a result or a question. It may be waiting for your reply.",
+	nextStep: "Reply to it, or continue without reply.",
+	missionId: "search",
+	projectId: "fixture-project",
+	sessionId: "w-search",
+	taskId: "search-3",
+	canContinue: true,
+	canDismiss: false,
+	canReply: true,
+	says: "Which Linux distributions count for the release?",
+};
+
+/** An attention row for #8 that names no chat: Now keeps #8's own chat link. */
+const REVIEW_CHECK: Problem = {
+	id: "task:search-8",
+	title: "Benchmark review",
+	cause: "The review's checks did not start.",
+	nextStep: "Open the mission and resolve its blocked work or question.",
+	missionId: "search",
+	projectId: "fixture-project",
+	sessionId: null,
+	taskId: "search-8",
+	canContinue: false,
+	canDismiss: false,
+	canReply: false,
+};
 
 function tasks(now: Situation): TaskLine[] {
 	const all = running();
@@ -192,6 +230,7 @@ function page(original: MissionPage): MissionPage {
 				: t,
 		),
 		tasksKnown: now !== "unread",
+		problems: now === "waiting" ? [WAITING, REVIEW_CHECK] : original.problems,
 		brief: "Search must answer in under 200 ms for workspaces with 50,000 files.",
 		decisions: ["Linux and macOS only for this release.", "Keep the old index until the new one is checked."],
 		freshness: now === "offline" ? OFFLINE : original.freshness,

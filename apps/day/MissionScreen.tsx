@@ -1203,6 +1203,7 @@ function MissionBody(props: {
 								inMission
 								earlier={todayWarning(props.day.freshness, props.page.freshness) !== ""}
 								chat={props.day.chat?.source}
+								openChat={props.day.chat ? (sessionId) => openMemberChat(props.page, sessionId) : undefined}
 							/>
 							<MissionNow day={props.day} page={props.page} anchor={props.anchor} />
 							<MissionNext

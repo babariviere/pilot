@@ -5,8 +5,8 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 // Today's own read of pilot, and of website, by their headlines.
-const PILOT = "Three short things need you.";
-const WEBSITE = "Two things need you.";
+const PILOT = "text:/^Three things need you\\./";
+const WEBSITE = "text:/^Two things need you\\./";
 
 async function choose(app: Awaited<ReturnType<typeof open>>, name: string) {
 	await app.press("label:Projects Today shows");

@@ -1,8 +1,9 @@
 // A mission chat ended its turn with no result and no question: it may ask
-// the user something in prose. This shows its last message, a reply field and
-// the two ways on. Reply sends the user's own words; Continue sends Pilot's
-// fixed words. Each is sent once, on a press. A lost answer is checked, never
-// sent again. A read of the same chat keeps the field, its focus and its words.
+// the user something in prose. This shows its last message as "Agent reply",
+// a field labeled "Your reply" and the two ways on. Reply sends the user's own
+// words; Continue without reply sends Pilot's fixed words. Each is sent once,
+// on a press. A lost answer is checked, never sent again. A read of the same
+// chat keeps the field, its focus and its words.
 import { signal, View } from "nsh";
 import { keepField } from "./kept";
 import type { ContinueResult, SessionChatSource } from "./sessionChat";
@@ -58,10 +59,11 @@ export function ChatWaits(props: {
 	return (
 		<View testID={`chat-waits-${id()}`} class="gap-2">
 			<If when={props.says}>
-				<Caption tone="faint">Its last message</Caption>
+				<Caption tone="faint">Agent reply</Caption>
 				<Quote testID={`chat-says-${id()}`} text={props.says ?? ""} />
 			</If>
 			<If when={!sent() && !unknown()}>
+				<Caption tone="faint">Your reply</Caption>
 				<TextField
 					ref={field.ref}
 					onFocus={field.focus}
@@ -88,7 +90,7 @@ export function ChatWaits(props: {
 						<Button
 							small
 							testID={`chat-waits-continue-${id()}`}
-							label="Continue"
+							label="Continue without reply"
 							disabled={sending()}
 							accessibilityLabel="Let this chat go on without your words. Pilot sends its fixed words once."
 							onPress={() => void run(() => props.chat.continueChat(id()), "")}

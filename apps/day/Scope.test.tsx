@@ -47,6 +47,53 @@ test("one project shows only its rows, and counts what needs you elsewhere witho
 	expect(sent(app)).toContain("Sent: 0");
 });
 
+test("All hides empty project groups but keeps unavailable and filtered empty projects", async () => {
+	const app = await ready();
+	await app.waitFor("id:scope-needs-demo-billing");
+	expect(app.shows("id:scope-missions-demo-billing")).toBe(true);
+	await app.press("Empty billing");
+	await app.waitUntil(() => !app.shows("id:scope-needs-demo-billing"));
+	expect(app.shows("id:scope-missions-demo-billing")).toBe(false);
+	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
+	await choose(app, "billing");
+	await app.waitFor("id:scope-needs-demo-billing");
+	expect(app.shows("id:scope-missions-demo-billing")).toBe(true);
+	expect(app.shows("Nothing needs you.")).toBe(true);
+	expect(app.shows("No active missions.")).toBe(true);
+	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("a profile-only headline separates requests from attention in the selected project", async () => {
+	const app = await ready();
+	await app.press("Global window");
+	await app.press("Website requests only");
+	await choose(app, "website");
+	await app.waitFor("Two incoming requests.");
+	expect(app.shows("id:scope-needs-demo-website")).toBe(true);
+	expect(app.shows("id:scope-missions-demo-website")).toBe(true);
+	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("stopped chats in another project are counted alongside this window's attention", async () => {
+	const app = await ready();
+	await app.press("Empty billing");
+	await app.press("Two stopped website chats");
+	await app.waitFor("Two stopped chats. Three other items need you. Two incoming requests.");
+	await app.press("Global window");
+	await choose(app, "website");
+	await app.waitFor("Two stopped chats. Two incoming requests.");
+	expect(app.shows("Some work needs a look. Two incoming requests.")).toBe(false);
+	expect(sent(app)).toContain("Sent: 0");
+});
+
+test("unknown attention stays unknown while incoming requests remain counted", async () => {
+	const app = await ready();
+	await app.waitFor("text:/What needs you is not fully known\\. Two incoming requests\\.$/");
+	await app.press("Global window");
+	await app.waitFor("text:/What needs you is not fully known\\. Two incoming requests\\.$/");
+	expect(app.shows("id:scope-needs-demo-billing")).toBe(true);
+});
+
 test("without the scope read, Today says it shows this window's project only", async () => {
 	const app = await ready();
 	await app.press("Scope unavailable");
