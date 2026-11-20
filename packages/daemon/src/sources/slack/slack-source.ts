@@ -61,8 +61,8 @@ type Cursor = {
 	version: 2;
 	last: string | null;
 	channels: Record<string, ChannelCursor>;
-	// term and privateSearch are left over from search-based discovery. They are read but no longer used.
-	mentions?: Record<string, [scope: string, term: number, privateSearch?: boolean]>;
+	// Keep the zero slot on disk so the previous daemon can still read these checkpoints.
+	mentions?: Record<string, [scope: string, 0]>;
 };
 type CacheStore = Pick<
 	TrackedItemStore,
@@ -553,7 +553,7 @@ function readCursor(value: TrackingJson | undefined, names: string[], now: numbe
 	)
 		throw new Error("Invalid Slack checkpoint");
 	const channels = previous.channels;
-	const mentions = previous.mentions;
+	const mentions = previous.mentions as Record<string, unknown> | undefined;
 	if (
 		mentions !== undefined &&
 		(!mentions ||
@@ -561,15 +561,7 @@ function readCursor(value: TrackingJson | undefined, names: string[], now: numbe
 			Array.isArray(mentions) ||
 			Object.keys(mentions).length > 100 ||
 			Object.values(mentions).some(
-				(entry) =>
-					!Array.isArray(entry) ||
-					(entry.length !== 2 && entry.length !== 3) ||
-					(entry[2] !== undefined && typeof entry[2] !== "boolean") ||
-					typeof entry[0] !== "string" ||
-					!/^[\w-]{12}$/.test(entry[0]) ||
-					!Number.isInteger(entry[1]) ||
-					entry[1] < 0 ||
-					entry[1] > 30,
+				(entry) => !Array.isArray(entry) || typeof entry[0] !== "string" || !/^[\w-]{12}$/.test(entry[0]),
 			))
 	)
 		throw new Error("Invalid Slack checkpoint");
@@ -581,9 +573,8 @@ function readCursor(value: TrackingJson | undefined, names: string[], now: numbe
 					mentions: Object.fromEntries(
 						names.flatMap((name) => {
 							const key = channelKey(name);
-							return Object.hasOwn(mentions, key)
-								? [[key, [...mentions[key]!] as [string, number, boolean?]]]
-								: [];
+							const entry = Object.hasOwn(mentions, key) ? mentions[key] : undefined;
+							return Array.isArray(entry) ? [[key, [entry[0], 0]]] : [];
 						}),
 					),
 				}

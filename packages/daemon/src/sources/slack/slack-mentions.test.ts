@@ -475,6 +475,10 @@ test("maximum mention checkpoints remain bounded; group edits and search-era che
 	const config = { slackChannels: names, slackMentionOnlyChannels: names, slackGroupHandles: groups };
 	const result = await f.poll({ ...f.context, cursor, config, call });
 	assert.equal(args?.cursor, "x".repeat(96));
+	assert.deepEqual(
+		(result.cursor as { mentions: object }).mentions,
+		Object.fromEntries(names.map((name) => [hash(name), [hash(JSON.stringify(["history", groups])), 0]])),
+	);
 	await f.store.commit(f.project.id, "slack", [], {
 		configKey: "x".repeat(64),
 		lastPolledAt: now,
