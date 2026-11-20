@@ -1,7 +1,7 @@
 // The header's notice when Pilot paused work for sleep: one Resume.
-import { Text, View } from "nsh";
+import { View } from "nsh";
 import type { PowerControls } from "./power";
-import { Action } from "./ui";
+import { Button, Caption } from "./ui";
 
 /** "16:21" for a pause today, or the date and time for an older one. */
 function sinceWords(since: number | null): string {
@@ -17,12 +17,12 @@ function sinceWords(since: number | null): string {
 export function PowerPause(props: { power: PowerControls; narrow: boolean }) {
 	const since = () => sinceWords(props.power.view().since);
 	return (
-		<View testID="power-paused" class="flex-row items-center gap-2">
+		<View testID="power-paused" class="flex-row items-center gap-2 pr-1">
 			<If when={!props.narrow}>
-				<Text class="text-xs text-muted-foreground">{props.power.message() || "Work paused for sleep"}</Text>
+				<Caption>{props.power.message() || "Work paused for sleep"}</Caption>
 			</If>
-			<Action
-				variant="primary"
+			<Button
+				kind="primary"
 				label={props.power.busy() ? "Resuming…" : "Resume work"}
 				icon="play"
 				testID="power-resume"

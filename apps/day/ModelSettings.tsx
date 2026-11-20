@@ -11,7 +11,7 @@ import {
 	modelPatterns as patterns,
 	modelReplacement as replacement,
 } from "./modelSettingsDraft";
-import { Action, Field, Panel, Picker, SectionTitle } from "./ui";
+import { Action, Field, QuietPanel, Picker, SectionTitle } from "./ui";
 import { WorkProfiles } from "./WorkProfiles";
 
 function effective(s: ModelSettings, task: boolean): string {
@@ -373,7 +373,7 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 									modelEditProject() === (read().project?.id ?? "") && modelEditBinding() !== read().binding
 								}
 							>
-								<Panel class="gap-2">
+								<QuietPanel class="gap-2">
 									<Text class="text-sm text-foreground">AI settings changed. Your edits are kept.</Text>
 									<Text class="text-xs text-faint">{`Saved now: ${edit() === "defaults" ? JSON.stringify(read().defaults) : JSON.stringify(read().scope.enabledModels)}`}</Text>
 									<Action
@@ -381,7 +381,7 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 										disabled={disabled()}
 										onPress={() => modelEditBinding.set(read().binding)}
 									/>
-								</Panel>
+								</QuietPanel>
 							</If>
 							<View class="flex-row gap-2">
 								<If when={modelEditProject() !== (read().project?.id ?? "")}>
@@ -524,7 +524,7 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 								)}
 							</Each>
 							<If when={challenge()?.challenge}>
-								<Panel testID="models-sign-in" size="lg" class="gap-2">
+								<QuietPanel testID="models-sign-in" size="lg" class="gap-2">
 									<Text class="text-sm text-foreground">Complete this sign-in with your provider.</Text>
 									<View selectable>
 										<Text class="text-sm text-foreground">{challenge()?.challenge?.userCode ?? ""}</Text>
@@ -558,7 +558,7 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 											}}
 										/>
 									</If>
-								</Panel>
+								</QuietPanel>
 							</If>
 						</View>
 					</View>

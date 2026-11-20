@@ -3,8 +3,13 @@
 import { type JSX, Text, type ViewRef } from "nsh";
 import { Collapsible } from "nsh/base";
 import { Pressable } from "./button";
+import { Icon } from "./icon";
+import { TYPE } from "./text";
 
-/** A quiet "▸ label" line; pressing it shows its content (`children`) below. */
+/**
+ * A quiet "› label" line; pressing it shows its content (`children`) below. A chat's folded turn uses `Fold`, which
+ * draws the same line.
+ */
 export function Disclosure(props: {
 	label: string;
 	open: boolean;
@@ -29,10 +34,12 @@ export function Disclosure(props: {
 				onBlur={props.onBlur}
 				expanded={props.open}
 				onPress={props.onToggle}
-				class="flex-row items-baseline gap-2 self-start rounded-md"
+				class="flex-row items-center gap-1 self-start rounded-md"
 			>
-				<Text class="text-sm text-muted-foreground">{props.open ? "▾" : "▸"}</Text>
-				<Text class="text-sm text-muted-foreground">{props.label}</Text>
+				<Icon name={props.open ? "chevron" : "right"} tint="tint-muted-foreground" />
+				<Text class="text-muted-foreground" style={TYPE.caption}>
+					{props.label}
+				</Text>
 			</Pressable>
 		</Collapsible>
 	);

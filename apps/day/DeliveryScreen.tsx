@@ -107,7 +107,7 @@ import {
 	Notice,
 	Page,
 	PageTitle,
-	Panel,
+	QuietPanel,
 	RowLink,
 	SectionTitle,
 	TextField,
@@ -152,7 +152,7 @@ function Report(props: { work: DeliveredWork }) {
 	const nothing = () =>
 		!w().completion && !w().nonCodeDelivery && !w().submission && !w().outcome && !w().workerDelivery;
 	return (
-		<Panel testID="delivery-report" size="lg" selectable class="gap-3">
+		<QuietPanel testID="delivery-report" size="lg" selectable class="gap-3">
 			<Said
 				label="Outcome"
 				text={
@@ -241,7 +241,7 @@ function Report(props: { work: DeliveredWork }) {
 					continues.
 				</Text>
 			</If>
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -778,7 +778,7 @@ function ChatNow(props: { day: Day; work: DeliveredWork; placeKey: string; rerea
 	return (
 		<If when={now()}>
 			{(n) => (
-				<Panel testID="delivery-chat-now" class="gap-2">
+				<QuietPanel testID="delivery-chat-now" class="gap-2">
 					<MarkLine
 						kind={n().move === "open" && props.work.chat?.state === "working" ? "moving" : "needs"}
 						testID="delivery-chat-line"
@@ -821,7 +821,7 @@ function ChatNow(props: { day: Day; work: DeliveredWork; placeKey: string; rerea
 							onPress={() => openChat(id(), "Result")}
 						/>
 					</View>
-				</Panel>
+				</QuietPanel>
 			)}
 		</If>
 	);
@@ -1151,7 +1151,7 @@ function YourCheck(props: {
 						</View>
 					</If>
 					<If when={asked()}>
-						<Panel testID="done-confirm" class="gap-2">
+						<QuietPanel testID="done-confirm" class="gap-2">
 							<Text class="text-sm text-foreground">
 								{`${openPrs().join(", ") || "Its pull request"} ${openPrs().length > 1 ? "are" : "is"} not merged. Done means you accept the result now. Pilot won't merge it, and it won't count as released.`}
 							</Text>
@@ -1175,7 +1175,7 @@ function YourCheck(props: {
 									onPress={() => doneAsk.set(null)}
 								/>
 							</View>
-						</Panel>
+						</QuietPanel>
 					</If>
 					<If when={noting() && !open() && !asked()}>
 						<NoteEditor review={props.review as ReviewSession} placeKey={key()} />
@@ -1225,17 +1225,17 @@ function YourCheck(props: {
 					</If>
 					<Each of={props.review?.general() ?? []} key={(e) => e.operationId}>
 						{(e) => (
-							<Panel testID="saved-general" size="sm" selectable class="gap-1">
+							<QuietPanel testID="saved-general" size="sm" selectable class="gap-1">
 								<Text class="text-xs text-muted-foreground">Your note · goes with Send back</Text>
 								<Text class="text-sm text-foreground">{e().body}</Text>
-							</Panel>
+							</QuietPanel>
 						)}
 					</Each>
 					<If when={props.review?.note() && !noting()}>
-						<Panel testID="saved-note" size="sm" selectable class="gap-1">
+						<QuietPanel testID="saved-note" size="sm" selectable class="gap-1">
 							<Text class="text-xs text-muted-foreground">My notes · only for you</Text>
 							<Text class="text-sm text-foreground">{props.review?.note() ?? ""}</Text>
-						</Panel>
+						</QuietPanel>
 					</If>
 				</View>
 			</If>

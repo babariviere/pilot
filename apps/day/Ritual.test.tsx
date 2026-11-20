@@ -25,7 +25,7 @@ test("first use: nothing to catch up on, and the day starts from Today", async (
 	await app.press("role:button[Start the day]");
 	await app.waitFor("id:standup");
 	expect(app.shows("id:start-day")).toBe(false);
-	expect(app.shows("Nothing needs you. Pilot keeps going on its own.")).toBe(true);
+	expect(app.shows("Pilot keeps going on its own.")).toBe(true);
 });
 
 test("a returning day catches up, keeps where the user left off and what each result rests on", async () => {
@@ -57,7 +57,7 @@ test("a returning day catches up, keeps where the user left off and what each re
 		expect(app.shows(text)).toBe(true);
 	}
 	await app.keyboard.press("mod+enter");
-	await app.waitFor("Nothing needs you. Pilot keeps going on its own.");
+	await app.waitFor("Pilot keeps going on its own.");
 	expect(app.shows("id:start-day")).toBe(false);
 });
 
@@ -162,7 +162,7 @@ test("an evening with nothing waiting closes calmly with where the user left off
 	await app.waitFor("Done for today.");
 	expect(app.shows("Where you left off: You were reading the search benchmark in Faster search.")).toBe(true);
 	await app.keyboard.press("mod+enter");
-	await app.waitFor("Nothing needs you. Pilot keeps going on its own.");
+	await app.waitFor("Pilot keeps going on its own.");
 	expect(app.shows("id:end-day")).toBe(false);
 });
 

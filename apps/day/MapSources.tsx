@@ -3,7 +3,7 @@ import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import type { MapSource, PlanPage } from "pilot-day/native";
 import { exactSource, type MapSourceDetail, type MapSourceRequest } from "./mapSourceContract";
 import type { Plans } from "./planning";
-import { Action, Panel } from "./ui";
+import { Action, QuietPanel } from "./ui";
 
 /** Original records, alongside the map question or fog area that cites them. Reading changes nothing. */
 export function MapSources(props: {
@@ -99,7 +99,7 @@ function Original(props: { plans: Plans; page: PlanPage; area: "item" | "fog"; r
 				disabled={busy()}
 			/>
 			<If when={open()}>
-				<Panel testID="original-source" selectable class="gap-3">
+				<QuietPanel testID="original-source" selectable class="gap-3">
 					<Text class="text-xs text-faint">{`From this map · ${props.source.kind} ${props.source.id}`}</Text>
 					<If
 						when={detail()}
@@ -137,7 +137,7 @@ function Original(props: { plans: Plans; page: PlanPage; area: "item" | "fog"; r
 						<Action label="Back to map" onPress={close} />
 						<Action label="Read source again" onPress={() => void load()} disabled={busy()} />
 					</View>
-				</Panel>
+				</QuietPanel>
 			</If>
 		</View>
 	);

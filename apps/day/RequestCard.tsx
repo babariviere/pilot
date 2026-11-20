@@ -3,7 +3,7 @@
 // names the exact place (Incoming.tsx); Later and Discard save the request's
 // triage, each sent once. Change only shows where work goes, and Open in Slack
 // shows the saved message in the browser: neither sends or starts anything.
-import { cleanup, effect, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, signal, View, type ViewRef } from "nsh";
 import type { Day } from "./day";
 import {
 	askStart,
@@ -22,7 +22,7 @@ import {
 	triageCard,
 } from "./Incoming";
 import type { IntakeMirror, IntakeRow } from "./intakeFeed";
-import { Action, glide, InlineAction, LinkAction, Mark, Panel } from "./ui";
+import { Body, Button, Caption, Fact, Facts, glide, Link, Question, QuietPanel, Spacer, State } from "./ui";
 import { anchors, focusFront } from "./view";
 
 /** The key that takes the front card's one next action, as on the other cards. */
@@ -30,15 +30,6 @@ const START_KEY = "⌘↩";
 
 /** The request whose routing choice is open, by ID. Opening it sends nothing. */
 const changing = signal<string | null>(null);
-
-function Fact(props: { label: string; children: string }) {
-	return (
-		<View class="flex-row gap-3">
-			<Text class="w-24 text-xs text-faint">{props.label}</Text>
-			<Text class="line-clamp-2 flex-1 text-sm text-foreground">{props.children}</Text>
-		</View>
-	);
-}
 
 /** Request `props.row`, `props.index` of `props.count` waiting. */
 export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: IntakeRow; index: number; count: number }) {
@@ -76,35 +67,31 @@ export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: Intake
 		}
 	});
 	return (
-		<View testID="request" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
-			<View class="gap-2">
-				<Text role="header" class="text-xl font-semibold leading-snug text-card-foreground">
-					{r().title}
-				</Text>
-				<View class="flex-row flex-wrap items-center gap-1.5">
-					<Mark kind="new" />
-					<Text class="text-xs text-foreground">{`${r().sourceLabel} request`}</Text>
+		<Question
+			testID="request"
+			title={r().title}
+			position={props.count > 1 ? `${props.index + 1} of ${props.count}` : undefined}
+			meta={
+				<>
+					<State kind="new" label={`${r().sourceLabel} request`} plain />
 					<If when={place()}>
-						<Text class="text-xs text-muted-foreground">{`· ${place()}`}</Text>
+						<Caption>{`· ${place()}`}</Caption>
 					</If>
-					<View class="flex-1" />
-					<If when={props.count > 1}>
-						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
-					</If>
-				</View>
-			</View>
+				</>
+			}
+		>
 			<If when={r().quote}>
-				<Text class="line-clamp-3 text-sm leading-relaxed text-muted-foreground">{`“${r().quote}”`}</Text>
+				<Body tone="muted" measure>{`“${r().quote}”`}</Body>
 			</If>
 			<If when={facts().length > 0}>
-				<Panel class="gap-2">
+				<Facts>
 					<Each of={facts()} key={(f) => f.label}>
 						{(f) => <Fact label={f().label}>{f().value}</Fact>}
 					</Each>
-				</Panel>
+				</Facts>
 			</If>
 			<If when={busy()}>
-				<Text class="text-sm text-muted-foreground">Waiting for Pilot's answer about this request.</Text>
+				<Body tone="muted">Waiting for Pilot's answer about this request.</Body>
 			</If>
 			<If
 				when={starting(r().id)}
@@ -112,10 +99,8 @@ export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: Intake
 					<View class="gap-4">
 						<View class="gap-3">
 							<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-								<Text class="min-w-0 shrink text-xs text-muted-foreground">
-									{routeWords(r().id, missions())}
-								</Text>
-								<InlineAction
+								<Caption>{routeWords(r().id, missions())}</Caption>
+								<Link
 									label={changing() === r().id ? "Done" : "Change"}
 									testID={`route-change-${r().id}`}
 									onPress={() => {
@@ -125,15 +110,15 @@ export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: Intake
 								/>
 							</View>
 							<If when={changing() === r().id}>
-								<Panel class="gap-3">
+								<QuietPanel class="gap-3">
 									<RouteChoice row={props.row} missions={missions()} busy={busy()} />
 									<PlanAction row={props.row} busy={busy()} />
-								</Panel>
+								</QuietPanel>
 							</If>
 						</View>
 						<View class="flex-row flex-wrap items-center gap-2">
-							<Action
-								variant="primary"
+							<Button
+								kind="primary"
 								label="Start work"
 								shortcut={START_KEY}
 								testID={`start-${r().id}`}
@@ -144,22 +129,22 @@ export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: Intake
 									askStart(props.mirror, props.row);
 								}}
 							/>
-							<Action
+							<Button
 								label="Later"
 								shortcut="L"
 								testID={`later-${r().id}`}
 								disabled={busy()}
 								onPress={() => void triageCard(props.mirror, props.row, "later")}
 							/>
-							<Action
+							<Button
 								label="Discard"
 								testID={`discard-${r().id}`}
 								disabled={busy()}
 								onPress={() => void triageCard(props.mirror, props.row, "discarded")}
 							/>
-							<View class="flex-1" />
+							<Spacer />
 							<If when={canOpenRequest(props.mirror, props.row)}>
-								<LinkAction
+								<Link
 									label="Open in Slack"
 									testID={`open-slack-${r().id}`}
 									onPress={() => void openRequestLink(props.mirror, props.row)}
@@ -179,6 +164,6 @@ export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: Intake
 					onStarted={startedCard}
 				/>
 			</If>
-		</View>
+		</Question>
 	);
 }

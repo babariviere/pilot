@@ -14,7 +14,7 @@ import { keepRead } from "./freshness";
 import { keepField } from "./kept";
 import { OpenChatAction } from "./OpenChatAction";
 import { utf8Bytes } from "./preferencesFeed";
-import { Action, Field, Panel, Picker, SectionTitle, TextField } from "./ui";
+import { Action, Field, QuietPanel, Picker, SectionTitle, TextField } from "./ui";
 
 function PrivacyRow(props: {
 	label: string;
@@ -236,7 +236,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 						onPress={() => clearing.set(true)}
 					/>
 					<If when={clearing()}>
-						<Panel size="lg" class="gap-3">
+						<QuietPanel size="lg" class="gap-3">
 							<Text class="text-sm font-medium text-foreground">Clear managed local evidence?</Text>
 							<Text class="text-sm text-muted-foreground">
 								Deletes managed service evidence, local feature counts and this app writer's log segments.
@@ -255,7 +255,7 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 									}}
 								/>
 							</View>
-						</Panel>
+						</QuietPanel>
 					</If>
 				</View>
 			</If>

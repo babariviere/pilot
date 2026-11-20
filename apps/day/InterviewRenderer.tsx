@@ -14,7 +14,7 @@ import {
 	type MarkKind,
 	MarkLine,
 	Notice,
-	Panel,
+	QuietPanel,
 	Pressable,
 	TextField,
 	ToggleRow,
@@ -248,13 +248,13 @@ function QuestionView(props: {
 				</Text>
 			</If>
 			<If when={q().state === "changed"}>
-				<Panel size="sm" class="gap-0.5">
+				<QuietPanel size="sm" class="gap-0.5">
 					<Text class="text-sm text-needs-ink">This question changed after you answered. Answer it again.</Text>
 					<Text class="text-xs text-muted-foreground">{`Your earlier answer: ${q().earlier}`}</Text>
-				</Panel>
+				</QuietPanel>
 			</If>
 			<If when={!locked() && answerView(props.source, q()).kept}>
-				<Panel size="sm" class="gap-0.5">
+				<QuietPanel size="sm" class="gap-0.5">
 					<Text class="text-sm text-needs-ink">
 						This question changed before your words were saved. Pilot did not send them.
 					</Text>
@@ -269,7 +269,7 @@ function QuestionView(props: {
 							})
 						}
 					/>
-				</Panel>
+				</QuietPanel>
 			</If>
 			<View class="gap-0.5" accessibilityLabel="Suggested answers">
 				<Each of={q().choices} key={(c) => c.id}>

@@ -10,7 +10,7 @@ import { errorText, logEvent } from "./dayLog";
 import { openFeedbackWith } from "./feedbackView";
 import { OpenChatAction } from "./OpenChatAction";
 import type { Plans } from "./planning";
-import { Action, MarkLine, Panel, TextField } from "./ui";
+import { Action, MarkLine, QuietPanel, TextField } from "./ui";
 
 type Repair = NonNullable<NonNullable<PlanPage["unstick"]>["repair"]>;
 type Fix = NonNullable<Repair["proposal"]>["fix"];
@@ -62,7 +62,7 @@ export function PlannerWaits(props: { plans: Plans; page: PlanPage }) {
 	const ready = () => !busy() && props.page.fresh && props.page.canContinue;
 	return (
 		<If when={plannerWaits(props.page) || message()}>
-			<Panel testID="planner-waits" class="gap-3">
+			<QuietPanel testID="planner-waits" class="gap-3">
 				<If when={plannerWaits(props.page)}>
 					<MarkLine kind="needs">
 						<Text testID="planner-waits-line" class="text-sm text-foreground">
@@ -108,7 +108,7 @@ export function PlannerWaits(props: { plans: Plans; page: PlanPage }) {
 						{message()}
 					</Text>
 				</If>
-			</Panel>
+			</QuietPanel>
 		</If>
 	);
 }
@@ -164,7 +164,7 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 					/>
 				</View>
 				<If when={open()}>
-					<Panel testID="unstick-card" class="gap-3">
+					<QuietPanel testID="unstick-card" class="gap-3">
 						<MarkLine kind={u()?.state === "stuck" ? "needs" : u()?.state === "moving" ? "moving" : "still"}>
 							<Text testID="unstick-line" class="text-sm text-foreground">
 								{u()?.line ?? ""}
@@ -205,7 +205,7 @@ export function Unstick(props: { plans: Plans; page: PlanPage }) {
 								{message()}
 							</Text>
 						</If>
-					</Panel>
+					</QuietPanel>
 				</If>
 			</View>
 		</If>

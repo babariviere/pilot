@@ -13,7 +13,7 @@ import type { Day } from "./day";
 import { restoreScroll, scrollOf } from "./kept";
 import { goHome, goSettings } from "./nav";
 import { OpenChatAction } from "./OpenChatAction";
-import { Action, Disclosure, DividedRow, glide, InlineAction, Mark, Panel, Pressable, SectionTitle } from "./ui";
+import { Action, Disclosure, DividedRow, glide, InlineAction, Mark, QuietPanel, Pressable, SectionTitle } from "./ui";
 import { focused, focusFront, todayPlace } from "./view";
 import { nextLine, provenance, stateOf, taskWord, type WorkState, workMark, workWord } from "./words";
 
@@ -285,7 +285,7 @@ function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const t = () => props.task;
 	const target = laneFocus(props.task.id, "now");
 	return (
-		<Panel testID={`now-${t().id}`} tone="card" size="lg" class="gap-2">
+		<QuietPanel testID={`now-${t().id}`} tone="card" size="lg" class="gap-2">
 			<View class="flex-row items-start gap-3">
 				<View selectable class="min-w-0 flex-1 flex-row flex-wrap items-baseline gap-x-2 gap-y-1">
 					<Text class="text-xs text-faint">{`#${t().number}`}</Text>
@@ -316,7 +316,7 @@ function NowCard(props: { day: Day; page: MissionPage; task: TaskLine }) {
 			</View>
 			<TaskModel task={t()} lane="now" />
 			<Details task={t()} lane="now" target={target} />
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -374,7 +374,7 @@ function BlockedItem(props: { day: Day; page: MissionPage; task: TaskLine }) {
 	const t = () => props.task;
 	const target = laneFocus(props.task.id, "blocked");
 	return (
-		<Panel testID={`blocked-${t().id}`} tone="card" size="md" class="gap-1.5">
+		<QuietPanel testID={`blocked-${t().id}`} tone="card" size="md" class="gap-1.5">
 			<View class="flex-row items-start gap-3">
 				<Text class="min-w-0 flex-1 text-xs font-semibold text-foreground">{workWord(stateOf(t()))}</Text>
 				<ChatLink day={props.day} page={props.page} task={t()} lane="blocked" />
@@ -385,7 +385,7 @@ function BlockedItem(props: { day: Day; page: MissionPage; task: TaskLine }) {
 				<Prerequisites task={t()} />
 			</View>
 			<Details task={t()} lane="blocked" target={target} />
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -398,7 +398,7 @@ function Waiting(props: { decision: Decision }) {
 		return "Decide on Today";
 	};
 	return (
-		<Panel testID="mission-waiting" tone="card" size="md" class="gap-1.5">
+		<QuietPanel testID="mission-waiting" tone="card" size="md" class="gap-1.5">
 			<View class="flex-row items-center gap-1.5">
 				<Mark kind={decisionMark(d())} />
 				<Text class="text-xs font-semibold text-needs-ink">Waiting for you</Text>
@@ -418,7 +418,7 @@ function Waiting(props: { decision: Decision }) {
 					}}
 				/>
 			</View>
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -429,14 +429,14 @@ function Waiting(props: { decision: Decision }) {
 function Paused(props: { page: MissionPage }) {
 	const state = () => props.page.row.state;
 	return (
-		<Panel testID="mission-held" tone="card" size="md" class="gap-1">
+		<QuietPanel testID="mission-held" tone="card" size="md" class="gap-1">
 			<Text class="text-xs font-semibold text-foreground">{state() === "paused" ? "Paused" : "Pausing"}</Text>
 			<Text class="text-xs text-muted-foreground">
 				{state() === "paused"
 					? "No new work starts in this mission until you resume it."
 					: "Its work is stopping at safe points. No new work starts."}
 			</Text>
-		</Panel>
+		</QuietPanel>
 	);
 }
 

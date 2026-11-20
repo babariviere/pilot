@@ -4,7 +4,7 @@
 // report. Opening the link or the file reports nothing. What the user types
 // is kept as a draft for the revision shown; words written before Pilot
 // changed the request are shown as history and count only once sent again.
-import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, keymap, signal, View, type ViewRef } from "nsh";
 import type { ActionAsk, HumanAction } from "pilot-day/native";
 import {
 	actionNeedsCheck,
@@ -19,7 +19,20 @@ import {
 import { COMMIT_KEY } from "./DecisionCard";
 import type { Day } from "./day";
 import { keepField } from "./kept";
-import { Action, InlineAction, Mark, Panel, TextField } from "./ui";
+import {
+	Body,
+	BodyStrong,
+	Button,
+	Caption,
+	Fact,
+	Facts,
+	KeyHints,
+	Link,
+	Question,
+	Spacer,
+	State,
+	TextField,
+} from "./ui";
 import { anchors, focusFront, focusInput, holdFront, messages, reports, reportText, setFor } from "./view";
 
 function verb(asked: ActionAsk | null | undefined): string {
@@ -43,17 +56,6 @@ function deliveryLine(action: HumanAction): string {
 }
 
 /** A quiet label and value pair. */
-function Fact(props: { label: string; children: string; testID?: string }) {
-	return (
-		<View class="flex-row gap-3">
-			<Text class="w-20 text-xs text-faint">{props.label}</Text>
-			<Text testID={props.testID} class="flex-1 text-sm text-foreground">
-				{props.children}
-			</Text>
-		</View>
-	);
-}
-
 /** The action `props.action`, `props.index` of `props.count` waiting. */
 export function ActionCard(props: { day: Day; action: HumanAction; index: number; count: number }) {
 	const a = () => props.action;
@@ -105,38 +107,84 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 			.join(" ");
 
 	return (
-		<View testID="action" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
-			<View class="gap-2">
-				<Text role="header" class="text-xl font-semibold leading-snug text-card-foreground">
-					{a().title}
-				</Text>
-				<View class="flex-row flex-wrap items-center gap-1.5">
-					<Mark kind={a().delivery === "unknown" ? "unknown" : "needs"} />
-					<Text class="text-xs text-needs-ink">
-						{a().state === "deferred" ? "Action for you · put off" : "Action for you"}
-					</Text>
-					<Text class="text-xs text-muted-foreground">{meta()}</Text>
-					<View class="flex-1" />
-					<If when={props.count > 1}>
-						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
+		<Question
+			testID="action"
+			title={a().title}
+			position={props.count > 1 ? `${props.index + 1} of ${props.count}` : undefined}
+			meta={
+				<>
+					<State
+						kind={a().delivery === "unknown" ? "unknown" : "needs"}
+						label={a().state === "deferred" ? "Action for you · put off" : "Action for you"}
+						plain
+					/>
+					<Caption>{meta()}</Caption>
+				</>
+			}
+			foot={
+				<>
+					<If
+						when={actionNeedsCheck(a())}
+						else={
+							<Button
+								kind="primary"
+								label="Mark done"
+								shortcut={COMMIT_KEY}
+								disabled={!idle() || (a().needs.length > 0 && text().trim() === "")}
+								onPress={() => void complete(props.day, a())}
+							/>
+						}
+					>
+						{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+						<If when={a().delivery === "unknown"}>
+							<Button
+								kind="primary"
+								label="Check again"
+								shortcut={COMMIT_KEY}
+								onPress={() => void checkAction(props.day, a())}
+							/>
+						</If>
 					</If>
-				</View>
-			</View>
-
+					<Button
+						label="Save progress"
+						disabled={!idle() || text().trim() === ""}
+						onPress={() => void saveProgress(props.day, a())}
+					/>
+					<Button
+						label="Later"
+						shortcut="L"
+						anchor={(node) => {
+							laterButton = node;
+						}}
+						disabled={!idle()}
+						onPress={() => void laterAction(props.day, a())}
+					/>
+					<Spacer />
+					<KeyHints
+						hints={[
+							[COMMIT_KEY, "Mark done"],
+							["J K", "next"],
+						]}
+					/>
+				</>
+			}
+		>
 			<If when={a().replaced}>
-				<Text role="alert" class="text-sm text-needs-ink">
+				<Body role="alert" tone="needs">
 					{a().replaced ?? ""}
-				</Text>
+				</Body>
 			</If>
 
 			<View class="gap-1.5">
 				<If when={a().nextStep}>
-					<Text class="text-sm font-medium text-card-foreground">{a().nextStep}</Text>
+					<BodyStrong>{a().nextStep}</BodyStrong>
 				</If>
-				<Text class="text-sm leading-relaxed text-muted-foreground">{a().why}</Text>
+				<Body tone="muted" measure>
+					{a().why}
+				</Body>
 			</View>
 
-			<Panel selectable class="gap-2">
+			<Facts>
 				<Each of={a().files} key={(f) => `${f.name}\u0000${f.digest}`}>
 					{(f) => (
 						<Fact
@@ -148,44 +196,37 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 				<Fact label="Where">{`${a().destination.target} on ${a().destination.label}`}</Fact>
 				<Fact label="Link">{a().destination.link}</Fact>
 				<If when={a().canOpen}>
-					<View class="flex-row gap-3">
-						<View class="w-20" />
-						<InlineAction testID="open-link" label="Open link" onPress={() => void openLink(props.day, a())} />
-					</View>
+					<Fact label="">
+						<Link testID="open-link" label="Open link" onPress={() => void openLink(props.day, a())} />
+					</Fact>
 				</If>
 				<Fact label="Asked by">{`“${a().origin.chatTitle}” · ${a().origin.chatLink}`}</Fact>
-			</Panel>
+			</Facts>
 
 			<If when={a().progress}>
-				<Text class="text-sm text-muted-foreground">{`Saved progress: ${a().progress}`}</Text>
+				<Body tone="muted">{`Saved progress: ${a().progress}`}</Body>
 			</If>
 
 			<If when={a().earlierReport}>
 				<View class="gap-1">
-					<Text class="text-xs text-faint">
+					<Caption tone="faint">
 						Your words from before Pilot changed the request. They do not count as a report.
-					</Text>
-					<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-						<Text testID="earlier-report" class="text-sm text-muted-foreground">
-							{a().earlierReport ?? ""}
-						</Text>
-						<If when={idle()}>
-							<InlineAction
-								testID="use-earlier"
-								label="Use these words"
-								onPress={() => useEarlier(props.day, a())}
-							/>
-						</If>
-					</View>
+					</Caption>
+					<Body testID="earlier-report" tone="muted">
+						{a().earlierReport ?? ""}
+					</Body>
+					<If when={idle()}>
+						<Link testID="use-earlier" label="Use these words" onPress={() => useEarlier(props.day, a())} />
+					</If>
 				</View>
 			</If>
 
 			<View class="gap-1.5">
-				<Text class="text-xs text-muted-foreground">
+				<Caption>
 					{a().needs.length > 0
 						? `When it is done, tell Pilot: ${a().needs.join("; ")}.`
 						: "Tell Pilot when it is done."}
-				</Text>
+				</Caption>
 				<TextField
 					testID="report"
 					ref={reportField.ref}
@@ -207,67 +248,25 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 						props.day.feed.flushDrafts();
 					}}
 					placeholder={a().needs[0] ?? "What you did"}
-					compact
 				/>
-				<Text class="text-xs text-faint">Opening the link or the file does not count. Only your report does.</Text>
+				<Caption tone="faint">Opening the link or the file does not count. Only your report does.</Caption>
 			</View>
 
 			<If when={a().draft.unsaved}>
-				<Text role="alert" class="text-sm text-needs-ink">
+				<Body role="alert" tone="needs">
 					Pilot could not save these words. They stay here; copy them before you close Pilot.
-				</Text>
+				</Body>
 			</If>
 			<If when={deliveryLine(a())}>
-				<Text role="alert" class="text-sm text-muted-foreground">
+				<Body role="alert" tone="muted">
 					{deliveryLine(a())}
-				</Text>
+				</Body>
 			</If>
 			<If when={messages()[id]}>
-				<Text role="alert" class="text-sm text-needs-ink">
+				<Body role="alert" tone="needs">
 					{messages()[id] ?? ""}
-				</Text>
+				</Body>
 			</If>
-
-			<View class="flex-row flex-wrap items-center gap-2">
-				<If
-					when={actionNeedsCheck(a())}
-					else={
-						<Action
-							variant="primary"
-							label="Mark done"
-							shortcut={COMMIT_KEY}
-							disabled={!idle() || (a().needs.length > 0 && text().trim() === "")}
-							onPress={() => void complete(props.day, a())}
-						/>
-					}
-				>
-					{/* Pilot checks by itself first; the button is the fallback after its tries. */}
-					<If when={a().delivery === "unknown"}>
-						<Action
-							variant="primary"
-							label="Check again"
-							shortcut={COMMIT_KEY}
-							onPress={() => void checkAction(props.day, a())}
-						/>
-					</If>
-				</If>
-				<Action
-					label="Save progress"
-					disabled={!idle() || text().trim() === ""}
-					onPress={() => void saveProgress(props.day, a())}
-				/>
-				<Action
-					label="Later"
-					shortcut="L"
-					anchor={(node) => {
-						laterButton = node;
-					}}
-					disabled={!idle()}
-					onPress={() => void laterAction(props.day, a())}
-				/>
-				<View class="flex-1" />
-				<Text class="text-xs text-faint">{`${COMMIT_KEY} Mark done · J K next`}</Text>
-			</View>
-		</View>
+		</Question>
 	);
 }

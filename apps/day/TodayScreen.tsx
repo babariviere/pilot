@@ -2,17 +2,20 @@
 // comes next. Read-only over the Rust read model, except through intents.
 // Movement comes only from agents' reports; a mission without a current
 // report is shown as such, never as not moving.
-import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
+// One panel under the page's head. Its tabs filter it: Overview shows every
+// section in two columns (what needs the user at the left, what moves at the
+// right); Needs you, New, Working and Missions show one part.
+import { effect, keymap, Scroll, type ScrollRef, signal } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
 import { CyberSuggestions } from "./CyberSuggestions";
 import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
-import { DayLine } from "./DayLine";
+import { DayActions, DayDate, DayNotes, visitToday } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { FeedbackIncoming, feedbackFocus, incomingFeedback, newFeedback } from "./FeedbackIncoming";
 import { everRead, todayWarning } from "./freshness";
-import { LinearRow, RequestNotes, requestChecks, todayRequests } from "./Incoming";
+import { LinearRow, RequestNotes, requestChecks, requestLine, todayRequests } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { goSchedules } from "./nav";
 import { PlannerInterviewCards, type PlannerInterviews, plannerInterviews } from "./PlannerInterviews";
@@ -42,21 +45,35 @@ import {
 } from "./ScopeRows";
 import { resultTitle, ToCheck, todayResults, unsettledCount } from "./ToCheck";
 import {
-	Action,
 	Arrive,
+	Button,
+	Caption,
+	Chips,
+	Column,
+	Columns,
+	EmptyLine,
 	EvidenceChip,
-	InlineAction,
-	Mark,
-	MarkLine,
+	Link,
 	Notice,
+	Num,
 	Page,
-	PageTitle,
-	RowLink,
-	SectionTitle,
-	Track,
+	PageFoot,
+	PageHead,
+	Panel,
+	Progress,
+	Quiet,
+	Quote,
+	Row,
+	RowDetail,
+	RowGroup,
+	Rows,
+	Section,
+	State,
+	Tab,
+	Tabs,
 } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
-import { WorkingNow } from "./WorkingNow";
+import { type WorkingList, WorkingNow, workingList } from "./WorkingNow";
 import { provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -125,28 +142,9 @@ function summary(day: Day, interviews: number): string {
 	return today.summary ? `${today.summary} ${line}` : line;
 }
 
-function total(row: MissionRow): number {
-	const p = row.progress;
-	return p.done + p.review + p.active + p.blocked + p.todo;
-}
-
 /** A mission's state: its mark and words. */
 export function MissionStatus(props: { row: MissionRow }) {
-	return (
-		<View class="flex-row items-center gap-1.5">
-			<Mark kind={stateMark(props.row)} />
-			<Text
-				class="text-xs"
-				classList={{
-					"text-needs-ink": stateTone(props.row) === "needs",
-					"text-failed-ink": stateTone(props.row) === "failed",
-					"text-muted-foreground": stateTone(props.row) === "quiet",
-				}}
-			>
-				{stateWord(props.row)}
-			</Text>
-		</View>
-	);
+	return <State kind={stateMark(props.row)} label={stateWord(props.row)} plain />;
 }
 
 function MissionLine(props: { day: Day; row: MissionRow; plans?: Plans }) {
@@ -158,51 +156,40 @@ function MissionLine(props: { day: Day; row: MissionRow; plans?: Plans }) {
 		const p = props.plans?.planning();
 		return p?.availability === "live" && !p.plans.some((plan) => plan.missionId === props.row.id);
 	};
-	const meta = () => {
-		const parts = [props.row.report ? provenance(props.row.report) : "", props.row.stage, old() ? "Old plan" : ""];
-		return parts.filter(Boolean).join(" · ");
-	};
+	const source = () =>
+		[props.row.report ? provenance(props.row.report) : "", props.row.stage, old() ? "Old plan" : ""]
+			.filter(Boolean)
+			.join(" · ");
 	return (
-		<View class="gap-1.5 border-t border-border py-3.5">
-			<RowLink
-				testID={`mission-${props.row.id}`}
-				title={props.row.title}
-				accessibilityLabel={`${props.row.title}, ${stateWord(props.row)}. Open the mission.`}
-				anchor={place.anchor}
-				onPress={place.press}
-			>
-				<MissionStatus row={props.row} />
-			</RowLink>
-			<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-				{/* min-w-0 shrink lets the summary wrap inside the row instead of running past it. */}
-				<Text class="min-w-0 shrink text-sm text-muted-foreground">{rowLine(props.row)}</Text>
-				<If when={decision()}>
-					<InlineAction
-						label={actionFor(decision())}
-						onPress={() => {
-							focused.set(props.row.decisionId ?? null);
-							focusFront.set(true);
-						}}
-					/>
-				</If>
-			</View>
-			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1 pt-1">
-				<Track progress={props.row.progress} />
-				<Text class="flex-1 text-xs text-faint">{meta()}</Text>
-				<Text class="text-xs text-faint">{`${props.row.progress.done} of ${total(props.row)} done`}</Text>
-			</View>
-		</View>
-	);
-}
-
-function MissionGroup(props: { day: Day; label: string; rows: MissionRow[]; first: boolean; plans?: Plans }) {
-	return (
-		<View classList={{ "pt-3": !props.first }}>
-			<Text class="pb-1.5 text-xs text-faint">{`${props.label}  ${props.rows.length}`}</Text>
-			<Each of={props.rows} key={(m) => m.id}>
-				{(m) => <MissionLine day={props.day} row={m()} plans={props.plans} />}
-			</Each>
-		</View>
+		<Row
+			testID={`mission-${props.row.id}`}
+			mark={stateMark(props.row)}
+			title={props.row.title}
+			meta={rowLine(props.row)}
+			state={stateWord(props.row)}
+			stateTone={stateTone(props.row)}
+			trailing={<Progress counts={props.row.progress} />}
+			accessibilityLabel={`${props.row.title}, ${stateWord(props.row)}. Open the mission.`}
+			anchor={place.anchor}
+			onPress={place.press}
+			detail={
+				<RowDetail>
+					<If when={source()}>
+						<Caption tone="faint">{source()}</Caption>
+					</If>
+					<If when={decision()}>
+						<Link
+							label={actionFor(decision())}
+							onPress={() => {
+								focused.set(props.row.decisionId ?? null);
+								focusFront.set(true);
+								todayTab.set("overview");
+							}}
+						/>
+					</If>
+				</RowDetail>
+			}
+		/>
 	);
 }
 
@@ -212,7 +199,7 @@ function itemTitle(day: Day, item: Item): string {
 	return item.kind === "decision" ? item.decision.title : item.action.title;
 }
 
-/** The words before an Up next title. */
+/** The words before a queued item's title. */
 function upNext(item: Item): string {
 	if (item.kind === "result") return "Up next, result to check: ";
 	if (item.kind === "request") return `Up next, ${item.row.request.sourceLabel} request: `;
@@ -285,7 +272,14 @@ function QueueCard(props: { day: Day; item: Item; index: number; count: number; 
 	);
 }
 
-/** What waits for the user: one card in front, the rest as "Up next". */
+/** Every item Needs you holds for this window, as its count says: cards, checks, other projects, interviews. */
+function needsCount(day: Day, ctx: TodayScope, interviews: PlannerInterviews): number {
+	const items = queue(day.today(), todayResults(day), todayRequests(day));
+	const checks = unsettledCount(day) + requestChecks(day);
+	return items.length + newFeedback(day).length + checks + otherNeedsCount(ctx) + interviews.rows().length;
+}
+
+/** What waits for the user: one question in front, the rest queued as rows under it. */
 function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerInterviews }) {
 	// Results to check queue behind the questions and actions, as cards of their own.
 	const results = () => todayResults(props.day);
@@ -307,53 +301,46 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 	effect(() => {
 		if (focusFront() && !first()) focusFront.set(false);
 	});
+	const quiet = () =>
+		readable() &&
+		incomingFeedback(props.day).length === 0 &&
+		props.interviews.rows().length === 0 &&
+		props.interviews.known() &&
+		otherNeedsCount(props.ctx) === 0;
 	return (
-		<View class="gap-4">
-			<SectionTitle
-				title="Needs you"
-				count={
-					items().length +
-					newFeedback(props.day).length +
-					checks() +
-					otherNeedsCount(props.ctx) +
-					props.interviews.rows().length
-				}
-			/>
+		<Section title="Needs you" count={needsCount(props.day, props.ctx, props.interviews)}>
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
-			<Each of={props.day.today().notes} key={(note) => note}>
-				{(note) => (
-					<View class="flex-row items-center gap-2.5 rounded-xl bg-ok-soft px-4 py-3">
-						<Mark kind="ready" />
-						<Text class="flex-1 text-sm text-ok-ink">{note()}</Text>
-					</View>
-				)}
-			</Each>
+			{/* Only a connected window can read project setup; mock worlds have no model controls. */}
+			<If when={props.day.models}>
+				<CyberSuggestions />
+			</If>
+			<Rows>
+				<Each of={props.day.today().notes} key={(note) => note}>
+					{(note) => <Row mark="done" title={note()} wrap />}
+				</Each>
+			</Rows>
 			<If
 				when={first()}
 				else={
 					<If
 						when={readable()}
 						else={
-							<Text testID="attention-unread" class="text-base text-foreground">
-								Pilot has not read what needs you yet. It keeps trying; nothing here is guessed.
-							</Text>
+							<Notice
+								testID="attention-unread"
+								placement="section"
+								text="Pilot has not read what needs you yet. It keeps trying; nothing here is guessed."
+							/>
 						}
 					>
-						<If
-							when={
-								incomingFeedback(props.day).length === 0 &&
-								props.interviews.rows().length === 0 &&
-								props.interviews.known() &&
-								otherNeedsCount(props.ctx) === 0
-							}
-						>
-							<Text class="text-base text-foreground">
-								{checks() > 0
-									? "Nothing else waits for you. Check the notes below."
-									: "Nothing needs you. Pilot keeps going on its own."}
-							</Text>
+						<If when={quiet()}>
+							<If
+								when={checks() > 0}
+								else={<Quiet title="Nothing needs you." text="Pilot keeps going on its own." />}
+							>
+								<EmptyLine text="Nothing else waits for you. Check the notes below." />
+							</If>
 						</If>
 					</If>
 				}
@@ -372,40 +359,80 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 					)}
 				</Each>
 			</If>
-			<If when={rest().length > 0}>
-				<View class="gap-0.5">
-					<Each of={rest()} key={(item) => item.id}>
-						{(item) => (
-							<View class="flex-row items-center gap-2.5 py-1.5">
-								<Mark
-									kind={
-										item().kind === "decision"
-											? decisionMark((item() as Extract<Item, { kind: "decision" }>).decision)
-											: item().kind === "request"
-												? "new"
-												: "needs"
-									}
-								/>
-								<Text class="flex-1 text-sm text-muted-foreground">
-									{upNext(item())}
-									<Text class="text-foreground">{itemTitle(props.day, item())}</Text>
-								</Text>
-								<Text class="text-xs text-faint">{effortOf(item())}</Text>
-							</View>
-						)}
-					</Each>
-				</View>
-			</If>
-			<PlannerInterviewCards interviews={props.interviews} />
+			<Rows>
+				<Each of={rest()} key={(item) => item.id}>
+					{(item) => (
+						<Row
+							mark={
+								item().kind === "decision"
+									? decisionMark((item() as Extract<Item, { kind: "decision" }>).decision)
+									: item().kind === "request"
+										? "new"
+										: "needs"
+							}
+							title={`${upNext(item())}${itemTitle(props.day, item())}`}
+							trailing={<Num>{effortOf(item())}</Num>}
+						/>
+					)}
+				</Each>
+				<PlannerInterviewCards interviews={props.interviews} />
+			</Rows>
 			<If when={items().length + otherNeedsCount(props.ctx) + newFeedback(props.day).length === 0}>
 				<InterviewReadNote interviews={props.interviews} />
 			</If>
 			<FeedbackIncoming day={props.day} active={!first()} />
 			<ToCheck day={props.day} nested queued />
-			<RequestNotes day={props.day} />
 			<OtherNeeds ctx={props.ctx} day={props.day} />
 			<OtherToCheck ctx={props.ctx} day={props.day} nested />
-		</View>
+		</Section>
+	);
+}
+
+/**
+ * New: what came in from Slack and Linear. Slack requests also wait in Needs you, as cards in its queue; the New
+ * tab lists them on their own, and a press brings one forward there. Linear's issues are one row to the Linear page.
+ */
+function New(props: { day: Day; filtered: boolean }) {
+	const requests = () => (props.filtered ? todayRequests(props.day) : []);
+	const waiting = () => todayRequests(props.day).length;
+	return (
+		<If when={props.day.intake || props.day.linear}>
+			<Section
+				testID="today-new"
+				title="New"
+				count={props.filtered ? requests().length : null}
+				note="From Slack and Linear"
+			>
+				<Rows>
+					<Each of={requests()} key={(r) => r.request.id}>
+						{(r) => (
+							<Row
+								testID={`new-${r().request.id}`}
+								mark="new"
+								title={r().request.title}
+								meta={requestLine(r().request)}
+								accessibilityLabel={`${r().request.title}. Bring it forward in Needs you.`}
+								onPress={() => {
+									focused.set(`request:${r().request.id}`);
+									focusFront.set(true);
+									todayTab.set("needs");
+								}}
+							/>
+						)}
+					</Each>
+					<LinearRow day={props.day} />
+				</Rows>
+				<RequestNotes day={props.day} />
+				<If when={!props.filtered && waiting() > 0}>
+					<EmptyLine
+						text={`${waiting() === 1 ? "One Slack request waits" : `${countWord(waiting())} Slack requests wait`} in Needs you.`}
+					/>
+				</If>
+				<If when={waiting() === 0}>
+					<EmptyLine text="No new requests from Slack." />
+				</If>
+			</Section>
+		</If>
 	);
 }
 
@@ -414,9 +441,9 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
  * forward, 1 to 9 pick an option, S, C, V and Q open help, L puts the item
  * off and Command-Return takes its one next action. Letters and digits never
  * fire while a text field has the focus; help keys never pick or send. New
- * (Command-N) belongs to the header, which every screen shares.
- * While Today shows only another project, the keys do nothing: this
- * window's own items are not on screen.
+ * (Command-N) belongs to the top bar, which every screen shares.
+ * While Today shows only another project, or a tab without the question in
+ * front, the keys do nothing: the item they would act on is not on screen.
  */
 function bindTriage(day: Day, shown: () => boolean) {
 	const results = () => todayResults(day);
@@ -469,58 +496,82 @@ function bindTriage(day: Day, shown: () => boolean) {
 	keymap.bind(guarded);
 }
 
-function Missions(props: { day: Day; ctx: TodayScope; plans?: Plans }) {
+function missionsCount(day: Day, ctx: TodayScope): number {
+	const today = day.today();
+	return today.moving.length + today.notMoving.length + today.unreported.length + otherMissionsCount(ctx);
+}
+
+/** How many missions Missions lists before Show all, on Overview. */
+const MISSIONS_SHOWN = 5;
+
+function Missions(props: { day: Day; ctx: TodayScope; plans?: Plans; all: boolean }) {
 	const today = () => props.day.today();
-	const count = () => today().moving.length + today().notMoving.length + today().unreported.length;
+	const own = () => [
+		...today().moving.map((row) => ({ row, group: "Moving" })),
+		...today().notMoving.map((row) => ({ row, group: "Not moving" })),
+		...today().unreported.map((row) => ({ row, group: "No current report" })),
+	];
+	const shown = () => (props.all ? own() : own().slice(0, MISSIONS_SHOWN));
+	const groups = () =>
+		["Moving", "Not moving", "No current report"]
+			.map((group) => ({
+				group,
+				rows: shown()
+					.filter((m) => m.group === group)
+					.map((m) => m.row),
+			}))
+			.filter((g) => g.rows.length > 0);
+	const count = (group: string) => own().filter((m) => m.group === group).length;
 	return (
-		<View class="gap-3">
-			<SectionTitle title="Missions" count={count() + otherMissionsCount(props.ctx)} />
+		<Section
+			title="Missions"
+			count={missionsCount(props.day, props.ctx)}
+			more={
+				!props.all && own().length > MISSIONS_SHOWN
+					? { label: `Show all ${own().length}`, onPress: () => todayTab.set("missions") }
+					: undefined
+			}
+		>
 			<If when={props.ctx.tagged()}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
-			<If when={count() === 0}>
-				<Text class="text-sm text-muted-foreground">No active missions.</Text>
+			<If when={own().length === 0}>
+				<EmptyLine text="No active missions." />
 			</If>
-			<If when={today().moving.length > 0}>
-				<MissionGroup day={props.day} label="Moving" rows={today().moving} first plans={props.plans} />
-			</If>
-			<If when={today().notMoving.length > 0}>
-				<MissionGroup
-					day={props.day}
-					label="Not moving"
-					rows={today().notMoving}
-					first={today().moving.length === 0}
-					plans={props.plans}
-				/>
-			</If>
-			<If when={today().unreported.length > 0}>
-				<MissionGroup
-					day={props.day}
-					label="No current report"
-					rows={today().unreported}
-					first={today().moving.length + today().notMoving.length === 0}
-					plans={props.plans}
-				/>
-			</If>
+			<Each of={groups()} key={(g) => g.group}>
+				{(g) => (
+					<>
+						<RowGroup label={`${g().group} · ${count(g().group)}`} />
+						<Rows>
+							<Each of={g().rows} key={(m) => m.id}>
+								{(m) => <MissionLine day={props.day} row={m()} plans={props.plans} />}
+							</Each>
+						</Rows>
+					</>
+				)}
+			</Each>
 			<OtherMissions ctx={props.ctx} day={props.day} />
-		</View>
+		</Section>
 	);
 }
 
 /**
  * The one old-data warning (freshness.ts). Nothing shows while reads work or
  * a normal refresh runs: the last good read stays and updates in place.
+ * On Today it spans the top of the panel; other pages show it in their flow.
  */
-export function FreshnessNote(props: { day: Day }) {
+export function FreshnessNote(props: { day: Day; placement?: "panel" | "flow" }) {
 	const warning = () => todayWarning(props.day.freshness, props.day.today().freshness);
 	return (
 		<If when={warning()}>
 			<Notice
 				testID="freshness"
+				kind="failed"
+				placement={props.placement ?? "flow"}
 				text={warning()}
 				action={
 					<If when={props.day.freshness}>
-						<Action
+						<Link
 							label="Try now"
 							testID="freshness-try"
 							accessibilityLabel="Read from Pilot's service now. This sends nothing."
@@ -530,20 +581,6 @@ export function FreshnessNote(props: { day: Day }) {
 				}
 			/>
 		</If>
-	);
-}
-
-/** Today when nothing could be read: say so, and show nothing guessed. */
-function Unreadable(props: { day: Day }) {
-	return (
-		<View testID="unreadable" class="gap-2 pt-6">
-			<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
-				Today could not be read.
-			</Text>
-			<Text class="text-base leading-relaxed text-muted-foreground">
-				{`${props.day.today().freshness.reason} Pilot shows Today again once it can read it. Nothing here is guessed.`}
-			</Text>
-		</View>
 	);
 }
 
@@ -580,82 +617,70 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 	};
 	return (
 		<If when={planning().availability !== "mock" || rows().length > 0}>
-			<View testID="planning" class="gap-1">
-				<View class="pb-1">
-					<SectionTitle title="Planning" count={rows().length}>
-						<If when={off()}>
-							<Text testID="planning-status" class="text-xs text-faint">
-								Unavailable
-							</Text>
-						</If>
-					</SectionTitle>
-				</View>
+			<Section testID="planning" title="Planning" count={rows().length} note={off() ? "Unavailable" : undefined}>
 				<If when={off()}>
-					<Notice testID="planning-off" text="Pilot cannot show missions in planning here.">
-						<Text class="text-sm text-muted-foreground">{planning().reason}</Text>
-						<Text class="text-xs text-faint">This is not the same as having none.</Text>
-						<If when={canReadAgain()}>
-							<View class="flex-row pt-1">
-								<Action
+					<Notice
+						testID="planning-off"
+						placement="section"
+						text="Pilot cannot show missions in planning here."
+						detail={planning().reason}
+						action={
+							<If when={canReadAgain()}>
+								<Link
 									label={reading() ? "Reading…" : "Read again"}
-									icon="refresh"
 									disabled={reading()}
 									accessibilityLabel="Read missions in planning again. This sends nothing."
 									onPress={() => void readAgain()}
 								/>
-							</View>
-						</If>
-					</Notice>
+							</If>
+						}
+					/>
+					<EmptyLine text="This is not the same as having none." />
 				</If>
 				<If when={!off() && rows().length === 0}>
-					<Text testID="planning-note" class="text-xs text-muted-foreground">
-						No missions in planning.
-					</Text>
+					<EmptyLine testID="planning-note" text="No missions in planning." />
 				</If>
-				<Each of={rows()} key={(p) => p.missionId}>
-					{(p) => {
-						const id = p().missionId;
-						const place = placeRow(`plan-${id}`, () => openPlan(id));
-						return (
-							<View class="gap-1 border-t border-border py-3">
-								<RowLink
+				<Rows>
+					<Each of={rows()} key={(p) => p.missionId}>
+						{(p) => {
+							const id = p().missionId;
+							const place = placeRow(`plan-${id}`, () => openPlan(id));
+							return (
+								<Row
 									testID={`plan-${id}`}
+									mark={stageMark(p().stage)}
 									title={p().title}
+									meta={p().line}
+									state={stageWord(p().stage)}
+									stateTone={p().needsYou ? "needs" : "quiet"}
 									accessibilityLabel={`${p().title}, ${stageWord(p().stage)}. Open its planning.`}
 									anchor={place.anchor}
 									onPress={place.press}
-								>
-									<View class="flex-row items-center gap-1.5">
-										<Mark kind={stageMark(p().stage)} />
-										<Text class={p().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
-											{stageWord(p().stage)}
-										</Text>
-									</View>
-								</RowLink>
-								<Text class="text-sm text-muted-foreground">{p().line}</Text>
-								<If when={p().plannerSays}>
-									<View testID={`plan-says-${id}`} selectable class="gap-0.5 pt-1">
-										<Text class="text-xs text-faint">Its last message</Text>
-										<Text class="text-sm leading-relaxed text-foreground">{p().plannerSays}</Text>
-									</View>
-								</If>
-								<If when={p().reply}>
-									<View class="-ml-3 flex-row pt-1">
-										<Action
-											variant="outline"
-											testID={`plan-reply-${id}`}
-											label="Reply or continue"
-											accessibilityLabel={`Open the planning of ${p().title} to reply to Pilot's planning agent or ask it to continue.`}
-											onPress={() => openPlan(id)}
-										/>
-									</View>
-								</If>
-							</View>
-						);
-					}}
-				</Each>
+									detail={
+										<If when={p().plannerSays || p().reply}>
+											<RowDetail>
+												<If when={p().plannerSays}>
+													<Quote testID={`plan-says-${id}`} text={p().plannerSays ?? ""} />
+												</If>
+												<If when={p().reply}>
+													<Button
+														small
+														testID={`plan-reply-${id}`}
+														label="Reply or continue"
+														accessibilityLabel={`Open the planning of ${p().title} to reply to Pilot's planning agent or ask it to continue.`}
+														onPress={() => openPlan(id)}
+													/>
+												</If>
+											</RowDetail>
+										</If>
+									}
+								/>
+							);
+						}}
+					</Each>
+				</Rows>
 				<OtherPlanning ctx={props.ctx} />
-			</View>
+			</Section>
 		</If>
 	);
 }
@@ -663,49 +688,46 @@ function Planning(props: { plans: Plans; ctx: TodayScope }) {
 function DoneSince(props: { day: Day; ctx: TodayScope }) {
 	const today = () => props.day.today();
 	return (
-		<View class="gap-1">
-			<View class="flex-row items-baseline gap-2 pb-2">
-				<Text role="header" class="text-sm font-semibold text-muted-foreground">
-					Done since you looked
-				</Text>
-				<Text class="text-sm text-faint">{today().lastLooked}</Text>
-			</View>
+		<Section title="Done since you looked" note={today().lastLooked}>
 			<If when={props.ctx.tagged() && today().done.length > 0}>
 				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
 			</If>
-			<Each of={today().done} key={(e) => e.id}>
-				{(e) => (
-					<View class="py-2.5">
-						<MarkLine
-							kind={
+			<Rows>
+				<Each of={today().done} key={(e) => e.id}>
+					{(e) => (
+						<Row
+							mark={
 								e().evidence.some((x) => x.tone === "bad")
 									? "failed"
 									: e().evidence.some((x) => x.tone === "warn")
 										? "needs"
 										: "done"
 							}
-						>
-							<View class="gap-2">
-								<Text class="text-sm text-foreground">{e().text}</Text>
-								<View class="flex-row flex-wrap items-center gap-1.5">
-									<Each of={e().evidence} key={(x) => x.label}>
-										{(x) => <EvidenceChip evidence={x()} />}
-									</Each>
-									<Text class="text-xs text-faint">{e().missionTitle}</Text>
-								</View>
-							</View>
-						</MarkLine>
-					</View>
-				)}
-			</Each>
+							title={e().text}
+							meta={e().missionTitle}
+							wrap
+							selectable
+							detail={
+								<RowDetail>
+									<Chips>
+										<Each of={e().evidence} key={(x) => x.label}>
+											{(x) => <EvidenceChip evidence={x()} />}
+										</Each>
+									</Chips>
+								</RowDetail>
+							}
+						/>
+					)}
+				</Each>
+			</Rows>
 			<If when={today().doneHidden > 0}>
-				<Text class="pt-1 text-xs text-faint">{`${today().doneHidden} earlier results are not shown here.`}</Text>
+				<EmptyLine text={`${today().doneHidden} earlier results are not shown here.`} />
 			</If>
 			<If when={today().finished.length > 0}>
-				<Text class="pt-2 text-xs text-muted-foreground">{`Finished: ${today().finished.join(", ")}`}</Text>
+				<EmptyLine text={`Finished: ${today().finished.join(", ")}`} />
 			</If>
 			<OtherDone ctx={props.ctx} />
-		</View>
+		</Section>
 	);
 }
 
@@ -721,32 +743,27 @@ function ComingUp(props: { day: Day; ctx: TodayScope }) {
 			.slice(0, 5);
 	return (
 		<If when={rows().length > 0}>
-			<View class="gap-1">
-				<View class="flex-row items-center gap-2 pb-2">
-					<View class="flex-1">
-						<SectionTitle title="Coming up" />
-					</View>
+			<Section
+				title="Coming up"
+				action={
 					<If when={props.day.schedules}>
-						<Action label="Schedules…" onPress={goSchedules} />
+						<Link label="Schedules…" onPress={goSchedules} />
 					</If>
-				</View>
-				<Each of={rows()} key={(s) => s.row.id}>
-					{(s) => (
-						<View class="flex-row gap-3 py-2">
-							<View class="flex-1 gap-0.5">
-								<Text class="text-sm text-foreground">{s().row.text}</Text>
-								<If when={props.ctx.tagged()}>
-									<ProjectLabel name={s().project} />
-								</If>
-								<If when={s().row.note}>
-									<Text class="text-xs text-faint">{s().row.note ?? ""}</Text>
-								</If>
-							</View>
-							<Text class="text-xs text-faint">{s().row.when}</Text>
-						</View>
-					)}
-				</Each>
-			</View>
+				}
+			>
+				<Rows>
+					<Each of={rows()} key={(s) => s.row.id}>
+						{(s) => (
+							<Row
+								title={s().row.text}
+								meta={[props.ctx.tagged() ? s().project : "", s().row.note ?? ""].filter(Boolean).join(" · ")}
+								trailing={<Num>{s().row.when}</Num>}
+								wrap
+							/>
+						)}
+					</Each>
+				</Rows>
+			</Section>
 		</If>
 	);
 }
@@ -758,58 +775,76 @@ function unreadProblems(ctx: TodayScope) {
 		.map((p) => p.name);
 }
 
-/** Today while it shows only another project. */
 function InterviewReadNote(props: { interviews: PlannerInterviews }) {
 	return (
 		<If when={!props.interviews.known() && props.interviews.rows().length === 0}>
-			<Text testID="planner-interviews-unconfirmed" class="text-sm text-muted-foreground">
-				Pilot has not confirmed which planner interviews need answers.
-			</Text>
+			<EmptyLine
+				testID="planner-interviews-unconfirmed"
+				text="Pilot has not confirmed which planner interviews need answers."
+			/>
 		</If>
 	);
 }
 
-function OtherProject(props: { day: Day; ctx: TodayScope; interviews: PlannerInterviews }) {
+/** Today while it shows only another project: the same panel, in two columns. */
+function OtherProject(props: { day: Day; ctx: TodayScope; interviews: PlannerInterviews; working: WorkingList }) {
 	return (
-		<If when={props.ctx.others().length > 0} else={<WorkingNow day={props.day} ctx={props.ctx} />}>
-			<View class="gap-12">
-				<View class="gap-4">
-					<Problems
-						rows={props.ctx.others().flatMap((p) => p.today?.problems ?? [])}
-						known
-						unreadProjects={unreadProblems(props.ctx)}
-						project={props.ctx.name}
-					/>
-					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx) + props.interviews.rows().length} />
-					<PlannerInterviewCards interviews={props.interviews} />
-					<If when={otherNeedsCount(props.ctx) === 0}>
-						<InterviewReadNote interviews={props.interviews} />
-					</If>
-					<OtherNeeds ctx={props.ctx} day={props.day} />
-					<OtherToCheck ctx={props.ctx} day={props.day} nested />
-				</View>
-				<OtherNotShown ctx={props.ctx} />
-				<WorkingNow day={props.day} ctx={props.ctx} />
-				<If when={props.ctx.others().some((p) => (p.planning?.plans.length ?? 0) > 0 || p.errors.planning)}>
-					<View class="gap-1">
-						<SectionTitle title="Planning" />
-						<OtherPlanning ctx={props.ctx} />
-					</View>
-				</If>
-				<View class="gap-3">
-					<SectionTitle title="Missions" count={otherMissionsCount(props.ctx)} />
-					<OtherMissions ctx={props.ctx} day={props.day} />
-				</View>
-				<View class="gap-1">
-					<Text role="header" class="text-sm font-semibold text-muted-foreground">
-						Done since you looked
-					</Text>
-					<OtherDone ctx={props.ctx} />
-				</View>
-			</View>
+		<If
+			when={props.ctx.others().length > 0}
+			else={
+				<Column>
+					<WorkingNow day={props.day} ctx={props.ctx} list={props.working} />
+				</Column>
+			}
+		>
+			<Columns
+				main={
+					<>
+						<Problems
+							rows={props.ctx.others().flatMap((p) => p.today?.problems ?? [])}
+							known
+							unreadProjects={unreadProblems(props.ctx)}
+							project={props.ctx.name}
+						/>
+						<Section title="Needs you" count={otherNeedsCount(props.ctx) + props.interviews.rows().length}>
+							<Rows>
+								<PlannerInterviewCards interviews={props.interviews} />
+							</Rows>
+							<If when={otherNeedsCount(props.ctx) === 0}>
+								<InterviewReadNote interviews={props.interviews} />
+							</If>
+							<OtherNeeds ctx={props.ctx} day={props.day} />
+							<OtherToCheck ctx={props.ctx} day={props.day} nested />
+						</Section>
+						<Section title="Done since you looked">
+							<OtherDone ctx={props.ctx} />
+						</Section>
+					</>
+				}
+				side={
+					<>
+						<OtherNotShown ctx={props.ctx} />
+						<WorkingNow day={props.day} ctx={props.ctx} list={props.working} />
+						<If when={props.ctx.others().some((p) => (p.planning?.plans.length ?? 0) > 0 || p.errors.planning)}>
+							<Section title="Planning">
+								<OtherPlanning ctx={props.ctx} />
+							</Section>
+						</If>
+						<Section title="Missions" count={otherMissionsCount(props.ctx)}>
+							<OtherMissions ctx={props.ctx} day={props.day} />
+						</Section>
+					</>
+				}
+			/>
 		</If>
 	);
 }
+
+/** Today's tabs: Overview shows every section; the others filter the panel to one part. */
+export type TodayTab = "overview" | "needs" | "new" | "working" | "missions";
+
+/** The tab this window's Today shows. Kept while the window lives; a new window starts on Overview. */
+export const todayTab = signal<TodayTab>("overview");
 
 /** The whole Today screen for `props.day`. */
 export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }) {
@@ -818,6 +853,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 	// The window's project scope: All projects unless the user chose one. Reading only.
 	const ctx = todayScope(props.day, plans);
 	const interviews = plannerInterviews(props.day);
+	const working = workingList(props.day, ctx);
 	const title = () => {
 		if (ctx.showsOwn())
 			return headline(props.day, interviews.rows().length + otherNeedsCount(ctx), interviews.known());
@@ -826,11 +862,14 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 			? "What needs you is not fully known."
 			: scoped;
 	};
+	const tab = () => (ctx.showsOwn() ? todayTab() : "overview");
 	bindScopeReads(props.day, ctx);
+	visitToday(props.day, props.rituals);
 	bindTriage(
 		props.day,
 		() =>
 			ctx.showsOwn() &&
+			(tab() === "overview" || tab() === "needs") &&
 			!feedbackTurn(props.day) &&
 			!!front(props.day.today(), todayResults(props.day), todayRequests(props.day)),
 	);
@@ -843,83 +882,173 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 		todayScrollTo.set(null);
 		node.scrollTo({ y, animated: false });
 	});
+	const problems = () => (
+		<Problems
+			rows={[...today().problems, ...ctx.others().flatMap((p) => p.today?.problems ?? [])]}
+			known={today().problemsKnown}
+			unreadProjects={unreadProblems(ctx)}
+			chat={props.day.chat?.source}
+			actionProject={ctx.on() ? ctx.own() : undefined}
+			earlier={
+				todayWarning(props.day.freshness, today().freshness) !== "" ||
+				ctx.others().some((p) => p.currentness === "stale")
+			}
+			project={ctx.tagged() ? ctx.name : undefined}
+		/>
+	);
+	const missionSide = (all: boolean) => (
+		<>
+			<If when={plans}>
+				<Planning plans={plans as Plans} ctx={ctx} />
+			</If>
+			<Missions day={props.day} ctx={ctx} plans={plans} all={all} />
+			<ComingUp day={props.day} ctx={ctx} />
+		</>
+	);
 	return (
 		<Scroll
 			testID="today-page"
 			ref={(node) => scroller.set(node)}
-			class="flex-1 bg-background"
+			class="flex-1"
 			contentOffset={{ y: todayPlace.y }}
 			scrollEventThrottle={100}
 			onScroll={(e) => {
 				todayPlace.y = e.offset.y;
 			}}
 		>
-			<Page gap={12}>
-				<If when={ctx.on() || today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
-					<View class="gap-12">
-						<View class="gap-3">
-							<View class="flex-row items-start gap-3">
-								<View class="flex-1">
-									<DayLine day={props.day} rituals={props.rituals} />
-								</View>
+			<Page>
+				<If
+					when={ctx.on() || today().freshness.state !== "unreadable"}
+					else={
+						<PageHead
+							testID="unreadable"
+							title="Today could not be read."
+							text={`${today().freshness.reason} Pilot shows Today again once it can read it. Nothing here is guessed.`}
+						/>
+					}
+				>
+					<PageHead
+						pre={<DayDate day={props.day} />}
+						title={title()}
+						text={ctx.showsOwn() ? summary(props.day, interviews.rows().length) : undefined}
+						actions={
+							<>
+								<DayActions day={props.day} rituals={props.rituals} />
 								<ScopeControl ctx={ctx} />
-							</View>
-							<PageTitle title={title()} />
-							<If when={ctx.showsOwn()}>
-								<Text class="text-base leading-relaxed text-muted-foreground">
-									{summary(props.day, interviews.rows().length)}
-								</Text>
-								<If when={today().leftOff && today().decisions.length === 0}>
-									<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
-								</If>
-							</If>
-							<ScopeNote day={props.day} ctx={ctx} />
-							<If when={ctx.showsOwn()}>
-								<FreshnessNote day={props.day} />
-							</If>
-						</View>
-
-						<If when={ctx.showsOwn()} else={<OtherProject day={props.day} ctx={ctx} interviews={interviews} />}>
-							<View class="gap-12">
-								<Problems
-									rows={[...today().problems, ...ctx.others().flatMap((p) => p.today?.problems ?? [])]}
-									known={today().problemsKnown}
-									unreadProjects={unreadProblems(ctx)}
-									chat={props.day.chat?.source}
-									actionProject={ctx.on() ? ctx.own() : undefined}
-									earlier={
-										todayWarning(props.day.freshness, today().freshness) !== "" ||
-										ctx.others().some((p) => p.currentness === "stale")
-									}
-									project={ctx.tagged() ? ctx.name : undefined}
-								/>
-								{/* Only a connected window can read project setup; mock worlds have no model controls. */}
-								<If when={props.day.models}>
-									<CyberSuggestions />
-								</If>
-								<NeedsYou day={props.day} ctx={ctx} interviews={interviews} />
-								<WorkingNow day={props.day} ctx={ctx} />
-								<If when={ctx.tagged()}>
-									<OtherNotShown ctx={ctx} />
-								</If>
-								<If when={plans}>
-									<Planning plans={plans as Plans} ctx={ctx} />
-								</If>
-								<Missions day={props.day} ctx={ctx} plans={plans} />
-								<LinearRow day={props.day} />
-								<DoneSince day={props.day} ctx={ctx} />
-								<ComingUp day={props.day} ctx={ctx} />
-
-								<Text class="border-t border-border pt-5 text-xs text-faint">
-									{!everRead(today().attention.state) || !today().problemsKnown || !interviews.known()
-										? "Pilot could not read everything that needs you yet. It keeps trying."
-										: today().problems.length > 0
-											? "Unresolved work is shown above. Pilot retries nothing on its own."
-											: "That is everything for now. Pilot will tell you if something needs you."}
-								</Text>
-							</View>
+							</>
+						}
+					>
+						<If when={ctx.showsOwn() && today().leftOff && today().decisions.length === 0}>
+							<Caption tone="accent">{today().leftOff ?? ""}</Caption>
 						</If>
-					</View>
+						<DayNotes day={props.day} rituals={props.rituals} />
+						<ScopeNote day={props.day} ctx={ctx} />
+					</PageHead>
+					<Panel
+						testID="today-panel"
+						notice={
+							<If when={ctx.showsOwn()}>
+								<FreshnessNote day={props.day} placement="panel" />
+							</If>
+						}
+						tabs={
+							<If when={ctx.showsOwn()}>
+								<Tabs testID="today-tabs">
+									<Tab
+										testID="today-tab-overview"
+										label="Overview"
+										selected={tab() === "overview"}
+										onPress={() => todayTab.set("overview")}
+									/>
+									<Tab
+										testID="today-tab-needs"
+										label="Needs you"
+										count={needsCount(props.day, ctx, interviews)}
+										selected={tab() === "needs"}
+										onPress={() => todayTab.set("needs")}
+									/>
+									<Tab
+										testID="today-tab-new"
+										label="New"
+										count={todayRequests(props.day).length}
+										selected={tab() === "new"}
+										onPress={() => todayTab.set("new")}
+									/>
+									<Tab
+										testID="today-tab-working"
+										label="Working"
+										count={working.count()}
+										selected={tab() === "working"}
+										onPress={() => todayTab.set("working")}
+									/>
+									<Tab
+										testID="today-tab-missions"
+										label="Missions"
+										count={missionsCount(props.day, ctx)}
+										selected={tab() === "missions"}
+										onPress={() => todayTab.set("missions")}
+									/>
+								</Tabs>
+							</If>
+						}
+					>
+						<If
+							when={ctx.showsOwn()}
+							else={<OtherProject day={props.day} ctx={ctx} interviews={interviews} working={working} />}
+						>
+							<If when={tab() === "overview"}>
+								<Columns
+									main={
+										<>
+											{problems()}
+											<NeedsYou day={props.day} ctx={ctx} interviews={interviews} />
+											<New day={props.day} filtered={false} />
+											<DoneSince day={props.day} ctx={ctx} />
+										</>
+									}
+									side={
+										<>
+											<WorkingNow day={props.day} ctx={ctx} list={working} />
+											<If when={ctx.tagged()}>
+												<OtherNotShown ctx={ctx} />
+											</If>
+											{missionSide(false)}
+										</>
+									}
+								/>
+							</If>
+							<If when={tab() === "needs"}>
+								<Column centered>
+									{problems()}
+									<NeedsYou day={props.day} ctx={ctx} interviews={interviews} />
+								</Column>
+							</If>
+							<If when={tab() === "new"}>
+								<Column centered>
+									<New day={props.day} filtered />
+								</Column>
+							</If>
+							<If when={tab() === "working"}>
+								<Column centered>
+									<WorkingNow day={props.day} ctx={ctx} list={working} />
+								</Column>
+							</If>
+							<If when={tab() === "missions"}>
+								<Column centered>{missionSide(true)}</Column>
+							</If>
+						</If>
+					</Panel>
+					<If when={ctx.showsOwn()}>
+						<PageFoot
+							text={
+								!everRead(today().attention.state) || !today().problemsKnown || !interviews.known()
+									? "Pilot could not read everything that needs you yet. It keeps trying."
+									: today().problems.length > 0
+										? "Unresolved work is shown above. Pilot retries nothing on its own."
+										: "That is everything for now. Pilot will tell you if something needs you."
+							}
+						/>
+					</If>
 				</If>
 			</Page>
 		</Scroll>

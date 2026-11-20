@@ -30,7 +30,7 @@ import { stageMark, stageWord } from "./PlanScreen";
 import { offered, openRitual, openStandup, ritualEntry } from "./ritualView";
 import { screenAgentAvailable, screenAgentOpen } from "./screenAgentOpen";
 import { updateLabel } from "./UpdateScreen";
-import { Action, KeyCap, KeyHint, Mark, type MarkKind, Picker } from "./ui";
+import { Action, KeyCap, KeyHint, Mark, type MarkKind, Picker, SearchButton } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
 import { route } from "./view";
 import { stateMark, stateWord } from "./words";
@@ -432,12 +432,9 @@ export function Palette(props: { places: Places; narrow: boolean }) {
 	keymap.bind("mod+k", () => (open() ? close() : open.set(true)));
 	return (
 		<>
-			<Action
-				label="Search"
-				icon="search"
-				iconOnly={props.narrow}
-				variant="outline"
-				shortcut={keymap.label("mod+k")}
+			<SearchButton
+				keys={keymap.label("mod+k")}
+				compact={props.narrow}
 				testID="search-open"
 				onPress={() => open.set(true)}
 			/>

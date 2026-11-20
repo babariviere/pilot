@@ -23,7 +23,7 @@ test("with nothing to decide, a result to check is the card in front", async () 
 	expect(app.shows("text:/^Up next, result to check: /")).toBe(true);
 	// The results are cards now: the old list heading is gone.
 	expect(app.shows("text:/^To check · \\d+$/")).toBe(false);
-	expect(app.shows("Nothing needs you. Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
 });
 
 test("Later puts the result in front after the others; J brings the next one; ⌘↩ opens it", async () => {
@@ -87,7 +87,7 @@ test("Slack requests wait behind the results; Start, Later and Discard work from
 	await app.keyboard.press("k");
 	await app.waitFor(`${request} >> ${stripe}`);
 	await app.press(`${request} >> role:button[Later]`);
-	await app.waitFor("Requests for later  1");
+	await app.waitFor("Requests for later · 1");
 	await app.waitFor(CARD);
 	await app.press("role:button[Show later requests]");
 	await app.press("id:bring-back-stripe");

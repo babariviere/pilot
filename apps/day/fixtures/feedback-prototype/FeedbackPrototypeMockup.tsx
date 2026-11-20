@@ -10,7 +10,7 @@ import { FeedbackQuestion } from "../../FeedbackQuestion";
 import type { FeedbackItem, StepResult, UserFeedbackQuestion } from "../../feedbackFeed";
 import type { ChatStep } from "../../feedbackSteps";
 import { QuestionArtifacts } from "../../QuestionArtifacts";
-import { Action, MarkLine, Panel, TabItem, TabRow } from "../../ui";
+import { Action, MarkLine, QuietPanel, TabItem, TabRow } from "../../ui";
 
 type State = "proposal" | "question" | "fix";
 const state = signal<State>("question");
@@ -88,7 +88,7 @@ function Line(props: { kind: "moving" | "needs" | "ready"; text: string; chat?: 
 
 function PrototypeProposal() {
 	return (
-		<Panel class="gap-2.5">
+		<QuietPanel class="gap-2.5">
 			<Text class="text-xs font-medium text-muted-foreground">Proposed: try a prototype first</Text>
 			<Text class="text-sm leading-relaxed text-foreground">
 				The look of a task's owner on plan rows is unclear.
@@ -107,7 +107,7 @@ function PrototypeProposal() {
 				<Action label="Start fix" />
 			</View>
 			<Text class="text-xs text-faint">A prototype makes mockups to choose from. It writes no code.</Text>
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -115,7 +115,7 @@ function ChosenFix() {
 	const shelf = createShelf();
 	const chosen = mockups[0]!;
 	return (
-		<Panel class="gap-2.5">
+		<QuietPanel class="gap-2.5">
 			<Text class="text-xs font-medium text-muted-foreground">Proposed: a small fix, from your choice</Text>
 			<Text class="text-sm leading-relaxed text-foreground">Inline owner chips on plan rows.</Text>
 			<Text class="text-sm leading-relaxed text-muted-foreground">
@@ -128,7 +128,7 @@ function ChosenFix() {
 			<View class="flex-row flex-wrap items-center gap-2">
 				<Action variant="outline" label="Start fix" />
 			</View>
-		</Panel>
+		</QuietPanel>
 	);
 }
 

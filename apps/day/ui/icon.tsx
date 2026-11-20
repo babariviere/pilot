@@ -6,6 +6,8 @@ import archive from "../icons/archive.svg";
 import back from "../icons/back.svg";
 import changes from "../icons/changes.svg";
 import chat from "../icons/chat.svg";
+import check from "../icons/check.svg";
+import chevron from "../icons/chevron.svg";
 import document from "../icons/document.svg";
 import fullscreen from "../icons/fullscreen.svg";
 import fullscreenExit from "../icons/fullscreen-exit.svg";
@@ -18,6 +20,7 @@ import plus from "../icons/plus.svg";
 import pointer from "../icons/pointer.svg";
 import refresh from "../icons/refresh.svg";
 import rename from "../icons/rename.svg";
+import right from "../icons/right.svg";
 import search from "../icons/search.svg";
 import settings from "../icons/settings.svg";
 import share from "../icons/share.svg";
@@ -29,6 +32,8 @@ const ICONS = {
 	back,
 	changes,
 	chat,
+	check,
+	chevron,
 	document,
 	fullscreen,
 	fullscreenExit,
@@ -41,6 +46,7 @@ const ICONS = {
 	pointer,
 	refresh,
 	rename,
+	right,
 	search,
 	settings,
 	share,

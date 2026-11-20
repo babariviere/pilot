@@ -3,10 +3,10 @@
 // the two ways on. Reply sends the user's own words; Continue sends Pilot's
 // fixed words. Each is sent once, on a press. A lost answer is checked, never
 // sent again. A read of the same chat keeps the field, its focus and its words.
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import { keepField } from "./kept";
 import type { ContinueResult, SessionChatSource } from "./sessionChat";
-import { Action, TextField } from "./ui";
+import { Button, Caption, Quote, TextField } from "./ui";
 
 /** Most characters a reply carries, as the service checks: the same as a new chat's first message. */
 const REPLY_CHARS = 12_000;
@@ -58,12 +58,8 @@ export function ChatWaits(props: {
 	return (
 		<View testID={`chat-waits-${id()}`} class="gap-2">
 			<If when={props.says}>
-				<View selectable class="gap-0.5">
-					<Text class="text-xs text-faint">Its last message</Text>
-					<Text testID={`chat-says-${id()}`} class="text-sm leading-relaxed text-foreground">
-						{props.says ?? ""}
-					</Text>
-				</View>
+				<Caption tone="faint">Its last message</Caption>
+				<Quote testID={`chat-says-${id()}`} text={props.says ?? ""} />
 			</If>
 			<If when={!sent() && !unknown()}>
 				<TextField
@@ -78,11 +74,11 @@ export function ChatWaits(props: {
 					accessibilityLabel="Your reply to this chat. It reads your words as your answer and goes on."
 				/>
 				<If when={tooLong()}>
-					<Text class="text-xs text-needs-ink">{`A reply holds at most ${REPLY_CHARS} characters. Shorten it to send.`}</Text>
+					<Caption tone="needs">{`A reply holds at most ${REPLY_CHARS} characters. Shorten it to send.`}</Caption>
 				</If>
-				<View class="-ml-3 flex-row gap-2">
-					<Action
-						variant="outline"
+				<View class="flex-row gap-2">
+					<Button
+						small
 						testID={`chat-reply-send-${id()}`}
 						label={sending() ? "Sending…" : "Reply"}
 						disabled={sending() || !text().trim() || tooLong() || !props.chat.replyChat}
@@ -90,7 +86,8 @@ export function ChatWaits(props: {
 						onPress={reply}
 					/>
 					<If when={props.canContinue}>
-						<Action
+						<Button
+							small
 							testID={`chat-waits-continue-${id()}`}
 							label="Continue"
 							disabled={sending()}
@@ -102,26 +99,23 @@ export function ChatWaits(props: {
 			</If>
 			<If when={unknown()}>
 				{(op) => (
-					<View class="-ml-3 flex-row">
-						<Action
-							testID={`chat-waits-check-${id()}`}
-							label={sending() ? "Checking…" : "Check"}
-							disabled={sending()}
-							accessibilityLabel="Check whether it reached the chat. This reads Pilot's saved answer and sends nothing."
-							onPress={() => void check(op())}
-						/>
-					</View>
+					<Button
+						small
+						testID={`chat-waits-check-${id()}`}
+						label={sending() ? "Checking…" : "Check"}
+						disabled={sending()}
+						accessibilityLabel="Check whether it reached the chat. This reads Pilot's saved answer and sends nothing."
+						onPress={() => void check(op())}
+					/>
 				)}
 			</If>
 			<If when={sent()}>
-				<Text testID={`chat-waits-sent-${id()}`} class="text-xs text-faint">
+				<Caption testID={`chat-waits-sent-${id()}`} tone="faint">
 					Sent. The chat goes on; this shows its next state when Pilot reads it again.
-				</Text>
+				</Caption>
 			</If>
 			<If when={result()?.message}>
-				<Text testID={`chat-waits-message-${id()}`} class="text-xs text-muted-foreground">
-					{result()?.message ?? ""}
-				</Text>
+				<Caption testID={`chat-waits-message-${id()}`}>{result()?.message ?? ""}</Caption>
 			</If>
 		</View>
 	);

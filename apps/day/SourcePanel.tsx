@@ -5,7 +5,7 @@ import { signal, Text, View } from "nsh";
 import type { Shown } from "./artifactReads";
 import { excerpt, sizeOf, unavailableLine } from "./deliveryView";
 import { SavedImage } from "./SavedImage";
-import { Action, Panel } from "./ui";
+import { Action, QuietPanel } from "./ui";
 
 /** `fill`: takes the height it is given, so a saved image grows into it (the full window). */
 export function SourcePanel(props: { inspection: Shown; fill?: boolean }) {
@@ -25,7 +25,7 @@ export function SourcePanel(props: { inspection: Shown; fill?: boolean }) {
 		return c?.state === "unavailable" ? unavailableLine(i().kind, c.reason) : "";
 	};
 	return (
-		<Panel testID="artifact-source" class={`gap-2 ${props.fill ? "min-h-0 flex-1" : ""}`}>
+		<QuietPanel testID="artifact-source" class={`gap-2 ${props.fill ? "min-h-0 flex-1" : ""}`}>
 			<If when={i().state === "reading"}>
 				<Text class="text-sm text-muted-foreground">Reading the saved source…</Text>
 			</If>
@@ -62,6 +62,6 @@ export function SourcePanel(props: { inspection: Shown; fill?: boolean }) {
 					Plain text from this saved revision. Pilot does not run or draw it, and looking records nothing.
 				</Text>
 			</If>
-		</Panel>
+		</QuietPanel>
 	);
 }

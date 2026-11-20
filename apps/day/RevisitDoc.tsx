@@ -19,7 +19,7 @@ import type {
 import { askRevisit, checkRevision, confirmRevision, resumeRevision } from "./planCommands";
 import type { Plans } from "./planning";
 import { drop, put, revisionShown, revisitBusy, revisitMessages, revisitOpen } from "./planView";
-import { Action, Disclosure, glide, Mark, type MarkKind, MarkLine, Notice, Panel, SectionTitle } from "./ui";
+import { Action, Disclosure, glide, Mark, type MarkKind, MarkLine, Notice, QuietPanel, SectionTitle } from "./ui";
 
 /** The words beside a part a revision touches. */
 export function changeWord(kind: ChangeKind): string {
@@ -203,7 +203,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 	const unknown = () => r().confirm === "unknown" || r().confirm === "checking";
 	const message = () => revisitMessages()[id()] ?? "";
 	return (
-		<Panel testID="revision-confirm" size="lg" class="gap-3">
+		<QuietPanel testID="revision-confirm" size="lg" class="gap-3">
 			<If when={message()}>
 				<Text testID="revisit-message" role="alert" class="text-sm text-foreground">
 					{message()}
@@ -310,7 +310,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 					/>
 				</If>
 			</View>
-		</Panel>
+		</QuietPanel>
 	);
 }
 

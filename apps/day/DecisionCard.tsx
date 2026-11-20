@@ -7,7 +7,7 @@
 // kept as drafts for the revision shown. A question that takes several
 // answers shows checkboxes and sends every option picked. Later is kept
 // with the draft; the chat still waits.
-import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, keymap, signal, View, type ViewRef } from "nsh";
 import type { Answer, Decision, DecisionOption } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
 import { openChat } from "./chatView";
@@ -31,19 +31,23 @@ import { keepField } from "./kept";
 import { QuestionArtifacts } from "./QuestionArtifacts";
 import { todayResults } from "./ToCheck";
 import {
-	Action,
 	Bars,
-	CheckboxRow,
+	Body,
+	Button,
+	Caption,
+	Chip,
+	Chips,
 	EvidenceChip,
-	InlineAction,
-	LinkAction,
-	Mark,
+	KeyHints,
+	Link,
 	type MarkKind,
-	Panel,
-	RadioList,
-	RadioRow,
+	Option,
+	Options,
+	Quote,
+	Question,
+	Spacer,
+	State,
 	TextField,
-	ToggleChip,
 } from "./ui";
 import {
 	anchors,
@@ -98,51 +102,36 @@ function deliveryLine(decision: Decision): string {
 function AnswerLine(props: { day: Day; decision: Decision; answer: Answer }) {
 	const a = () => props.answer;
 	return (
-		<View class="gap-1">
-			<Text class="text-sm text-muted-foreground">{a().question}</Text>
+		<View class="gap-0.5">
+			<Body tone="muted">{a().question}</Body>
 			<If when={a().state === "ready"}>
-				<Text class="text-sm text-foreground">{a().answer}</Text>
+				<Body>{a().answer}</Body>
 				<If when={a().earlier}>
-					<Text class="text-xs text-faint">Asked about an earlier version of this decision.</Text>
+					<Caption tone="faint">Asked about an earlier version of this decision.</Caption>
 				</If>
 			</If>
 			<If when={a().state === "asking"}>
-				<Text class="text-sm text-faint">Pilot is writing an answer…</Text>
+				<Body tone="faint">Pilot is writing an answer…</Body>
 			</If>
 			<If when={a().state === "checking"}>
-				<Text class="text-sm text-faint">Checking. This only reads; it asks nothing again.</Text>
+				<Body tone="faint">Checking. This only reads; it asks nothing again.</Body>
 			</If>
 			<If when={a().state === "unknown"}>
-				<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-					<Text class="min-w-0 shrink text-sm text-needs-ink">
-						No answer came back. Pilot will not ask again until it checks.
-					</Text>
-					<InlineAction
-						testID="check-answer"
-						label="Check again"
-						onPress={() => void checkAnswer(props.day, props.decision, a())}
-					/>
-				</View>
+				<Body tone="needs">No answer came back. Pilot will not ask again until it checks.</Body>
+				<Link
+					testID="check-answer"
+					label="Check again"
+					onPress={() => void checkAnswer(props.day, props.decision, a())}
+				/>
 			</If>
 		</View>
 	);
 }
 
-/** An option's label, its Suggested or Recommended mark and its one-line consequence. */
-function OptionText(props: { decision: Decision; option: DecisionOption }) {
-	const o = () => props.option;
-	return (
-		// min-w-0 lets a long label wrap inside the card instead of running past it.
-		<View class="min-w-0 flex-1 gap-0.5">
-			<Text class="text-sm font-medium text-card-foreground">{o().label}</Text>
-			<If when={o().recommended}>
-				<Text class="text-xs text-muted-foreground">{props.decision.reply ? "Suggested" : "Recommended"}</Text>
-			</If>
-			<If when={o().detail}>
-				<Text class="text-xs text-muted-foreground">{o().detail}</Text>
-			</If>
-		</View>
-	);
+/** An option's tag: Suggested for an agent's suggestion, Recommended for a coordinator's. */
+function optionTag(decision: Decision, option: DecisionOption): string | undefined {
+	if (!option.recommended) return undefined;
+	return decision.reply ? "Suggested" : "Recommended";
 }
 
 /** How many options are picked on a question that takes several, in a few words. */
@@ -249,68 +238,98 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 			.map((part) => `· ${part}`)
 			.join(" ");
 	const showOptions = () => d().options.length > (d().reply ? 0 : 1);
-	const keyHints = () =>
-		[
-			`${COMMIT_KEY} ${commitLabel(d())}`,
-			"J K next",
-			d().multiple ? "1–9 pick any" : "",
-			d().helpUnavailable ? "" : "S C Q help",
-			d().reply ? "0 own words" : "",
-		]
-			.filter(Boolean)
-			.join(" · ");
+	const keyHints = (): [string, string][] =>
+		(
+			[
+				[COMMIT_KEY, commitLabel(d())],
+				["J K", "next"],
+				d().multiple ? ["1–9", "pick any"] : null,
+				d().helpUnavailable ? null : ["S C Q", "help"],
+				d().reply ? ["0", "own words"] : null,
+			] as ([string, string] | null)[]
+		).filter((h): h is [string, string] => h !== null);
 
 	return (
-		<View testID="decision" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
-			<View class="gap-2">
-				<Text role="header" class="text-xl font-semibold leading-snug text-card-foreground">
-					{d().title}
-				</Text>
-				<If when={hasSource()}>
-					<View testID="decision-source" class="flex-row flex-wrap items-center gap-x-1.5 gap-y-1">
-						<If when={d().missionId}>
-							<LinkAction
-								label={`Mission: ${d().missionTitle || "Title unavailable"}`}
-								testID={missionLink}
-								anchor={mission.anchor}
-								onPress={mission.press}
-							/>
-							<Text class="text-xs text-muted-foreground">·</Text>
-						</If>
-						<If when={props.day.chat} else={<Text class="text-xs text-muted-foreground">{chatLabel()}</Text>}>
-							<LinkAction label={chatLabel()} testID={chatLink} anchor={chat.anchor} onPress={chat.press} />
-						</If>
-					</View>
-				</If>
-				<View class="flex-row flex-wrap items-center gap-1.5">
-					<Mark kind={decisionMark(d())} />
-					<Text
-						class="text-xs"
-						classList={{
-							"text-needs-ink": decisionMark(d()) === "needs" || decisionMark(d()) === "unknown",
-							"text-failed-ink": decisionMark(d()) === "failed",
-							"text-ok-ink": decisionMark(d()) === "ready",
-						}}
-					>
-						{d().reason}
-					</Text>
-					<Text class="text-xs text-muted-foreground">{meta()}</Text>
-					<View class="flex-1" />
+		<Question
+			testID="decision"
+			title={d().title}
+			position={props.count > 1 ? `${props.index + 1} of ${props.count}` : undefined}
+			meta={
+				<>
+					<State kind={decisionMark(d())} label={d().reason} plain />
+					<Caption>{meta()}</Caption>
 					<If when={d().draft.later}>
-						<Text testID="put-off" class="text-xs text-faint">
+						<Caption testID="put-off" tone="faint">
 							Put off. The chat still waits.
-						</Text>
+						</Caption>
 					</If>
-					<If when={props.count > 1}>
-						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
+				</>
+			}
+			foot={
+				<>
+					<If
+						when={needsCheck(d())}
+						else={
+							<Button
+								kind="primary"
+								label={commitLabel(d())}
+								shortcut={COMMIT_KEY}
+								anchor={(node) => {
+									commitButton = node;
+								}}
+								disabled={!idle() || !canSend(d())}
+								onPress={() => void decide(props.day, d())}
+							/>
+						}
+					>
+						{/* Pilot checks by itself first; the button is the fallback after its tries. */}
+						<If when={d().delivery === "unknown"}>
+							<Button
+								kind="primary"
+								label="Check again"
+								shortcut={COMMIT_KEY}
+								anchor={(node) => {
+									commitButton = node;
+								}}
+								onPress={() => void checkDecision(props.day, d())}
+							/>
+						</If>
+					</If>
+					<If when={props.later}>
+						<Button
+							label="Later"
+							shortcut="L"
+							anchor={(node) => {
+								laterButton = node;
+							}}
+							disabled={!idle()}
+							onPress={() => laterDecision(props.day, d())}
+						/>
+					</If>
+					<Spacer />
+					<KeyHints hints={keyHints()} />
+				</>
+			}
+		>
+			<If when={hasSource()}>
+				<View testID="decision-source" class="flex-row flex-wrap items-center gap-x-1.5 gap-y-1">
+					<If when={d().missionId}>
+						<Link
+							label={`Mission: ${d().missionTitle || "Title unavailable"}`}
+							testID={missionLink}
+							anchor={mission.anchor}
+							onPress={mission.press}
+						/>
+						<Caption>·</Caption>
+					</If>
+					<If when={props.day.chat} else={<Caption>{chatLabel()}</Caption>}>
+						<Link label={chatLabel()} testID={chatLink} anchor={chat.anchor} onPress={chat.press} />
 					</If>
 				</View>
-			</View>
+			</If>
 
 			<If when={(helpOpen(id, "simpler") && d().simpler) || d().context}>
-				<Text class="text-sm leading-relaxed text-card-foreground">
-					{helpOpen(id, "simpler") && d().simpler ? d().simpler : d().context}
-				</Text>
+				<Body measure>{helpOpen(id, "simpler") && d().simpler ? d().simpler : d().context}</Body>
 			</If>
 			<If when={props.day.artifacts && d().artifacts.length > 0}>
 				<QuestionArtifacts source={props.day.artifacts as ArtifactSource} artifacts={d().artifacts} />
@@ -319,8 +338,8 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 			<If
 				when={d().helpUnavailable}
 				else={
-					<View class="flex-row flex-wrap gap-1.5">
-						<ToggleChip
+					<Chips>
+						<Chip
 							label="Say it simpler"
 							shortcut="S"
 							anchor={(node) => {
@@ -330,7 +349,7 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							onChange={() => toggleHelp(d(), "simpler")}
 						/>
 						<If when={d().more.length > 0}>
-							<ToggleChip
+							<Chip
 								label="More context"
 								shortcut="C"
 								pressed={helpOpen(id, "more")}
@@ -338,71 +357,65 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							/>
 						</If>
 						<If when={d().visual}>
-							<ToggleChip
+							<Chip
 								label="Show me"
 								shortcut="V"
 								pressed={helpOpen(id, "visual")}
 								onChange={() => toggleHelp(d(), "visual")}
 							/>
 						</If>
-						<ToggleChip
+						<Chip
 							label="Ask a question"
 							shortcut="Q"
 							pressed={helpOpen(id, "ask")}
 							onChange={() => toggleHelp(d(), "ask")}
 						/>
 						<If when={d().details}>
-							<ToggleChip
+							<Chip
 								label="What was pushed"
 								pressed={helpOpen(id, "details")}
 								onChange={() => toggleHelp(d(), "details")}
 							/>
 						</If>
-					</View>
+					</Chips>
 				}
 			>
 				<If
 					when={d().canClarify}
 					else={
-						<Text testID="help-unavailable" class="text-xs text-faint">
+						<Caption testID="help-unavailable" tone="faint">
 							{d().helpUnavailable ?? ""}
-						</Text>
+						</Caption>
 					}
 				>
-					<View class="flex-row">
-						<ToggleChip
-							label="Ask a question"
-							pressed={helpOpen(id, "ask")}
-							onChange={() => toggleHelp(d(), "ask")}
-						/>
-					</View>
+					<Chips>
+						<Chip label="Ask a question" pressed={helpOpen(id, "ask")} onChange={() => toggleHelp(d(), "ask")} />
+					</Chips>
 				</If>
 			</If>
 
 			<If when={helpOpen(id, "more")}>
-				<Panel class="gap-1.5">
+				<Quote>
 					<Each of={d().more} key={(line) => line}>
-						{(line) => <Text class="text-sm text-foreground">{line()}</Text>}
+						{(line) => <Body>{line()}</Body>}
 					</Each>
-				</Panel>
+				</Quote>
 			</If>
 
 			<If when={helpOpen(id, "visual") && d().visual}>
-				<Panel testID="visual" class="gap-3">
-					<Text class="text-sm text-foreground">{d().visual?.explanation ?? ""}</Text>
+				<Quote testID="visual">
+					<Body>{d().visual?.explanation ?? ""}</Body>
 					<Bars bars={d().visual?.bars ?? []} />
-					<Text class="text-xs text-faint">{`From ${d().visual?.source ?? ""}. It explains; it does not answer for you.`}</Text>
-				</Panel>
+					<Caption tone="faint">{`From ${d().visual?.source ?? ""}. It explains; it does not answer for you.`}</Caption>
+				</Quote>
 			</If>
 
 			<If when={helpOpen(id, "details") && d().details}>
-				<Panel>
-					<Text class="text-sm text-foreground">{d().details ?? ""}</Text>
-				</Panel>
+				<Quote text={d().details ?? ""} />
 			</If>
 
 			<If when={helpOpen(id, "ask") && (!d().helpUnavailable || d().canClarify)}>
-				<Panel class="gap-3">
+				<Quote>
 					<Each of={d().answers} key={(a) => a.id}>
 						{(a) => <AnswerLine day={props.day} decision={d()} answer={a()} />}
 					</Each>
@@ -424,70 +437,70 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 							onBlur={unbindEscape}
 							submitBehavior="submit"
 							placeholder="Ask about this decision"
-							compact
 							class="flex-1"
 						/>
-						<Action
+						<Button
 							label={asking()[id] ? "Asking…" : "Ask"}
 							disabled={asking()[id] === true}
 							onPress={() => void ask(props.day, d())}
 						/>
 					</View>
-					<Text class="text-xs text-faint">
+					<Caption tone="faint">
 						{d().canClarify
 							? "Clarification keeps this request open until you answer. It uses the same agent and cost controls, with no tools or work continuation."
 							: "Questions help you decide. They never answer for you."}
-					</Text>
-				</Panel>
+					</Caption>
+				</Quote>
 			</If>
 
 			<If when={d().tried.length > 0}>
-				<View class="gap-1 pl-1">
+				<View class="gap-0.5">
 					<Each of={d().tried} key={(line) => line}>
-						{(line) => <Text class="text-xs text-muted-foreground">{`• ${line()}`}</Text>}
+						{(line) => <Caption>{`• ${line()}`}</Caption>}
 					</Each>
 				</View>
 			</If>
 
-			<Text class="text-xs leading-relaxed text-muted-foreground">{d().boundary}</Text>
+			<Caption>{d().boundary}</Caption>
 
 			<If when={showOptions() && d().multiple}>
 				<View class="gap-1">
-					<Text testID="picked" class="px-3 text-xs text-muted-foreground">
-						{pickedLine(d())}
-					</Text>
-					<Each of={d().options} key={(o) => o.id}>
-						{(o) => (
-							<CheckboxRow
-								size="lg"
-								anchor={(node) => radios.set(o().id, node)}
-								checked={picked(d()).includes(o().id)}
-								disabled={!idle()}
-								onChange={() => choose(props.day, d(), o().id)}
-							>
-								<OptionText decision={d()} option={o()} />
-							</CheckboxRow>
-						)}
-					</Each>
+					<Caption testID="picked">{pickedLine(d())}</Caption>
+					<Options multiple>
+						<Each of={d().options} key={(o) => o.id}>
+							{(o) => (
+								<Option
+									multiple
+									title={o().label}
+									tag={optionTag(d(), o())}
+									hint={o().detail || undefined}
+									anchor={(node) => radios.set(o().id, node)}
+									checked={picked(d()).includes(o().id)}
+									disabled={!idle()}
+									onChange={() => choose(props.day, d(), o().id)}
+								/>
+							)}
+						</Each>
+					</Options>
 				</View>
 			</If>
 
 			<If when={showOptions() && !d().multiple}>
-				<RadioList>
+				<Options>
 					<Each of={d().options} key={(o) => o.id}>
 						{(o) => (
-							<RadioRow
-								size="lg"
+							<Option
+								title={o().label}
+								tag={optionTag(d(), o())}
+								hint={o().detail || undefined}
 								anchor={(node) => radios.set(o().id, node)}
 								checked={chosen(d()) === o().id}
 								disabled={!idle()}
 								onChange={() => choose(props.day, d(), o().id)}
-							>
-								<OptionText decision={d()} option={o()} />
-							</RadioRow>
+							/>
 						)}
 					</Each>
-				</RadioList>
+				</Options>
 			</If>
 
 			<If when={d().reply}>
@@ -507,83 +520,38 @@ function OrdinaryDecisionCard(props: { day: Day; decision: Decision; index: numb
 					onSelectionChange={replyField.select}
 					onBlur={unbindEscape}
 					placeholder={d().options.length > 0 ? "Add detail, or answer in your own words" : "Your answer"}
-					compact
 				/>
 			</If>
 
 			<If when={d().draft.unsaved}>
-				<Text role="alert" class="text-sm text-needs-ink">
+				<Body role="alert" tone="needs">
 					Pilot could not save this draft. It stays here; copy it before you close Pilot.
-				</Text>
+				</Body>
 			</If>
 			<If when={pickChanged(d())}>
-				<Text role="alert" class="text-sm text-needs-ink">
+				<Body role="alert" tone="needs">
 					This decision changed after you picked. Read it again and pick an answer.
-				</Text>
+				</Body>
 			</If>
 			<If when={deliveryLine(d())}>
-				<Text role="alert" class="text-sm text-muted-foreground">
+				<Body role="alert" tone="muted">
 					{deliveryLine(d())}
-				</Text>
+				</Body>
 			</If>
 			<If when={messages()[id]}>
-				<Text role="alert" class="text-sm text-needs-ink">
+				<Body role="alert" tone="needs">
 					{messages()[id] ?? ""}
-				</Text>
+				</Body>
 			</If>
 
-			<View class="flex-row flex-wrap items-center gap-2">
-				<If
-					when={needsCheck(d())}
-					else={
-						<Action
-							variant="primary"
-							label={commitLabel(d())}
-							shortcut={COMMIT_KEY}
-							anchor={(node) => {
-								commitButton = node;
-							}}
-							disabled={!idle() || !canSend(d())}
-							onPress={() => void decide(props.day, d())}
-						/>
-					}
-				>
-					{/* Pilot checks by itself first; the button is the fallback after its tries. */}
-					<If when={d().delivery === "unknown"}>
-						<Action
-							variant="primary"
-							label="Check again"
-							shortcut={COMMIT_KEY}
-							anchor={(node) => {
-								commitButton = node;
-							}}
-							onPress={() => void checkDecision(props.day, d())}
-						/>
-					</If>
-				</If>
-				<If when={props.later}>
-					<Action
-						label="Later"
-						shortcut="L"
-						anchor={(node) => {
-							laterButton = node;
-						}}
-						disabled={!idle()}
-						onPress={() => laterDecision(props.day, d())}
-					/>
-				</If>
-				<View class="flex-1" />
-				<Text class="text-xs text-faint">{keyHints()}</Text>
-			</View>
-
 			<If when={d().evidence.length > 0}>
-				<View class="flex-row flex-wrap gap-1.5">
+				<Chips>
 					<Each of={d().evidence} key={(e) => e.label}>
 						{(e) => <EvidenceChip evidence={e()} />}
 					</Each>
-				</View>
+				</Chips>
 			</If>
-		</View>
+		</Question>
 	);
 }
 

@@ -43,7 +43,7 @@ import {
 	KeyCap,
 	Mark,
 	MarkLine,
-	Panel,
+	QuietPanel,
 	smallestAt,
 	TextField,
 } from "./ui";
@@ -281,7 +281,7 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 					onCancel={() => screenAgentOpen.set(false)}
 				>
 					<If when={view() === "answer" && (latest(chat()).length > 0 || problem())}>
-						<Panel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
+						<QuietPanel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
 							{/* A long answer scrolls inside the bar instead of running past it. */}
 							<Scroll testID="screen-agent-answer" class="min-h-0 shrink" contentClass="gap-3">
 								<Each of={latest(chat())} key={(r) => r.key}>
@@ -309,10 +309,10 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 									/>
 								</View>
 							</If>
-						</Panel>
+						</QuietPanel>
 					</If>
 					<If when={view() === "conversation"}>
-						<Panel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
+						<QuietPanel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
 							<View class="flex-row items-center gap-2">
 								<Text class="flex-1 text-sm font-semibold text-foreground">Screen agent</Text>
 								<Action label="Make feedback" variant="outline" onPress={() => void makeFeedback()} />
@@ -328,10 +328,10 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 									{(r) => <Line row={r()} />}
 								</Each>
 							</Scroll>
-						</Panel>
+						</QuietPanel>
 					</If>
 					<If when={view() === "feedback"}>
-						<Panel tone="card" size="lg" class="gap-3 shadow-lg" testID="screen-agent-draft">
+						<QuietPanel tone="card" size="lg" class="gap-3 shadow-lg" testID="screen-agent-draft">
 							<Text class="text-sm font-semibold text-foreground">Feedback</Text>
 							<If
 								when={draft() !== null}
@@ -370,7 +370,7 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 									onPress={() => void sendFeedback()}
 								/>
 							</View>
-						</Panel>
+						</QuietPanel>
 					</If>
 					<View class="flex-row items-center gap-2 rounded-2xl border border-border-strong bg-background px-2 py-2 shadow-lg">
 						<Mark kind={working() ? "moving" : "still"} />

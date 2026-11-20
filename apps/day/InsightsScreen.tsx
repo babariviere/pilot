@@ -23,7 +23,7 @@ import {
 	Notice,
 	Page,
 	PageTitle,
-	Panel,
+	QuietPanel,
 	Picker,
 	SectionTitle,
 	TabItem,
@@ -275,7 +275,7 @@ function Detail(
 				</If>
 				<If when={replace()}>
 					{(kind) => (
-						<Panel class="gap-2">
+						<QuietPanel class="gap-2">
 							<Meta text="Your other New draft stays saved. Opening this finding does not start work." />
 							<View class="flex-row flex-wrap gap-2">
 								<Action label="Keep existing draft" onPress={() => replace.set(null)} />
@@ -285,7 +285,7 @@ function Detail(
 									onPress={() => props.openWork?.draft(kind(), d(), true)}
 								/>
 							</View>
-						</Panel>
+						</QuietPanel>
 					)}
 				</If>
 				<If when={d().lifecycle !== "verified"}>
@@ -683,7 +683,7 @@ export function InsightsScreen(props: Props) {
 				</Each>
 				<If when={insightsReview()}>
 					{(review) => (
-						<Panel class="gap-3" tone="card">
+						<QuietPanel class="gap-3" tone="card">
 							<SectionTitle title={review().label} />
 							<Each of={review().lines} key="index">
 								{(line) => <Meta text={line()} />}
@@ -715,7 +715,7 @@ export function InsightsScreen(props: Props) {
 									}}
 								/>
 							</View>
-						</Panel>
+						</QuietPanel>
 					)}
 				</If>
 				<If when={s()} else={<Meta text="Insights could not be read yet." />}>

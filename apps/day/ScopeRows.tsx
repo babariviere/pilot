@@ -4,7 +4,7 @@
 // actionable sections; another project's rows say what is there, and its
 // missions and plans open. Choosing a scope or opening a row only reads:
 // nothing starts or is sent. What Pilot could not read stays unknown.
-import { effect, lifecycle, Text, untracked, View } from "nsh";
+import { effect, lifecycle, untracked, View } from "nsh";
 import type { Decision, HumanAction, MissionRow, Planning } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
@@ -16,9 +16,9 @@ import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import { type ScopeCount, type ScopeProject, todayProject } from "./todayScope";
-import { Action, InlineAction, Mark, Picker, RowLink, SectionTitle } from "./ui";
+import { Block, Button, Caption, EmptyLine, Link, Notice, Picker, Progress, Row, RowGroup, Rows } from "./ui";
 import { drafts, openMission, picks, placeRow, replies, reports } from "./view";
-import { rowLine, stateMark, stateWord } from "./words";
+import { rowLine, stateMark, stateTone, stateWord } from "./words";
 import { destinationProject } from "./workSearch";
 import { scopedQuestion } from "./ScopedQuestion";
 
@@ -183,7 +183,7 @@ function elsewhereLine(c: ScopeCount | null): string {
 	return c.complete ? line : `At least ${line.charAt(0).toLowerCase()}${line.slice(1)}`;
 }
 
-/** The line under Today's summary: what Today shows, and what needs the user elsewhere. */
+/** The lines under Today's summary: what Today shows, and what needs the user elsewhere. */
 export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 	const view = () => props.day.scope?.view();
 	const snapshot = () => {
@@ -240,31 +240,26 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 			when={props.ctx.on()}
 			else={
 				<If when={props.ctx.offReason()}>
-					<Text testID="scope-note" class="text-xs text-muted-foreground">
-						{props.ctx.offReason()}
-					</Text>
+					<Caption testID="scope-note">{props.ctx.offReason()}</Caption>
 				</If>
 			}
 		>
 			<View testID="scope-note" class="gap-1">
-				<Text class="text-xs text-muted-foreground">{shows()}</Text>
+				<Caption>{shows()}</Caption>
 				<If when={elsewhere()}>
-					<View class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
-						<Mark kind={snapshot()?.outsideNeedsYou.count ? "needs" : snapshot() ? "done" : "unknown"} />
-						<Text testID="scope-elsewhere" class="text-xs text-muted-foreground">
-							{elsewhere()}
-						</Text>
-						<InlineAction label="Show all projects" testID="scope-all" onPress={() => todayProject.set("all")} />
-					</View>
+					<Notice
+						kind={snapshot()?.outsideNeedsYou.count ? "needs" : snapshot() ? "done" : "unknown"}
+						text={elsewhere()}
+						testID="scope-elsewhere"
+						action={<Link label="Show all projects" testID="scope-all" onPress={() => todayProject.set("all")} />}
+					/>
 				</If>
 				<If when={view()?.state === "unavailable" || (snapshot() && view()?.reason)}>
-					<View class="flex-row">
-						<InlineAction
-							label="Read again"
-							testID="scope-read"
-							onPress={() => void props.day.scope?.read(props.ctx.scope())}
-						/>
-					</View>
+					<Link
+						label="Read again"
+						testID="scope-read"
+						onPress={() => void props.day.scope?.read(props.ctx.scope())}
+					/>
 				</If>
 			</View>
 		</If>
@@ -275,7 +270,7 @@ export function ScopeNote(props: { day: Day; ctx: TodayScope }) {
 export function ProjectLabel(props: { name: string; own?: boolean; stale?: boolean }) {
 	const words = () =>
 		props.own ? `${props.name} · this window` : `${props.name}${props.stale ? " · earlier read" : ""}`;
-	return <Text class="pt-2 text-xs text-faint">{words()}</Text>;
+	return <RowGroup label={words()} />;
 }
 
 /** Which read errors cover each part of another project's Today. */
@@ -303,10 +298,7 @@ function Unread(props: { project: ScopeProject; section: string }) {
 	};
 	return (
 		<If when={reason()}>
-			<View class="flex-row items-center gap-2.5 py-1.5">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-muted-foreground">{`${props.project.name}: ${reason()}`}</Text>
-			</View>
+			<Notice placement="section" text={`${props.project.name}: ${reason()}`} />
 		</If>
 	);
 }
@@ -348,81 +340,83 @@ export function OtherNeeds(props: { ctx: TodayScope; day: Day }) {
 	return (
 		<Each of={props.ctx.others()} key={(p) => p.id}>
 			{(p) => (
-				<View testID={`scope-needs-${p().id}`} class="gap-0.5">
+				<View testID={`scope-needs-${p().id}`}>
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
 					<Unread project={p()} section="needsYou" />
-					<Each of={needsOf(p())} key={(n) => n.id}>
-						{(n) => (
-							<View class="flex-row items-center gap-2.5 py-1.5">
-								<Mark kind={n().decision ? decisionMark(n().decision as Decision) : "needs"} />
-								<View class="min-w-0 flex-1 gap-0.5">
-									<Text class="text-sm text-foreground">{n().title}</Text>
-									<Text class="text-xs text-muted-foreground">{n().why}</Text>
-								</View>
-								<If when={props.day.chat && n().decision?.requestSessionId}>
-									<Action
-										label="Open chat"
-										onPress={() => {
-											const id = n().decision?.requestSessionId;
-											if (!id) return;
-											destinationProject.set(p().name);
-											openChat(id, "Today");
-										}}
-									/>
-								</If>
-								<If
-									when={
-										props.day.search &&
-										(n().decision?.reply || !!n().decision?.interviewRoundId) &&
-										n().id.startsWith("question-")
+					<Rows>
+						<Each of={needsOf(p())} key={(n) => n.id}>
+							{(n) => (
+								<Row
+									mark={n().decision ? decisionMark(n().decision as Decision) : "needs"}
+									title={n().title}
+									meta={[n().why, n().effort].filter(Boolean).join(" · ")}
+									trailing={
+										<>
+											<If when={props.day.chat && n().decision?.requestSessionId}>
+												<Button
+													small
+													label="Open chat"
+													onPress={() => {
+														const id = n().decision?.requestSessionId;
+														if (!id) return;
+														destinationProject.set(p().name);
+														openChat(id, "Today");
+													}}
+												/>
+											</If>
+											<If
+												when={
+													props.day.search &&
+													(n().decision?.reply || !!n().decision?.interviewRoundId) &&
+													n().id.startsWith("question-")
+												}
+											>
+												<Button
+													small
+													label={n().decision?.interviewRoundId ? "Open interview" : "Answer"}
+													accessibilityLabel={`Answer ${n().title} in ${p().name}`}
+													onPress={() =>
+														scopedQuestion.set({
+															projectId: p().id,
+															projectName: p().name,
+															decisionId: n().id,
+															interviewRoundId: n().decision?.interviewRoundId ?? undefined,
+														})
+													}
+												/>
+											</If>
+										</>
 									}
-								>
-									<Action
-										label={n().decision?.interviewRoundId ? "Open interview" : "Answer"}
-										accessibilityLabel={`Answer ${n().title} in ${p().name}`}
-										onPress={() =>
-											scopedQuestion.set({
-												projectId: p().id,
-												projectName: p().name,
-												decisionId: n().id,
-												interviewRoundId: n().decision?.interviewRoundId ?? undefined,
-											})
-										}
-									/>
-								</If>
-								<Text class="text-xs text-muted-foreground">{n().effort}</Text>
-							</View>
-						)}
-					</Each>
-					<Each of={requestTrouble(p())} key={(t) => t}>
-						{(t) => (
-							<View class="flex-row items-center gap-2.5 py-1.5">
-								<Mark kind="unknown" />
-								<Text class="flex-1 text-sm text-muted-foreground">{`${p().name}: ${t()}`}</Text>
-							</View>
-						)}
-					</Each>
-					<Each of={requestsOf(p())} key={(r) => r.id}>
-						{(r) => (
-							<View testID={`scope-request-${r().id}`} class="flex-row items-center gap-2.5 py-1.5">
-								<Mark kind="new" />
-								<View class="min-w-0 flex-1 gap-0.5">
-									<Text class="text-sm text-foreground">{r().title}</Text>
-									<Text class="text-xs text-muted-foreground">
-										{[`${r().sourceLabel} request`, r().place, r().age].filter(Boolean).join(" · ")}
-									</Text>
-								</View>
-								<Action
-									label="Open"
-									accessibilityLabel={`${r().title} in ${p().name}. Open it to start work, put it off or discard it.`}
-									onPress={() => {
-										openRequestIn(p().id, r().id);
-										todayProject.set(p().id);
-									}}
 								/>
-							</View>
-						)}
+							)}
+						</Each>
+					</Rows>
+					<Each of={requestTrouble(p())} key={(t) => t}>
+						{(t) => <Notice placement="section" text={`${p().name}: ${t()}`} />}
 					</Each>
+					<Rows>
+						<Each of={requestsOf(p())} key={(r) => r.id}>
+							{(r) => (
+								<Row
+									testID={`scope-request-${r().id}`}
+									mark="new"
+									title={r().title}
+									meta={[`${r().sourceLabel} request`, r().place, r().age].filter(Boolean).join(" · ")}
+									trailing={
+										<Button
+											small
+											label="Open"
+											accessibilityLabel={`${r().title} in ${p().name}. Open it to start work, put it off or discard it.`}
+											onPress={() => {
+												openRequestIn(p().id, r().id);
+												todayProject.set(p().id);
+											}}
+										/>
+									}
+								/>
+							)}
+						</Each>
+					</Rows>
 				</View>
 			)}
 		</Each>
@@ -444,41 +438,40 @@ export function OtherMissions(props: { ctx: TodayScope; day: Day }) {
 	return (
 		<Each of={props.ctx.others()} key={(p) => p.id}>
 			{(p) => (
-				<View testID={`scope-missions-${p().id}`} class="gap-0.5">
+				<View testID={`scope-missions-${p().id}`}>
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
 					<Unread project={p()} section="missions" />
 					<If when={complete(p(), "missions") && missionsOf(p()).length === 0}>
-						<Text class="py-1.5 text-sm text-muted-foreground">No active missions.</Text>
+						<EmptyLine text="No active missions." />
 					</If>
-					<Each of={missionsOf(p())} key={(m) => m.id}>
-						{(m) => {
-							const id = m().id;
-							// The same place as the window's own row: back on Today, the row takes the focus again.
-							const place = placeRow(`mission-${id}`, () =>
-								jump({ day: props.day }, () => {
-									openMission(id);
-									destinationProject.set(p().name);
-								}),
-							);
-							return (
-								<View class="gap-1 border-t border-border py-3">
-									<RowLink
+					<Rows>
+						<Each of={missionsOf(p())} key={(m) => m.id}>
+							{(m) => {
+								const id = m().id;
+								// The same place as the window's own row: back on Today, the row takes the focus again.
+								const place = placeRow(`mission-${id}`, () =>
+									jump({ day: props.day }, () => {
+										openMission(id);
+										destinationProject.set(p().name);
+									}),
+								);
+								return (
+									<Row
 										testID={`scope-mission-${id}`}
+										mark={stateMark(m())}
 										title={m().title}
+										meta={rowLine(m())}
+										state={stateWord(m())}
+										stateTone={stateTone(m())}
+										trailing={<Progress counts={m().progress} />}
 										accessibilityLabel={`${m().title} in ${p().name}, ${stateWord(m())}. Open the mission.`}
 										anchor={place.anchor}
 										onPress={place.press}
-									>
-										<View class="flex-row items-center gap-1.5">
-											<Mark kind={stateMark(m())} />
-											<Text class="text-xs text-muted-foreground">{stateWord(m())}</Text>
-										</View>
-									</RowLink>
-									<Text class="text-sm text-muted-foreground">{rowLine(m())}</Text>
-								</View>
-							);
-						}}
-					</Each>
+									/>
+								);
+							}}
+						</Each>
+					</Rows>
 				</View>
 			)}
 		</Each>
@@ -495,40 +488,31 @@ export function OtherPlanning(props: { ctx: TodayScope }) {
 	return (
 		<Each of={shown()} key={(p) => p.id}>
 			{(p) => (
-				<View testID={`scope-planning-${p().id}`} class="gap-0.5">
+				<View testID={`scope-planning-${p().id}`}>
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
 					<If when={p().errors.planning}>
-						<View class="flex-row items-center gap-2.5 py-1.5">
-							<Mark kind="unknown" />
-							<Text class="flex-1 text-sm text-muted-foreground">{`${p().name}: ${p().errors.planning ?? ""}`}</Text>
-						</View>
+						<Notice placement="section" text={`${p().name}: ${p().errors.planning ?? ""}`} />
 					</If>
-					<Each of={plansOf(p())} key={(row) => row.missionId}>
-						{(row) => {
-							const id = row().missionId;
-							const place = placeRow(`plan-${id}`, () => openPlan(id));
-							return (
-								<View class="py-1.5">
-									<RowLink
+					<Rows>
+						<Each of={plansOf(p())} key={(row) => row.missionId}>
+							{(row) => {
+								const id = row().missionId;
+								const place = placeRow(`plan-${id}`, () => openPlan(id));
+								return (
+									<Row
 										testID={`scope-plan-${id}`}
+										mark={stageMark(row().stage)}
 										title={row().title}
+										state={stageWord(row().stage)}
+										stateTone={row().needsYou ? "needs" : "quiet"}
 										accessibilityLabel={`${row().title} in ${p().name}, ${stageWord(row().stage)}. Open its planning.`}
 										anchor={place.anchor}
 										onPress={place.press}
-									>
-										<View class="flex-row items-center gap-1.5">
-											<Mark kind={stageMark(row().stage)} />
-											<Text
-												class={row().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}
-											>
-												{stageWord(row().stage)}
-											</Text>
-										</View>
-									</RowLink>
-								</View>
-							);
-						}}
-					</Each>
+									/>
+								);
+							}}
+						</Each>
+					</Rows>
 				</View>
 			)}
 		</Each>
@@ -541,17 +525,13 @@ export function OtherDone(props: { ctx: TodayScope }) {
 	return (
 		<Each of={shown()} key={(p) => p.id}>
 			{(p) => (
-				<View testID={`scope-done-${p().id}`} class="gap-0.5">
+				<View testID={`scope-done-${p().id}`}>
 					<ProjectLabel name={p().name} stale={p().currentness === "stale"} />
-					<Each of={p().today?.done ?? []} key={(e) => e.id}>
-						{(e) => (
-							<View class="flex-row items-center gap-3 py-2">
-								<Mark kind="done" />
-								<Text class="flex-1 text-sm text-foreground">{e().text}</Text>
-								<Text class="text-xs text-faint">{e().missionTitle}</Text>
-							</View>
-						)}
-					</Each>
+					<Rows>
+						<Each of={p().today?.done ?? []} key={(e) => e.id}>
+							{(e) => <Row mark="done" title={e().text} meta={e().missionTitle} wrap />}
+						</Each>
+					</Rows>
 				</View>
 			)}
 		</Each>
@@ -567,51 +547,57 @@ export function OtherToCheck(props: { ctx: TodayScope; day: Day; nested?: boolea
 	const shown = () => props.ctx.others().filter((p) => rows(p).length > 0 || !p.results?.complete);
 	return (
 		<If when={shown().length > 0}>
-			<View class="gap-1" testID="scope-to-check">
-				<If when={props.nested} else={<SectionTitle title="To check" />}>
-					<Text role="header" class="pb-0.5 text-xs font-medium text-muted-foreground">
-						{props.ctx.scope() === "all" ? "To check in other projects" : "To check"}
-					</Text>
-				</If>
+			<View testID="scope-to-check">
+				<RowGroup label={props.nested && props.ctx.scope() === "all" ? "To check in other projects" : "To check"} />
 				<Each of={shown()} key={(p) => p.id}>
 					{(p) => (
-						<View class="gap-0.5">
+						<View>
 							<ProjectLabel name={p().name} stale={p().currentness !== "live"} />
-							<Each of={rows(p())} key={(i) => i.snapshot?.targetId ?? JSON.stringify(i.subject)}>
-								{(i) => (
-									<View class="flex-row items-center gap-2.5 py-2">
-										<Mark kind={i().unsettled || i().snapshot?.pendingOperationId ? "unknown" : "needs"} />
-										<Text class="flex-1 text-sm text-foreground">{i().title}</Text>
-										<Text class="text-xs text-needs-ink">
-											{i().unsettled || i().snapshot?.pendingOperationId
-												? "Check not confirmed"
-												: "To check"}
-										</Text>
-										<If when={props.day.delivery}>
-											<Action
-												label="Review result"
-												accessibilityLabel={`Review ${i().title} in ${p().name}`}
-												onPress={() => {
-													destinationProject.set(p().name);
-													openDelivery(i().subject, i().title);
-												}}
-											/>
-										</If>
-									</View>
-								)}
-							</Each>
+							<Rows>
+								<Each of={rows(p())} key={(i) => i.snapshot?.targetId ?? JSON.stringify(i.subject)}>
+									{(i) => (
+										<Row
+											mark={i().unsettled || i().snapshot?.pendingOperationId ? "unknown" : "needs"}
+											title={i().title}
+											state={
+												i().unsettled || i().snapshot?.pendingOperationId
+													? "Check not confirmed"
+													: "To check"
+											}
+											stateTone="needs"
+											trailing={
+												<If when={props.day.delivery}>
+													<Button
+														small
+														label="Review result"
+														accessibilityLabel={`Review ${i().title} in ${p().name}`}
+														onPress={() => {
+															destinationProject.set(p().name);
+															openDelivery(i().subject, i().title);
+														}}
+													/>
+												</If>
+											}
+										/>
+									)}
+								</Each>
+							</Rows>
 							<If when={!p().results?.complete}>
-								<Text class="text-xs text-muted-foreground">
-									{p().results?.reason ||
-										"Delivered results could not all be read. This is not an empty list."}
-								</Text>
+								<EmptyLine
+									text={
+										p().results?.reason ||
+										"Delivered results could not all be read. This is not an empty list."
+									}
+								/>
 							</If>
 							<If when={!props.day.delivery && rows(p()).length > 0}>
-								<Text class="text-xs text-faint">
-									{props.ctx.scope() === "all"
-										? "Choose this project above to check its results here."
-										: "This window acts on another project, so it cannot check these here."}
-								</Text>
+								<EmptyLine
+									text={
+										props.ctx.scope() === "all"
+											? "Choose this project above to check its results here."
+											: "This window acts on another project, so it cannot check these here."
+									}
+								/>
 							</If>
 						</View>
 					)}
@@ -625,11 +611,13 @@ export function OtherToCheck(props: { ctx: TodayScope; day: Day; nested?: boolea
 export function OtherNotShown(props: { ctx: TodayScope }) {
 	return (
 		<If when={props.ctx.others().length > 0}>
-			<Text testID="scope-not-shown" class="text-xs text-faint">
-				{props.ctx.showsOwn()
-					? "Coming up from other projects is not shown here yet."
-					: "Coming up for this project is not shown here yet."}
-			</Text>
+			<Block>
+				<Caption testID="scope-not-shown" tone="faint">
+					{props.ctx.showsOwn()
+						? "Coming up from other projects is not shown here yet."
+						: "Coming up for this project is not shown here yet."}
+				</Caption>
+			</Block>
 		</If>
 	);
 }

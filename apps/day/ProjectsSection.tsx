@@ -10,7 +10,7 @@ import {
 	projectRepository,
 	type SourcePreview,
 } from "./projectSetup";
-import { Action, CheckboxRow, Disclosure, Panel, SectionTitle, TextField } from "./ui";
+import { Action, CheckboxRow, Disclosure, QuietPanel, SectionTitle, TextField } from "./ui";
 
 // Keep Settings small; paging reaches every project and saved import.
 const PAGE_SIZE = 5;
@@ -227,7 +227,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 						}
 					/>
 					<If when={preview()}>
-						<Panel class="gap-2">
+						<QuietPanel class="gap-2">
 							<Text class="text-sm text-foreground">
 								{preview()?.copy === "jj"
 									? "Agents will use private jj copies. Main is read-only."
@@ -246,7 +246,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 									if (p) void action({ action: "add", path: p.path, digest: p.digest });
 								}}
 							/>
-						</Panel>
+						</QuietPanel>
 					</If>
 				</View>
 			</If>
@@ -292,7 +292,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 						}
 					/>
 					<If when={imported()}>
-						<Panel class="gap-2">
+						<QuietPanel class="gap-2">
 							<View selectable>
 								<Text class="text-sm text-foreground">{imported()?.resolvedDestination ?? ""}</Text>
 							</View>
@@ -315,7 +315,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 										});
 								}}
 							/>
-						</Panel>
+						</QuietPanel>
 					</If>
 				</View>
 			</If>
@@ -448,7 +448,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 			</If>
 			<Each of={unsettled()} key={(o) => o.operationId}>
 				{(o) => (
-					<Panel class="gap-2">
+					<QuietPanel class="gap-2">
 						<Text class="text-sm text-foreground">
 							The previous action is unconfirmed. Check only reads its receipt.
 						</Text>
@@ -458,7 +458,7 @@ export function ProjectsSection(props: { source?: ProjectsSource }) {
 							disabled={busy()}
 							onPress={() => void run(async () => accept(await source.check(o().operationId)))}
 						/>
-					</Panel>
+					</QuietPanel>
 				)}
 			</Each>
 			<If when={message()}>

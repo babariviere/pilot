@@ -25,8 +25,8 @@ test("Today shows decisions first, then moving and waiting missions", async () =
 		"How should finished work reach you?",
 		"text:/^1 of \\d+$/",
 		"Up next: Open a test copy of Pilot on your Mac?",
-		"Moving  1",
-		"Not moving  2",
+		"Moving · 1",
+		"Not moving · 2",
 		"Waiting for you",
 		"Done since you looked",
 		"Coming up",
@@ -42,7 +42,7 @@ test("deciding sends the recommended option and moves the mission", async () => 
 	await app.waitFor("Quieter notifications has your answer: One summary at 18:00.");
 	await app.waitFor("Seven things left.");
 	expect(app.shows("Open a test copy of Pilot on your Mac?")).toBe(true);
-	expect(app.shows("Moving  2")).toBe(true);
+	expect(app.shows("Moving · 2")).toBe(true);
 });
 
 test("a picked option is the one sent", async () => {
@@ -230,7 +230,7 @@ test("a lost confirmation stays unknown and is only checked, never resent", asyn
 
 test("nothing waiting is said calmly", async () => {
 	const app = await open("./Quiet.tsx", desktop);
-	await app.waitFor("Nothing needs you. Pilot keeps going on its own.");
+	await app.waitFor("Pilot keeps going on its own.");
 	expect(app.shows("You were reading the history slice in Native desktop app.")).toBe(true);
 });
 
@@ -241,15 +241,18 @@ test("a large world keeps Today limited", async () => {
 
 test("the update workload reaches the screen", async () => {
 	const app = await open("./Pulse.tsx", desktop);
+	// Overview lists five missions; the Missions tab lists them all.
+	await app.press("id:today-tab-missions");
 	await app.waitFor("Working on update 4.");
+	await app.press("id:today-tab-overview");
 	await app.waitFor("Update 4 landed with its checks.");
 	await app.waitFor("104 earlier results are not shown here.");
 });
 
 test("a mission without a current report is not counted as not moving", async () => {
 	const app = await open("./MockApp.tsx", desktop);
-	await app.waitFor("No current report  1");
-	expect(app.shows("Not moving  2")).toBe(true);
+	await app.waitFor("No current report · 1");
+	expect(app.shows("Not moving · 2")).toBe(true);
 	expect(app.shows("No report yet")).toBe(true);
 	expect(app.shows("No report yet. One chat working.")).toBe(true);
 	expect(app.shows("Agent report · 12 min ago · Verify")).toBe(true);
@@ -562,7 +565,7 @@ test("pause asks first, stays Pausing until its receipt, and resume brings it ba
 	await app.waitFor("Starting the paused work again.");
 	await app.waitFor(RUNNING);
 	await app.keyboard.press("escape");
-	await app.waitFor("Moving  1");
+	await app.waitFor("Moving · 1");
 });
 
 test("a paused mission stays Not moving, and resumed without a current report it is unreported", async () => {
@@ -573,7 +576,7 @@ test("a paused mission stays Not moving, and resumed without a current report it
 	await app.press("role:button[Resume]");
 	await app.waitFor(RUNNING);
 	await app.keyboard.press("escape");
-	await app.waitFor("No current report  1");
+	await app.waitFor("No current report · 1");
 	expect(app.shows("Old report")).toBe(true);
 });
 
@@ -603,7 +606,7 @@ test("a pause that does not finish everywhere stays Pausing and names what needs
 test("offline keeps the last read visible and turns controls off", async () => {
 	const app = await open("./Offline.tsx", desktop);
 	await app.waitFor("Offline. Pilot's service is not answering. Showing what Pilot read 6 min ago.");
-	expect(app.shows("Moving  1")).toBe(true);
+	expect(app.shows("Moving · 1")).toBe(true);
 	await app.press("id:mission-search");
 	await app.waitFor("Pause and Resume need a fresh read.");
 	expect(app.shows("role:button[Pause mission]")).toBe(false);
@@ -612,7 +615,7 @@ test("offline keeps the last read visible and turns controls off", async () => {
 test("nothing readable is said plainly, with nothing guessed", async () => {
 	const app = await open("./Unreadable.tsx", desktop);
 	await app.waitFor("Today could not be read.");
-	expect(app.shows("Nothing needs you. Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
 	expect(app.shows("Missions")).toBe(false);
 });
 
@@ -694,11 +697,11 @@ test("Linear is one quiet row after Missions; it counts new issues and opens the
 	await app.waitFor("id:linear-row");
 	// The demo saved 5 open issues of yours; one is a new request.
 	await app.waitFor("Linear · 5 assigned to you · 1 new");
-	// The Linear request is not a card, and the old New section is gone.
+	// The Linear request is not a card; Linear is one row of New, above Done since you looked.
 	expect(app.shows("CSV export times out for large accounts")).toBe(false);
 	expect(app.shows("id:incoming")).toBe(false);
 	const texts = app.texts();
-	expect(texts.indexOf("Done since you looked")).toBeGreaterThan(texts.indexOf("Missions"));
+	expect(texts.indexOf("Done since you looked")).toBeGreaterThan(texts.indexOf("Linear · 5 assigned to you · 1 new"));
 	await app.press("id:linear-open");
 	await app.waitFor("id:linear");
 });

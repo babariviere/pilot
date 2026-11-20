@@ -1,9 +1,9 @@
-import { computed, Text, untracked, View } from "nsh";
+import { computed, untracked } from "nsh";
 import type { PlanRow } from "pilot-day/native";
 import type { Day } from "./day";
 import { openPlannerInterview } from "./planView";
 import { todayProject } from "./todayScope";
-import { Action } from "./ui";
+import { Button, Caption, Row, RowDetail } from "./ui";
 import { placeRow, todayPlace } from "./view";
 
 type Request = { projectId: string; project: string; plan: PlanRow };
@@ -44,7 +44,10 @@ export function plannerInterviews(day: Day) {
 
 export type PlannerInterviews = ReturnType<typeof plannerInterviews>;
 
-/** The interview is its own request, not a decision, plan approval, or work item. */
+/**
+ * The interview is its own request, not a decision, plan approval, or work item: one row each, queued under the
+ * question in front, with its one way in. Put it inside `Rows`.
+ */
 export function PlannerInterviewCards(props: { interviews: PlannerInterviews }) {
 	return (
 		<Each of={props.interviews.rows()} key={(r) => r.plan.missionId}>
@@ -61,26 +64,35 @@ export function PlannerInterviewCards(props: { interviews: PlannerInterviews }) 
 							: `${n} ${n === 1 ? "question" : "questions"} pending.`;
 				};
 				return (
-					<View testID={`planner-interview-${mission}`} class="gap-3 rounded-lg border border-border p-4">
-						<Text class="text-xs text-muted-foreground">{`${r().project} · Mission planning`}</Text>
-						<Text role="header" class="text-lg font-semibold text-foreground">
-							{r().plan.title}
-						</Text>
-						<Text class="text-sm text-foreground">Planner needs your answers</Text>
-						<Text class="text-sm text-muted-foreground">
-							{[pending(), "Your saved draft stays in the interview."].filter(Boolean).join(" ")}
-						</Text>
-						<View class="flex-row">
-							<Action
-								variant="primary"
+					<Row
+						testID={`planner-interview-${mission}`}
+						mark="needs"
+						title={r().plan.title}
+						meta="Planner needs your answers"
+						detail={
+							<RowDetail>
+								<Caption tone="faint">
+									{[
+										`${r().project} · Mission planning.`,
+										pending(),
+										"Your saved draft stays in the interview.",
+									]
+										.filter(Boolean)
+										.join(" ")}
+								</Caption>
+							</RowDetail>
+						}
+						trailing={
+							<Button
+								small
 								label="Answer interview →"
 								testID={id}
 								anchor={place.anchor}
 								accessibilityLabel={`Answer interview for ${r().plan.title} in ${r().project}`}
 								onPress={place.press}
 							/>
-						</View>
-					</View>
+						}
+					/>
 				);
 			}}
 		</Each>

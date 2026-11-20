@@ -62,7 +62,7 @@ import {
 	Notice,
 	Page,
 	PageTitle,
-	Panel,
+	QuietPanel,
 	Picker,
 	RadioList,
 	RadioRow,
@@ -292,9 +292,9 @@ function ConfirmStart(props: { plans: Plans }) {
 	return (
 		<View testID="confirm-start" class="gap-3 rounded-2xl border border-border-strong bg-card px-5 py-4">
 			<Text class="text-sm font-medium text-card-foreground">Start one chat with exactly these words?</Text>
-			<Panel size="sm" selectable>
+			<QuietPanel size="sm" selectable>
 				<Text class="text-sm text-foreground">{findingGoal(goalDraft(), "fix")}</Text>
-			</Panel>
+			</QuietPanel>
 			<View class="gap-1">
 				<Text class="text-xs text-faint">What it may do</Text>
 				<RadioList>

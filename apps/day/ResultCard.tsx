@@ -1,13 +1,13 @@
 // A delivered result as Needs you's card: what was delivered, its evidence, and one way to check it.
 // Opening it reads; only Mark done or Send back on its page send anything. Later puts it after the
 // other results in this window only.
-import { cleanup, effect, Text, View, type ViewRef } from "nsh";
+import { cleanup, effect, type ViewRef } from "nsh";
 import type { Day } from "./day";
 import type { DeliveredWork } from "./deliveryContract";
 import type { DeliveryEntry } from "./deliveryFeed";
 import { openDelivery, ownPullRequests, prName, prState } from "./deliveryView";
 import { resultOrigin, resultTitle } from "./ToCheck";
-import { Action, Mark, Panel } from "./ui";
+import { Body, Button, Caption, Fact, Facts, KeyHints, Question, Spacer, State } from "./ui";
 import { anchors, focusFront, laterResult, placeRow } from "./view";
 
 /** The key that takes the front card's one next action, as on the other cards. */
@@ -41,15 +41,6 @@ function screens(work: DeliveredWork): string {
 	if ("none" in s) return `None: ${s.none}`;
 	const n = s.pairs.length;
 	return n === 1 ? "1 screen" : `${n} screens`;
-}
-
-function Fact(props: { label: string; children: string }) {
-	return (
-		<View class="flex-row gap-3">
-			<Text class="w-20 text-xs text-faint">{props.label}</Text>
-			<Text class="line-clamp-2 flex-1 text-sm text-foreground">{props.children}</Text>
-		</View>
-	);
 }
 
 /** Result `props.entry`, `props.index` of `props.count` waiting. */
@@ -89,53 +80,60 @@ export function ResultCard(props: { day: Day; entry: DeliveryEntry; index: numbe
 		}
 	});
 	return (
-		<View testID="result" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
-			<View class="gap-2">
-				<Text role="header" class="text-xl font-semibold leading-snug text-card-foreground">
-					{title()}
-				</Text>
-				<View class="flex-row flex-wrap items-center gap-1.5">
-					<Mark kind={unconfirmed() ? "unknown" : "needs"} />
-					<Text class="text-xs text-needs-ink">{unconfirmed() ? "Check not confirmed" : "To check"}</Text>
-					<Text class="text-xs text-muted-foreground">{meta()}</Text>
-					<View class="flex-1" />
-					<If when={props.count > 1}>
-						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
-					</If>
-				</View>
-			</View>
+		<Question
+			testID="result"
+			title={title()}
+			position={props.count > 1 ? `${props.index + 1} of ${props.count}` : undefined}
+			meta={
+				<>
+					<State
+						kind={unconfirmed() ? "unknown" : "needs"}
+						label={unconfirmed() ? "Check not confirmed" : "To check"}
+						plain
+					/>
+					<Caption>{meta()}</Caption>
+				</>
+			}
+			foot={
+				<>
+					<Button
+						kind="primary"
+						label="Check the result"
+						testID={rowId}
+						shortcut={OPEN_KEY}
+						anchor={(node) => {
+							openButton = node;
+							place.anchor(node);
+						}}
+						onPress={place.press}
+					/>
+					<Button label="Later" shortcut="L" testID="result-later" onPress={() => laterResult(e().key)} />
+					<Spacer />
+					<KeyHints
+						hints={[
+							[OPEN_KEY, "Open"],
+							["J K", "next"],
+						]}
+					/>
+				</>
+			}
+		>
 			<If when={summary()}>
-				<Text class="line-clamp-3 text-sm leading-relaxed text-muted-foreground">{summary()}</Text>
+				<Body tone="muted" measure>
+					{summary()}
+				</Body>
 			</If>
 			<If when={facts().length > 0}>
-				<Panel class="gap-2">
+				<Facts>
 					<Each of={facts()} key={(f) => f.label}>
 						{(f) => <Fact label={f().label}>{f().value}</Fact>}
 					</Each>
-				</Panel>
+				</Facts>
 			</If>
 			<If when={e().reason}>
-				<Text class="text-xs text-muted-foreground">{e().reason}</Text>
+				<Caption>{e().reason}</Caption>
 			</If>
-			<Text class="text-xs text-faint">
-				Pilot does not count an agent's report or a merged pull request as your check.
-			</Text>
-			<View class="flex-row flex-wrap items-center gap-2">
-				<Action
-					variant="primary"
-					label="Check the result"
-					testID={rowId}
-					shortcut={OPEN_KEY}
-					anchor={(node) => {
-						openButton = node;
-						place.anchor(node);
-					}}
-					onPress={place.press}
-				/>
-				<Action label="Later" shortcut="L" testID="result-later" onPress={() => laterResult(e().key)} />
-				<View class="flex-1" />
-				<Text class="text-xs text-faint">{`${OPEN_KEY} Open · J K next`}</Text>
-			</View>
-		</View>
+			<Caption tone="faint">Pilot does not count an agent's report or a merged pull request as your check.</Caption>
+		</Question>
 	);
 }

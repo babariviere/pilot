@@ -2,21 +2,22 @@
 // identity, project access and activity; navigation never sends an intent.
 // Chats waiting for a coding slot show under the working ones: no action,
 // they start by themselves when their turn comes.
-import { computed, signal, Text, View } from "nsh";
+import { computed, signal } from "nsh";
 import { openChat } from "./chatView";
 import { queueLine } from "./codingQueue";
 import type { Day } from "./day";
 import { OpenChatAction } from "./OpenChatAction";
 import type { TodayScope } from "./ScopeRows";
-import { Action, Mark, SectionTitle } from "./ui";
+import { EmptyLine, RowGroup, Row, Rows, Section } from "./ui";
 import { placeRow } from "./view";
 
 const expanded = signal<Record<string, boolean>>({});
 
-export function WorkingNow(props: { day: Day; ctx: TodayScope }) {
-	const read = () => props.day.scope?.view();
-	const snapshot = () => (read()?.snapshot?.scope === props.ctx.scope() ? read()?.snapshot : null);
-	const state = () => props.day.scope?.activity() ?? "failed";
+/** The chats working now and waiting for a slot in the scope Today shows, and what Pilot can say about the read. */
+export function workingList(day: Day, ctx: TodayScope) {
+	const read = () => day.scope?.view();
+	const snapshot = () => (read()?.snapshot?.scope === ctx.scope() ? read()?.snapshot : null);
+	const state = () => day.scope?.activity() ?? "failed";
 	const projects = () => snapshot()?.projects.filter((p) => p.selected) ?? [];
 	const rows = computed(() => {
 		if (state() !== "live" && state() !== "stale") return [];
@@ -64,68 +65,76 @@ export function WorkingNow(props: { day: Day; ctx: TodayScope }) {
 		if (!complete()) return "Some working chats could not be read. This list may be incomplete.";
 		return rows().length === 0 ? "No chat is working now." : "";
 	};
-	const shown = () => (expanded()[props.ctx.scope()] ? rows() : rows().slice(0, 4));
+	/** The count Today shows: only when the read is complete, so a partial list never reads as all of it. */
+	const count = () => (complete() ? rows().length : null);
+	return { rows, waiting, complete, note, count };
+}
+
+export type WorkingList = ReturnType<typeof workingList>;
+
+/** How many working chats show before Show all: a short list, the rest one press away. */
+const SHOWN = 4;
+
+export function WorkingNow(props: { day: Day; ctx: TodayScope; list: WorkingList }) {
+	const list = props.list;
+	const shown = () => (expanded()[props.ctx.scope()] ? list.rows() : list.rows().slice(0, SHOWN));
 	return (
-		<View testID="working-now" class="gap-3">
-			<SectionTitle title="Working now" count={complete() ? rows().length : undefined}>
-				<View class="h-8 w-8" />
-			</SectionTitle>
-			<If when={note()}>
-				<Text testID="working-note" class="text-xs text-muted-foreground">
-					{note()}
-				</Text>
+		<Section
+			testID="working-now"
+			title="Working now"
+			count={list.count()}
+			more={
+				list.rows().length > SHOWN
+					? {
+							label: expanded()[props.ctx.scope()] ? "Show fewer" : `Show all ${list.rows().length}`,
+							onPress: () => expanded.update((v) => ({ ...v, [props.ctx.scope()]: !v[props.ctx.scope()] })),
+						}
+					: undefined
+			}
+		>
+			<If when={list.note()}>
+				<EmptyLine testID="working-note" text={list.note()} />
 			</If>
-			<Each of={shown()} key={(r) => r.sessionId}>
-				{(r) => {
-					const place = placeRow(`working-${r().sessionId}`, () => openChat(r().sessionId, "Today"));
-					return (
-						<View testID={`working-${r().sessionId}`} class="gap-1 border-t border-border py-2">
-							<View class="flex-row items-start gap-3">
-								<Text class="min-w-0 flex-1 text-sm font-medium text-foreground">
-									{r().title || "Unnamed chat"}
-								</Text>
-								<View class="w-28 flex-row items-center justify-end gap-1.5">
-									<Mark kind={r().earlier ? "unreported" : "moving"} />
-									<Text class="text-xs text-muted-foreground">{r().earlier ? "Was working" : "Working"}</Text>
-								</View>
-								<If when={props.day.chat}>
-									<OpenChatAction
-										anchor={place.anchor}
-										testID={`working-open-${r().sessionId}`}
-										accessibilityLabel={`Open chat “${r().title || "Unnamed chat"}” in ${r().projectName}`}
-										onPress={place.press}
-									/>
-								</If>
-							</View>
-							<Text class="text-xs text-muted-foreground">{`${r().projectName} · ${r().missionTitle || (r().missionId ? "Mission title not available" : "Standalone chat")} · ${r().purpose || "Task or purpose not available"}`}</Text>
-						</View>
-					);
-				}}
-			</Each>
-			<If when={rows().length > 4}>
-				<View class="flex-row">
-					<Action
-						label={expanded()[props.ctx.scope()] ? "Show fewer" : `Show all ${rows().length}`}
-						onPress={() => expanded.update((v) => ({ ...v, [props.ctx.scope()]: !v[props.ctx.scope()] }))}
-					/>
-				</View>
-			</If>
-			<If when={waiting().length > 0}>
-				<View testID="working-waiting" class="gap-1">
-					<Text class="text-xs text-faint">{`Waiting · ${waiting().length}`}</Text>
-					<Each of={waiting()} key={(r) => r.sessionId}>
+			<Rows>
+				<Each of={shown()} key={(r) => r.sessionId}>
+					{(r) => {
+						const place = placeRow(`working-${r().sessionId}`, () => openChat(r().sessionId, "Today"));
+						return (
+							<Row
+								testID={`working-${r().sessionId}`}
+								mark={r().earlier ? "unreported" : "working"}
+								title={r().title || "Unnamed chat"}
+								meta={`${r().projectName} · ${r().missionTitle || (r().missionId ? "Mission title not available" : "Standalone chat")} · ${r().purpose || "Task or purpose not available"}`}
+								state={r().earlier ? "Was working" : "Working"}
+								trailing={
+									<If when={props.day.chat}>
+										<OpenChatAction
+											anchor={place.anchor}
+											testID={`working-open-${r().sessionId}`}
+											accessibilityLabel={`Open chat “${r().title || "Unnamed chat"}” in ${r().projectName}`}
+											onPress={place.press}
+										/>
+									</If>
+								}
+							/>
+						);
+					}}
+				</Each>
+			</Rows>
+			<If when={list.waiting().length > 0}>
+				<RowGroup testID="working-waiting" label={`Waiting · ${list.waiting().length}`} />
+				<Rows>
+					<Each of={list.waiting()} key={(r) => r.sessionId}>
 						{(r) => {
 							const place = placeRow(`waiting-${r().sessionId}`, () => openChat(r().sessionId, "Today"));
 							return (
-								<View testID={`waiting-${r().sessionId}`} class="gap-1 border-t border-border py-2">
-									<View class="flex-row items-start gap-3">
-										<Text class="min-w-0 flex-1 text-sm font-medium text-foreground">
-											{r().title || "Unnamed chat"}
-										</Text>
-										<View class="w-28 flex-row items-center justify-end gap-1.5">
-											<Mark kind="still" />
-											<Text class="text-xs text-muted-foreground">Waiting</Text>
-										</View>
+								<Row
+									testID={`waiting-${r().sessionId}`}
+									mark="still"
+									title={r().title || "Unnamed chat"}
+									meta={`${r().projectName} · ${queueLine(r().queue)}`}
+									state="Waiting"
+									trailing={
 										<If when={props.day.chat}>
 											<OpenChatAction
 												anchor={place.anchor}
@@ -134,16 +143,13 @@ export function WorkingNow(props: { day: Day; ctx: TodayScope }) {
 												onPress={place.press}
 											/>
 										</If>
-									</View>
-									<Text testID={`waiting-line-${r().sessionId}`} class="text-xs text-muted-foreground">
-										{`${r().projectName} · ${queueLine(r().queue)}`}
-									</Text>
-								</View>
+									}
+								/>
 							);
 						}}
 					</Each>
-				</View>
+				</Rows>
 			</If>
-		</View>
+		</Section>
 	);
 }

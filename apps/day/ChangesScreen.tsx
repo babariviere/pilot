@@ -37,7 +37,7 @@ import {
 	Notice,
 	Page,
 	PageTitle,
-	Panel,
+	QuietPanel,
 	PatchDiff,
 	RowLink,
 	SectionTitle,
@@ -288,7 +288,7 @@ function ChangeList(props: { changes: Changes; onBackFromJump?: () => boolean })
 function Kept(props: { changes: Changes; page: ChangePage }) {
 	const identity = () => props.page.identity;
 	return (
-		<Panel testID="kept" class="gap-1.5">
+		<QuietPanel testID="kept" class="gap-1.5">
 			<Text class="text-sm text-foreground">
 				{`The snapshot Pilot kept on ${identity().capturedAt}. The files may have changed since.`}
 			</Text>
@@ -308,7 +308,7 @@ function Kept(props: { changes: Changes; page: ChangePage }) {
 					/>
 				</View>
 			</If>
-		</Panel>
+		</QuietPanel>
 	);
 }
 

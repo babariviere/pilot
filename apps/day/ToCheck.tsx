@@ -3,13 +3,13 @@
 // Pilot also reads new canonical deliveries after the saved start-fresh cutoff.
 // Earlier checks and acknowledged standalone starts are kept. Nothing here sends,
 // and an agent's report or a merged pull request never counts as a check.
-import { signal, Text, View } from "nsh";
+import { signal, View } from "nsh";
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
 import type { DeliveryEntry, DeliveryMirror, DeliveryOp, DeliveryView } from "./deliveryFeed";
 import { openDelivery, ownPullRequests, settledLine, titleOf, unsettledLine, waitsForCheck } from "./deliveryView";
 import { restoreScroll, scrollOf } from "./kept";
-import { Action, Mark, Notice, RowLink, SectionTitle } from "./ui";
+import { Block, Body, EmptyLine, Link, Notice, Row, RowGroup, Rows, SectionTitle } from "./ui";
 import { placeRow } from "./view";
 
 function missions(day: Day): MissionRow[] {
@@ -125,37 +125,41 @@ function LiveToCheck(props: {
 	};
 	return (
 		<If when={visible()}>
-			<View testID="to-check" class="gap-1">
+			<View testID="to-check">
 				<If
 					when={props.nested && !props.queued}
 					else={
 						<If when={!props.queued}>
-							<View class="pb-1">
-								<SectionTitle title="To check" count={rows().length} />
-							</View>
+							<SectionTitle title="To check" count={rows().length} />
 						</If>
 					}
 				>
-					<Text role="header" class="pb-0.5 text-xs font-medium text-muted-foreground">
-						{rows().length > 0 ? `To check · ${rows().length}` : "To check"}
-					</Text>
+					<RowGroup label={rows().length > 0 ? `To check · ${rows().length}` : "To check"} />
 				</If>
 				<If when={discovery()?.reason}>
-					<Text class="text-xs text-muted-foreground">{discovery()?.reason ?? ""}</Text>
+					<EmptyLine text={discovery()?.reason ?? ""} />
 				</If>
 				<If when={discovery()?.more}>
-					<Action label="Next results" testID="check-more" onPress={() => void props.mirror.source.readMore?.()} />
+					<Block>
+						<Link
+							label="Next results"
+							testID="check-more"
+							onPress={() => void props.mirror.source.readMore?.()}
+						/>
+					</Block>
 				</If>
 				<If when={discovery()?.later}>
-					<Action
-						label="First results"
-						testID="check-first"
-						onPress={() => void props.mirror.source.readSaved()}
-					/>
+					<Block>
+						<Link
+							label="First results"
+							testID="check-first"
+							onPress={() => void props.mirror.source.readSaved()}
+						/>
+					</Block>
 				</If>
 				<If when={v().saved === "unavailable"}>
 					<Notice
-						class="mb-2"
+						placement="section"
 						text="Pilot could not read your earlier checks. This is not the same as having none."
 					/>
 				</If>
@@ -164,11 +168,11 @@ function LiveToCheck(props: {
 						// One saved command whose answer is lost, and its read-only Check.
 						<Notice
 							testID={`check-unsettled-${o().operationId}`}
-							class="mb-2"
+							placement="section"
 							text={unsettledLine(o(), title(o()))}
 							detail="Pilot will not send it again. Check only reads its saved answer."
 							action={
-								<Action
+								<Link
 									label={o().checking ? "Checking…" : "Check"}
 									testID={`check-op-${o().operationId}`}
 									accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
@@ -185,50 +189,45 @@ function LiveToCheck(props: {
 					)}
 				</Each>
 				<If when={message()}>
-					<Text role="alert" class="pb-1 text-sm text-muted-foreground">
-						{message()}
-					</Text>
+					<Block>
+						<Body role="alert" tone="muted">
+							{message()}
+						</Body>
+					</Block>
 				</If>
-				<Each of={notes()} key={(n) => n.id}>
-					{(n) => (
-						<View class="flex-row items-center gap-2.5 pb-1">
-							<Mark kind="done" />
-							<Text class="flex-1 text-sm text-muted-foreground">{n().text}</Text>
-						</View>
-					)}
-				</Each>
-				<Each of={rows()} key={(e) => e.key}>
-					{(e) => {
-						const entry = e();
-						const name = () => title(entry);
-						const id = `check-${entry.key.replaceAll("/", ".")}`;
-						const place = placeRow(id, () => {
-							// Coming back keeps the mission page where it was.
-							if (props.missionId)
-								restoreScroll(`mission/${props.missionId}`, scrollOf(`mission/${props.missionId}`));
-							openDelivery(entry.subject, name());
-						});
-						return (
-							<View class="gap-1 border-t border-border py-3.5">
-								<RowLink
+				<Rows>
+					<Each of={notes()} key={(n) => n.id}>
+						{(n) => <Row mark="done" title={n().text} wrap />}
+					</Each>
+				</Rows>
+				<Rows>
+					<Each of={rows()} key={(e) => e.key}>
+						{(e) => {
+							const entry = e();
+							const name = () => title(entry);
+							const id = `check-${entry.key.replaceAll("/", ".")}`;
+							const place = placeRow(id, () => {
+								// Coming back keeps the mission page where it was.
+								if (props.missionId)
+									restoreScroll(`mission/${props.missionId}`, scrollOf(`mission/${props.missionId}`));
+								openDelivery(entry.subject, name());
+							});
+							return (
+								<Row
 									testID={id}
+									mark={e().snapshot?.pendingOperationId ? "unknown" : "needs"}
 									title={name()}
+									meta={meta(entry.key)}
+									state={e().snapshot?.pendingOperationId ? "Check not confirmed" : "To check"}
+									stateTone="needs"
 									accessibilityLabel={`${name()}, delivered. Open it to check the result.`}
 									anchor={place.anchor}
 									onPress={place.press}
-								>
-									<View class="flex-row items-center gap-1.5">
-										<Mark kind={e().snapshot?.pendingOperationId ? "unknown" : "needs"} />
-										<Text class="text-xs text-needs-ink">
-											{e().snapshot?.pendingOperationId ? "Check not confirmed" : "To check"}
-										</Text>
-									</View>
-								</RowLink>
-								<Text class="text-xs text-faint">{meta(entry.key)}</Text>
-							</View>
-						);
-					}}
-				</Each>
+								/>
+							);
+						}}
+					</Each>
+				</Rows>
 			</View>
 		</If>
 	);

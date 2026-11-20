@@ -7,7 +7,7 @@ import type { Interview, PlanPage, Question } from "pilot-day/native";
 import { errorText, logEvent } from "./dayLog";
 import type { Plans } from "./planning";
 import { put } from "./planView";
-import { Action, Panel, TextField, ToggleChip } from "./ui";
+import { Action, QuietPanel, TextField, ToggleChip } from "./ui";
 
 /** A note on one question: say it simpler, and the user's own words about it. */
 export type QuestionNote = { simpler: boolean; text: string };
@@ -173,9 +173,9 @@ export function QuestionHelp(props: {
 				/>
 			</View>
 			<If when={panel(key, "context") && q().context}>
-				<Panel testID={`context-${q().id}`}>
+				<QuietPanel testID={`context-${q().id}`}>
 					<Text class="text-sm leading-relaxed text-foreground">{q().context}</Text>
-				</Panel>
+				</QuietPanel>
 			</If>
 			<If when={note().simpler}>
 				<Text testID={`simpler-${q().id}`} class="text-xs text-faint">
@@ -183,7 +183,7 @@ export function QuestionHelp(props: {
 				</Text>
 			</If>
 			<If when={canAsk() && (panel(key, "ask") || q().asks.length > 0)}>
-				<Panel testID={`ask-${q().id}`} class="gap-3">
+				<QuietPanel testID={`ask-${q().id}`} class="gap-3">
 					<Each of={q().asks} key={(a) => a.id}>
 						{(a) => (
 							<View class="gap-1">
@@ -225,10 +225,10 @@ export function QuestionHelp(props: {
 					<Text class="text-xs text-faint">
 						A separate chat answers from the mission's records. It answers nothing for you.
 					</Text>
-				</Panel>
+				</QuietPanel>
 			</If>
 			<If when={panel(key, "reword")}>
-				<Panel class="gap-1.5">
+				<QuietPanel class="gap-1.5">
 					<Text class="text-sm text-foreground">What should change about this question?</Text>
 					<TextField
 						testID={`reword-${q().id}`}
@@ -240,7 +240,7 @@ export function QuestionHelp(props: {
 						compact
 					/>
 					<Text class="text-xs text-faint">Notes wait here. Send them together at the end of the round.</Text>
-				</Panel>
+				</QuietPanel>
 			</If>
 		</View>
 	);

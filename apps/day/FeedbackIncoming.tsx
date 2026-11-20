@@ -1,12 +1,12 @@
 // Feedback attention in Today's Needs you queue. Reading and Later send no work intent.
-import { effect, Keyboard, signal, Text, View } from "nsh";
+import { effect, Keyboard, signal, View } from "nsh";
 import type { Day } from "./day";
 import { FeedbackRow } from "./FeedbackRow";
 import type { FeedbackItem } from "./feedbackFeed";
 import { askingOf, chatState, clip, stepsOf } from "./feedbackSteps";
 import { dayOf, feedbackLater } from "./feedbackView";
 import { todayProject } from "./todayScope";
-import { Action, Mark } from "./ui";
+import { Block, Button, EmptyLine, Link, Row, Rows } from "./ui";
 
 /** User-selected feedback can come forward without answering the current chat question. */
 export const feedbackFocus = signal<string | null>(null);
@@ -60,14 +60,14 @@ export function FeedbackIncoming(props: { day: Day; active?: boolean }) {
 		feedbackLater.update((all) => [...all.filter((k) => !k.startsWith(`${item.id}/`)), ...(later ? [key] : [])]);
 	};
 	return (
-		<View testID="incoming-feedback" class="gap-1">
+		<View testID="incoming-feedback">
 			{/* Only a read that never worked says so here; the Feedback page carries the old-data warning. */}
 			<If when={v().reason && v().availability !== "live"}>
-				<Text class="text-sm text-muted-foreground">{v().reason}</Text>
+				<EmptyLine text={v().reason} />
 			</If>
 			<Each of={first() ? [first()!] : []} key={(i) => i.id}>
 				{(item) => (
-					<View class="gap-3">
+					<Block gap={3}>
 						<FeedbackRow
 							day={props.day}
 							mirror={mirror}
@@ -75,59 +75,62 @@ export function FeedbackIncoming(props: { day: Day; active?: boolean }) {
 							when={dayOf(item().recordedAt)}
 							routeKey="today"
 						/>
-						<View class="flex-row">
-							<Action label="Later" testID={`feedback-later-${item().id}`} onPress={() => defer(item(), true)} />
-						</View>
-					</View>
+						<Button label="Later" testID={`feedback-later-${item().id}`} onPress={() => defer(item(), true)} />
+					</Block>
 				)}
 			</Each>
-			<Each of={pending().filter((i) => i.id !== first()?.id)} key={(i) => i.id}>
-				{(item) => (
-					<View class="flex-row items-center gap-2.5 py-1.5">
-						<Mark kind={askingOf(stepsOf(item())) ? "needs" : "new"} />
-						<View class="flex-1">
-							<Action
-								label={`Up next: Feedback · ${clip(item().text, 100)}`}
-								testID={`feedback-new-${item().id}`}
-								onPress={() => {
-									Keyboard.dismiss();
-									feedbackFocus.set(item().id);
-								}}
-							/>
-						</View>
-					</View>
-				)}
-			</Each>
+			<Rows>
+				<Each of={pending().filter((i) => i.id !== first()?.id)} key={(i) => i.id}>
+					{(item) => (
+						<Row
+							mark={askingOf(stepsOf(item())) ? "needs" : "new"}
+							title={`Up next: Feedback · ${clip(item().text, 100)}`}
+							testID={`feedback-new-${item().id}`}
+							onPress={() => {
+								Keyboard.dismiss();
+								feedbackFocus.set(item().id);
+							}}
+						/>
+					)}
+				</Each>
+			</Rows>
 			<If when={kept().length > 0}>
-				<View class="gap-1 pt-3">
-					<Action
+				<Block>
+					<Link
 						label={`Later · Feedback ${kept().length}`}
 						testID="feedback-later-show"
 						onPress={() => laterOpen.set(!laterOpen())}
 					/>
-					<If when={laterOpen()}>
+				</Block>
+				<If when={laterOpen()}>
+					<Rows>
 						<Each of={kept()} key={(i) => i.id}>
 							{(item) => (
-								<View class="flex-row items-center gap-2.5 border-t border-border py-2.5">
-									<Text class="min-w-0 flex-1 text-sm text-foreground">{clip(item().text, 100)}</Text>
-									<Action
-										label="Bring back"
-										testID={`feedback-bring-back-${item().id}`}
-										onPress={() => defer(item(), false)}
-									/>
-								</View>
+								<Row
+									title={clip(item().text, 100)}
+									trailing={
+										<Button
+											small
+											label="Bring back"
+											testID={`feedback-bring-back-${item().id}`}
+											onPress={() => defer(item(), false)}
+										/>
+									}
+								/>
 							)}
 						</Each>
-					</If>
-				</View>
+					</Rows>
+				</If>
 			</If>
 			<If when={v().more}>
-				<Text class="text-xs text-faint">Earlier feedback has not been read yet.</Text>
-				<Action
-					label="Read earlier feedback"
-					testID="incoming-feedback-more"
-					onPress={() => void mirror.source.more()}
-				/>
+				<EmptyLine text="Earlier feedback has not been read yet." />
+				<Block>
+					<Link
+						label="Read earlier feedback"
+						testID="incoming-feedback-more"
+						onPress={() => void mirror.source.more()}
+					/>
+				</Block>
 			</If>
 		</View>
 	);

@@ -73,7 +73,7 @@ import {
 	MarkLine,
 	Page,
 	PageTitle,
-	Panel,
+	QuietPanel,
 	Pressable,
 	RowLink,
 	SectionTitle,
@@ -134,7 +134,7 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 	};
 	return (
 		<If when={props.ops.length > 0}>
-			<Panel testID={props.testID} class="gap-2">
+			<QuietPanel testID={props.testID} class="gap-2">
 				<Each of={props.ops} key={(o) => o.operationId}>
 					{(o) => (
 						<View class="gap-1.5">
@@ -178,7 +178,7 @@ function Unsettled(props: { mirror: ThreadsMirror; missionId: string; ops: Threa
 						{threadMessages()[key()] ?? ""}
 					</Text>
 				</If>
-			</Panel>
+			</QuietPanel>
 		</If>
 	);
 }
@@ -544,7 +544,7 @@ function Links(props: {
 				</View>
 			</If>
 			<If when={open()}>
-				<Panel size="sm" class="gap-0.5">
+				<QuietPanel size="sm" class="gap-0.5">
 					<If when={choices().length === 0}>
 						<Text class="text-xs text-muted-foreground">Every task and decision is linked already.</Text>
 					</If>
@@ -566,7 +566,7 @@ function Links(props: {
 							/>
 						)}
 					</Each>
-				</Panel>
+				</QuietPanel>
 			</If>
 		</View>
 	);
@@ -588,7 +588,7 @@ function HandoffNote(props: { topic: Topic }) {
 	const h = () => props.topic.handoff;
 	return (
 		<If when={props.topic.disposition === "open" && h()}>
-			<Panel testID="thread-handoff" class="gap-2">
+			<QuietPanel testID="thread-handoff" class="gap-2">
 				<Text class="text-sm font-medium text-foreground">
 					{h()?.queued ? "Sent to the planner" : "Waits to go to the planner"}
 				</Text>
@@ -600,7 +600,7 @@ function HandoffNote(props: { topic: Topic }) {
 					The planner proposes a revision with these tasks. Confirm it on the mission's planning page; nothing
 					changes before.
 				</Text>
-			</Panel>
+			</QuietPanel>
 		</If>
 	);
 }
@@ -756,7 +756,7 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 	const read = (which: "older" | "latest", sessionId?: string) =>
 		void props.mirror.source.history(props.missionId, props.topic.id, which, sessionId);
 	return (
-		<Panel testID="thread-history" class="gap-2">
+		<QuietPanel testID="thread-history" class="gap-2">
 			<View class="flex-row flex-wrap items-center gap-2">
 				<Text class="text-sm font-medium text-foreground">
 					{chat() ? "Thread chat activity" : "Coordinator activity"}
@@ -846,7 +846,7 @@ function Activity(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 					/>
 				</View>
 			</If>
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -1116,9 +1116,9 @@ function Message(props: {
 					</View>
 				}
 			>
-				<Panel selectable>
+				<QuietPanel selectable>
 					<Text class="text-base leading-relaxed text-foreground">{m().text}</Text>
-				</Panel>
+				</QuietPanel>
 			</If>
 			{/* Only your messages wait for an answer; the agent's do not. */}
 			<If when={m().author === "you" && REPLY[m().reply]}>
@@ -1324,7 +1324,7 @@ function Conversation(props: {
 function WaitingMessages(props: { messages: WaitingMessage[] }) {
 	return (
 		<If when={props.messages.length > 0}>
-			<Panel testID="thread-waiting" class="gap-2">
+			<QuietPanel testID="thread-waiting" class="gap-2">
 				<Text class="text-xs text-muted-foreground">
 					{props.messages.length === 1
 						? "Waiting for the coordinator. It goes with your next answers, or as soon as the coordinator is free."
@@ -1337,7 +1337,7 @@ function WaitingMessages(props: { messages: WaitingMessage[] }) {
 						</MarkLine>
 					)}
 				</Each>
-			</Panel>
+			</QuietPanel>
 		</If>
 	);
 }
@@ -1662,7 +1662,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 									</MarkLine>
 								</If>
 								<If when={t().disposition !== "open"}>
-									<Panel testID="thread-closed" class="gap-2">
+									<QuietPanel testID="thread-closed" class="gap-2">
 										<Text class="text-sm text-foreground">
 											{t().disposition === "later"
 												? "This thread is in Later. Its history stays."
@@ -1687,7 +1687,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 												}
 											/>
 										</View>
-									</Panel>
+									</QuietPanel>
 								</If>
 								<Links
 									mirror={mirror}

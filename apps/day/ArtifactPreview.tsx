@@ -7,7 +7,7 @@ import { effect, nativeComponent, signal, Text, View, type ViewRef } from "nsh";
 import type { SavedArtifact, Shown } from "./artifactReads";
 import { rested, showsInPage } from "./onScreen";
 import { SourcePanel } from "./SourcePanel";
-import { Action, Panel } from "./ui";
+import { Action, QuietPanel } from "./ui";
 
 type State = { state: string; message: string };
 const NativePreview = nativeComponent<{ snapshot: SavedArtifact }, { state: State }>("pilot/artifact-preview", {
@@ -45,7 +45,7 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 	const saved = () => props.inspection.artifact;
 	const present = () => saved()?.content.state === "text";
 	return (
-		<Panel testID="artifact-preview" class={`gap-2 ${props.fill ? "flex-1" : ""}`}>
+		<QuietPanel testID="artifact-preview" class={`gap-2 ${props.fill ? "flex-1" : ""}`}>
 			<If when={props.inspection.state === "reading" || (present() && inView() && state().state === "loading")}>
 				<Text class="text-sm text-muted-foreground">Opening the saved preview…</Text>
 			</If>
@@ -108,6 +108,6 @@ export function ArtifactPreview(props: { inspection: Shown; fill?: boolean }) {
 			<If when={present() && state().state !== "error" && state().state !== "stopped"}>
 				<Action label="Reset" testID="artifact-preview-reset" onPress={startAgain} />
 			</If>
-		</Panel>
+		</QuietPanel>
 	);
 }

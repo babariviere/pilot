@@ -1,19 +1,19 @@
-// Popups: a value chosen from a list, and a menu of commands. They share
-// one popup frame.
+// Popups: a value chosen from a list (the select), and a menu of commands. They share one popup frame.
 import { type JSX, Text, View } from "nsh";
 import { type Align, Menu as BaseMenu, MenuItem as BaseMenuItem, Select, type SelectItem } from "nsh/base";
 import { type AgentMark, useAgent } from "./agent";
 import { FOCUS_RING } from "./button";
 import { Icon, type IconName } from "./icon";
+import { TYPE } from "./text";
 
 /** The frame of every popup: a picker's list and a menu. */
-const POPUP = "min-w-56 rounded-xl border border-border bg-popover p-1 shadow-md";
+const POPUP = "min-w-56 rounded-(--radius-panel) border border-border bg-popover p-1.5 shadow-md";
 
 /**
- * One value chosen from a list, such as a project: a quiet trigger naming
- * the choice, and a popup list with a second line per item (`detail`).
- * `searchable` adds a filter field for long lists. Choosing only reports
- * the value; the caller decides what that does.
+ * The select: one value chosen from a list, such as a project or a model. Its trigger is 26 points high, framed like
+ * a field, naming the choice with a chevron; its popup lists the items with a second line each (`detail`).
+ * `searchable` adds a filter field for long lists. Choosing only reports the value; the caller decides what it does.
+ * In a `Row` it sits in the trailing slot.
  */
 export function Picker(props: {
 	testID?: string;
@@ -60,23 +60,29 @@ export function Picker(props: {
 				if (value !== null) props.onChange(value);
 			}}
 			onOpenChange={({ open }) => props.onOpenChange?.(open)}
-			class={`rounded-lg disabled:opacity-50 ${FOCUS_RING}`}
+			class={`rounded-lg disabled:opacity-45 ${FOCUS_RING}`}
 			popupClass={POPUP}
 			listClass="max-h-72"
 			itemClass="group rounded-lg px-2.5 py-1.5 focus:bg-accent selected:bg-selection disabled:opacity-50"
-			searchClass="mb-1 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground"
+			searchClass="mb-1 rounded-lg border border-input bg-card px-2.5 py-1 text-foreground"
 			renderItem={(item) => (
-				<View class="gap-0.5">
-					<Text class="text-sm text-popover-foreground group-selected:font-medium">{item.title}</Text>
+				<View>
+					<Text class="text-popover-foreground" style={TYPE.body}>
+						{item.title}
+					</Text>
 					<If when={props.detail?.(item.value)}>
-						<Text class="text-xs text-faint">{props.detail?.(item.value) ?? ""}</Text>
+						<Text class="text-faint" style={TYPE.caption}>
+							{props.detail?.(item.value) ?? ""}
+						</Text>
 					</If>
 				</View>
 			)}
 			trigger={
-				<View class="min-h-8 flex-row items-center gap-2 rounded-lg border border-input px-3 py-1 hover:bg-accent">
-					<Text class="text-sm text-foreground">{title()}</Text>
-					<Text class="text-xs text-faint">▾</Text>
+				<View class="h-6.5 flex-row items-center gap-2 rounded-lg border border-input bg-card pl-2.5 pr-1.5 hover:bg-accent">
+					<Text class="shrink truncate text-foreground" style={TYPE.body}>
+						{title()}
+					</Text>
+					<Icon name="chevron" tint="tint-faint" />
 				</View>
 			}
 		/>
@@ -135,7 +141,7 @@ export function MenuTrigger(props: {
 			role="button"
 			accessibilityLabel={props.accessibilityLabel}
 			tooltip={props.tooltip}
-			class={`min-h-8 min-w-8 items-center justify-center rounded-lg px-2 hover:bg-accent active:bg-accent ${FOCUS_RING}`}
+			class={`size-6.5 items-center justify-center rounded-lg hover:bg-accent active:bg-accent ${FOCUS_RING}`}
 		>
 			<Icon name={props.icon} />
 		</View>
@@ -144,12 +150,17 @@ export function MenuTrigger(props: {
 
 /** What a `Menu`'s commands act on, as a quiet line above them. */
 export function MenuTitle(props: { label: string }) {
-	return <Text class="px-2.5 pb-1 pt-1.5 text-xs text-faint">{props.label}</Text>;
+	return (
+		<Text class="px-2.5 pb-1 pt-1 text-faint" style={TYPE.caption}>
+			{props.label}
+		</Text>
+	);
 }
 
-/** One command of a `Menu`. Choosing it closes the menu. */
+/** One command of a `Menu`: its words and a quiet `hint` at the right ("Shown now", a count). Choosing it closes the menu. */
 export function MenuItem(props: {
 	label: string;
+	hint?: string;
 	testID?: string;
 	disabled?: boolean;
 	agent?: AgentMark;
@@ -169,9 +180,16 @@ export function MenuItem(props: {
 			testID={props.testID}
 			disabled={props.disabled}
 			onSelect={props.onSelect}
-			class="rounded-lg px-2.5 py-1.5 hover:bg-accent focus:bg-accent disabled:opacity-50"
+			class="flex-row items-center gap-3 rounded-lg px-2.5 py-1.5 hover:bg-accent focus:bg-accent disabled:opacity-50"
 		>
-			<Text class="text-sm text-popover-foreground">{props.label}</Text>
+			<Text class="flex-1 text-popover-foreground" style={TYPE.body}>
+				{props.label}
+			</Text>
+			<If when={props.hint}>
+				<Text class="font-mono text-faint" style={TYPE.number}>
+					{props.hint ?? ""}
+				</Text>
+			</If>
 		</BaseMenuItem>
 	);
 }

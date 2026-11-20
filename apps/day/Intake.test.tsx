@@ -57,7 +57,7 @@ test("a Slack request is a card: where it came from, its own words and facts; Li
 	expect(app.shows(`Up next, Slack request: ${STRIPE}`)).toBe(true);
 	// Linear's requests wait on the Linear page, not in Needs you.
 	expect(app.shows("CSV export times out for large accounts")).toBe(false);
-	expect(app.shows("Nothing needs you. Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
 	expect(app.shows("Sends: 0 · Checks: 0")).toBe(true);
 });
 
@@ -114,7 +114,7 @@ test("Later and Bring back, Discard and Undo each send once and move the card", 
 	await app.waitFor("id:intake-later");
 	await app.waitFor(`${CARD} >> ${STRIPE}`);
 	expect(app.shows("Sends: 1 · Checks: 0")).toBe(true);
-	expect(app.shows("Requests for later  1")).toBe(true);
+	expect(app.shows("Requests for later · 1")).toBe(true);
 	await app.press("role:button[Show later requests]");
 	await app.press("id:bring-back-northwind");
 	await app.waitFor(`${CARD} >> ${NORTHWIND}`);

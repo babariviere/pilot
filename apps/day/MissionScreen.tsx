@@ -43,7 +43,7 @@ import {
 	Notice,
 	Page,
 	PageTitle,
-	Panel,
+	QuietPanel,
 	RowLink,
 	SectionTitle,
 	TextField,
@@ -207,7 +207,7 @@ function ArchiveConfirm(props: { day: Day; page: MissionPage }) {
 				</Text>
 			</If>
 			<If when={archiving() === row().id}>
-				<Panel testID="mission-archive-confirm" size="lg" class="gap-2">
+				<QuietPanel testID="mission-archive-confirm" size="lg" class="gap-2">
 					<Text class="text-sm text-foreground">{`Archive “${row().title}”?`}</Text>
 					<Text class="text-xs text-muted-foreground">
 						It leaves Today. Its history, tasks, decisions and chats stay. Chats that are working keep working:
@@ -224,7 +224,7 @@ function ArchiveConfirm(props: { day: Day; page: MissionPage }) {
 						/>
 						<Action label="Cancel" testID="mission-archive-cancel" onPress={() => archiving.set(null)} />
 					</View>
-				</Panel>
+				</QuietPanel>
 			</If>
 		</View>
 	);
@@ -431,7 +431,7 @@ function Control(props: { day: Day; page: MissionPage }) {
 
 	return (
 		<If when={shown()}>
-			<Panel testID="pause" size="lg" class="gap-3">
+			<QuietPanel testID="pause" size="lg" class="gap-3">
 				<If when={controlLine(control())}>
 					<Text class="text-sm leading-relaxed text-foreground">{controlLine(control())}</Text>
 				</If>
@@ -497,7 +497,7 @@ function Control(props: { day: Day; page: MissionPage }) {
 				<If when={!live()}>
 					<Text class="text-xs text-muted-foreground">Pause and Resume need a fresh read.</Text>
 				</If>
-			</Panel>
+			</QuietPanel>
 		</If>
 	);
 }

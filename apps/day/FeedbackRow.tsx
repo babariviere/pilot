@@ -51,7 +51,7 @@ import { draftLinkedMission } from "./linkedMission";
 import { OpenChatAction } from "./OpenChatAction";
 import { newBusy } from "./planView";
 import { QuestionArtifacts } from "./QuestionArtifacts";
-import { Action, Field, glide, type Mark, MarkLine, Panel, Picker } from "./ui";
+import { Action, Field, glide, type Mark, MarkLine, QuietPanel, Picker } from "./ui";
 import { openMission } from "./view";
 
 /**
@@ -176,7 +176,7 @@ function Proposal(props: {
 		draftLinkedMission(props.item, props.triage, { value: p(), digest: props.digest });
 	};
 	return (
-		<Panel testID={`feedback-proposal-${props.item.id}`} class="gap-2.5">
+		<QuietPanel testID={`feedback-proposal-${props.item.id}`} class="gap-2.5">
 			<Text class="text-xs font-medium text-muted-foreground">{heading()}</Text>
 			<Text class="text-sm leading-relaxed text-foreground">{p().summary}</Text>
 			<View selectable>
@@ -330,7 +330,7 @@ function Proposal(props: {
 					/>
 				</View>
 			</If>
-		</Panel>
+		</QuietPanel>
 	);
 }
 

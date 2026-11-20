@@ -1,7 +1,7 @@
 // The same navigation affordance everywhere a screen offers an existing chat.
 
 import type { ViewRef } from "nsh";
-import { Action } from "./ui";
+import { Button } from "./ui";
 
 export function OpenChatAction(props: {
 	accessibilityLabel: string;
@@ -12,7 +12,8 @@ export function OpenChatAction(props: {
 	onPress: () => void;
 }) {
 	return (
-		<Action
+		<Button
+			small
 			label={props.label ?? "Open chat"}
 			icon="chat"
 			iconOnly={props.label === undefined}

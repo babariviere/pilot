@@ -2,7 +2,7 @@
 import { signal, Text, View } from "nsh";
 import type { DayFeed } from "./feeds";
 import type { MigrationIntent, MigrationView } from "./migration";
-import { Action, Panel } from "./ui";
+import { Action, QuietPanel } from "./ui";
 
 export function MigrationControls(props: {
 	source: Pick<DayFeed, "migration">;
@@ -47,7 +47,7 @@ export function MigrationControls(props: {
 					/>
 				</If>
 				<If when={preview()?.state === "preview" && !unknown()}>
-					<Panel class="gap-3">
+					<QuietPanel class="gap-3">
 						<Text class="text-sm font-medium text-foreground">{`Finish replacing “${preview()?.oldTitle}” with “${preview()?.newTitle}”?`}</Text>
 						<Text class="text-sm text-muted-foreground">
 							Archive the old mission and finish its replacement link. Keep its history, chats and unpublished
@@ -112,7 +112,7 @@ export function MigrationControls(props: {
 							/>
 							<Action label="Cancel" disabled={busy()} onPress={() => preview.set(null)} />
 						</View>
-					</Panel>
+					</QuietPanel>
 				</If>
 				<If when={unknown()}>
 					<Action

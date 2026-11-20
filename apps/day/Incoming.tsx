@@ -14,7 +14,21 @@ import { findingWork } from "./insightsWork";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
 import { groupOf, openLinear } from "./linearView";
 import { goalDraft, linkedMission, openNew, replacesDraft, requestDraft } from "./planView";
-import { Action, glide, InlineAction, LinkAction, Mark, Notice, Panel, RadioList, RadioRow } from "./ui";
+import {
+	Action,
+	Block,
+	Body,
+	Button,
+	glide,
+	Link,
+	Notice,
+	QuietPanel,
+	RadioList,
+	RadioRow,
+	Row,
+	RowGroup,
+	Rows,
+} from "./ui";
 import { focused, focusFront, placeRow, releaseFront } from "./view";
 
 /**
@@ -296,7 +310,7 @@ export function ConfirmStart(props: {
 			: "as standalone work";
 	};
 	return (
-		<Panel testID={`confirm-${id()}`} class="gap-2">
+		<QuietPanel testID={`confirm-${id()}`} class="gap-2">
 			<Text class="text-sm text-foreground">
 				{`Start one Build chat for ${quoted(props.row.request.title)} ${place()}?`}
 			</Text>
@@ -328,7 +342,7 @@ export function ConfirmStart(props: {
 					}}
 				/>
 			</View>
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -479,27 +493,32 @@ export function IntakeWorkControls(props: {
 function KeptRow(props: { mirror: IntakeMirror; row: IntakeRow; state: "later" | "discarded"; busy: boolean }) {
 	const r = () => props.row.request;
 	return (
-		<View testID={`${props.state}-row-${r().id}`} class="flex-row items-center gap-2.5 border-t border-border py-2.5">
-			<Mark kind="still" />
-			<View class="flex-1 gap-0.5">
-				<Text class="text-sm text-foreground">{r().title}</Text>
-				<Text class="text-xs text-faint">{requestLine(r())}</Text>
-			</View>
-			<Action
-				label={props.state === "later" ? "Bring back" : "Undo"}
-				testID={`${props.state === "later" ? "bring-back" : "undo"}-${r().id}`}
-				disabled={props.busy}
-				onPress={() => void triage(props.mirror, props.row, "new")}
-			/>
-			<If when={props.state === "later"}>
-				<Action
-					label="Discard"
-					testID={`discard-${r().id}`}
-					disabled={props.busy}
-					onPress={() => void triage(props.mirror, props.row, "discarded")}
-				/>
-			</If>
-		</View>
+		<Row
+			testID={`${props.state}-row-${r().id}`}
+			mark="still"
+			title={r().title}
+			meta={requestLine(r())}
+			trailing={
+				<>
+					<Button
+						small
+						label={props.state === "later" ? "Bring back" : "Undo"}
+						testID={`${props.state === "later" ? "bring-back" : "undo"}-${r().id}`}
+						disabled={props.busy}
+						onPress={() => void triage(props.mirror, props.row, "new")}
+					/>
+					<If when={props.state === "later"}>
+						<Button
+							small
+							label="Discard"
+							testID={`discard-${r().id}`}
+							disabled={props.busy}
+							onPress={() => void triage(props.mirror, props.row, "discarded")}
+						/>
+					</If>
+				</>
+			}
+		/>
 	);
 }
 
@@ -515,25 +534,33 @@ function Kept(props: {
 	const noun = props.state === "later" ? "later requests" : "discarded requests";
 	return (
 		<If when={props.rows.length > 0}>
-			<View testID={`intake-${props.state}`} class="gap-0.5">
-				<View class="flex-row items-center gap-2">
-					<Text class="text-xs text-faint">{`${title}  ${props.rows.length}`}</Text>
-					<View class="flex-1" />
-					<Action
-						label={shown() ? "Hide" : "Show"}
-						accessibilityLabel={`${shown() ? "Hide" : "Show"} ${noun}`}
-						onPress={() => {
-							glide();
-							shown.set(!shown());
-						}}
-					/>
-				</View>
+			<View testID={`intake-${props.state}`}>
+				<Row
+					title={`${title} · ${props.rows.length}`}
+					trailing={
+						<Link
+							label={shown() ? "Hide" : "Show"}
+							accessibilityLabel={`${shown() ? "Hide" : "Show"} ${noun}`}
+							onPress={() => {
+								glide();
+								shown.set(!shown());
+							}}
+						/>
+					}
+				/>
 				<If when={shown()}>
-					<Each of={props.rows} key={(r) => r.request.id}>
-						{(r) => (
-							<KeptRow mirror={props.mirror} row={r()} state={props.state} busy={props.busy(r().request.id)} />
-						)}
-					</Each>
+					<Rows>
+						<Each of={props.rows} key={(r) => r.request.id}>
+							{(r) => (
+								<KeptRow
+									mirror={props.mirror}
+									row={r()}
+									state={props.state}
+									busy={props.busy(r().request.id)}
+								/>
+							)}
+						</Each>
+					</Rows>
 				</If>
 			</View>
 		</If>
@@ -606,36 +633,36 @@ function LiveNotes(props: { day: Day; mirror: IntakeMirror }) {
 		v().later.length + v().discarded.length > 0;
 	return (
 		<If when={any()}>
-			<View testID="requests" class="gap-2">
+			<View testID="requests">
 				<If when={v().reason}>
 					<Notice
 						testID="incoming-off"
+						placement="section"
 						text={v().availability === "live" ? v().reason : `Pilot cannot show new requests here. ${v().reason}`}
 						detail={v().availability !== "live" ? "This is not the same as having none." : undefined}
-					>
-						<View class="flex-row pt-1">
-							<Action
+						action={
+							<Link
 								label={reading() ? "Reading…" : "Read again"}
-								icon="refresh"
 								testID="incoming-read"
 								disabled={reading()}
 								accessibilityLabel="Read new requests again. This sends nothing."
 								onPress={() => void readAgain()}
 							/>
-						</View>
-					</Notice>
+						}
+					/>
 				</If>
 				<Each of={v().intake.trouble} key={(t) => t}>
-					{(t) => <Notice text={t()} />}
+					{(t) => <Notice placement="section" text={t()} />}
 				</Each>
 				<Each of={v().unsettled} key={(o) => o.operationId}>
 					{(o) => (
 						<Notice
 							testID={`unsettled-${o().operationId}`}
+							placement="section"
 							text={unsettledLine(o())}
 							detail="Pilot will not send it again. Check only reads its saved answer."
 							action={
-								<Action
+								<Link
 									label={o().delivery === "checking" ? "Checking…" : "Check"}
 									testID={`check-${o().operationId}`}
 									accessibilityLabel="Check whether it happened. This reads Pilot's saved answer and sends nothing."
@@ -652,37 +679,35 @@ function LiveNotes(props: { day: Day; mirror: IntakeMirror }) {
 					)}
 				</Each>
 				<If when={result()}>
-					<Text testID="incoming-result" role="alert" class="text-sm text-muted-foreground">
-						{result()}
-					</Text>
+					<Block>
+						<Body testID="incoming-result" role="alert" tone="muted">
+							{result()}
+						</Body>
+					</Block>
 				</If>
-				<Each of={notes()} key={(n) => n.id}>
-					{(n) => (
-						<View class="flex-row items-center gap-2.5">
-							<Mark kind="done" />
-							<Text class="flex-1 text-sm text-muted-foreground">{n().text}</Text>
-						</View>
-					)}
-				</Each>
+				<Rows>
+					<Each of={notes()} key={(n) => n.id}>
+						{(n) => <Row mark="done" title={n().text} wrap />}
+					</Each>
+				</Rows>
 				<If when={undoRow()}>
-					<View testID="incoming-undo" class="flex-row flex-wrap items-baseline gap-x-1.5">
-						<Text class="min-w-0 shrink text-sm text-muted-foreground">
-							{`Discarded ${quoted(undoRow()?.request.title ?? "")}.`}
-						</Text>
-						<InlineAction
-							label="Undo"
-							testID="undo-last"
-							onPress={() => {
-								const row = undoRow();
-								if (row && !busy(row.request.id)) void triage(props.mirror, row, "new");
-							}}
-						/>
-					</View>
+					<Row
+						testID="incoming-undo"
+						title={`Discarded ${quoted(undoRow()?.request.title ?? "")}.`}
+						trailing={
+							<Link
+								label="Undo"
+								testID="undo-last"
+								onPress={() => {
+									const row = undoRow();
+									if (row && !busy(row.request.id)) void triage(props.mirror, row, "new");
+								}}
+							/>
+						}
+					/>
 				</If>
 				<If when={more()}>
-					<Text testID="incoming-more" class="text-xs text-faint">
-						{`${more()} Pilot reads up to 100 requests from each source.`}
-					</Text>
+					<RowGroup testID="incoming-more" label={`${more()} Pilot reads up to 100 requests from each source.`} />
 				</If>
 				<Kept mirror={props.mirror} state="later" rows={v().later} busy={busy} />
 				<Kept mirror={props.mirror} state="discarded" rows={v().discarded} busy={busy} />
@@ -731,20 +756,20 @@ export function LinearRow(props: { day: Day }) {
 	};
 	return (
 		<If when={shown()}>
-			<View testID="linear-row" class="flex-row items-center gap-2.5 rounded-xl border border-border px-4 py-3">
-				<Mark kind={fresh() > 0 ? "new" : "still"} />
-				<Text class="flex-1 text-sm text-foreground">
-					{head()}
-					<Text class="text-muted-foreground">{tail()}</Text>
-				</Text>
-				<LinkAction
-					label="Open"
-					testID="linear-open"
-					accessibilityLabel="Your Linear issues. Opens Pilot's saved copy; it changes nothing."
-					anchor={place.anchor}
-					onPress={place.press}
-				/>
-			</View>
+			<Row
+				testID="linear-row"
+				mark={fresh() > 0 ? "new" : "still"}
+				title={`${head()}${tail()}`}
+				trailing={
+					<Link
+						label="Open"
+						testID="linear-open"
+						accessibilityLabel="Your Linear issues. Opens Pilot's saved copy; it changes nothing."
+						anchor={place.anchor}
+						onPress={place.press}
+					/>
+				}
+			/>
 		</If>
 	);
 }

@@ -45,7 +45,7 @@ import { TodayScreen } from "./TodayScreen";
 import { threadRoute } from "./threadView";
 import { todayProject } from "./todayScope";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
-import { Arrive, Notice } from "./ui";
+import { Arrive, GridBackdrop, Notice } from "./ui";
 import type { Update } from "./updateFeed";
 import { updateEntry } from "./updateView";
 import { route } from "./view";
@@ -128,12 +128,13 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 	});
 	return (
 		<View class="flex-1 bg-background">
+			<GridBackdrop />
 			<AppHeader day={props.day} plans={props.plans} changes={props.changes} />
 			<If when={navigationError()}>
-				<Notice text={navigationError()} />
+				<Notice text={navigationError()} placement="panel" />
 			</If>
 			<If when={navigationRestoring()}>
-				<Notice text="Returning to the previous project…" />
+				<Notice text="Returning to the previous project…" placement="panel" />
 			</If>
 			<View class="min-h-0 flex-1">
 				<If

@@ -19,7 +19,7 @@ import type {
 import type { Changes } from "./changeFeed";
 import type { Day } from "./day";
 import type { Plans } from "./planning";
-import { Action, Arrive, glide, Mark, type MarkKind, Page, Panel, SectionTitle } from "./ui";
+import { Action, Arrive, glide, Mark, type MarkKind, Page, QuietPanel, SectionTitle } from "./ui";
 import type { Update } from "./updateFeed";
 import { closeUpdate, updateBusy, updateMessage } from "./updateView";
 import { captureView, restoreView, saveForms, startFresh } from "./windowState";
@@ -332,7 +332,7 @@ function Offer(props: { update: Update }) {
 		return o.kind === "register" ? "Register Pilot's service" : `Pilot ${o.version} is ready ${kindWords(o.kind)}`;
 	};
 	return (
-		<Panel size="lg" class="gap-3">
+		<QuietPanel size="lg" class="gap-3">
 			<Text class="text-base font-medium text-foreground">{title()}</Text>
 			<Text class="text-sm text-muted-foreground">{offer()?.note ?? ""}</Text>
 			<If when={service().blocked}>
@@ -357,7 +357,7 @@ function Offer(props: { update: Update }) {
 					/>
 				</If>
 			</View>
-		</Panel>
+		</QuietPanel>
 	);
 }
 
@@ -371,7 +371,7 @@ function Confirm(props: { update: Update; day: Day; plans?: Plans; pending: Conf
 				: `${c().mode === "force" ? "Force update" : "Update"} to ${c().to}?`;
 	return (
 		<Arrive>
-			<Panel size="lg" class="gap-3">
+			<QuietPanel size="lg" class="gap-3">
 				<Text role="header" class="text-base font-medium text-foreground">
 					{title()}
 				</Text>
@@ -396,7 +396,7 @@ function Confirm(props: { update: Update; day: Day; plans?: Plans; pending: Conf
 					/>
 					<Action label="Cancel" disabled={updateBusy()} onPress={() => void cancel(props.update)} />
 				</View>
-			</Panel>
+			</QuietPanel>
 		</Arrive>
 	);
 }

@@ -1,198 +1,283 @@
-// Choosing among options: radio rows for one choice, checkbox rows for
-// several, and toggle rows when a row turns a pick on and off. Each row is
-// its indicator, then its words. The page owns which are chosen.
+// Choosing: the options of a Question (one choice, or several with `multiple`). Each option is a ring or a box,
+// then its words: a title, an optional tag ("Recommended") and a hint. The page owns which are chosen.
 import { type JSX, Text, View, type ViewRef } from "nsh";
 import { Checkbox, Radio, RadioGroup, Toggle } from "nsh/base";
 import { type AgentMark, useAgent } from "./agent";
 import { FOCUS_RING } from "./button";
+import { Icon } from "./icon";
+import { TYPE } from "./text";
 
-/** A choice row's size: `md` for settings and short lists, `lg` for a decision's options. */
-export type ChoiceSize = "md" | "lg";
-
-const ROW: Record<ChoiceSize, string> = {
-	md: "flex-row items-center gap-2.5 rounded-lg px-2 py-1.5",
-	lg: "flex-row items-start gap-3 rounded-xl px-3 py-2.5",
-};
-/** A toggle row's indicator is a mark (top-aligned for wrapping words) or a key cap (centred on one line). */
-const TOGGLE_ROW: Record<ChoiceSize, string> = {
-	md: "flex-row items-start gap-2.5 rounded-lg px-2 py-1.5",
-	lg: "flex-row items-center gap-3 rounded-xl px-3 py-2.5",
-};
-const ROW_STATES = `hover:bg-accent disabled:opacity-70 ${FOCUS_RING}`;
-
-/** The radio's ring and dot, by size. Its `group-checked:` classes follow the row. */
-function RadioDot(props: { size: ChoiceSize }) {
+/**
+ * The options of one choice: one stop of Tab, the arrows move between them. Options reach 12 points past the
+ * Question's text on each side, so their rings line up with it. For picks that add up, use a plain `Options
+ * multiple`: each `Option multiple` is its own stop.
+ */
+export function Options(props: { multiple?: boolean; testID?: string; children?: JSX.Element }) {
 	return (
-		<View
-			class="items-center justify-center rounded-full border border-input group-checked:border-primary"
-			classList={{ "size-3.5": props.size === "md", "mt-0.5 size-4": props.size === "lg" }}
+		<If
+			when={props.multiple}
+			else={
+				<RadioGroup testID={props.testID} class="-mx-3 gap-0.5">
+					{props.children}
+				</RadioGroup>
+			}
 		>
-			<View
-				class="rounded-full group-checked:bg-primary"
-				classList={{ "size-1.5": props.size === "md", "size-2": props.size === "lg" }}
-			/>
-		</View>
+			<View testID={props.testID} class="-mx-3 gap-0.5">
+				{props.children}
+			</View>
+		</If>
 	);
 }
 
-/** The words of a choice row, or its own content. */
-function Words(props: { label?: string; children?: JSX.Element }) {
+/** An option's words: its title, its tag and its hint, or richer content. */
+function Words(props: { title?: string; tag?: string; hint?: string; children?: JSX.Element }) {
 	return (
-		<If when={props.children} else={<Text class="text-sm text-foreground">{props.label ?? ""}</Text>}>
+		<If
+			when={props.children}
+			else={
+				<View class="min-w-0 flex-1 gap-0.5">
+					<View class="flex-row flex-wrap items-center gap-2">
+						<Text class="text-foreground" style={TYPE.bodyStrong}>
+							{props.title ?? ""}
+						</Text>
+						<If when={props.tag}>
+							<OptionTag label={props.tag ?? ""} />
+						</If>
+					</View>
+					<If when={props.hint}>
+						<Text class="text-muted-foreground" style={TYPE.caption}>
+							{props.hint ?? ""}
+						</Text>
+					</If>
+				</View>
+			}
+		>
 			{props.children}
 		</If>
 	);
 }
 
-/** The set a `RadioRow` belongs to: one stop of Tab, arrows move between its rows. */
-export function RadioList(props: { children?: JSX.Element }) {
-	return <RadioGroup class="gap-0.5">{props.children}</RadioGroup>;
-}
-
-/** One choice of a `RadioList`: a ring, then its words (`label`, or richer `children`). */
-export function RadioRow(props: {
-	testID?: string;
-	label?: string;
-	checked: boolean;
-	disabled?: boolean;
-	/** The size (default `md`). */
-	size?: ChoiceSize;
-	accessibilityLabel?: string;
-	/** Hears the row's view, to give it the keyboard focus. */
-	anchor?: (node: ViewRef) => void;
-	agent?: AgentMark;
-	onChange: () => void;
-	children?: JSX.Element;
-}) {
-	const size = (): ChoiceSize => props.size ?? "md";
-	const agent = useAgent({
-		component: "radio",
-		label: () => props.accessibilityLabel ?? props.label,
-		id: () => props.testID,
-		state: { checked: () => props.checked },
-		disabled: () => props.disabled,
-		mark: () => props.agent,
-		actions: {
-			select: () => {
-				if (!props.checked) props.onChange();
-			},
-		},
-	});
+/** The small tag after an option's title, such as "Recommended" or "Suggested". */
+export function OptionTag(props: { label: string }) {
 	return (
-		<Radio
-			ref={(node: ViewRef) => {
-				agent.anchor(node);
-				props.anchor?.(node);
-			}}
-			testID={props.testID}
-			checked={props.checked}
-			disabled={props.disabled}
-			accessibilityLabel={props.accessibilityLabel ?? null}
-			onChange={props.onChange}
-			class={`group ${ROW[size()]} checked:bg-selection checked:hover:bg-selection ${ROW_STATES}`}
-		>
-			<RadioDot size={size()} />
-			<Words label={props.label}>{props.children}</Words>
-		</Radio>
+		<View class="rounded-md bg-muted px-1.5 group-checked:bg-card group-aria-checked:bg-card">
+			<Text class="text-muted-foreground" style={{ fontSize: 11, lineHeight: 16, fontWeight: "500" }}>
+				{props.label}
+			</Text>
+		</View>
 	);
 }
 
-/** One option the user may tick with others: a box, then its words (`label`, or richer `children`). */
-export function CheckboxRow(props: {
-	testID?: string;
-	label?: string;
-	checked: boolean;
-	disabled?: boolean;
-	/** The size (default `md`). */
-	size?: ChoiceSize;
-	/** The test id of the tick, shown only while checked. */
-	tickTestID?: string;
-	accessibilityLabel?: string;
-	/** Hears the row's view, to give it the keyboard focus. */
-	anchor?: (node: ViewRef) => void;
-	agent?: AgentMark;
-	onChange: () => void;
-	children?: JSX.Element;
-}) {
-	const size = (): ChoiceSize => props.size ?? "md";
-	const agent = useAgent({
-		component: "checkbox",
-		label: () => props.accessibilityLabel ?? props.label,
-		id: () => props.testID,
-		state: { checked: () => props.checked },
-		disabled: () => props.disabled,
-		mark: () => props.agent,
-		actions: {
-			setChecked: (on) => {
-				if (on !== props.checked) props.onChange();
-			},
-			toggle: () => props.onChange(),
-		},
-	});
-	return (
-		<Checkbox
-			ref={(node: ViewRef) => {
-				agent.anchor(node);
-				props.anchor?.(node);
-			}}
-			testID={props.testID}
-			checked={props.checked}
-			disabled={props.disabled}
-			accessibilityLabel={props.accessibilityLabel ?? null}
-			onChange={props.onChange}
-			class={`${ROW[size()]} checked:bg-selection checked:hover:bg-selection ${ROW_STATES}`}
-			indicatorClass={`size-4 items-center justify-center rounded border border-input checked:border-primary checked:bg-primary ${size() === "lg" ? "mt-0.5" : ""}`}
-			indicator={
-				<If when={props.checked}>
-					<View testID={props.tickTestID} class="size-2 rounded-sm bg-primary-foreground" />
-				</If>
-			}
-		>
-			<Words label={props.label}>{props.children}</Words>
-		</Checkbox>
-	);
-}
+const OPTION = `group flex-row items-start gap-2.5 rounded-lg px-3 py-2 hover:bg-accent disabled:opacity-60 ${FOCUS_RING}`;
+const COMPACT = `group flex-row items-center gap-2.5 rounded-lg px-2 py-1 hover:bg-accent disabled:opacity-60 ${FOCUS_RING}`;
 
-/** A ring or a box that shows a pick, for a `ToggleRow`'s `indicator`. */
-export function PickMark(props: {
-	/** `radio` when one pick replaces another, `checkbox` when picks add up. */
-	shape: "radio" | "checkbox";
-	checked: boolean;
-}) {
+/** The ring of a one-choice option. Its `group-checked:` classes follow the option. */
+function Ring() {
 	return (
-		<View
-			class="mt-1 size-3.5 items-center justify-center border"
-			classList={{
-				"rounded-full": props.shape === "radio",
-				"rounded-sm": props.shape === "checkbox",
-				"border-primary": props.checked,
-				"border-input": !props.checked,
-			}}
-		>
-			<View class="size-1.5" classList={{ "rounded-full": props.shape === "radio", "bg-primary": props.checked }} />
+		<View class="mt-px size-4 items-center justify-center rounded-full border-[1.5px] border-input group-checked:border-primary">
+			<View class="size-2 rounded-full group-checked:bg-primary" />
 		</View>
 	);
 }
 
 /**
- * A row that turns a pick on and off, for options outside a radio set: its `indicator` (a `PickMark`, a
- * `KeyCap`), then its content. Its children's `group-aria-pressed:` classes follow it.
+ * One option of a Question: a ring (or a box with `multiple`), then its `title`, `tag` and `hint` (or richer
+ * `children`). The chosen option is filled. `compact` draws a one-line option for short lists outside a Question.
+ */
+export function Option(props: {
+	title?: string;
+	tag?: string;
+	hint?: string;
+	checked: boolean;
+	/** A box that adds up with other picks instead of a ring that replaces them. */
+	multiple?: boolean;
+	compact?: boolean;
+	disabled?: boolean;
+	testID?: string;
+	/** The test id of the tick, shown only while a `multiple` option is checked. */
+	tickTestID?: string;
+	accessibilityLabel?: string;
+	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
+	onChange: () => void;
+	children?: JSX.Element;
+}) {
+	const agent = useAgent({
+		component: props.multiple ? "checkbox" : "radio",
+		label: () => props.accessibilityLabel ?? props.title,
+		id: () => props.testID,
+		state: { checked: () => props.checked },
+		disabled: () => props.disabled,
+		mark: () => props.agent,
+		actions: props.multiple
+			? {
+					setChecked: (on) => {
+						if (on !== props.checked) props.onChange();
+					},
+					toggle: () => props.onChange(),
+				}
+			: {
+					select: () => {
+						if (!props.checked) props.onChange();
+					},
+				},
+	});
+	const anchor = (node: ViewRef) => {
+		agent.anchor(node);
+		props.anchor?.(node);
+	};
+	const look = () => `${props.compact ? COMPACT : OPTION} checked:bg-selection checked:hover:bg-selection`;
+	return (
+		<If
+			when={props.multiple}
+			else={
+				<Radio
+					ref={anchor}
+					testID={props.testID}
+					checked={props.checked}
+					disabled={props.disabled}
+					accessibilityLabel={props.accessibilityLabel ?? null}
+					onChange={props.onChange}
+					class={look()}
+				>
+					<Ring />
+					<Words title={props.title} tag={props.tag} hint={props.hint}>
+						{props.children}
+					</Words>
+				</Radio>
+			}
+		>
+			<Checkbox
+				ref={anchor}
+				testID={props.testID}
+				checked={props.checked}
+				disabled={props.disabled}
+				accessibilityLabel={props.accessibilityLabel ?? null}
+				onChange={props.onChange}
+				class={look()}
+				indicatorClass="mt-px size-4 items-center justify-center rounded border-[1.5px] border-input checked:border-primary checked:bg-primary"
+				indicator={
+					<If when={props.checked}>
+						<View testID={props.tickTestID}>
+							<Icon name="check" tint="tint-primary-foreground" />
+						</View>
+					</If>
+				}
+			>
+				<Words title={props.title} tag={props.tag} hint={props.hint}>
+					{props.children}
+				</Words>
+			</Checkbox>
+		</If>
+	);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Older shapes, kept while screens move.
+
+/** @deprecated `md` is `Option compact`, `lg` is `Option`. */
+export type ChoiceSize = "md" | "lg";
+
+/** @deprecated Use `Options`. */
+export function RadioList(props: { children?: JSX.Element }) {
+	return <RadioGroup class="gap-0.5">{props.children}</RadioGroup>;
+}
+
+/** @deprecated Use `Option` (`size="md"` is `compact`). */
+export function RadioRow(props: {
+	testID?: string;
+	label?: string;
+	checked: boolean;
+	disabled?: boolean;
+	size?: ChoiceSize;
+	accessibilityLabel?: string;
+	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
+	onChange: () => void;
+	children?: JSX.Element;
+}) {
+	return (
+		<Option
+			title={props.label}
+			checked={props.checked}
+			compact={props.size !== "lg"}
+			disabled={props.disabled}
+			testID={props.testID}
+			accessibilityLabel={props.accessibilityLabel}
+			anchor={props.anchor}
+			agent={props.agent}
+			onChange={props.onChange}
+		>
+			{props.children}
+		</Option>
+	);
+}
+
+/** @deprecated Use `Option multiple` (in a Question) or `Checkbox` (elsewhere). */
+export function CheckboxRow(props: {
+	testID?: string;
+	label?: string;
+	checked: boolean;
+	disabled?: boolean;
+	size?: ChoiceSize;
+	tickTestID?: string;
+	accessibilityLabel?: string;
+	anchor?: (node: ViewRef) => void;
+	agent?: AgentMark;
+	onChange: () => void;
+	children?: JSX.Element;
+}) {
+	return (
+		<Option
+			multiple
+			title={props.label}
+			checked={props.checked}
+			compact={props.size !== "lg"}
+			disabled={props.disabled}
+			testID={props.testID}
+			tickTestID={props.tickTestID}
+			accessibilityLabel={props.accessibilityLabel}
+			anchor={props.anchor}
+			agent={props.agent}
+			onChange={props.onChange}
+		>
+			{props.children}
+		</Option>
+	);
+}
+
+/**
+ * A ring or a box that shows a pick, for a `ToggleRow`'s `indicator`.
+ * @deprecated Use `Option`, which draws its own ring or box.
+ */
+export function PickMark(props: { shape: "radio" | "checkbox"; checked: boolean }) {
+	return (
+		<View
+			class={`mt-px size-4 items-center justify-center border-[1.5px] ${props.shape === "radio" ? "rounded-full" : "rounded"} ${props.checked ? "border-primary" : "border-input"}`}
+		>
+			<View
+				class={`size-2 ${props.shape === "radio" ? "rounded-full" : "rounded-sm"} ${props.checked ? "bg-primary" : ""}`}
+			/>
+		</View>
+	);
+}
+
+/**
+ * A row that turns a pick on and off, for options outside a radio set: its `indicator`, then its content.
+ * @deprecated Use `Option` (or `Option multiple`).
  */
 export function ToggleRow(props: {
 	testID?: string;
 	pressed: boolean;
 	disabled?: boolean;
-	/** The size (default `md`). */
 	size?: ChoiceSize;
 	accessibilityLabel?: string;
-	/** Hears the row's view, to give it the keyboard focus. */
 	anchor?: (node: ViewRef) => void;
 	agent?: AgentMark;
 	indicator: JSX.Element;
 	onChange: () => void;
 	children?: JSX.Element;
 }) {
-	const size = (): ChoiceSize => props.size ?? "md";
 	const agent = useAgent({
 		component: "toggle",
 		label: () => props.accessibilityLabel,
@@ -218,7 +303,7 @@ export function ToggleRow(props: {
 			disabled={props.disabled}
 			accessibilityLabel={props.accessibilityLabel ?? null}
 			onChange={props.onChange}
-			class={`group ${TOGGLE_ROW[size()]} aria-pressed:bg-selection aria-pressed:hover:bg-selection ${ROW_STATES}`}
+			class={`${props.size === "lg" ? OPTION : COMPACT} aria-pressed:bg-selection aria-pressed:hover:bg-selection`}
 		>
 			{props.indicator}
 			{props.children}

@@ -14,7 +14,7 @@
 - Use the verified NSH 0.5.0 (`f4d68f7`) distribution (`NSH_DAY_CLI` can select a local copy). Keep NSH dependencies
   on the pinned release and preserve Cargo locks. Do not rebuild or patch NSH,
   edit shared dependency caches, or install tools to work around a setup failure.
-- Build screens from the component library in `ui/` (`ui/index.ts` lists it). Screens do not import
+- Build screens from the component library in `ui/` (`ui/README.md` is the guide). Screens do not import
   `nsh/base` or restyle a control: add a variant to the library instead. Only single-use overlays
   (the palette, the full-window artifact) assemble `nsh/base` themselves.
 - Follow "Live data in the UI" in [CODING_STANDARDS.md](../../CODING_STANDARDS.md) for every read, refresh and write.
