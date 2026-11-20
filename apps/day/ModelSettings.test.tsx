@@ -5,7 +5,9 @@ const desktop = { platform: "macos", width: 1100, height: 1800 } as const;
 test("allowances show uncertain catalog value, preserve drafts, and never resend an unknown approval", async () => {
 	const app = await open("./ModelSettingsFixture.tsx", desktop);
 	expect(app.texts().some((t) => t.includes("$0.30 uncertain") && t.includes("$0.50 left"))).toBe(true);
-	expect(app.texts().some((t) => t.includes("Improve the parser") && t.includes("$7.00 left"))).toBe(true);
+	// Each allowance is a row now: the work is its title, the amounts its meta line.
+	expect(app.shows("Mission Improve the parser")).toBe(true);
+	expect(app.texts().some((t) => t.includes("$7.00 left of"))).toBe(true);
 	await app.press("id:funding-edit");
 	await app.clear("id:funding-daily");
 	await app.type("id:funding-daily", "2.50");

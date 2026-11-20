@@ -1,10 +1,27 @@
-// A paged library inside Settings. One page at a time limits kept rows;
+// A paged library inside Settings' Project tab. One page at a time limits kept rows;
 // selecting or reading sources never starts AI work or accepts guidance.
-import { cleanup, effect, host, signal, Text, untracked, View } from "nsh";
+import { cleanup, effect, host, signal, untracked, View } from "nsh";
 import type { KnowledgeDetail, KnowledgePage, KnowledgeRevisionPage } from "../../packages/protocol/src/knowledge";
 import { call, windowId } from "./bridge";
 import { editKnowledge, type KnowledgeEdit, knowledgeDraft, knowledgeFingerprint, libraryOpen } from "./knowledgeView";
-import { Action, Field, SectionTitle, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	EmptyLine,
+	Field,
+	Heading,
+	Link,
+	Notice,
+	Row,
+	RowDetail,
+	Rows,
+	Section,
+	TextField,
+} from "./ui";
 
 export type LibraryCall = (name: string, args: unknown) => Promise<unknown>;
 const nativeCall: LibraryCall = async (name, args) => {
@@ -221,176 +238,191 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 			});
 	});
 	return (
-		<View testID="knowledge" class="gap-4">
-			<View class="flex-row items-center justify-between gap-3">
-				<SectionTitle title="Knowledge" />
-				<Action
+		<Section
+			testID="knowledge"
+			title="Knowledge"
+			action={
+				<Link
 					label={libraryOpen() ? "Hide library" : "Open library"}
 					testID="knowledge-open"
 					onPress={() => {
 						libraryOpen.set(!libraryOpen());
 					}}
 				/>
-			</View>
-			<Text class="text-sm text-muted-foreground">
-				Sourced project understanding, not agreement or permission. Reading and editing start no AI maintenance.
-			</Text>
+			}
+		>
+			<Block>
+				<Body tone="muted" measure>
+					Sourced project understanding, not agreement or permission. Reading and editing start no AI maintenance.
+				</Body>
+			</Block>
 			<If when={libraryOpen()}>
-				<View class="gap-4">
+				<Block gap={3}>
 					<Field
 						label="Search Knowledge"
 						testID="knowledge-query"
 						value={query()}
 						onChange={(v) => query.set(v)}
 					/>
-					<View class="flex-row gap-2">
-						<Action
+					<Buttons>
+						<Button
 							label="Search"
 							testID="knowledge-search"
 							disabled={busy() || !props.projectId}
 							onPress={() => void search()}
 						/>
-						<Action
+						<Button
 							label="Historical memory"
 							testID="knowledge-memory"
 							disabled={busy()}
 							onPress={() => void oldMemory()}
 						/>
-					</View>
-					<If when={stale()}>
-						<Text class="text-sm text-muted-foreground">
-							Earlier read. Currentness unknown. Read again before relying on it.
-						</Text>
-					</If>
+					</Buttons>
 					<If when={message()}>
-						<Text testID="knowledge-message" class="text-sm text-muted-foreground">
-							{message()}
-						</Text>
+						<Caption testID="knowledge-message">{message()}</Caption>
 					</If>
-					<Each of={pending()} key={(r) => r.operationId}>
-						{(r) => (
-							<View class="gap-2">
-								<Text class="text-sm text-muted-foreground">
-									A Knowledge save is unresolved. Your draft stays; no replacement save will be sent.
-								</Text>
+				</Block>
+				<If when={stale()}>
+					<Notice
+						kind="needs"
+						placement="section"
+						text="Earlier read. Currentness unknown. Read again before relying on it."
+					/>
+				</If>
+				<Each of={pending()} key={(r) => r.operationId}>
+					{(r) => (
+						<Notice
+							kind="needs"
+							placement="section"
+							text="A Knowledge save is unresolved. Your draft stays; no replacement save will be sent."
+							action={
 								<If when={r().operationId}>
-									<Action
+									<Link
 										label="Check save"
 										testID="knowledge-check"
 										disabled={busy()}
 										onPress={() => void check(r().operationId)}
 									/>
 								</If>
-							</View>
-						)}
-					</Each>
-					<If when={page() && readProject === props.projectId}>
-						<If when={page()?.entries.length === 0}>
-							<Text class="text-sm text-muted-foreground">No matching Knowledge in this project.</Text>
-						</If>
+							}
+						/>
+					)}
+				</Each>
+				<If when={page() && readProject === props.projectId}>
+					<If when={page()?.entries.length === 0}>
+						<EmptyLine text="No matching Knowledge in this project." />
+					</If>
+					<Rows>
 						<Each of={page()?.entries ?? []} key={(r) => r.id}>
 							{(r) => (
-								<View class="gap-1 border-t border-border py-3">
-									<Action
-										label={r().title}
-										testID={`knowledge-entry-${r().id}`}
-										disabled={busy()}
-										onPress={() => void open(r().id, r().revision)}
-									/>
-									<Text class="text-xs text-muted-foreground">{`Revision ${r().revision}. ${r().freshness.state === "needs_check" ? "Needs checking" : r().freshness.state === "checked" ? "Checked within stated coverage" : "Not checked"}`}</Text>
-									<Text class="text-sm text-muted-foreground">{r().synopsis}</Text>
-								</View>
+								<Row
+									testID={`knowledge-entry-${r().id}`}
+									title={r().title}
+									meta={`Revision ${r().revision}. ${r().freshness.state === "needs_check" ? "Needs checking" : r().freshness.state === "checked" ? "Checked within stated coverage" : "Not checked"}`}
+									accessibilityLabel={`${r().title}, revision ${r().revision}. Read it.`}
+									onPress={() => {
+										if (!busy()) void open(r().id, r().revision);
+									}}
+									detail={
+										<RowDetail>
+											<Caption>{r().synopsis}</Caption>
+										</RowDetail>
+									}
+								/>
 							)}
 						</Each>
-						<If when={page()?.more}>
-							<Action label="Next page" disabled={busy()} onPress={() => void search(page()?.cursor)} />
-						</If>
+					</Rows>
+					<If when={page()?.more}>
+						<Block>
+							<Link label="Next page" disabled={busy()} onPress={() => void search(page()?.cursor)} />
+						</Block>
 					</If>
-					<If when={shown()}>
-						{(d) => (
-							<View testID="knowledge-detail" selectable class="gap-3 border-t border-border pt-4">
-								<Text role="header" class="text-lg font-semibold text-foreground">
-									{d().revision.title}
-								</Text>
-								<Text class="text-xs text-muted-foreground">{`Revision ${d().revision.revision}. Latest: ${d().entry.revision}. ${d().revision.revision !== d().entry.revision ? "Historical revision." : ""}`}</Text>
-								<Text class="text-sm text-muted-foreground">
-									{d().freshness.state === "checked"
-										? `Checked only within this coverage: ${d().freshness.checked?.coverage ?? "Not supplied"}`
-										: "Needs checking before reliance. Reading does not check or accept it."}
-								</Text>
-								<Text class="text-sm leading-relaxed text-foreground">{d().revision.body}</Text>
-								<Each of={d().freshness.pending?.reasons ?? []} key={(reason) => reason}>
-									{(reason) => <Text class="text-xs text-muted-foreground">{reason()}</Text>}
-								</Each>
-								<If when={d().freshness.failure}>
-									<Text class="text-xs text-muted-foreground">{`Last check failed: ${d().freshness.failure?.reason}`}</Text>
-								</If>
-								<Text class="text-xs text-faint">{`Author: ${JSON.stringify(d().revision.author)}. Recorded: ${new Date(d().revision.recordedAt).toLocaleString()}. Origin: ${JSON.stringify(d().entry.origin)}.`}</Text>
-								<Text class="text-xs text-muted-foreground">{d().revision.reason ?? "Original revision"}</Text>
-								<Text class="text-xs font-medium text-foreground">Sources (exact saved records)</Text>
-								<Each of={d().revision.sources} key={(s) => JSON.stringify(s)}>
-									{(s) => (
-										<View class="gap-1">
-											<Text class="text-xs text-muted-foreground">{JSON.stringify(s())}</Text>
-											<If when={s().type === "knowledge"}>
-												<Action
-													label="Open cited Knowledge revision"
-													disabled={busy()}
-													onPress={() => {
-														const source = s();
-														if (source.type === "knowledge")
-															void open(source.knowledgeId, source.revision);
-													}}
-												/>
-											</If>
-										</View>
-									)}
-								</Each>
-								<View class="flex-row gap-2">
-									<Action label="Revision history" disabled={busy()} onPress={() => void history()} />
-									<Action
-										label="Read current revision"
+				</If>
+				<If when={shown()}>
+					{(d) => (
+						<Block testID="knowledge-detail" selectable gap={3}>
+							<Heading role="header">{d().revision.title}</Heading>
+							<Caption>{`Revision ${d().revision.revision}. Latest: ${d().entry.revision}. ${d().revision.revision !== d().entry.revision ? "Historical revision." : ""}`}</Caption>
+							<Body tone="muted">
+								{d().freshness.state === "checked"
+									? `Checked only within this coverage: ${d().freshness.checked?.coverage ?? "Not supplied"}`
+									: "Needs checking before reliance. Reading does not check or accept it."}
+							</Body>
+							<Body measure>{d().revision.body}</Body>
+							<Each of={d().freshness.pending?.reasons ?? []} key={(reason) => reason}>
+								{(reason) => <Caption>{reason()}</Caption>}
+							</Each>
+							<If when={d().freshness.failure}>
+								<Caption>{`Last check failed: ${d().freshness.failure?.reason}`}</Caption>
+							</If>
+							<Caption tone="faint">{`Author: ${JSON.stringify(d().revision.author)}. Recorded: ${new Date(d().revision.recordedAt).toLocaleString()}. Origin: ${JSON.stringify(d().entry.origin)}.`}</Caption>
+							<Caption>{d().revision.reason ?? "Original revision"}</Caption>
+							<BodyStrong>Sources (exact saved records)</BodyStrong>
+							<Each of={d().revision.sources} key={(s) => JSON.stringify(s)}>
+								{(s) => (
+									<View class="gap-1">
+										<Caption>{JSON.stringify(s())}</Caption>
+										<If when={s().type === "knowledge"}>
+											<Link
+												label="Open cited Knowledge revision"
+												disabled={busy()}
+												onPress={() => {
+													const source = s();
+													if (source.type === "knowledge") void open(source.knowledgeId, source.revision);
+												}}
+											/>
+										</If>
+									</View>
+								)}
+							</Each>
+							<Buttons>
+								<Button label="Revision history" disabled={busy()} onPress={() => void history()} />
+								<Button
+									label="Read current revision"
+									disabled={busy()}
+									onPress={() => void open(d().entry.id)}
+								/>
+								<Button
+									label="Edit this revision"
+									testID="knowledge-edit"
+									disabled={busy() || !!draft() || d().revision.revision !== d().entry.revision}
+									onPress={() => knowledgeDraft.set(editKnowledge(d()))}
+								/>
+							</Buttons>
+							<Each of={revisions()?.revisions ?? []} key={(r) => r.revision}>
+								{(r) => (
+									<Link
+										label={`Revision ${r().revision}: ${r().reason ?? r().title}`}
 										disabled={busy()}
-										onPress={() => void open(d().entry.id)}
+										onPress={() => void open(d().entry.id, r().revision)}
 									/>
-									<Action
-										label="Edit this revision"
-										testID="knowledge-edit"
-										disabled={busy() || !!draft() || d().revision.revision !== d().entry.revision}
-										onPress={() => knowledgeDraft.set(editKnowledge(d()))}
-									/>
-								</View>
-								<Each of={revisions()?.revisions ?? []} key={(r) => r.revision}>
-									{(r) => (
-										<Action
-											label={`Revision ${r().revision}: ${r().reason ?? r().title}`}
-											disabled={busy()}
-											onPress={() => void open(d().entry.id, r().revision)}
-										/>
-									)}
-								</Each>
-								<If when={revisions()?.more}>
-									<Action
-										label="Older revisions"
-										disabled={busy()}
-										onPress={() => void history(revisions()?.cursor)}
-									/>
-								</If>
-							</View>
-						)}
-					</If>
-					<If when={draft() && !localDraft()}>
-						<Text class="text-sm text-muted-foreground">
-							An unsaved Knowledge draft belongs to another project. Return to that project to edit it.
-						</Text>
-					</If>
-					<If when={localDraft()}>
-						{(d) => (
-							<View testID="knowledge-draft" class="gap-3 border-t border-border pt-4">
-								<Text class="text-sm font-medium text-foreground">{`Unsaved edit of ${d().id}, revision ${d().expectedRevision}`}</Text>
-								<Field label="Title" value={d().title} onChange={(v) => change("title", v)} />
-								<Field label="Synopsis" value={d().synopsis} onChange={(v) => change("synopsis", v)} />
-								<Text class="text-sm text-foreground">Body (Markdown, keep the entry's required headings)</Text>
+								)}
+							</Each>
+							<If when={revisions()?.more}>
+								<Link
+									label="Older revisions"
+									disabled={busy()}
+									onPress={() => void history(revisions()?.cursor)}
+								/>
+							</If>
+						</Block>
+					)}
+				</If>
+				<If when={draft() && !localDraft()}>
+					<Notice
+						kind="needs"
+						placement="section"
+						text="An unsaved Knowledge draft belongs to another project. Return to that project to edit it."
+					/>
+				</If>
+				<If when={localDraft()}>
+					{(d) => (
+						<Block testID="knowledge-draft" gap={3}>
+							<BodyStrong>{`Unsaved edit of ${d().id}, revision ${d().expectedRevision}`}</BodyStrong>
+							<Field label="Title" value={d().title} onChange={(v) => change("title", v)} />
+							<Field label="Synopsis" value={d().synopsis} onChange={(v) => change("synopsis", v)} />
+							<View class="gap-1.5">
+								<BodyStrong>Body (Markdown, keep the entry's required headings)</BodyStrong>
 								<TextField
 									testID="knowledge-body"
 									accessibilityLabel="Knowledge body"
@@ -399,87 +431,83 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 									onChange={({ value }) => change("body", value)}
 									rows={8}
 								/>
-								<Text class="text-xs text-muted-foreground">
-									Saved sources stay attached. Editing does not claim they were checked.
-								</Text>
-								<Field
-									label="Reason for this revision"
-									testID="knowledge-reason"
-									value={d().reason}
-									onChange={(v) => change("reason", v)}
+								<Caption>Saved sources stay attached. Editing does not claim they were checked.</Caption>
+							</View>
+							<Field
+								label="Reason for this revision"
+								testID="knowledge-reason"
+								value={d().reason}
+								onChange={(v) => change("reason", v)}
+							/>
+							<Buttons>
+								<Button
+									label="Save new revision"
+									testID="knowledge-save"
+									disabled={busy() || !operationsKnown() || pending().length > 0 || !d().reason.trim()}
+									onPress={() => void save()}
 								/>
-								<View class="flex-row gap-2">
-									<Action
-										label="Save new revision"
-										testID="knowledge-save"
-										disabled={busy() || !operationsKnown() || pending().length > 0 || !d().reason.trim()}
-										onPress={() => void save()}
-									/>
-									<Action
-										label="Discard draft"
+								<Button
+									label="Discard draft"
+									disabled={busy() || pending().length > 0}
+									onPress={() => knowledgeDraft.set(null)}
+								/>
+								<If
+									when={
+										shown()?.entry.id === d().id &&
+										shown()?.revision.revision === shown()?.entry.revision &&
+										(shown()?.revision.revision ?? 0) > d().expectedRevision
+									}
+								>
+									<Button
+										label="Keep my draft on this revision"
 										disabled={busy() || pending().length > 0}
-										onPress={() => knowledgeDraft.set(null)}
+										onPress={() => {
+											const current = shown();
+											const kept = localDraft();
+											if (current && kept)
+												knowledgeDraft.set({
+													...kept,
+													expectedRevision: current.revision.revision,
+													submittedVersion: undefined,
+													submittedHash: undefined,
+												});
+										}}
 									/>
-									<If
-										when={
-											shown()?.entry.id === d().id &&
-											shown()?.revision.revision === shown()?.entry.revision &&
-											(shown()?.revision.revision ?? 0) > d().expectedRevision
-										}
-									>
-										<Action
-											label="Keep my draft on this revision"
-											disabled={busy() || pending().length > 0}
-											onPress={() => {
-												const current = shown();
-												const kept = localDraft();
-												if (current && kept)
-													knowledgeDraft.set({
-														...kept,
-														expectedRevision: current.revision.revision,
-														submittedVersion: undefined,
-														submittedHash: undefined,
-													});
-											}}
-										/>
-									</If>
-								</View>
-							</View>
-						)}
-					</If>
-					<If when={memory()}>
-						{(m) => (
-							<View testID="knowledge-old-memory" selectable class="gap-3 border-t border-border pt-4">
-								<Text class="text-sm font-medium text-foreground">Historical memory</Text>
-								<Text class="text-xs text-muted-foreground">
-									Old notes and summaries may be stale. New shared understanding uses Knowledge. No summarizer
-									is started.
-								</Text>
-								<Action label="Memory overview" disabled={busy()} onPress={() => void oldMemory()} />
-								<Each of={m().nodes} key={(n) => `${n.lo}-${n.hi}`}>
-									{(n) => (
-										<View class="gap-1">
-											<Text class="text-sm text-muted-foreground">{`#${n().lo}-${n().hi}: ${n().entry?.text ?? n().text ?? "No saved summary"}${n().replaced ? " (replaced, history only)" : ""}`}</Text>
-											<If when={n().lo !== n().hi}>
-												<Action
-													label={`Open notes #${n().lo}-${n().hi}`}
-													disabled={busy()}
-													onPress={() => void oldMemory(n().lo, n().hi)}
-												/>
-											</If>
-										</View>
-									)}
-								</Each>
-								<If when={m().truncated}>
-									<Text class="text-xs text-muted-foreground">
-										Partial tree. Open a range to read its notes.
-									</Text>
 								</If>
-							</View>
-						)}
-					</If>
-				</View>
+							</Buttons>
+						</Block>
+					)}
+				</If>
+				<If when={memory()}>
+					{(m) => (
+						<Block testID="knowledge-old-memory" selectable gap={3}>
+							<BodyStrong>Historical memory</BodyStrong>
+							<Caption>
+								Old notes and summaries may be stale. New shared understanding uses Knowledge. No summarizer is
+								started.
+							</Caption>
+							<Link label="Memory overview" disabled={busy()} onPress={() => void oldMemory()} />
+							<Each of={m().nodes} key={(n) => `${n.lo}-${n.hi}`}>
+								{(n) => (
+									<View class="gap-1">
+										<Body tone="muted">{`#${n().lo}-${n().hi}: ${n().entry?.text ?? n().text ?? "No saved summary"}${n().replaced ? " (replaced, history only)" : ""}`}</Body>
+										<If when={n().lo !== n().hi}>
+											<Link
+												label={`Open notes #${n().lo}-${n().hi}`}
+												disabled={busy()}
+												onPress={() => void oldMemory(n().lo, n().hi)}
+											/>
+										</If>
+									</View>
+								)}
+							</Each>
+							<If when={m().truncated}>
+								<Caption>Partial tree. Open a range to read its notes.</Caption>
+							</If>
+						</Block>
+					)}
+				</If>
 			</If>
-		</View>
+		</Section>
 	);
 }

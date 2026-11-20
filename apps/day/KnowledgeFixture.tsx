@@ -1,8 +1,8 @@
 // Invented records and scripted replies, test-only. No daemon or model.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { mount, Scroll, signal } from "nsh";
 import { KnowledgeSection, type LibraryCall } from "./KnowledgeSection";
 import { restoreKnowledge, savedKnowledge } from "./knowledgeView";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const writes = signal(0);
 const checks = signal(0);
@@ -104,42 +104,48 @@ const source: LibraryCall = async (name, args) => {
 };
 
 mount(() => (
-	<Scroll class="flex-1 bg-background">
-		<View class="gap-4 px-6 py-6">
-			<Text>Mock data</Text>
-			<Text>{`Saves: ${writes()}. Checks: ${checks()}.`}</Text>
-			<View class="flex-row gap-2">
-				<Action label="Lose next reply" onPress={() => unknown.set(true)} />
-				<Action label="Lose preflight reply" onPress={() => losePreflight.set(true)} />
-				<Action label="Hold next save" onPress={() => hold.set(true)} />
-				<Action
-					label="Release reply"
-					onPress={() => {
-						release?.();
-						release = undefined;
-						hold.set(false);
-					}}
-				/>
-				<Action label="New evidence" onPress={() => revision.set(revision() + 1)} />
-				<Action
-					label="Save window"
-					onPress={() => {
-						saved = savedKnowledge();
-						mounted.set(false);
-					}}
-				/>
-				<Action
-					label="Restore window"
-					onPress={() => {
-						restoreKnowledge(saved);
-						mounted.set(true);
-					}}
-				/>
-				<Action label="Other project" onPress={() => project.set("other")} />
-			</View>
+	<Scroll class="flex-1">
+		<Page width="form">
+			<Block>
+				<Caption tone="faint">Mock data</Caption>
+				<Caption>{`Saves: ${writes()}. Checks: ${checks()}.`}</Caption>
+				<Buttons>
+					<Button label="Lose next reply" onPress={() => unknown.set(true)} />
+					<Button label="Lose preflight reply" onPress={() => losePreflight.set(true)} />
+					<Button label="Hold next save" onPress={() => hold.set(true)} />
+					<Button
+						label="Release reply"
+						onPress={() => {
+							release?.();
+							release = undefined;
+							hold.set(false);
+						}}
+					/>
+					<Button label="New evidence" onPress={() => revision.set(revision() + 1)} />
+					<Button
+						label="Save window"
+						onPress={() => {
+							saved = savedKnowledge();
+							mounted.set(false);
+						}}
+					/>
+					<Button
+						label="Restore window"
+						onPress={() => {
+							restoreKnowledge(saved);
+							mounted.set(true);
+						}}
+					/>
+					<Button label="Other project" onPress={() => project.set("other")} />
+				</Buttons>
+			</Block>
 			<If when={mounted()}>
-				<KnowledgeSection projectId={project()} source={source} />
+				<Panel>
+					<Column>
+						<KnowledgeSection projectId={project()} source={source} />
+					</Column>
+				</Panel>
 			</If>
-		</View>
+		</Page>
 	</Scroll>
 ));

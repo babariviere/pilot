@@ -1,9 +1,9 @@
 // Invented connections. No network, configuration files or browser sign-ins.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { mount, Scroll, signal } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import type { ConnectionControls, ConnectionSnapshot } from "./connectionControls";
 import { restoreConnectionDraft, savedConnectionDraft } from "./connectionDraft";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const snapshot = signal<ConnectionSnapshot | null>({
 	version: 1,
@@ -86,20 +86,29 @@ const controls: ConnectionControls = {
 	},
 };
 mount(() => (
-	<Scroll class="flex-1 bg-background">
-		<View class="gap-4 p-6">
-			<Text class="text-sm text-faint">Mock data · Tool connections</Text>
-			<Text>{`Sends: ${sends()}, checks: ${checks()}, probes: ${probes()}, reads: ${reads()}`}</Text>
-			<View class="flex-row flex-wrap gap-2">
-				<Action label="Toggle Settings" onPress={() => shown.set(!shown())} />
-				<Action label="Lose next reply" onPress={() => lose.set(true)} />
-				<Action label="External change" onPress={() => snapshot.set({ ...snapshot()!, binding: "b".repeat(64) })} />
-				<Action label="Save and restore draft" onPress={() => restoreConnectionDraft(savedConnectionDraft())} />
-				<Action label="Unavailable" onPress={() => snapshot.set(null)} />
-			</View>
+	<Scroll class="flex-1">
+		<Page width="form">
+			<Block>
+				<Caption tone="faint">Mock data · Tool connections</Caption>
+				<Caption>{`Sends: ${sends()}, checks: ${checks()}, probes: ${probes()}, reads: ${reads()}`}</Caption>
+				<Buttons>
+					<Button label="Toggle Settings" onPress={() => shown.set(!shown())} />
+					<Button label="Lose next reply" onPress={() => lose.set(true)} />
+					<Button
+						label="External change"
+						onPress={() => snapshot.set({ ...snapshot()!, binding: "b".repeat(64) })}
+					/>
+					<Button label="Save and restore draft" onPress={() => restoreConnectionDraft(savedConnectionDraft())} />
+					<Button label="Unavailable" onPress={() => snapshot.set(null)} />
+				</Buttons>
+			</Block>
 			<If when={shown()}>
-				<ConnectionSettings controls={controls} />
+				<Panel>
+					<Column>
+						<ConnectionSettings controls={controls} />
+					</Column>
+				</Panel>
 			</If>
-		</View>
+		</Page>
 	</Scroll>
 ));

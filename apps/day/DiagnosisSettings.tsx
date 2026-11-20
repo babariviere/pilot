@@ -1,5 +1,6 @@
-// Native privacy controls and explicit entry to an on-demand read-only specialist.
-import { signal, Text, View } from "nsh";
+// Native privacy controls and explicit entry to an on-demand read-only specialist, in Settings' Diagnostics &
+// privacy tab. Privacy switches change a draft; only Save sends it. Clearing local evidence asks first.
+import { signal, View } from "nsh";
 import { openChat } from "./chatView";
 import type { DiagnosisControls, Privacy } from "./diagnosisControls";
 import {
@@ -14,8 +15,26 @@ import { keepRead } from "./freshness";
 import { keepField } from "./kept";
 import { OpenChatAction } from "./OpenChatAction";
 import { utf8Bytes } from "./preferencesFeed";
-import { Action, Field, QuietPanel, Picker, SectionTitle, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	Disclosure,
+	Field,
+	Link,
+	Notice,
+	Picker,
+	Question,
+	Row,
+	Rows,
+	Section,
+	Switch,
+	TextField,
+} from "./ui";
 
+/** One privacy control: its name, what it does and its switch. The switch changes the draft; Save sends it. */
 function PrivacyRow(props: {
 	label: string;
 	detail: string;
@@ -25,47 +44,53 @@ function PrivacyRow(props: {
 	testID: string;
 }) {
 	return (
-		<View class="flex-row items-center gap-4 border-t border-border py-3">
-			<View class="flex-1 gap-1">
-				<Text class="text-sm font-medium text-foreground">{props.label}</Text>
-				<Text class="text-sm text-muted-foreground">{props.detail}</Text>
-			</View>
-			<Action
-				label={props.value ? "On · turn off" : "Off · turn on"}
-				testID={props.testID}
-				accessibilityLabel={`${props.label}: ${props.value ? "on, turn off" : "off, turn on"}`}
-				disabled={props.disabled}
-				onPress={props.onChange}
-			/>
-		</View>
+		<Row
+			title={props.label}
+			meta={props.detail}
+			wrap
+			trailing={
+				<Switch
+					testID={props.testID}
+					accessibilityLabel={props.label}
+					checked={props.value}
+					disabled={props.disabled}
+					onChange={() => props.onChange()}
+				/>
+			}
+		/>
 	);
 }
+
+/** What the last diagnostics action said, and Check for each action whose answer was lost. */
 export function DiagnosisStatus(props: { controls: DiagnosisControls }) {
 	return (
-		<View class="gap-2">
+		<>
 			<If when={props.controls.message()}>
-				<Text testID="diagnosis-message" class="text-sm text-muted-foreground">
-					{props.controls.message()}
-				</Text>
+				<Block>
+					<Caption testID="diagnosis-message">{props.controls.message()}</Caption>
+				</Block>
 			</If>
 			<Each of={props.controls.operations().filter((o) => o.pending)} key={(o) => o.operationId}>
 				{(o) => (
-					<View class="flex-row items-center gap-3">
-						<Text class="flex-1 text-sm text-muted-foreground">
-							Unconfirmed diagnostics action. Do not send it again.
-						</Text>
-						<Action
-							label="Check receipt"
-							testID="diagnosis-check"
-							disabled={props.controls.busy()}
-							onPress={() => void props.controls.check(o().operationId)}
-						/>
-					</View>
+					<Notice
+						kind="needs"
+						placement="section"
+						text="Unconfirmed diagnostics action. Do not send it again."
+						action={
+							<Link
+								label="Check receipt"
+								testID="diagnosis-check"
+								disabled={props.controls.busy()}
+								onPress={() => void props.controls.check(o().operationId)}
+							/>
+						}
+					/>
 				)}
 			</Each>
-		</View>
+		</>
 	);
 }
+
 export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 	const c = props.controls;
 	void c.read();
@@ -114,217 +139,274 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 		}
 	};
 	return (
-		<View testID="diagnosis-settings" class="gap-5">
-			<View class="gap-1.5">
-				<SectionTitle title="Diagnostics & privacy" />
-				<Text class="text-sm text-muted-foreground">
-					This Mac and its connected service. Local collection never enables uploads.
-				</Text>
-			</View>
-			<If when={reads.warn()}>
-				<Action
-					label={c.busy() ? "Reading…" : "Try now"}
-					testID="diagnosis-read"
-					disabled={c.busy()}
-					onPress={() => void reads.now()}
-				/>
-			</If>
-			<If when={s()}>
-				<View>
-					<PrivacyRow
-						label="Local operational diagnostics"
-						detail="Protected rotating app and service evidence. Structured records exclude conversation content."
-						value={value()?.localDiagnostics === true}
-						disabled={disabled()}
-						testID="privacy-local"
-						onChange={() => edit("localDiagnostics", !value()?.localDiagnostics)}
-					/>
-					<PrivacyRow
-						label="Local feature counts"
-						detail="Optional daily counts of catalogued actions, without chat text or project names. Stored on this Mac, not uploaded."
-						value={value()?.localFeatureUsage === true}
-						disabled={disabled()}
-						testID="privacy-counts"
-						onChange={() => edit("localFeatureUsage", !value()?.localFeatureUsage)}
-					/>
-					<PrivacyRow
-						label="Remote operational reporting"
-						detail="Separate opt-in. Sends reviewed operational fields to your collector, not raw logs or conversation content."
-						value={value()?.remoteOperational === true}
-						disabled={disabled()}
-						testID="privacy-remote"
-						onChange={() => edit("remoteOperational", !value()?.remoteOperational)}
-					/>
-					<If when={value()?.remoteOperational || privacyDraft()?.endpoint}>
-						<Field
-							label="Collector endpoint"
-							testID="privacy-endpoint"
-							value={value()?.endpoint ?? ""}
-							placeholder="https://collector.example.test/v1/traces"
-							onChange={(v) => edit("endpoint", v)}
+		<View testID="diagnosis-settings">
+			<Section
+				title="Diagnostics & privacy"
+				action={
+					<If when={reads.warn()}>
+						<Link
+							label={c.busy() ? "Reading…" : "Try now"}
+							testID="diagnosis-read"
+							disabled={c.busy()}
+							onPress={() => void reads.now()}
 						/>
-						<Text class="text-xs text-muted-foreground">
-							HTTPS or literal loopback HTTP, with no credentials, query or custom path. Your collector controls
-							its own retention. No offline upload queue.
-						</Text>
 					</If>
-					<PrivacyRow
-						label="Product analytics"
-						detail="Separate consent for catalogued product events. Export also requires remote reporting. Local feature-count history is never uploaded."
-						value={value()?.productAnalytics === true}
-						disabled={disabled()}
-						testID="privacy-analytics"
-						onChange={() => edit("productAnalytics", !value()?.productAnalytics)}
-					/>
-				</View>
-				<If when={privacyDraft()}>
-					<Text class="text-sm text-muted-foreground">Not saved. Save applies only these privacy controls.</Text>
-					<If when={stale()}>
-						<Text class="text-sm text-needs-ink">
-							These controls changed since you edited them. Revert to the current choices before editing again.
-						</Text>
-					</If>
-					<If when={!!privacyDraft()?.endpoint && !safeCollector(privacyDraft()?.endpoint ?? "")}>
-						<Text class="text-sm text-needs-ink">
-							Use a collector endpoint without credentials or a custom path. This invalid endpoint will not be
-							saved in your window draft.
-						</Text>
-					</If>
-					<View class="flex-row gap-2">
-						<Action label="Revert" disabled={c.busy()} onPress={() => privacyDraft.set(null)} />
-						<Action
-							label="Save privacy controls"
-							testID="privacy-save"
-							variant="primary"
-							disabled={
-								disabled() ||
-								stale() ||
-								(!!privacyDraft()?.endpoint && !safeCollector(privacyDraft()?.endpoint ?? "")) ||
-								(value()?.remoteOperational === true && !value()?.endpoint)
-							}
-							onPress={() => void save()}
+				}
+			>
+				<Block>
+					<Body tone="muted" measure>
+						This Mac and its connected service. Local collection never enables uploads.
+					</Body>
+				</Block>
+				<If when={s()}>
+					<Rows>
+						<PrivacyRow
+							label="Local operational diagnostics"
+							detail="Protected rotating app and service evidence. Structured records exclude conversation content."
+							value={value()?.localDiagnostics === true}
+							disabled={disabled()}
+							testID="privacy-local"
+							onChange={() => edit("localDiagnostics", !value()?.localDiagnostics)}
 						/>
-					</View>
+						<PrivacyRow
+							label="Local feature counts"
+							detail="Optional daily counts of catalogued actions, without chat text or project names. Stored on this Mac, not uploaded."
+							value={value()?.localFeatureUsage === true}
+							disabled={disabled()}
+							testID="privacy-counts"
+							onChange={() => edit("localFeatureUsage", !value()?.localFeatureUsage)}
+						/>
+						<PrivacyRow
+							label="Remote operational reporting"
+							detail="Separate opt-in. Sends reviewed operational fields to your collector, not raw logs or conversation content."
+							value={value()?.remoteOperational === true}
+							disabled={disabled()}
+							testID="privacy-remote"
+							onChange={() => edit("remoteOperational", !value()?.remoteOperational)}
+						/>
+						<If when={value()?.remoteOperational || privacyDraft()?.endpoint}>
+							<Block>
+								<Field
+									label="Collector endpoint"
+									testID="privacy-endpoint"
+									value={value()?.endpoint ?? ""}
+									placeholder="https://collector.example.test/v1/traces"
+									help="HTTPS or literal loopback HTTP, with no credentials, query or custom path. Your collector controls its own retention. No offline upload queue."
+									onChange={(v) => edit("endpoint", v)}
+								/>
+							</Block>
+						</If>
+						<PrivacyRow
+							label="Product analytics"
+							detail="Separate consent for catalogued product events. Export also requires remote reporting. Local feature-count history is never uploaded."
+							value={value()?.productAnalytics === true}
+							disabled={disabled()}
+							testID="privacy-analytics"
+							onChange={() => edit("productAnalytics", !value()?.productAnalytics)}
+						/>
+					</Rows>
+					<If when={privacyDraft()}>
+						<If when={stale()}>
+							<Notice
+								kind="needs"
+								placement="section"
+								text="These controls changed since you edited them. Revert to the current choices before editing again."
+							/>
+						</If>
+						<If when={!!privacyDraft()?.endpoint && !safeCollector(privacyDraft()?.endpoint ?? "")}>
+							<Notice
+								kind="needs"
+								placement="section"
+								text="Use a collector endpoint without credentials or a custom path. This invalid endpoint will not be saved in your window draft."
+							/>
+						</If>
+						<Block>
+							<Caption>Not saved. Save applies only these privacy controls.</Caption>
+							<Buttons>
+								<Button
+									kind="primary"
+									label="Save privacy controls"
+									testID="privacy-save"
+									disabled={
+										disabled() ||
+										stale() ||
+										(!!privacyDraft()?.endpoint && !safeCollector(privacyDraft()?.endpoint ?? "")) ||
+										(value()?.remoteOperational === true && !value()?.endpoint)
+									}
+									onPress={() => void save()}
+								/>
+								<Button label="Revert" disabled={c.busy()} onPress={() => privacyDraft.set(null)} />
+							</Buttons>
+						</Block>
+					</If>
 				</If>
-				<View class="gap-3 border-t border-border pt-3">
-					<Action
-						label={details() ? "Hide retention details" : "Retention & other copies"}
-						testID="privacy-details"
-						onPress={() => details.set(!details())}
-					/>
-					<If when={details()}>
-						<View class="gap-2">
-							<Text class="text-sm text-muted-foreground">
-								Managed Day logs rotate at 1 MiB and keep three older segments. Startup before verified controls
-								is not recorded. Disable stops this writer; it does not delete its existing files. Reads filter
-								disabled or old-epoch evidence.
-							</Text>
-							<Each of={s()?.retained ?? []} key={(x) => x}>
-								{(line) => <Text class="text-sm text-muted-foreground">{line()}</Text>}
-							</Each>
-							<Text class="text-sm text-muted-foreground">
-								This app can confirm only its own writer. Other app processes, backups and OS-held stdout may
-								keep copies. Unknown or disconnected writer controls stop integrated collection; they do not
-								prove physical deletion.
-							</Text>
-						</View>
+				<DiagnosisStatus controls={c} />
+				<Block gap={3}>
+					<Buttons>
+						<Button
+							label="Turn off all collection and reporting"
+							testID="privacy-revoke"
+							disabled={c.busy()}
+							onPress={() =>
+								void c
+									.write("save", {
+										localDiagnostics: false,
+										localFeatureUsage: false,
+										remoteOperational: false,
+										productAnalytics: false,
+									})
+									.then((r) => {
+										if (r.accepted) privacyDraft.set(null);
+									})
+							}
+						/>
+					</Buttons>
+					<Caption>
+						Revocation stays available when an earlier action is unconfirmed. It does not clear kept copies or
+						replay that action.
+					</Caption>
+					<If when={s()}>
+						<Disclosure
+							label={details() ? "Hide retention details" : "Retention & other copies"}
+							testID="privacy-details"
+							open={details()}
+							onToggle={() => details.set(!details())}
+						>
+							<View class="gap-2">
+								<Body tone="muted" measure>
+									Managed Day logs rotate at 1 MiB and keep three older segments. Startup before verified
+									controls is not recorded. Disable stops this writer; it does not delete its existing files.
+									Reads filter disabled or old-epoch evidence.
+								</Body>
+								<Each of={s()?.retained ?? []} key={(x) => x}>
+									{(line) => (
+										<Body tone="muted" measure>
+											{line()}
+										</Body>
+									)}
+								</Each>
+								<Body tone="muted" measure>
+									This app can confirm only its own writer. Other app processes, backups and OS-held stdout may
+									keep copies. Unknown or disconnected writer controls stop integrated collection; they do not
+									prove physical deletion.
+								</Body>
+							</View>
+						</Disclosure>
 					</If>
-					<Action
-						label="Clear local diagnostics…"
-						testID="privacy-clear"
-						disabled={disabled()}
-						onPress={() => clearing.set(true)}
-					/>
-					<If when={clearing()}>
-						<QuietPanel size="lg" class="gap-3">
-							<Text class="text-sm font-medium text-foreground">Clear managed local evidence?</Text>
-							<Text class="text-sm text-muted-foreground">
+				</Block>
+				<If when={s()}>
+					<If
+						when={clearing()}
+						else={
+							<Block>
+								<Buttons>
+									<Button
+										kind="destructive"
+										label="Clear local diagnostics…"
+										testID="privacy-clear"
+										disabled={disabled()}
+										onPress={() => clearing.set(true)}
+									/>
+								</Buttons>
+								<Caption>OS logs, agent replies, exports, backups and uploaded data stay.</Caption>
+							</Block>
+						}
+					>
+						<Question
+							title="Clear managed local evidence?"
+							foot={
+								<>
+									<Button
+										kind="destructive"
+										label="Clear local evidence"
+										testID="privacy-clear-confirm"
+										disabled={disabled()}
+										onPress={() => {
+											clearing.set(false);
+											void c.write("clear", null);
+										}}
+									/>
+									<Button label="Cancel" onPress={() => clearing.set(false)} />
+								</>
+							}
+						>
+							<Body tone="muted" measure>
 								Deletes managed service evidence, local feature counts and this app writer's log segments.
 								Collection can write new records while enabled. OS logs, agent replies, exports, backups, other
 								app writers and uploaded data remain. Writer results are reported separately.
-							</Text>
-							<View class="flex-row gap-2">
-								<Action label="Cancel" onPress={() => clearing.set(false)} />
-								<Action
-									label="Clear local evidence"
-									testID="privacy-clear-confirm"
-									disabled={disabled()}
-									onPress={() => {
-										clearing.set(false);
-										void c.write("clear", null);
-									}}
-								/>
-							</View>
-						</QuietPanel>
+							</Body>
+						</Question>
 					</If>
-				</View>
-			</If>
-			<Action
-				label="Turn off all collection and reporting"
-				testID="privacy-revoke"
-				disabled={c.busy()}
-				onPress={() =>
-					void c
-						.write("save", {
-							localDiagnostics: false,
-							localFeatureUsage: false,
-							remoteOperational: false,
-							productAnalytics: false,
-						})
-						.then((r) => {
-							if (r.accepted) privacyDraft.set(null);
-						})
+				</If>
+			</Section>
+			<Section
+				title="Investigate a problem"
+				more={
+					(s()?.chats.items.length ?? 0) > 5
+						? { label: all() ? "Show fewer" : "Show saved diagnoses", onPress: () => all.set(!all()) }
+						: undefined
 				}
-			/>
-			<Text class="text-xs text-muted-foreground">
-				Revocation stays available when an earlier action is unconfirmed. It does not clear kept copies or replay
-				that action.
-			</Text>
-			<DiagnosisStatus controls={c} />
-			<View class="gap-3 border-t border-border pt-5">
-				<SectionTitle title="Investigate a problem" />
-				<Text class="text-sm text-muted-foreground">
-					Ask a read-only specialist. No continuous AI monitor. Fixing code is a separate action.
-				</Text>
-				<Action
-					label="Ask about Pilot"
-					testID="diagnosis-ask"
-					variant="primary"
-					disabled={disabled()}
-					onPress={() => asking.set(!asking())}
-				/>
+				footnote={s()?.chats.hasMore ? "Only the first 100 active app-wide diagnoses are listed." : undefined}
+			>
+				<Block gap={3}>
+					<Body tone="muted" measure>
+						Ask a read-only specialist. No continuous AI monitor. Fixing code is a separate action.
+					</Body>
+					<Buttons>
+						<Button
+							label="Ask about Pilot"
+							testID="diagnosis-ask"
+							disabled={disabled()}
+							onPress={() => asking.set(!asking())}
+						/>
+					</Buttons>
+				</Block>
 				<If when={asking()}>
-					<View class="gap-3">
-						<Text class="text-sm text-muted-foreground">
+					<Block>
+						<Body tone="muted" measure>
 							Focus: no chat, app-wide on this service. The specialist can read protected Pilot logs, chat
 							history and operational evidence across this service. It cannot change work, enable collection or
 							start a fix.
-						</Text>
-						<Text class="text-sm text-muted-foreground">
+						</Body>
+						<Body tone="muted" measure>
 							Your question and the evidence it reads go to the selected model provider. This is separate from
 							telemetry consent.
-						</Text>
-						<Picker
-							label="Diagnosis model"
-							testID="diagnosis-model"
-							items={(s()?.models ?? []).map((m) => ({ value: m.id, title: `${m.name} (${m.id})` }))}
-							value={diagnosisModel() || null}
-							placeholder="Choose an eligible model"
-							disabled={disabled()}
-							onChange={(id) => {
-								diagnosisModel.set(id);
-								diagnosisThinking.set(s()?.models.find((m) => m.id === id)?.taskDefaultThinking ?? "");
-							}}
+						</Body>
+					</Block>
+					<Rows>
+						<Row
+							title="Diagnosis model"
+							trailing={
+								<Picker
+									label="Diagnosis model"
+									testID="diagnosis-model"
+									items={(s()?.models ?? []).map((m) => ({ value: m.id, title: `${m.name} (${m.id})` }))}
+									value={diagnosisModel() || null}
+									placeholder="Choose an eligible model"
+									disabled={disabled()}
+									onChange={(id) => {
+										diagnosisModel.set(id);
+										diagnosisThinking.set(s()?.models.find((m) => m.id === id)?.taskDefaultThinking ?? "");
+									}}
+								/>
+							}
 						/>
-						<Picker
-							label="Diagnosis thinking"
-							testID="diagnosis-thinking"
-							items={(model()?.thinkingLevels ?? []).map((level) => ({ value: level, title: level }))}
-							value={diagnosisThinking() || null}
-							placeholder="Choose supported thinking"
-							disabled={disabled()}
-							onChange={diagnosisThinking.set}
+						<Row
+							title="Diagnosis thinking"
+							trailing={
+								<Picker
+									label="Diagnosis thinking"
+									testID="diagnosis-thinking"
+									items={(model()?.thinkingLevels ?? []).map((level) => ({ value: level, title: level }))}
+									value={diagnosisThinking() || null}
+									placeholder="Choose supported thinking"
+									disabled={disabled()}
+									onChange={diagnosisThinking.set}
+								/>
+							}
 						/>
+					</Rows>
+					<Block gap={3}>
 						<TextField
 							ref={questionField.ref}
 							onFocus={questionField.focus}
@@ -337,43 +419,40 @@ export function DiagnosisSettings(props: { controls: DiagnosisControls }) {
 							placeholder="What should we investigate?"
 							rows={4}
 						/>
-						<Action
-							label="Start diagnosis"
-							testID="diagnosis-start"
-							variant="primary"
-							disabled={
-								disabled() ||
-								!model() ||
-								!(model()?.thinkingLevels ?? []).includes(diagnosisThinking()) ||
-								!diagnosisQuestion().trim() ||
-								utf8Bytes(diagnosisQuestion()) > 8192
-							}
-							onPress={() => void begin()}
-						/>
-					</View>
-				</If>
-				<Each of={(s()?.chats.items ?? []).slice(0, all() ? 100 : 5)} key={(c) => c.sessionId}>
-					{(chat) => (
-						<View class="flex-row items-start gap-3 border-t border-border py-2">
-							<Text class="min-w-0 flex-1 text-sm text-foreground">{chat().title || "Pilot diagnostics"}</Text>
-							<Text class="text-xs text-muted-foreground">{chat().status}</Text>
-							<OpenChatAction
-								label="Open diagnosis chat"
-								accessibilityLabel="Open diagnosis chat"
-								onPress={() => openChat(chat().sessionId, "Settings")}
+						<Buttons>
+							<Button
+								label="Start diagnosis"
+								testID="diagnosis-start"
+								disabled={
+									disabled() ||
+									!model() ||
+									!(model()?.thinkingLevels ?? []).includes(diagnosisThinking()) ||
+									!diagnosisQuestion().trim() ||
+									utf8Bytes(diagnosisQuestion()) > 8192
+								}
+								onPress={() => void begin()}
 							/>
-						</View>
-					)}
-				</Each>
-				<If when={(s()?.chats.items.length ?? 0) > 5}>
-					<Action label={all() ? "Show fewer" : "Show saved diagnoses"} onPress={() => all.set(!all())} />
+						</Buttons>
+					</Block>
 				</If>
-				<If when={s()?.chats.hasMore}>
-					<Text class="text-sm text-muted-foreground">
-						Only the first 100 active app-wide diagnoses are listed.
-					</Text>
-				</If>
-			</View>
+				<Rows>
+					<Each of={(s()?.chats.items ?? []).slice(0, all() ? 100 : 5)} key={(c) => c.sessionId}>
+						{(chat) => (
+							<Row
+								title={chat().title || "Pilot diagnostics"}
+								state={chat().status}
+								trailing={
+									<OpenChatAction
+										label="Open diagnosis chat"
+										accessibilityLabel="Open diagnosis chat"
+										onPress={() => openChat(chat().sessionId, "Settings")}
+									/>
+								}
+							/>
+						)}
+					</Each>
+				</Rows>
+			</Section>
 		</View>
 	);
 }
@@ -393,10 +472,8 @@ export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: 
 		if (r.accepted && text() === message) diagnosisReplies.set({ ...diagnosisReplies(), [props.sessionId]: "" });
 	};
 	return (
-		<View class="gap-3 border-t border-border pt-4">
-			<Text class="text-sm text-muted-foreground">
-				Ask a follow-up. This specialist is read-only; a fix needs a separate start.
-			</Text>
+		<View class="gap-3">
+			<Body tone="muted">Ask a follow-up. This specialist is read-only; a fix needs a separate start.</Body>
 			<TextField
 				ref={replyField.ref}
 				onFocus={replyField.focus}
@@ -408,14 +485,11 @@ export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: 
 				onChange={({ value }) => diagnosisReplies.set({ ...diagnosisReplies(), [props.sessionId]: value })}
 				rows={4}
 			/>
-			<View class="flex-row gap-2">
-				<If when={reads.warn()}>
-					<Action label="Try now" disabled={c.busy()} onPress={() => void reads.now()} />
-				</If>
-				<Action
+			<Buttons>
+				<Button
+					kind="primary"
 					label="Send follow-up"
 					testID="diagnosis-send"
-					variant="primary"
 					disabled={
 						c.busy() ||
 						!c.snapshot() ||
@@ -425,7 +499,10 @@ export function DiagnosisReply(props: { controls: DiagnosisControls; sessionId: 
 					}
 					onPress={() => void send()}
 				/>
-			</View>
+				<If when={reads.warn()}>
+					<Button label="Try now" disabled={c.busy()} onPress={() => void reads.now()} />
+				</If>
+			</Buttons>
 			<DiagnosisStatus controls={c} />
 		</View>
 	);

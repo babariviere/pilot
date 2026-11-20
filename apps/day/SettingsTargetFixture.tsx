@@ -1,5 +1,7 @@
 // Mock data only: Settings opened at a target, as a task line's Change does. No service, provider or storage.
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal, View } from "nsh";
+import type { ConnectionControls } from "./connectionControls";
+import type { DiagnosisControls } from "./diagnosisControls";
 import { scrollOf } from "./kept";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import type { ModelControls, ModelSettings } from "./modelControls";
@@ -7,7 +9,7 @@ import { modelSettingsDemo } from "./modelSettingsDemo";
 import { goSettings } from "./nav";
 import { ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption } from "./ui";
 
 const settings = signal<ModelSettings | null>(modelSettingsDemo);
 const models: ModelControls = {
@@ -28,17 +30,53 @@ const models: ModelControls = {
 		return null;
 	},
 };
-const day = { ...openDay(), preferences: mirrorPreferences(new ScriptedPreferences()), models };
+// Unread stubs, so Settings shows all its tabs: their sections say they could not read.
+const connections: ConnectionControls = {
+	snapshot: () => null,
+	busy: () => false,
+	message: () => "",
+	unknown: () => [],
+	async read() {},
+	async probe() {},
+	async write() {
+		return false;
+	},
+	async check() {},
+};
+const diagnosis: DiagnosisControls = {
+	snapshot: () => null,
+	busy: () => false,
+	message: () => "",
+	operations: () => [],
+	async read() {},
+	async write() {
+		return { accepted: false };
+	},
+	async check() {},
+};
+const day = {
+	...openDay(),
+	preferences: mirrorPreferences(new ScriptedPreferences()),
+	models,
+	connections,
+	diagnosis,
+};
 const where = signal(-1);
 
 mount(() => (
 	<View class="flex-1">
-		<View class="flex-row flex-wrap items-center gap-1 px-6 pt-2">
-			<Action label="Change on a Cyber task" onPress={() => goSettings({ section: "models", profile: "cyber" })} />
-			<Action label="Change on a task set by you" onPress={() => goSettings({ section: "models" })} />
-			<Action label="Where" onPress={() => where.set(scrollOf("settings"))} />
-			<Text>{`Scrolled: ${where() > 0 ? "yes" : where() === 0 ? "no" : "unknown"}`}</Text>
-		</View>
+		<Block>
+			<Buttons>
+				<Button
+					small
+					label="Change on a Cyber task"
+					onPress={() => goSettings({ section: "models", profile: "cyber" })}
+				/>
+				<Button small label="Change on a task set by you" onPress={() => goSettings({ section: "models" })} />
+				<Button small label="Where" onPress={() => where.set(scrollOf("settings"))} />
+				<Caption>{`Scrolled: ${where() > 0 ? "yes" : where() === 0 ? "no" : "unknown"}`}</Caption>
+			</Buttons>
+		</Block>
 		<MockDayScreen day={day} />
 	</View>
 ));

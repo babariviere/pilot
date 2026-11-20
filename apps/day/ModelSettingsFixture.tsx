@@ -1,10 +1,12 @@
 // Mock data only. No service, credentials, providers or writes outside this window.
-import { mount, Scroll, signal, Text, View } from "nsh";
+// The AI and Allowances tabs of Settings on one panel, as the behaviour tests need both.
+import { mount, Scroll, signal } from "nsh";
+import { FundingSettings } from "./FundingSettings";
 import { ModelSettingsSection } from "./ModelSettings";
 import type { ModelControls, ModelSettings, SignInView } from "./modelControls";
 import { modelSettingsDemo } from "./modelSettingsDemo";
 import { modelEdit, restoreModelDraft, savedModelDraft } from "./modelSettingsDraft";
-import { Action, Page } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const initial = modelSettingsDemo;
 const settings = signal<ModelSettings | null>(initial),
@@ -74,65 +76,74 @@ const controls: ModelControls = {
 };
 const kept = signal("");
 mount(() => (
-	<Scroll class="flex-1 bg-background">
-		<Page gap={4}>
-			<Text>Mock data. AI settings behavior fixture.</Text>
-			<View class="flex-row flex-wrap gap-2">
-				<Action label="Next unknown" onPress={() => next.set("unknown")} />
-				<Action label="Shared settings only" onPress={() => settings.set({ ...initial, project: null })} />
-				<Action label="External edit" onPress={() => settings.set({ ...initial, binding: "b".repeat(64) })} />
-				<Action
-					label="SDK fallback"
-					onPress={() =>
-						settings.set({
-							...initial,
-							available: {
-								...initial.available,
-								defaultModel: "fixture/missing",
-								resolvedDefaultModel: "fixture/plain",
-							},
-						})
-					}
-				/>
-				<Action
-					label="SDK outside scope"
-					onPress={() =>
-						settings.set({
-							...initial,
-							available: {
-								...initial.available,
-								defaultModel: "fixture/unlisted",
-								resolvedDefaultModel: undefined,
-							},
-						})
-					}
-				/>
-				<Action
-					label="Unavailable"
-					onPress={() => settings.set({ ...initial, project: { ...initial.project!, model: "fixture/missing" } })}
-				/>
-				<Action
-					label="No reference"
-					onPress={() =>
-						settings.set({
-							...initial,
-							task: { models: [], priceCeiling: { limit: null, source: "unavailable" } },
-						})
-					}
-				/>
-				<Action
-					label="Save and restore draft"
-					onPress={() => {
-						kept.set(savedModelDraft());
-						restoreModelDraft("");
-						restoreModelDraft(kept());
-					}}
-				/>
-			</View>
-			<Text testID="models-counts">{`Sends: ${sends()}, checks: ${checks()}`}</Text>
-			<Text testID="models-kept">{kept()}</Text>
-			<Text>{`Editing: ${modelEdit() ?? "none"}`}</Text>
-			<ModelSettingsSection controls={controls} />
+	<Scroll class="flex-1">
+		<Page width="form">
+			<Block>
+				<Caption>Mock data. AI settings behavior fixture.</Caption>
+				<Buttons>
+					<Button label="Next unknown" onPress={() => next.set("unknown")} />
+					<Button label="Shared settings only" onPress={() => settings.set({ ...initial, project: null })} />
+					<Button label="External edit" onPress={() => settings.set({ ...initial, binding: "b".repeat(64) })} />
+					<Button
+						label="SDK fallback"
+						onPress={() =>
+							settings.set({
+								...initial,
+								available: {
+									...initial.available,
+									defaultModel: "fixture/missing",
+									resolvedDefaultModel: "fixture/plain",
+								},
+							})
+						}
+					/>
+					<Button
+						label="SDK outside scope"
+						onPress={() =>
+							settings.set({
+								...initial,
+								available: {
+									...initial.available,
+									defaultModel: "fixture/unlisted",
+									resolvedDefaultModel: undefined,
+								},
+							})
+						}
+					/>
+					<Button
+						label="Unavailable"
+						onPress={() =>
+							settings.set({ ...initial, project: { ...initial.project!, model: "fixture/missing" } })
+						}
+					/>
+					<Button
+						label="No reference"
+						onPress={() =>
+							settings.set({
+								...initial,
+								task: { models: [], priceCeiling: { limit: null, source: "unavailable" } },
+							})
+						}
+					/>
+					<Button
+						label="Save and restore draft"
+						onPress={() => {
+							kept.set(savedModelDraft());
+							restoreModelDraft("");
+							restoreModelDraft(kept());
+						}}
+					/>
+				</Buttons>
+				<Caption testID="models-counts">{`Sends: ${sends()}, checks: ${checks()}`}</Caption>
+				<Caption testID="models-kept">{kept()}</Caption>
+				<Caption>{`Editing: ${modelEdit() ?? "none"}`}</Caption>
+			</Block>
+			<Panel>
+				<Column>
+					<ModelSettingsSection controls={controls} />
+					<FundingSettings controls={controls} />
+				</Column>
+			</Panel>
 		</Page>
 	</Scroll>
 ));

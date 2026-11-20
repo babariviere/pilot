@@ -9,7 +9,7 @@ import { DayScreen } from "./DayScreen";
 import { ScreenAgentBar } from "./ScreenAgentBar";
 import { ConnectedScreenAgent, installScreenAgent } from "./screenAgent";
 import { screenAgentAvailable } from "./screenAgentOpen";
-import { Action, Notice } from "./ui";
+import { Link, Notice, Page } from "./ui";
 import { dataSource } from "./view";
 
 dataSource.set("pilot");
@@ -42,23 +42,24 @@ function Connected() {
 		<If
 			when={open().length > 0}
 			else={
-				<View testID="not-connected" class="flex-1 items-center justify-center bg-background px-6">
-					<Notice
-						class="w-full max-w-md"
-						kind={connection().state === "none" ? "unknown" : "still"}
-						text={note()}
-						action={
-							<If when={canRead()}>
-								<Action
-									label="Try now"
-									testID="connection-read"
-									onPress={() => {
-										void readAgain();
-									}}
-								/>
-							</If>
-						}
-					/>
+				<View testID="not-connected" class="flex-1 justify-center">
+					<Page width="form">
+						<Notice
+							kind={connection().state === "none" ? "needs" : "working"}
+							text={note()}
+							action={
+								<If when={canRead()}>
+									<Link
+										label="Try now"
+										testID="connection-read"
+										onPress={() => {
+											void readAgain();
+										}}
+									/>
+								</If>
+							}
+						/>
+					</Page>
 				</View>
 			}
 		>

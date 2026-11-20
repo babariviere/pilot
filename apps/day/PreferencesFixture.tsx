@@ -3,13 +3,13 @@
 // what the next Save does, "Save and reopen" keeps the window as a close or
 // an update saves it and shows it again in a fresh window state, and
 // "Draft elsewhere" leaves unsaved preferences for another project.
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal, View } from "nsh";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import { type PreferencesDemoNext, ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
 import { preferencesDraft } from "./preferencesView";
 import { scriptedSchedules } from "./schedulesDemo";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const preferences = new ScriptedPreferences();
@@ -22,38 +22,42 @@ const kept = signal("");
 
 mount(() => (
 	<View class="flex-1">
-		<View class="flex-row flex-wrap items-center gap-1 px-6 pt-2">
-			<Text testID="counts">{`Saves: ${preferences.saves()} · Checks: ${preferences.checks()}`}</Text>
-			<Each of={NEXT} key={(n) => n}>
-				{(n) => <Action label={`Next ${n()}`} onPress={() => preferences.next.set(n())} />}
-			</Each>
-			<Action label="Unreadable" onPress={() => preferences.mode.set("unreadable")} />
-			{/* A read as Pilot starts one on its own (a change, the window coming back). */}
-			<Action label="Fixture read" onPress={() => void day.preferences.source.read()} />
-			<Action label="History pages of 2" onPress={() => preferences.page.set(2)} />
-			<Action label="History fails" onPress={() => preferences.historyFails.set(true)} />
-			<Action label="Empty project" onPress={() => preferences.empty()} />
-			<Action
-				label="Draft elsewhere"
-				onPress={() =>
-					preferencesDraft.set({
-						projectId: "other-project",
-						baseRevision: 1,
-						entries: [{ key: "x", id: null, text: "Other project's words" }],
-					})
-				}
-			/>
-			<Action
-				label="Save and reopen"
-				onPress={() => {
-					const v = captureView(day.today());
-					kept.set((v.preferences ?? []).join(" | "));
-					startFresh();
-					restoreView(v, undefined, day.today(), false, true);
-				}}
-			/>
-			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
-		</View>
+		<Block>
+			<Buttons>
+				<Caption testID="counts">{`Saves: ${preferences.saves()} · Checks: ${preferences.checks()}`}</Caption>
+				<Each of={NEXT} key={(n) => n}>
+					{(n) => <Button small label={`Next ${n()}`} onPress={() => preferences.next.set(n())} />}
+				</Each>
+				<Button small label="Unreadable" onPress={() => preferences.mode.set("unreadable")} />
+				{/* A read as Pilot starts one on its own (a change, the window coming back). */}
+				<Button small label="Fixture read" onPress={() => void day.preferences.source.read()} />
+				<Button small label="History pages of 2" onPress={() => preferences.page.set(2)} />
+				<Button small label="History fails" onPress={() => preferences.historyFails.set(true)} />
+				<Button small label="Empty project" onPress={() => preferences.empty()} />
+				<Button
+					small
+					label="Draft elsewhere"
+					onPress={() =>
+						preferencesDraft.set({
+							projectId: "other-project",
+							baseRevision: 1,
+							entries: [{ key: "x", id: null, text: "Other project's words" }],
+						})
+					}
+				/>
+				<Button
+					small
+					label="Save and reopen"
+					onPress={() => {
+						const v = captureView(day.today());
+						kept.set((v.preferences ?? []).join(" | "));
+						startFresh();
+						restoreView(v, undefined, day.today(), false, true);
+					}}
+				/>
+				<Caption testID="kept">{`Kept: [${kept()}]`}</Caption>
+			</Buttons>
+		</Block>
 		<MockDayScreen day={day} />
 	</View>
 ));

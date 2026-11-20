@@ -7,10 +7,13 @@
 // silently replaces typed text, and a draft for another project is never
 // saved here. A Save whose answer was lost stays Unknown: Check only reads
 // its result. Leaving, closing or updating keeps the draft (windowState.ts).
-import { effect, keymap, Scroll, type ScrollRef, signal, Text, untracked, View, type ViewRef } from "nsh";
+// Settings is one form page: one panel with one tab per part (AI, Project, Local projects, Tool connections,
+// Allowances, Diagnostics & privacy). A tab shows only when this window has its controls.
+import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, untracked, View, type ViewRef } from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
+import { FundingSettings } from "./FundingSettings";
 import { keepRead, staleLine } from "./freshness";
 import { KnowledgeSection } from "./KnowledgeSection";
 import { keepField, keepScroll } from "./kept";
@@ -44,9 +47,36 @@ import {
 	sourceLine,
 } from "./preferencesView";
 import { SchedulesScreen } from "./SchedulesScreen";
+import { ScopedAnswerDrafts } from "./ScopedQuestion";
 import { SlackSettings } from "./SlackSettings";
 import { schedulesOpen } from "./scheduleDraft";
-import { Action, ExpandableRow, glide, Notice, Page, PageTitle, SectionTitle, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	EmptyLine,
+	Fact,
+	Facts,
+	glide,
+	Link,
+	Notice,
+	Page,
+	PageFoot,
+	PageHead,
+	Panel,
+	Quote,
+	Row,
+	RowDetail,
+	Rows,
+	Section,
+	Spacer,
+	Tab,
+	Tabs,
+	TextField,
+} from "./ui";
 
 /** The new row that takes the keyboard focus once. */
 const focusRow = signal<string | null>(null);
@@ -176,20 +206,14 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 	const savedOf = (e: DraftEntry): ProjectPreference | undefined =>
 		e.id ? read()?.entries.find((x) => x.id === e.id && x.text === e.text) : undefined;
 	return (
-		<View testID="preferences" class="gap-5">
-			<View class="gap-1.5">
-				<SectionTitle title="Project preferences" />
-				<Text class="text-sm leading-relaxed text-muted-foreground">
-					{`Small choices you made for ${name()}. Coordinators follow them when they plan and work in this project. They never give Pilot permission to do anything.`}
-				</Text>
-			</View>
-			<View class="flex-row items-baseline gap-3 border-t border-border pt-3">
-				<Text class="text-sm text-muted-foreground">Project</Text>
-				<Text testID="preferences-project" class="flex-1 text-sm font-medium text-foreground">
-					{v().projectName || (read() ? "This window's project" : "")}
-				</Text>
+		<Section
+			testID="preferences"
+			title="Project preferences"
+			footnote={!dirty() && read() ? changedLine(read() as ProjectPreferences) || undefined : undefined}
+			footnoteTestID="preferences-changed"
+			action={
 				<If when={reads.warn()}>
-					<Action
+					<Link
 						label={v().reading ? "Reading…" : "Try now"}
 						icon="refresh"
 						testID="preferences-read"
@@ -198,44 +222,63 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 						onPress={() => void reads.now()}
 					/>
 				</If>
-			</View>
+			}
+		>
+			<Block>
+				<Body tone="muted" measure>
+					{`Small choices you made for ${name()}. Coordinators follow them when they plan and work in this project. They never give Pilot permission to do anything.`}
+				</Body>
+				<Facts>
+					<Fact label="Project" testID="preferences-project">
+						{v().projectName || (read() ? "This window's project" : "")}
+					</Fact>
+				</Facts>
+			</Block>
 			<If when={elsewhere()}>
 				<Notice
 					testID="preferences-elsewhere"
+					kind="needs"
+					placement="section"
 					text="You have unsaved preferences for another project."
 					detail={`This window saves only ${name()}'s preferences. They stay unsaved until you discard them.`}
-				>
-					<View class="flex-row gap-2">
+					action={
 						<If
 							when={discardAsk()}
 							else={
-								<Action
+								<Link
 									label="Discard them"
 									testID="preferences-elsewhere-discard"
 									onPress={() => discardAsk.set(true)}
 								/>
 							}
 						>
-							<Action
-								label="Discard for good"
-								testID="preferences-elsewhere-confirm"
-								onPress={() => {
-									discardAsk.set(false);
-									preferencesDraft.set(null);
-								}}
-							/>
-							<Action
-								label="Keep them"
-								testID="preferences-elsewhere-keep"
-								onPress={() => discardAsk.set(false)}
-							/>
+							<Buttons>
+								<Button
+									small
+									kind="destructive"
+									label="Discard for good"
+									testID="preferences-elsewhere-confirm"
+									onPress={() => {
+										discardAsk.set(false);
+										preferencesDraft.set(null);
+									}}
+								/>
+								<Button
+									small
+									label="Keep them"
+									testID="preferences-elsewhere-keep"
+									onPress={() => discardAsk.set(false)}
+								/>
+							</Buttons>
 						</If>
-					</View>
-				</Notice>
+					}
+				/>
 			</If>
 			<If when={v().reason && (!read() || reads.stale())}>
 				<Notice
 					testID="preferences-off"
+					kind="needs"
+					placement="section"
 					text={
 						read()
 							? staleLine(reads.readAt() ?? 0)
@@ -248,35 +291,39 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 				{(o) => (
 					<Notice
 						testID="preferences-unknown"
+						kind="needs"
+						placement="section"
 						text={
 							o().state === "checking"
 								? "Checking that your last change was saved…"
 								: "Pilot does not know if your last change was saved."
 						}
 						detail="It will not send it again. Check only reads its result. Your text stays here."
-					>
-						{/* Pilot checks by itself first; the button is the fallback after its tries. */}
-						<If when={o().state !== "checking"}>
-							<View class="flex-row">
-								<Action label="Check" testID="preferences-check" onPress={() => void check(o().operationId)} />
-							</View>
-						</If>
-					</Notice>
+						action={
+							// Pilot checks by itself first; Check is the fallback after its tries.
+							<If when={o().state !== "checking"}>
+								<Link label="Check" testID="preferences-check" onPress={() => void check(o().operationId)} />
+							</If>
+						}
+					/>
 				)}
 			</Each>
 			<If when={conflict()}>
 				<Notice
 					testID="preferences-conflict"
+					kind="needs"
+					placement="section"
 					text="These preferences changed since you started editing. Nothing was saved; your text is kept."
 					detail="Saved now:"
-				>
-					<View class="gap-1">
+				/>
+				<Block>
+					<Quote>
 						<Each of={read()?.entries ?? []} key={(e) => e.id}>
-							{(e) => <Text class="text-sm text-muted-foreground">{`• ${e().text}`}</Text>}
+							{(e) => <Body tone="muted">{`• ${e().text}`}</Body>}
 						</Each>
-					</View>
-					<View class="flex-row gap-2 pt-1">
-						<Action
+					</Quote>
+					<Buttons>
+						<Button
 							label="Keep my version"
 							testID="preferences-keep-mine"
 							onPress={() => {
@@ -285,24 +332,24 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 								if (d && p) preferencesDraft.set({ ...d, baseRevision: p.revision });
 							}}
 						/>
-						<Action label="Use the saved version" testID="preferences-use-saved" onPress={revert} />
-					</View>
-				</Notice>
+						<Button label="Use the saved version" testID="preferences-use-saved" onPress={revert} />
+					</Buttons>
+				</Block>
 			</If>
 			<If
 				when={read() || dirty()}
 				else={
 					<If when={!v().reason}>
-						<Text class="text-sm text-muted-foreground">{`Reading ${name()}'s preferences…`}</Text>
+						<EmptyLine text={`Reading ${name()}'s preferences…`} />
 					</If>
 				}
 			>
 				<View testID="preferences-list">
 					<If when={rows().length === 0}>
-						<Text testID="preferences-empty" class="border-t border-border py-3.5 text-sm text-muted-foreground">
-							No preferences yet. Add one here. A mission's coordinator can also record one, quoting a note you
-							wrote in that mission.
-						</Text>
+						<EmptyLine
+							testID="preferences-empty"
+							text="No preferences yet. Add one here. A mission's coordinator can also record one, quoting a note you wrote in that mission."
+						/>
 					</If>
 					<Each of={rows()} key={(e) => e.key}>
 						{(e) => {
@@ -312,7 +359,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 								() => e().text,
 							);
 							return (
-								<View testID={`preference-row-${e().key}`} class="gap-1.5 border-t border-border py-3">
+								<Block testID={`preference-row-${e().key}`} gap={1}>
 									<TextField
 										testID={`preference-${e().key}`}
 										ref={field.ref}
@@ -320,6 +367,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 										autoFocus={focusRow() === e().key}
 										readonly={!editable()}
 										value={e().text}
+										invalid={tooLong(e().text)}
 										accessibilityLabel="A preference for this project"
 										placeholder="Write one short preference"
 										onChange={({ value }) => edit(e().key, value)}
@@ -330,12 +378,14 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 										onSelectionChange={field.select}
 									/>
 									<If when={tooLong(e().text)}>
-										<Text class="text-xs text-needs-ink">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Text>
+										<Caption tone="failed">{`Too long. Keep it under ${MAX_TEXT_BYTES} bytes.`}</Caption>
 									</If>
 									<View class="flex-row items-center gap-2">
-										<Text class="flex-1 text-xs text-faint">{meta(e())}</Text>
+										<Caption tone="faint">{meta(e())}</Caption>
+										<Spacer />
 										<If when={editable()}>
-											<Action
+											<Button
+												small
 												label="Remove"
 												testID={`preference-remove-${e().key}`}
 												accessibilityLabel="Remove this preference. Nothing is saved until you press Save."
@@ -344,64 +394,55 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 										</If>
 									</View>
 									<If when={savedOf(e()) && quoteOf(savedOf(e()) as ProjectPreference)}>
-										<Text class="text-xs text-faint">
+										<Caption tone="faint">
 											{`Your words: “${quoteOf(savedOf(e()) as ProjectPreference)}”`}
-										</Text>
+										</Caption>
 									</If>
 									<If when={savedOf(e())}>
-										<Text class="text-xs text-faint">{`Source: ${JSON.stringify(savedOf(e())?.source)}`}</Text>
+										<Caption tone="faint">{`Source: ${JSON.stringify(savedOf(e())?.source)}`}</Caption>
 									</If>
-								</View>
+								</Block>
 							);
 						}}
 					</Each>
-					<View class="flex-row items-center gap-3 border-t border-border pt-3">
-						<Action
-							label="Add a preference"
-							icon="plus"
-							testID="preference-add"
-							disabled={!editable() || rows().length >= MAX_ENTRIES}
-							onPress={addRow}
-						/>
-						<If when={rows().length >= MAX_ENTRIES}>
-							<Text class="text-xs text-faint">{`A project keeps at most ${MAX_ENTRIES}.`}</Text>
-						</If>
-					</View>
+					<Block>
+						<View class="flex-row items-center gap-3">
+							<Button
+								label="Add a preference"
+								icon="plus"
+								testID="preference-add"
+								disabled={!editable() || rows().length >= MAX_ENTRIES}
+								onPress={addRow}
+							/>
+							<If when={rows().length >= MAX_ENTRIES}>
+								<Caption tone="faint">{`A project keeps at most ${MAX_ENTRIES}.`}</Caption>
+							</If>
+						</View>
+					</Block>
 				</View>
 			</If>
-			<If
-				when={dirty()}
-				else={
-					<If when={read() && changedLine(read() as ProjectPreferences)}>
-						<Text testID="preferences-changed" class="text-xs text-faint">
-							{read() ? changedLine(read() as ProjectPreferences) : ""}
-						</Text>
-					</If>
-				}
-			>
-				<View testID="preferences-unsaved" class="gap-2 rounded-xl border border-border px-4 py-3">
-					<Text class="text-sm text-foreground">
-						{blocker() || `Unsaved. Save replaces ${name()}'s preferences with this list.`}
-					</Text>
-					<View class="flex-row gap-2">
-						<Action
-							variant="primary"
+			<If when={dirty()}>
+				<Block testID="preferences-unsaved">
+					<Body>{blocker() || `Unsaved. Save replaces ${name()}'s preferences with this list.`}</Body>
+					<Buttons>
+						<Button
+							kind="primary"
 							label={v().saving ? "Saving…" : "Save"}
 							shortcut={keymap.label("mod+s")}
 							testID="preferences-save"
 							disabled={!canSave()}
 							onPress={() => void save()}
 						/>
-						<Action label="Revert" testID="preferences-revert" disabled={v().saving} onPress={revert} />
-					</View>
-				</View>
+						<Button label="Revert" testID="preferences-revert" disabled={v().saving} onPress={revert} />
+					</Buttons>
+				</Block>
 			</If>
 			<If when={preferencesMessage()}>
-				<Text testID="preferences-message" class="text-xs text-muted-foreground">
-					{preferencesMessage()}
-				</Text>
+				<Block>
+					<Caption testID="preferences-message">{preferencesMessage()}</Caption>
+				</Block>
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -441,10 +482,11 @@ function History(props: { mirror: PreferencesMirror }) {
 	const revisions = () => historyPages().flatMap((p) => p.revisions);
 	const next = () => historyPages().at(-1);
 	return (
-		<View testID="preferences-history" class="gap-3">
-			<View class="flex-row items-center gap-2 border-t border-border pt-3">
-				<Text class="flex-1 text-sm text-muted-foreground">History</Text>
-				<Action
+		<Section
+			testID="preferences-history"
+			title="History"
+			action={
+				<Link
 					label={historyOpen() ? "Hide history" : "Show history"}
 					testID="preferences-history-toggle"
 					accessibilityLabel={
@@ -459,73 +501,96 @@ function History(props: { mirror: PreferencesMirror }) {
 						if (open) void load();
 					}}
 				/>
-			</View>
+			}
+			more={
+				historyOpen() && !historyReading() && next()?.more && next()?.before
+					? {
+							label: "Show earlier",
+							testID: "preferences-history-more",
+							onPress: () => void load(next()?.before ?? undefined),
+						}
+					: undefined
+			}
+		>
 			<If when={historyOpen()}>
 				<If when={historyError()}>
 					<Notice
 						testID="preferences-history-off"
+						kind="needs"
+						placement="section"
 						text={historyError()}
 						detail="This is not the same as having no history."
 					/>
 				</If>
 				<If when={!historyError() && !historyReading() && revisions().length === 0}>
-					<Text testID="preferences-history-empty" class="text-sm text-muted-foreground">
-						No saved changes yet.
-					</Text>
+					<EmptyLine testID="preferences-history-empty" text="No saved changes yet." />
 				</If>
-				<View>
+				<Rows>
 					<Each of={revisions()} key={(r) => String(r.revision)}>
 						{(r) => (
-							<ExpandableRow
-								open={openRevision() === r().revision}
+							<Row
 								testID={`preferences-revision-${r().revision}`}
+								title={revisionLine(r())}
+								meta={r().reason ?? undefined}
+								selected={openRevision() === r().revision}
 								accessibilityLabel={`${revisionLine(r())}. ${openRevision() === r().revision ? "Hide" : "Show"} the list it saved.`}
-								onToggle={() => {
+								onPress={() => {
 									glide();
 									openRevision.set(openRevision() === r().revision ? null : r().revision);
 								}}
-								summaryClass="gap-0.5 py-2.5"
-								content={
-									<View testID={`preferences-revision-detail-${r().revision}`} class="gap-1 pb-3">
-										<If when={r().entries.length === 0}>
-											<Text class="text-sm text-muted-foreground">No preferences.</Text>
-										</If>
-										<Each of={r().entries} key={(e) => e.id}>
-											{(e) => (
-												<View selectable class="gap-1">
-													<Text class="text-sm text-muted-foreground">{`• ${e().text}`}</Text>
-													<Text class="text-xs text-faint">{`Source: ${JSON.stringify(e().source)}. ${sourceLine(e())}`}</Text>
-												</View>
-											)}
-										</Each>
-										<If when={revisionQuote(r())}>
-											<Text class="text-xs text-faint">{`From your note: “${revisionQuote(r())}”`}</Text>
-										</If>
-									</View>
+								detail={
+									<If when={openRevision() === r().revision}>
+										<RowDetail testID={`preferences-revision-detail-${r().revision}`}>
+											<If when={r().entries.length === 0}>
+												<Caption>No preferences.</Caption>
+											</If>
+											<Each of={r().entries} key={(e) => e.id}>
+												{(e) => (
+													<View selectable class="gap-0.5">
+														<Body tone="muted">{`• ${e().text}`}</Body>
+														<Caption tone="faint">{`Source: ${JSON.stringify(e().source)}. ${sourceLine(e())}`}</Caption>
+													</View>
+												)}
+											</Each>
+											<If when={revisionQuote(r())}>
+												<Caption tone="faint">{`From your note: “${revisionQuote(r())}”`}</Caption>
+											</If>
+										</RowDetail>
+									</If>
 								}
-							>
-								<Text class="text-sm text-foreground group-hover:underline">{revisionLine(r())}</Text>
-								<If when={r().reason}>
-									<Text class="text-xs text-faint">{r().reason ?? ""}</Text>
-								</If>
-							</ExpandableRow>
+							/>
 						)}
 					</Each>
-				</View>
+				</Rows>
 				<If when={historyReading()}>
-					<Text class="text-sm text-muted-foreground">Reading history…</Text>
-				</If>
-				<If when={!historyReading() && next()?.more && next()?.before}>
-					<View class="flex-row">
-						<Action
-							label="Show earlier"
-							testID="preferences-history-more"
-							onPress={() => void load(next()?.before ?? undefined)}
-						/>
-					</View>
+					<EmptyLine text="Reading history…" />
 				</If>
 			</If>
-		</View>
+		</Section>
+	);
+}
+
+/** Settings' tabs, in order. Each shows only when this window has its controls. */
+type SettingsTab = "ai" | "project" | "projects" | "connections" | "allowances" | "diagnosis";
+const TABS: { id: SettingsTab; label: string }[] = [
+	{ id: "ai", label: "AI" },
+	{ id: "project", label: "Project" },
+	{ id: "projects", label: "Local projects" },
+	{ id: "connections", label: "Tool connections" },
+	{ id: "allowances", label: "Allowances" },
+	{ id: "diagnosis", label: "Diagnostics & privacy" },
+];
+/** The tab the user chose, kept while the window is open. Null shows the first tab this window has. */
+const settingsTab = signal<SettingsTab | null>(null);
+
+// LIBRARY GAP: Tabs neither wrap nor scroll. Settings has up to six tabs, which overflow a narrow window and hide
+// the last ones from the pointer. The library's Tabs should scroll sideways (or wrap) when they do not fit; until
+// then Settings puts them in a sideways Scroll without a bar.
+function SidewaysTabs(props: { children?: JSX.Element }) {
+	return (
+		<Scroll horizontal scrollbar={false}>
+			{props.children}
+		</Scroll>
 	);
 }
 
@@ -567,13 +632,28 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 				.catch(() => {});
 		});
 	});
+	const has = (tab: SettingsTab): boolean => {
+		if (tab === "ai" || tab === "allowances") return !!props.day.models;
+		if (tab === "connections") return !!props.day.connections || !!props.day.slack;
+		if (tab === "diagnosis") return !!props.day.diagnosis;
+		return true;
+	};
+	const tabs = () => TABS.filter((t) => has(t.id));
+	const tab = (): SettingsTab => {
+		const chosen = settingsTab();
+		return chosen && has(chosen) ? chosen : (tabs()[0]?.id ?? "project");
+	};
+	// A target (a task line's Change) names a work profile: the AI tab holds it.
+	effect(() => {
+		if (settingsTarget()?.section === "models" && has("ai")) untracked(() => settingsTab.set("ai"));
+	});
 	return (
 		<If
 			when={schedulesOpen() && props.day.schedules}
 			else={
 				<Scroll
 					ref={(node) => scroller.set(node)}
-					class="flex-1 bg-background"
+					class="flex-1"
 					contentOffset={scroll.contentOffset}
 					scrollEventThrottle={100}
 					onScroll={(e) => {
@@ -581,29 +661,70 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 					}}
 				>
 					<View ref={(node: ViewRef) => root.set(node)}>
-						<Page testID="settings" gap={10}>
-							<ScopedAnswerDrafts />
-							<PageTitle title="Settings" />
-							<If when={props.day.schedules}>
-								<View class="flex-row">
-									<Action
-										label="Schedules…"
-										testID="settings-schedules"
-										onPress={() => schedulesOpen.set(true)}
-									/>
-								</View>
-							</If>
-							<If when={props.day.models}>{(controls) => <ModelSettingsSection controls={controls()} />}</If>
-							<If when={props.day.connections}>{(controls) => <ConnectionSettings controls={controls()} />}</If>
-							<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
-							<If when={props.day.diagnosis}>{(controls) => <DiagnosisSettings controls={controls()} />}</If>
-							<Preferences mirror={mirror} />
-							<KnowledgeSection projectId={mirror.view().projectId} />
-							<ProjectsSection />
-							<History mirror={mirror} />
-							<Text class="border-t border-border pt-5 text-xs text-faint">
-								Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply.
-							</Text>
+						<Page testID="settings" width="form">
+							<PageHead
+								title="Settings"
+								actions={
+									<If when={props.day.schedules}>
+										<Button
+											label="Schedules…"
+											testID="settings-schedules"
+											onPress={() => schedulesOpen.set(true)}
+										/>
+									</If>
+								}
+							>
+								<ScopedAnswerDrafts />
+							</PageHead>
+							<Panel
+								testID="settings-panel"
+								tabs={
+									<SidewaysTabs>
+										<Tabs>
+											<Each of={tabs()} key={(t) => t.id}>
+												{(t) => (
+													<Tab
+														label={t().label}
+														testID={`settings-tab-${t().id}`}
+														selected={tab() === t().id}
+														onPress={() => {
+															glide();
+															settingsTab.set(t().id);
+														}}
+													/>
+												)}
+											</Each>
+										</Tabs>
+									</SidewaysTabs>
+								}
+							>
+								<Column>
+									<If when={tab() === "ai" ? props.day.models : undefined}>
+										{(controls) => <ModelSettingsSection controls={controls()} />}
+									</If>
+									<If when={tab() === "project"}>
+										<Preferences mirror={mirror} />
+										<History mirror={mirror} />
+										<KnowledgeSection projectId={mirror.view().projectId} />
+									</If>
+									<If when={tab() === "projects"}>
+										<ProjectsSection />
+									</If>
+									<If when={tab() === "connections"}>
+										<If when={props.day.connections}>
+											{(controls) => <ConnectionSettings controls={controls()} />}
+										</If>
+										<If when={props.day.slack}>{(controls) => <SlackSettings controls={controls()} />}</If>
+									</If>
+									<If when={tab() === "allowances" ? props.day.models : undefined}>
+										{(controls) => <FundingSettings controls={controls()} standalone />}
+									</If>
+									<If when={tab() === "diagnosis" ? props.day.diagnosis : undefined}>
+										{(controls) => <DiagnosisSettings controls={controls()} />}
+									</If>
+								</Column>
+							</Panel>
+							<PageFoot text="Preferences are what you chose. Pilot's approvals, Stop and spending limits still apply." />
 						</Page>
 					</View>
 				</Scroll>
@@ -613,5 +734,3 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 		</If>
 	);
 }
-
-import { ScopedAnswerDrafts } from "./ScopedQuestion";

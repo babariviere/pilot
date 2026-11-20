@@ -1,8 +1,27 @@
-// Native-owned allowances, with one explicit approval and no automatic resumption.
-import { Text, View } from "nsh";
+// Native-owned allowances, with one explicit approval and no automatic resumption. Settings shows them in their own
+// Allowances tab; spending limits turn on and off at once, everything else is a draft until Save or Approve.
+import { effect, untracked, View } from "nsh";
+import { ModelStatus } from "./ModelSettings";
 import type { ModelControls } from "./modelControls";
 import { fundingDraft as draft } from "./modelSettingsDraft";
-import { Action, CheckboxRow, Field, Picker, SectionTitle } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	EmptyLine,
+	Field,
+	Link,
+	Notice,
+	Num,
+	Picker,
+	Row,
+	RowDetail,
+	Rows,
+	Section,
+	Switch,
+} from "./ui";
 
 const money = (n: number | null | undefined) => (n == null ? "Not set" : `$${(n / 1_000_000).toFixed(2)}`);
 export function fundingAmount(text: string): number | null | undefined {
@@ -11,7 +30,15 @@ export function fundingAmount(text: string): number | null | undefined {
 	const n = Math.round(Number(text) * 1_000_000);
 	return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
 }
-export function FundingSettings(props: { controls: ModelControls }) {
+/**
+ * The allowances section. `standalone` is the Allowances tab on its own: it reads the controls itself and shows
+ * their status (what the last action said, an Unknown action's Check), which the AI tab shows otherwise.
+ */
+export function FundingSettings(props: { controls: ModelControls; standalone?: boolean }) {
+	if (props.standalone)
+		effect(() => {
+			untracked(() => void props.controls.read());
+		});
 	const settings = () => props.controls.settings(),
 		view = () => settings()?.funding;
 	const locked = () => props.controls.busy() || props.controls.unknown().length > 0;
@@ -36,90 +63,128 @@ export function FundingSettings(props: { controls: ModelControls }) {
 	const elsewhere = () => !!draft() && draft()?.project !== (settings()?.project?.id ?? "");
 	const limited = () => view()?.enabled !== false;
 	return (
-		<View testID="funding-settings" class="gap-3 border-t border-border pt-4">
-			<SectionTitle title="Allowances" />
-			<If when={view()}>
-				{(v) => (
-					<CheckboxRow
-						testID="funding-limits"
-						label="Limit spending"
-						checked={v().enabled}
-						disabled={locked()}
-						onChange={() => void props.controls.write("funding-limits", !v().enabled)}
-					/>
-				)}
-			</If>
-			<If
-				when={limited()}
-				else={
-					<Text testID="funding-off" class="text-sm text-muted-foreground">
-						Spending limits are off. Pilot does not stop work for cost.
-					</Text>
+		<View testID="funding-settings">
+			<Section
+				title="Allowances"
+				action={
+					<If when={limited() && view() && !draft()}>
+						<Link label="Change allowances" testID="funding-edit" disabled={locked()} onPress={begin} />
+					</If>
 				}
 			>
-				<View class="gap-3">
-					<Text class="text-xs text-faint">
-						New native work uses these allowances. Legacy desktop chats keep their existing controls until
-						migration.
-					</Text>
-					<Text class="text-sm text-muted-foreground">
-						Catalog value, including subscription models. Planning, retries, helpers and reviews count once.
-						Missing prices or request bounds hold only affected work.
-					</Text>
+				<If when={props.standalone}>
+					<ModelStatus controls={props.controls} />
+				</If>
+				<Rows>
+					<If when={view()}>
+						{(v) => (
+							<Row
+								title="Limit spending"
+								meta={
+									limited()
+										? "New native work uses these allowances. Legacy desktop chats keep their existing controls until migration."
+										: undefined
+								}
+								wrap
+								trailing={
+									<Switch
+										testID="funding-limits"
+										accessibilityLabel="Limit spending"
+										checked={v().enabled}
+										disabled={locked()}
+										onChange={() => void props.controls.write("funding-limits", !v().enabled)}
+									/>
+								}
+							/>
+						)}
+					</If>
+				</Rows>
+				<If
+					when={limited()}
+					else={
+						<EmptyLine testID="funding-off" text="Spending limits are off. Pilot does not stop work for cost." />
+					}
+				>
+					<Block>
+						<Body tone="muted" measure>
+							Catalog value, including subscription models. Planning, retries, helpers and reviews count once.
+							Missing prices or request bounds hold only affected work.
+						</Body>
+					</Block>
 					<If
 						when={view()}
 						else={
-							<Text class="text-sm text-needs-ink">
-								Allowances unavailable. No spending permission is implied.
-							</Text>
+							<Notice
+								kind="needs"
+								placement="section"
+								text="Allowances unavailable. No spending permission is implied."
+							/>
 						}
 					>
 						{(v) => (
-							<View class="gap-3">
-								<Text class="text-sm text-foreground">{`Background: ${money(v().background.spentMicros)} used, ${money(v().background.uncertainMicros)} uncertain, ${money(v().background.remainingMicros)} left.`}</Text>
-								<If when={v().background.heldMaximumMicros}>
-									<Text class="text-sm text-needs-ink">{`Last background request needed a ${money(v().background.heldMaximumMicros)} reservation. Increase its daily allowance or wait for reset.`}</Text>
-								</If>
-								<Text class="text-xs text-faint">{`Daily allowance ${money(v().dailyMicros)}. Resets at ${v().resetAt} (UTC). Uncertain charges survive reset.`}</Text>
-								<Each of={v().backgroundJobs ?? []} key={(j) => `${j.job}:${j.projectId ?? "unknown"}`}>
-									{(j) => (
-										<Text class="text-xs text-muted-foreground">{`${j().job} · ${j().projectId ?? "Project unknown"}: ${money(j().spentMicros)} used, ${money(j().uncertainMicros)} uncertain.`}</Text>
-									)}
-								</Each>
-								<If when={settings()?.project}>
-									<Text class="text-sm text-muted-foreground">{`New missions: ${money(v().missionDefaultMicros)} for their lifetime. New quick fixes: ${money(v().quickFixDefaultMicros)}. Defaults do not refill existing work.`}</Text>
-								</If>
-								<Each of={v().accounts} key={(a) => `${a.kind}:${a.id}`}>
-									{(a) => (
-										<View class="gap-1">
-											<Text class="text-sm text-muted-foreground">{`${a().kind === "mission" ? "Mission" : "Quick fix"} ${settings()?.fundedWork?.find((w) => w.owner.kind === a().kind && w.owner.id === a().id)?.title ?? a().id}: ${money(a().spentMicros)} used, ${money(a().uncertainMicros)} uncertain, ${money(a().remainingMicros)} left of ${money(a().limitMicros)}.`}</Text>
-											<If when={a().heldMaximumMicros}>
-												<Text class="text-xs text-needs-ink">{`Last request needed a ${money(a().heldMaximumMicros)} reservation. Approve a larger total to continue; other holds stay.`}</Text>
+							<>
+								<Rows>
+									<Row
+										title="Background"
+										meta={`${money(v().background.spentMicros)} used, ${money(v().background.uncertainMicros)} uncertain, ${money(v().background.remainingMicros)} left.`}
+										wrap
+										detail={
+											<If when={v().background.heldMaximumMicros}>
+												<RowDetail>
+													<Caption tone="needs">{`Last background request needed a ${money(v().background.heldMaximumMicros)} reservation. Increase its daily allowance or wait for reset.`}</Caption>
+												</RowDetail>
 											</If>
-										</View>
-									)}
-								</Each>
-								<If when={v().accountCount > v().accounts.length}>
-									<Text class="text-xs text-faint">{`Showing ${v().accounts.length} of ${v().accountCount} allowances.`}</Text>
-								</If>
-								<If when={!draft()}>
-									<Action
-										label="Change allowances"
-										testID="funding-edit"
-										disabled={locked()}
-										onPress={begin}
+										}
 									/>
+									<Row
+										title="Daily allowance"
+										meta={`Resets at ${v().resetAt} (UTC). Uncertain charges survive reset.`}
+										wrap
+										trailing={<Num>{money(v().dailyMicros)}</Num>}
+									/>
+									<Each of={v().backgroundJobs ?? []} key={(j) => `${j.job}:${j.projectId ?? "unknown"}`}>
+										{(j) => (
+											<Row
+												title={`${j().job} · ${j().projectId ?? "Project unknown"}`}
+												meta={`${money(j().spentMicros)} used, ${money(j().uncertainMicros)} uncertain.`}
+											/>
+										)}
+									</Each>
+									<Each of={v().accounts} key={(a) => `${a.kind}:${a.id}`}>
+										{(a) => (
+											<Row
+												title={`${a().kind === "mission" ? "Mission" : "Quick fix"} ${settings()?.fundedWork?.find((w) => w.owner.kind === a().kind && w.owner.id === a().id)?.title ?? a().id}`}
+												meta={`${money(a().spentMicros)} used, ${money(a().uncertainMicros)} uncertain, ${money(a().remainingMicros)} left of ${money(a().limitMicros)}.`}
+												wrap
+												detail={
+													<If when={a().heldMaximumMicros}>
+														<RowDetail>
+															<Caption tone="needs">{`Last request needed a ${money(a().heldMaximumMicros)} reservation. Approve a larger total to continue; other holds stay.`}</Caption>
+														</RowDetail>
+													</If>
+												}
+											/>
+										)}
+									</Each>
+								</Rows>
+								<If when={settings()?.project}>
+									<Block>
+										<Body tone="muted">{`New missions: ${money(v().missionDefaultMicros)} for their lifetime. New quick fixes: ${money(v().quickFixDefaultMicros)}. Defaults do not refill existing work.`}</Body>
+									</Block>
 								</If>
-							</View>
+								<If when={v().accountCount > v().accounts.length}>
+									<EmptyLine text={`Showing ${v().accounts.length} of ${v().accountCount} allowances.`} />
+								</If>
+							</>
 						)}
 					</If>
 					<If when={draft()}>
 						{(d) => (
-							<View class="gap-3">
+							<Block gap={3}>
 								<If
 									when={elsewhere()}
 									else={
-										<View class="gap-3">
+										<>
 											<Field
 												label="Daily background allowance (USD catalog value)"
 												testID="funding-daily"
@@ -128,69 +193,75 @@ export function FundingSettings(props: { controls: ModelControls }) {
 												placeholder="Not set"
 											/>
 											<If when={settings()?.project}>
-												<View class="gap-3">
-													<Field
-														label="New mission default (USD)"
-														value={d().mission}
-														onChange={(v) => edit("mission", v)}
-														placeholder="Ask at creation"
-													/>
-													<Field
-														label="New quick-fix default (USD)"
-														value={d().quickFix}
-														onChange={(v) => edit("quickFix", v)}
-														placeholder="Ask at creation"
-													/>
-												</View>
+												<Field
+													label="New mission default (USD)"
+													value={d().mission}
+													onChange={(v) => edit("mission", v)}
+													placeholder="Ask at creation"
+												/>
+												<Field
+													label="New quick-fix default (USD)"
+													value={d().quickFix}
+													onChange={(v) => edit("quickFix", v)}
+													placeholder="Ask at creation"
+												/>
 											</If>
-											<Action
-												label="Save allowance settings"
-												testID="funding-save"
-												disabled={
-													locked() ||
-													[d().daily, d().mission, d().quickFix].some(
-														(v) => fundingAmount(v) === undefined,
-													)
-												}
-												onPress={() =>
-													void props.controls
-														.write(
-															"funding-settings",
-															{
-																dailyMicros: fundingAmount(d().daily),
-																missionDefaultMicros: fundingAmount(d().mission),
-																quickFixDefaultMicros: fundingAmount(d().quickFix),
-															},
-															d().binding,
+											<Buttons>
+												<Button
+													kind="primary"
+													label="Save allowance settings"
+													testID="funding-save"
+													disabled={
+														locked() ||
+														[d().daily, d().mission, d().quickFix].some(
+															(v) => fundingAmount(v) === undefined,
 														)
-														.then((ok) => {
-															if (ok) draft.set(null);
-														})
-												}
-											/>
+													}
+													onPress={() =>
+														void props.controls
+															.write(
+																"funding-settings",
+																{
+																	dailyMicros: fundingAmount(d().daily),
+																	missionDefaultMicros: fundingAmount(d().mission),
+																	quickFixDefaultMicros: fundingAmount(d().quickFix),
+																},
+																d().binding,
+															)
+															.then((ok) => {
+																if (ok) draft.set(null);
+															})
+													}
+												/>
+												<Button
+													label="Discard allowance draft"
+													onPress={() => draft.set(null)}
+													disabled={locked()}
+												/>
+											</Buttons>
 											<If when={settings()?.project}>
-												<View class="gap-3 border-t border-border pt-3">
-													<Picker
-														label="Fund existing work"
-														placeholder="Choose work"
-														value={d().session || null}
-														items={(settings()?.fundedWork ?? []).map((w) => ({
-															value: w.id,
-															title: w.title,
-														}))}
-														onChange={(v) => edit("session", v)}
-													/>
-													<Field
-														label="New total allowance (USD, not an added amount)"
-														value={d().amount}
-														onChange={(v) => edit("amount", v)}
-														placeholder="Enter an amount"
-													/>
-													<Text class="text-xs text-faint">
-														Only explicit increases change an existing allowance. This does not clear
-														Pause, Stop, subscription or required-review holds.
-													</Text>
-													<Action
+												<Picker
+													label="Fund existing work"
+													placeholder="Choose work"
+													value={d().session || null}
+													items={(settings()?.fundedWork ?? []).map((w) => ({
+														value: w.id,
+														title: w.title,
+													}))}
+													onChange={(v) => edit("session", v)}
+												/>
+												<Field
+													label="New total allowance (USD, not an added amount)"
+													value={d().amount}
+													onChange={(v) => edit("amount", v)}
+													placeholder="Enter an amount"
+												/>
+												<Caption tone="faint">
+													Only explicit increases change an existing allowance. This does not clear Pause,
+													Stop, subscription or required-review holds.
+												</Caption>
+												<Buttons>
+													<Button
 														label="Approve allowance"
 														testID="funding-approve"
 														disabled={locked() || !d().session || fundingAmount(d().amount) == null}
@@ -206,60 +277,76 @@ export function FundingSettings(props: { controls: ModelControls }) {
 																})
 														}
 													/>
-												</View>
+												</Buttons>
 											</If>
-										</View>
+										</>
 									}
 								>
-									<Text class="text-sm text-needs-ink">
-										An allowance draft belongs to another project. Return there or discard it.
-									</Text>
+									<Notice
+										kind="needs"
+										placement="flow"
+										text="An allowance draft belongs to another project. Return there or discard it."
+										action={
+											<Link
+												label="Discard allowance draft"
+												disabled={locked()}
+												onPress={() => draft.set(null)}
+											/>
+										}
+									/>
 								</If>
-								<Action label="Discard allowance draft" onPress={() => draft.set(null)} disabled={locked()} />
-							</View>
+							</Block>
 						)}
 					</If>
-				</View>
-			</If>
-			<Each
-				of={(settings()?.fundedWork ?? []).filter((w) => w.subscription && !w.subscription.forced)}
-				key={(w) => w.id}
-			>
-				{(w) => (
-					<View class="gap-2 border-t border-border pt-3">
-						<Text class="text-sm text-needs-ink">{`${w().title}: subscription usage is at its limit.`}</Text>
-						<Text class="text-xs text-faint">
-							Continue anyway applies only to this chat and its helpers. Other spending and work holds stay.
-						</Text>
-						<Action
-							label="Continue anyway"
-							disabled={locked()}
-							onPress={() => void props.controls.write("continue-anyway", w().id)}
+				</If>
+				<Each
+					of={(settings()?.fundedWork ?? []).filter((w) => w.subscription && !w.subscription.forced)}
+					key={(w) => w.id}
+				>
+					{(w) => (
+						<Notice
+							kind="needs"
+							placement="section"
+							text={`${w().title}: subscription usage is at its limit.`}
+							detail="Continue anyway applies only to this chat and its helpers. Other spending and work holds stay."
+							action={
+								<Button
+									small
+									label="Continue anyway"
+									disabled={locked()}
+									onPress={() => void props.controls.write("continue-anyway", w().id)}
+								/>
+							}
 						/>
-					</View>
-				)}
-			</Each>
-			<Each
-				of={[
-					...new Set(
-						(settings()?.backgroundSubscription?.windows ?? [])
-							.filter((w) => !settings()?.backgroundSubscription?.force?.includes(w.provider))
-							.map((w) => w.provider),
-					),
-				]}
-				key={(p) => p}
-			>
-				{(p) => (
-					<View class="gap-2 border-t border-border pt-3">
-						<Text class="text-sm text-needs-ink">{`Background work is held by ${p()} subscription usage.`}</Text>
-						<Action
-							label={`Continue background anyway (${p()})`}
-							disabled={locked()}
-							onPress={() => void props.controls.write("background-continue", p())}
+					)}
+				</Each>
+				<Each
+					of={[
+						...new Set(
+							(settings()?.backgroundSubscription?.windows ?? [])
+								.filter((w) => !settings()?.backgroundSubscription?.force?.includes(w.provider))
+								.map((w) => w.provider),
+						),
+					]}
+					key={(p) => p}
+				>
+					{(p) => (
+						<Notice
+							kind="needs"
+							placement="section"
+							text={`Background work is held by ${p()} subscription usage.`}
+							action={
+								<Button
+									small
+									label={`Continue background anyway (${p()})`}
+									disabled={locked()}
+									onPress={() => void props.controls.write("background-continue", p())}
+								/>
+							}
 						/>
-					</View>
-				)}
-			</Each>
+					)}
+				</Each>
+			</Section>
 		</View>
 	);
 }

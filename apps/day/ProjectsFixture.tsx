@@ -1,8 +1,8 @@
 // Scripted mock data only. No daemon, filesystem, GitHub or credential access.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { mount, Scroll, signal } from "nsh";
 import { ProjectsSection } from "./ProjectsSection";
 import { type ProjectSetup, type ProjectsSource, restoreProjectSetup, savedProjectSetup } from "./projectSetup";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const writes = signal(0),
 	checks = signal(0),
@@ -95,39 +95,43 @@ const source: ProjectsSource = {
 };
 const shown = signal(true);
 mount(() => (
-	<View class="flex-1 bg-background">
-		<View class="flex-row items-center gap-2 px-6 py-3">
-			<Text>{`Mock data. Actions: ${writes()}. Checks: ${checks()}.`}</Text>
-			<Action label="Next uncertain" onPress={() => uncertain.set(true)} />
-			<Action
-				label="Many projects"
-				onPress={() => {
-					snapshot.projects = Array.from({ length: 12 }, (_, i) => ({
-						id: `project-${i}`,
-						name: `Project ${i + 1}`,
-						path: `/Users/test/src/project-${i + 1}`,
-						copy: "jj",
-						setup: [],
-					}));
-				}}
-			/>
-			<Action
-				label="Save and reopen"
-				onPress={() => {
-					const saved = savedProjectSetup();
-					shown.set(false);
-					restoreProjectSetup([]);
-					restoreProjectSetup(saved);
-					shown.set(true);
-				}}
-			/>
-		</View>
-		<Scroll class="flex-1">
-			<View class="mx-auto w-full max-w-3xl gap-6 px-6 py-6">
-				<If when={shown()}>
-					<ProjectsSection source={source} />
-				</If>
-			</View>
-		</Scroll>
-	</View>
+	<Scroll class="flex-1">
+		<Page width="form">
+			<Block>
+				<Caption>{`Mock data. Actions: ${writes()}. Checks: ${checks()}.`}</Caption>
+				<Buttons>
+					<Button label="Next uncertain" onPress={() => uncertain.set(true)} />
+					<Button
+						label="Many projects"
+						onPress={() => {
+							snapshot.projects = Array.from({ length: 12 }, (_, i) => ({
+								id: `project-${i}`,
+								name: `Project ${i + 1}`,
+								path: `/Users/test/src/project-${i + 1}`,
+								copy: "jj",
+								setup: [],
+							}));
+						}}
+					/>
+					<Button
+						label="Save and reopen"
+						onPress={() => {
+							const saved = savedProjectSetup();
+							shown.set(false);
+							restoreProjectSetup([]);
+							restoreProjectSetup(saved);
+							shown.set(true);
+						}}
+					/>
+				</Buttons>
+			</Block>
+			<If when={shown()}>
+				<Panel>
+					<Column>
+						<ProjectsSection source={source} />
+					</Column>
+				</Panel>
+			</If>
+		</Page>
+	</Scroll>
 ));

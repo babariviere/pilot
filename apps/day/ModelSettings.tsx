@@ -1,7 +1,6 @@
-// AI settings use the page's existing reading column, quiet rows and native controls.
-// Sign-in challenges and answers are ephemeral, never part of saved drafts or messages.
-import { effect, signal, Text, untracked, View } from "nsh";
-import { FundingSettings } from "./FundingSettings";
+// AI settings: the window's models, work profiles, shared defaults and provider sign-in, as sections of the
+// Settings panel's AI tab. Sign-in challenges and answers are ephemeral, never part of saved drafts or messages.
+import { effect, signal, untracked, View } from "nsh";
 import type { ModelControls, ModelRecovery, ModelSettings, SignInView } from "./modelControls";
 import {
 	modelDraft as draft,
@@ -11,8 +10,26 @@ import {
 	modelPatterns as patterns,
 	modelReplacement as replacement,
 } from "./modelSettingsDraft";
-import { Action, Field, QuietPanel, Picker, SectionTitle } from "./ui";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	EmptyLine,
+	Field,
+	Link,
+	Notice,
+	Picker,
+	Quote,
+	Row,
+	RowDetail,
+	Rows,
+	Section,
+} from "./ui";
 import { WorkProfiles } from "./WorkProfiles";
+
+const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 function effective(s: ModelSettings, task: boolean): string {
 	const list = task ? s.task : s.available;
@@ -36,72 +53,115 @@ function FailedWork(props: { controls: ModelControls; id: string; title: string 
 	const thinking = signal("");
 	const choice = () => read()?.choices.models.find((m) => m.id === model());
 	return (
-		<View class="gap-2 border-t border-border pt-3">
-			<Text class="text-sm text-foreground">{props.title}</Text>
-			<Text class="text-xs text-faint">
-				Only this chat is affected. Choosing a model saves it for an explicit next attempt; it does not restart
-				work.
-			</Text>
-			<Action
-				label="Choose a replacement"
-				disabled={props.controls.busy()}
-				onPress={() =>
-					void props.controls.recovery(props.id).then((r) => {
-						read.set(r);
-						model.set("");
-						thinking.set("");
-					})
-				}
-			/>
-			<If when={read()}>
-				{(r) => (
-					<View class="gap-2">
-						<If when={r().choices.models.length === 0}>
-							<Text class="text-sm text-needs-ink">
-								No eligible replacement for this chat. Check sign-in, its scope and the price ceiling.
-							</Text>
-						</If>
-						<Picker
-							label="Replacement for this chat"
-							items={r().choices.models.map((m) => ({ value: m.id, title: m.name }))}
-							value={model() || null}
-							placeholder="Choose an eligible model"
-							disabled={props.controls.busy()}
-							onChange={(id) => {
-								model.set(id);
-								thinking.set(r().choices.models.find((m) => m.id === id)?.taskDefaultThinking ?? "");
-							}}
-						/>
-						<If when={choice()}>
-							<Picker
-								label="Replacement thinking"
-								items={(choice()?.thinkingLevels ?? []).map((level) => ({ value: level, title: level }))}
-								value={thinking()}
-								placeholder="Choose supported thinking"
-								disabled={props.controls.busy()}
-								onChange={thinking.set}
-							/>
-						</If>
-						<Action
-							label="Save for next attempt"
-							disabled={props.controls.busy() || props.controls.unknown().length > 0 || !choice() || !thinking()}
-							onPress={() =>
-								void props.controls
-									.write("failed-model", {
-										sessionId: props.id,
-										source: r().source,
-										model: model(),
-										thinking: thinking(),
-									})
-									.then((ok) => {
-										if (ok) read.set(null);
-									})
-							}
-						/>
-					</View>
-				)}
+		<Row
+			mark="failed"
+			title={props.title}
+			meta="Only this chat is affected. Choosing a model saves it for an explicit next attempt; it does not restart work."
+			wrap
+			trailing={
+				<Button
+					small
+					label="Choose a replacement"
+					disabled={props.controls.busy()}
+					onPress={() =>
+						void props.controls.recovery(props.id).then((r) => {
+							read.set(r);
+							model.set("");
+							thinking.set("");
+						})
+					}
+				/>
+			}
+			detail={
+				<If when={read()}>
+					{(r) => (
+						<RowDetail>
+							<If when={r().choices.models.length === 0}>
+								<Caption tone="needs">
+									No eligible replacement for this chat. Check sign-in, its scope and the price ceiling.
+								</Caption>
+							</If>
+							<Buttons>
+								<Picker
+									label="Replacement for this chat"
+									items={r().choices.models.map((m) => ({ value: m.id, title: m.name }))}
+									value={model() || null}
+									placeholder="Choose an eligible model"
+									disabled={props.controls.busy()}
+									onChange={(id) => {
+										model.set(id);
+										thinking.set(r().choices.models.find((m) => m.id === id)?.taskDefaultThinking ?? "");
+									}}
+								/>
+								<If when={choice()}>
+									<Picker
+										label="Replacement thinking"
+										items={(choice()?.thinkingLevels ?? []).map((level) => ({ value: level, title: level }))}
+										value={thinking()}
+										placeholder="Choose supported thinking"
+										disabled={props.controls.busy()}
+										onChange={thinking.set}
+									/>
+								</If>
+								<Button
+									small
+									label="Save for next attempt"
+									disabled={
+										props.controls.busy() || props.controls.unknown().length > 0 || !choice() || !thinking()
+									}
+									onPress={() =>
+										void props.controls
+											.write("failed-model", {
+												sessionId: props.id,
+												source: r().source,
+												model: model(),
+												thinking: thinking(),
+											})
+											.then((ok) => {
+												if (ok) read.set(null);
+											})
+									}
+								/>
+							</Buttons>
+						</RowDetail>
+					)}
+				</If>
+			}
+		/>
+	);
+}
+
+/**
+ * What the last AI settings action said, and the actions whose answer was lost. Shown in the AI and Allowances
+ * tabs, which share these controls. Check only looks up a receipt; nothing is sent again.
+ */
+export function ModelStatus(props: { controls: ModelControls }) {
+	const c = props.controls;
+	return (
+		<>
+			<If when={c.message()}>
+				<Block>
+					<Caption testID="models-message">{c.message()}</Caption>
+				</Block>
 			</If>
-		</View>
+			<Each of={c.unknown()} key={(o) => o.operationId}>
+				{(o) => (
+					<Notice
+						kind="needs"
+						placement="section"
+						text="An earlier AI settings action is Unknown. No automatic retry."
+						action={
+							<Link
+								label="Check receipt"
+								testID="models-check"
+								disabled={c.busy()}
+								onPress={() => void c.check(o().operationId)}
+							/>
+						}
+					/>
+				)}
+			</Each>
+		</>
 	);
 }
 
@@ -143,400 +203,454 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 		untracked(() => void c.read());
 	});
 	return (
-		<View testID="model-settings" class="gap-4">
-			<View class="gap-1.5">
-				<SectionTitle title="AI" />
-				<Text class="text-sm text-muted-foreground">
-					Choose models for new work. Running chats keep their current model. Advanced Pi configuration stays
-					unchanged.
-				</Text>
-			</View>
-			<View class="flex-row items-center gap-3">
-				<Text class="flex-1 text-sm text-muted-foreground">
-					{s()?.project ? `Project: ${s()?.project?.name}` : "Shared settings for all projects"}
-				</Text>
-				<Action
-					label={c.busy() ? "Reading…" : "Read again"}
-					testID="models-read"
-					disabled={c.busy()}
-					onPress={() => void c.read()}
-				/>
-			</View>
-			<If when={c.message()}>
-				<Text testID="models-message" class="text-sm text-needs-ink">
-					{c.message()}
-				</Text>
-			</If>
-			<Each of={c.unknown()} key={(o) => o.operationId}>
-				{(o) => (
-					<View class="flex-row items-center gap-2">
-						<Text class="flex-1 text-sm text-muted-foreground">
-							An earlier AI settings action is Unknown. No automatic retry.
-						</Text>
-						<Action
-							label="Check receipt"
-							testID="models-check"
-							disabled={c.busy()}
-							onPress={() => void c.check(o().operationId)}
-						/>
-					</View>
-				)}
-			</Each>
-			<FundingSettings controls={c} />
+		<View testID="model-settings">
+			<Section
+				title="AI"
+				note={s()?.project ? `Project: ${s()?.project?.name}` : "Shared settings for all projects"}
+				action={
+					<Link
+						label={c.busy() ? "Reading…" : "Read again"}
+						testID="models-read"
+						disabled={c.busy()}
+						onPress={() => void c.read()}
+					/>
+				}
+			>
+				<Block>
+					<Body tone="muted" measure>
+						Choose models for new work. Running chats keep their current model. Advanced Pi configuration stays
+						unchanged.
+					</Body>
+				</Block>
+				<ModelStatus controls={c} />
+			</Section>
 			<If when={s()}>
 				{(read) => (
-					<View class="gap-4">
-						<WorkProfiles controls={c} settings={read()} />
-						<If
-							when={read().project}
-							else={
-								<Text class="text-sm text-muted-foreground">
-									Choose a project in Today to see its effective model, thinking and price ceiling. Shared
-									settings and sign-in stay available below.
-								</Text>
-							}
-						>
-							<View class="gap-2 border-t border-border pt-3">
-								<Text class="text-sm font-medium text-foreground">Effective choices</Text>
-								<Text
-									testID="models-effective-task"
-									class="text-sm text-muted-foreground"
-								>{`Mission/task start: ${effective(read(), true)}`}</Text>
-								<Text
-									testID="models-effective-build"
-									class="text-sm text-muted-foreground"
-								>{`Fresh Build: ${effective(read(), false)}`}</Text>
-								<Text class="text-xs text-faint">
-									Prepared copies, Ask profiles and existing chats can differ. A running chat's reported choice
-									is authoritative.
-								</Text>
-								<Text testID="models-price" class="text-sm text-muted-foreground">
-									{read().task.priceCeiling?.limit != null
-										? `Task-start ceiling: $${read().task.priceCeiling?.limit}/M input + output (${read().task.priceCeiling?.source}).`
-										: "Reference prices unavailable. New task starts are held until you set a replacement limit."}
-								</Text>
-							</View>
-						</If>
-						<If when={read().project}>
-							<View class="gap-2 border-t border-border pt-3">
-								<Text class="text-sm text-foreground">Project model override</Text>
-								<Picker
-									testID="models-project"
-									label="Project model override"
-									items={[{ value: "inherit", title: "Use Pi defaults" }, ...items()]}
-									value={read().project?.model ?? "inherit"}
-									placeholder={read().project?.model ?? "Use Pi defaults"}
-									searchable
-									disabled={disabled()}
-									onChange={(v) => void c.write("project-model", v === "inherit" ? null : v)}
-								/>
-								<Text class="text-xs text-faint">{`Pi project scope: ${read().scope.projectOverride === null ? "inherits shared scope" : JSON.stringify(read().scope.projectOverride)}. Pi project defaults may override shared defaults.`}</Text>
-							</View>
-						</If>
-						<View class="gap-2 border-t border-border pt-3">
-							<View class="flex-row items-center">
-								<Text class="flex-1 text-sm text-foreground">Shared defaults</Text>
-								<Action
-									label="Edit defaults"
-									testID="models-edit-defaults"
-									disabled={disabled() || edit() !== null}
-									onPress={() => {
-										modelEditBinding.set(read().binding);
-										modelEditProject.set(read().project?.id ?? "");
-										draft.set({ ...read().defaults });
-										replacement.set(read().defaults.pilotTaskPriceLimit?.toString() ?? "");
-										edit.set("defaults");
-									}}
-								/>
-							</View>
-							<Text class="text-sm text-muted-foreground">
-								{read().defaults.defaultModel
-									? `${read().defaults.defaultProvider ?? ""}/${read().defaults.defaultModel}`
-									: "Pi chooses the default"}
-							</Text>
-							<If when={edit() === "defaults"}>
-								<Picker
-									testID="models-default"
-									label="Shared default model"
-									items={[
-										{ value: "inherit", title: "Let Pi choose" },
-										...read().scope.candidates.map((m) => ({ value: m.id, title: m.name })),
-									]}
-									value={
-										draft()?.defaultModel ? `${draft()?.defaultProvider}/${draft()?.defaultModel}` : "inherit"
-									}
-									placeholder="Choose a shared default"
-									searchable
-									disabled={disabled()}
-									onChange={(v) => changeDefault(v === "inherit" ? "" : v)}
-								/>
-								<Picker
-									testID="models-thinking"
-									label="Shared default thinking"
-									items={[
-										{ value: "inherit", title: "Keep action-specific defaults" },
-										...["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((v) => ({
-											value: v,
-											title: v,
-										})),
-									]}
-									value={draft()?.defaultThinkingLevel ?? "inherit"}
-									placeholder="Thinking"
-									disabled={disabled()}
-									onChange={(v) => {
-										const d = draft();
-										if (d) draft.set({ ...d, defaultThinkingLevel: v === "inherit" ? null : v });
-									}}
-								/>
-								<Text class="text-xs text-faint">
-									Per-model thinking settings and scope pins stay intact. Supported levels and each action's
-									effective value appear below.
-								</Text>
-								<Field
-									label="Replacement price limit ($/M input + output)"
-									testID="models-limit"
-									value={replacement()}
-									placeholder="Required only without reference prices"
-									onChange={replacement.set}
-								/>
-							</If>
-						</View>
-						<View class="gap-2 border-t border-border pt-3">
-							<View class="flex-row items-center">
-								<Text class="flex-1 text-sm text-foreground">Chosen models</Text>
-								<Action
-									label="Edit list"
-									testID="models-edit-scope"
-									disabled={disabled() || edit() !== null}
-									onPress={() => {
-										modelEditBinding.set(read().binding);
-										modelEditProject.set(read().project?.id ?? "");
-										patterns.set([...(read().scope.enabledModels ?? [])]);
-										edit.set("scope");
-									}}
-								/>
-							</View>
-							<Text class="text-sm text-muted-foreground">
-								{read().scope.enabledModels?.length
-									? read().scope.enabledModels?.join(", ")
-									: "All authenticated models"}
-							</Text>
-							<Each of={read().scope.resolution.filter((r) => r.matches.length === 0)} key={(r) => r.pattern}>
-								{(r) => (
-									<Text class="text-xs text-needs-ink">{`${r().pattern}: unavailable (${r().unresolved ?? "unknown"}). Sign in or choose another model.`}</Text>
-								)}
-							</Each>
-							<If when={edit() === "scope"}>
-								<Each
-									of={patterns().map((pattern, index) => ({ pattern, index }))}
-									key={(p) => String(p.index)}
-								>
-									{(p) => (
-										<View class="flex-row items-center">
-											<Text class="flex-1 text-sm text-muted-foreground">{p().pattern}</Text>
-											<Action
-												label="Remove"
-												disabled={disabled()}
-												onPress={() => patterns.set(patterns().filter((_, index) => index !== p().index))}
-											/>
-										</View>
-									)}
-								</Each>
-								<Picker
-									label="Add a model to the chosen list"
-									items={read().scope.candidates.map((m) => ({
-										value: m.id,
-										title: `${m.name} (${m.provider})`,
-									}))}
-									value={null}
-									placeholder="Add a model"
-									searchable
-									disabled={disabled()}
-									onChange={(v) => {
-										if (!patterns().includes(v)) patterns.set([...patterns(), v]);
-									}}
-								/>
-								<Action
-									label="Use all authenticated models"
-									disabled={disabled()}
-									onPress={() =>
-										void c.write("scope", null, modelEditBinding()).then((ok) => {
-											if (ok) edit.set(null);
-										})
-									}
-								/>
-							</If>
-						</View>
-						<If when={edit()}>
+					<>
+						<Block>
+							<WorkProfiles controls={c} settings={read()} />
+						</Block>
+						<Section title="Effective choices">
 							<If
-								when={
-									modelEditProject() === (read().project?.id ?? "") && modelEditBinding() !== read().binding
+								when={read().project}
+								else={
+									<Block>
+										<Body tone="muted">
+											Choose a project in Today to see its effective model, thinking and price ceiling.
+											Shared settings and sign-in stay available below.
+										</Body>
+									</Block>
 								}
 							>
-								<QuietPanel class="gap-2">
-									<Text class="text-sm text-foreground">AI settings changed. Your edits are kept.</Text>
-									<Text class="text-xs text-faint">{`Saved now: ${edit() === "defaults" ? JSON.stringify(read().defaults) : JSON.stringify(read().scope.enabledModels)}`}</Text>
-									<Action
-										label="Keep my edits"
-										disabled={disabled()}
-										onPress={() => modelEditBinding.set(read().binding)}
-									/>
-								</QuietPanel>
+								<Block>
+									<Body testID="models-effective-task" tone="muted">
+										{`Mission/task start: ${effective(read(), true)}`}
+									</Body>
+									<Body testID="models-effective-build" tone="muted">
+										{`Fresh Build: ${effective(read(), false)}`}
+									</Body>
+									<Body testID="models-price" tone="muted">
+										{read().task.priceCeiling?.limit != null
+											? `Task-start ceiling: $${read().task.priceCeiling?.limit}/M input + output (${read().task.priceCeiling?.source}).`
+											: "Reference prices unavailable. New task starts are held until you set a replacement limit."}
+									</Body>
+									<Caption tone="faint">
+										Prepared copies, Ask profiles and existing chats can differ. A running chat's reported
+										choice is authoritative.
+									</Caption>
+								</Block>
 							</If>
-							<View class="flex-row gap-2">
-								<If when={modelEditProject() !== (read().project?.id ?? "")}>
-									<Text class="text-sm text-needs-ink">
-										These edits belong to another project. Revert them before editing this project's settings.
-									</Text>
+						</Section>
+						<Section title="Models">
+							<Rows>
+								<If when={read().project}>
+									<Row
+										title="Project model override"
+										meta={`Pi project scope: ${read().scope.projectOverride === null ? "inherits shared scope" : JSON.stringify(read().scope.projectOverride)}. Pi project defaults may override shared defaults.`}
+										wrap
+										trailing={
+											<Picker
+												testID="models-project"
+												label="Project model override"
+												items={[{ value: "inherit", title: "Use Pi defaults" }, ...items()]}
+												value={read().project?.model ?? "inherit"}
+												placeholder={read().project?.model ?? "Use Pi defaults"}
+												searchable
+												disabled={disabled()}
+												onChange={(v) => void c.write("project-model", v === "inherit" ? null : v)}
+											/>
+										}
+									/>
 								</If>
-								<Action
-									variant="primary"
-									label="Save AI settings"
-									testID="models-save"
-									disabled={
-										disabled() ||
-										modelEditProject() !== (read().project?.id ?? "") ||
-										(edit() === "scope" && patterns().length === 0)
+								<Row
+									title="Shared defaults"
+									meta={
+										read().defaults.defaultModel
+											? `${read().defaults.defaultProvider ?? ""}/${read().defaults.defaultModel}`
+											: "Pi chooses the default"
 									}
-									onPress={() => void save()}
+									trailing={
+										<Button
+											small
+											label="Edit defaults"
+											testID="models-edit-defaults"
+											disabled={disabled() || edit() !== null}
+											onPress={() => {
+												modelEditBinding.set(read().binding);
+												modelEditProject.set(read().project?.id ?? "");
+												draft.set({ ...read().defaults });
+												replacement.set(read().defaults.pilotTaskPriceLimit?.toString() ?? "");
+												edit.set("defaults");
+											}}
+										/>
+									}
 								/>
-								<Action label="Revert" disabled={c.busy()} onPress={() => edit.set(null)} />
-							</View>
-						</If>
-						<If when={read().project}>
-							<View class="gap-2 border-t border-border pt-3">
-								<Text class="text-sm font-medium text-foreground">Eligible models and thinking</Text>
-								<If when={read().task.models.length === 0}>
-									<Text class="text-sm text-muted-foreground">
-										No eligible model for new tasks. Check sign-in, chosen scope and the price ceiling.
-									</Text>
+								<If when={edit() === "defaults"}>
+									<Row
+										title="Shared default model"
+										trailing={
+											<Picker
+												testID="models-default"
+												label="Shared default model"
+												items={[
+													{ value: "inherit", title: "Let Pi choose" },
+													...read().scope.candidates.map((m) => ({ value: m.id, title: m.name })),
+												]}
+												value={
+													draft()?.defaultModel
+														? `${draft()?.defaultProvider}/${draft()?.defaultModel}`
+														: "inherit"
+												}
+												placeholder="Choose a shared default"
+												searchable
+												disabled={disabled()}
+												onChange={(v) => changeDefault(v === "inherit" ? "" : v)}
+											/>
+										}
+									/>
+									<Row
+										title="Shared default thinking"
+										meta="Per-model thinking settings and scope pins stay intact. Supported levels and each action's effective value appear below."
+										wrap
+										trailing={
+											<Picker
+												testID="models-thinking"
+												label="Shared default thinking"
+												items={[
+													{ value: "inherit", title: "Keep action-specific defaults" },
+													...THINKING.map((v) => ({ value: v, title: v })),
+												]}
+												value={draft()?.defaultThinkingLevel ?? "inherit"}
+												placeholder="Thinking"
+												disabled={disabled()}
+												onChange={(v) => {
+													const d = draft();
+													if (d) draft.set({ ...d, defaultThinkingLevel: v === "inherit" ? null : v });
+												}}
+											/>
+										}
+									/>
+									<Block>
+										<Field
+											label="Replacement price limit ($/M input + output)"
+											testID="models-limit"
+											value={replacement()}
+											placeholder="Required only without reference prices"
+											onChange={replacement.set}
+										/>
+									</Block>
 								</If>
-								<If when={read().task.models.length > 5}>
-									<Text class="text-xs text-faint">{`First 5 of ${read().task.models.length} eligible models. Search the model pickers for the full list.`}</Text>
-								</If>
-								<Each of={read().task.models.slice(0, 5)} key={(m) => m.id}>
-									{(m) => (
-										<View class="gap-1 py-1">
-											<Text class="text-sm text-foreground">{`${m().name} (${m().id})`}</Text>
-											<Text class="text-xs text-faint">{`Supported: ${m().thinkingLevels?.join(", ") ?? "not reported"}. Task: ${m().taskDefaultThinking ?? "not reported"}. Build: ${m().defaultThinking ?? "not reported"}. Switch: ${m().modelChangeThinking ?? "keep current thinking"}.`}</Text>
-										</View>
+								<Row
+									title="Chosen models"
+									meta={
+										read().scope.enabledModels?.length
+											? read().scope.enabledModels?.join(", ")
+											: "All authenticated models"
+									}
+									wrap
+									trailing={
+										<Button
+											small
+											label="Edit list"
+											testID="models-edit-scope"
+											disabled={disabled() || edit() !== null}
+											onPress={() => {
+												modelEditBinding.set(read().binding);
+												modelEditProject.set(read().project?.id ?? "");
+												patterns.set([...(read().scope.enabledModels ?? [])]);
+												edit.set("scope");
+											}}
+										/>
+									}
+								/>
+								<Each of={read().scope.resolution.filter((r) => r.matches.length === 0)} key={(r) => r.pattern}>
+									{(r) => (
+										<Row
+											mark="needs"
+											title={`${r().pattern}: unavailable (${r().unresolved ?? "unknown"}).`}
+											meta="Sign in or choose another model."
+										/>
 									)}
 								</Each>
-							</View>
+								<If when={edit() === "scope"}>
+									<Each
+										of={patterns().map((pattern, index) => ({ pattern, index }))}
+										key={(p) => String(p.index)}
+									>
+										{(p) => (
+											<Row
+												title={p().pattern}
+												trailing={
+													<Button
+														small
+														label="Remove"
+														disabled={disabled()}
+														onPress={() =>
+															patterns.set(patterns().filter((_, index) => index !== p().index))
+														}
+													/>
+												}
+											/>
+										)}
+									</Each>
+									<Row
+										title="Add a model to the chosen list"
+										trailing={
+											<Picker
+												label="Add a model to the chosen list"
+												items={read().scope.candidates.map((m) => ({
+													value: m.id,
+													title: `${m.name} (${m.provider})`,
+												}))}
+												value={null}
+												placeholder="Add a model"
+												searchable
+												disabled={disabled()}
+												onChange={(v) => {
+													if (!patterns().includes(v)) patterns.set([...patterns(), v]);
+												}}
+											/>
+										}
+									/>
+								</If>
+							</Rows>
+							<If when={edit()}>
+								<If
+									when={
+										modelEditProject() === (read().project?.id ?? "") && modelEditBinding() !== read().binding
+									}
+								>
+									<Notice
+										kind="needs"
+										placement="section"
+										text="AI settings changed. Your edits are kept."
+										detail={`Saved now: ${edit() === "defaults" ? JSON.stringify(read().defaults) : JSON.stringify(read().scope.enabledModels)}`}
+										action={
+											<Link
+												label="Keep my edits"
+												disabled={disabled()}
+												onPress={() => modelEditBinding.set(read().binding)}
+											/>
+										}
+									/>
+								</If>
+								<If when={modelEditProject() !== (read().project?.id ?? "")}>
+									<Notice
+										kind="needs"
+										placement="section"
+										text="These edits belong to another project. Revert them before editing this project's settings."
+									/>
+								</If>
+								<Block>
+									<Buttons>
+										<Button
+											kind="primary"
+											label="Save AI settings"
+											testID="models-save"
+											disabled={
+												disabled() ||
+												modelEditProject() !== (read().project?.id ?? "") ||
+												(edit() === "scope" && patterns().length === 0)
+											}
+											onPress={() => void save()}
+										/>
+										<Button label="Revert" disabled={c.busy()} onPress={() => edit.set(null)} />
+										<If when={edit() === "scope"}>
+											<Button
+												label="Use all authenticated models"
+												disabled={disabled()}
+												onPress={() =>
+													void c.write("scope", null, modelEditBinding()).then((ok) => {
+														if (ok) edit.set(null);
+													})
+												}
+											/>
+										</If>
+									</Buttons>
+								</Block>
+							</If>
+						</Section>
+						<If when={read().project}>
+							<Section
+								title="Eligible models and thinking"
+								count={read().task.models.length}
+								footnote={
+									read().task.models.length > 5
+										? `First 5 of ${read().task.models.length} eligible models. Search the model pickers for the full list.`
+										: undefined
+								}
+							>
+								<If when={read().task.models.length === 0}>
+									<EmptyLine text="No eligible model for new tasks. Check sign-in, chosen scope and the price ceiling." />
+								</If>
+								<Rows>
+									<Each of={read().task.models.slice(0, 5)} key={(m) => m.id}>
+										{(m) => (
+											<Row
+												title={`${m().name} (${m().id})`}
+												meta={`Supported: ${m().thinkingLevels?.join(", ") ?? "not reported"}. Task: ${m().taskDefaultThinking ?? "not reported"}. Build: ${m().defaultThinking ?? "not reported"}. Switch: ${m().modelChangeThinking ?? "keep current thinking"}.`}
+												wrap
+											/>
+										)}
+									</Each>
+								</Rows>
+							</Section>
 						</If>
 						<If when={(read().failed?.length ?? 0) > 0}>
-							<View class="gap-2">
-								<SectionTitle title="Failed work" />
-								<Text class="text-xs text-faint">{`Showing ${read().failed?.length ?? 0} of ${read().failedCount ?? 0} failed chats. Other work keeps its own controls.`}</Text>
-								<Each of={read().failed ?? []} key={(f) => f.id}>
-									{(f) => <FailedWork controls={c} id={f().id} title={f().title} />}
-								</Each>
-							</View>
-						</If>
-						<View class="gap-3 border-t border-border pt-3">
-							<SectionTitle title="Provider sign-in" />
-							<Text class="text-xs text-faint">
-								Sign-in codes stay out of chats and saved drafts. Sign out removes Pilot's stored credential,
-								not environment keys or the provider's own authorization.
-							</Text>
-							<Each
-								of={read().providers.filter((p) => p.methods.length > 0 || p.credential !== "missing")}
-								key={(p) => p.id}
+							<Section
+								title="Failed work"
+								count={read().failedCount ?? 0}
+								footnote={`Showing ${read().failed?.length ?? 0} of ${read().failedCount ?? 0} failed chats. Other work keeps its own controls.`}
 							>
-								{(p) => (
-									<View class="gap-2 border-t border-border pt-3">
-										<Text class="text-sm text-foreground">{`${p().name}: ${p().credential.replaceAll("_", " ")}`}</Text>
-										<View class="flex-row flex-wrap gap-2">
-											<Each of={p().methods} key={(m) => m}>
-												{(m) => (
-													<Action
-														label={
-															m() === "device_code"
-																? "Sign in with device code"
-																: "Sign in with browser code"
-														}
-														disabled={
-															disabled() ||
-															read().runs.some(
-																(r) =>
-																	r.provider === p().id &&
-																	["starting", "waiting", "working"].includes(r.state),
-															)
-														}
-														onPress={() => {
-															challenge.set(null);
-															answer.set("");
-															void c.write("sign-in", { provider: p().id, method: m() });
-														}}
-													/>
-												)}
-											</Each>
-											<Action label="Sign out" disabled={c.busy()} onPress={() => logout.set(p().id)} />
-										</View>
-										<If when={logout() === p().id}>
-											<View class="gap-2">
-												<Text class="text-sm text-muted-foreground">
-													This cancels pending sign-in and removes this provider's stored credential.
-													Affected work may need sign-in again.
-												</Text>
-												<View class="flex-row">
-													<Action
-														label="Confirm sign out"
+								<Rows>
+									<Each of={read().failed ?? []} key={(f) => f.id}>
+										{(f) => <FailedWork controls={c} id={f().id} title={f().title} />}
+									</Each>
+								</Rows>
+							</Section>
+						</If>
+						<Section title="Provider sign-in">
+							<Block>
+								<Caption tone="faint">
+									Sign-in codes stay out of chats and saved drafts. Sign out removes Pilot's stored credential,
+									not environment keys or the provider's own authorization.
+								</Caption>
+							</Block>
+							<Rows>
+								<Each
+									of={read().providers.filter((p) => p.methods.length > 0 || p.credential !== "missing")}
+									key={(p) => p.id}
+								>
+									{(p) => (
+										<Row
+											title={p().name}
+											meta={p().credential.replaceAll("_", " ")}
+											detail={
+												<RowDetail>
+													<Buttons>
+														<Each of={p().methods} key={(m) => m}>
+															{(m) => (
+																<Button
+																	small
+																	label={
+																		m() === "device_code"
+																			? "Sign in with device code"
+																			: "Sign in with browser code"
+																	}
+																	disabled={
+																		disabled() ||
+																		read().runs.some(
+																			(r) =>
+																				r.provider === p().id &&
+																				["starting", "waiting", "working"].includes(r.state),
+																		)
+																	}
+																	onPress={() => {
+																		challenge.set(null);
+																		answer.set("");
+																		void c.write("sign-in", { provider: p().id, method: m() });
+																	}}
+																/>
+															)}
+														</Each>
+														<Button
+															small
+															label="Sign out"
+															disabled={c.busy()}
+															onPress={() => logout.set(p().id)}
+														/>
+													</Buttons>
+													<If when={logout() === p().id}>
+														<Caption>
+															This cancels pending sign-in and removes this provider's stored credential.
+															Affected work may need sign-in again.
+														</Caption>
+														<Buttons>
+															<Button
+																small
+																kind="destructive"
+																label="Confirm sign out"
+																disabled={c.busy()}
+																onPress={() => {
+																	challenge.set(null);
+																	answer.set("");
+																	void c.write("logout", p().id).then((ok) => {
+																		if (ok) logout.set(null);
+																	});
+																}}
+															/>
+															<Button small label="Keep signed in" onPress={() => logout.set(null)} />
+														</Buttons>
+													</If>
+												</RowDetail>
+											}
+										/>
+									)}
+								</Each>
+								<Each of={read().runs} key={(r) => r.id}>
+									{(r) => (
+										<Row
+											title={`${r().provider}: ${r().state}${r().reauthenticationRequired ? ", fresh sign-in required" : ""}`}
+											trailing={
+												<>
+													<Button
+														small
+														label="Check sign-in"
 														disabled={c.busy()}
-														onPress={() => {
-															challenge.set(null);
-															answer.set("");
-															void c.write("logout", p().id).then((ok) => {
-																if (ok) logout.set(null);
-															});
-														}}
+														onPress={() => void checkRun(r().id)}
 													/>
-													<Action label="Keep signed in" onPress={() => logout.set(null)} />
-												</View>
-											</View>
-										</If>
-									</View>
-								)}
-							</Each>
-							<Each of={read().runs} key={(r) => r.id}>
-								{(r) => (
-									<View class="gap-2">
-										<Text class="text-sm text-muted-foreground">{`${r().provider}: ${r().state}${r().reauthenticationRequired ? ", fresh sign-in required" : ""}`}</Text>
-										<View class="flex-row">
-											<Action
-												label="Check sign-in"
-												disabled={c.busy()}
-												onPress={() => void checkRun(r().id)}
-											/>
-											<If when={["starting", "waiting", "working"].includes(r().state)}>
-												<Action
-													label="Cancel sign-in"
-													disabled={c.busy()}
-													onPress={() => {
-														challenge.set(null);
-														answer.set("");
-														void c.write("cancel", r().id);
-													}}
-												/>
-											</If>
-										</View>
-									</View>
-								)}
-							</Each>
+													<If when={["starting", "waiting", "working"].includes(r().state)}>
+														<Button
+															small
+															label="Cancel sign-in"
+															disabled={c.busy()}
+															onPress={() => {
+																challenge.set(null);
+																answer.set("");
+																void c.write("cancel", r().id);
+															}}
+														/>
+													</If>
+												</>
+											}
+										/>
+									)}
+								</Each>
+							</Rows>
 							<If when={challenge()?.challenge}>
-								<QuietPanel testID="models-sign-in" size="lg" class="gap-2">
-									<Text class="text-sm text-foreground">Complete this sign-in with your provider.</Text>
-									<View selectable>
-										<Text class="text-sm text-foreground">{challenge()?.challenge?.userCode ?? ""}</Text>
-									</View>
-									<Action
-										label="Open sign-in page"
-										disabled={c.busy()}
-										onPress={() => {
-											const v = challenge();
-											if (v) void c.signIn(v.run.id, "open");
-										}}
-									/>
+								<Block testID="models-sign-in" gap={3}>
+									<Body>Complete this sign-in with your provider.</Body>
+									<Quote code text={challenge()?.challenge?.userCode ?? ""} />
+									<Buttons>
+										<Button
+											label="Open sign-in page"
+											disabled={c.busy()}
+											onPress={() => {
+												const v = challenge();
+												if (v) void c.signIn(v.run.id, "open");
+											}}
+										/>
+									</Buttons>
 									<If when={challenge()?.challenge?.type === "manual_code"}>
 										<Field
 											label="Provider response (code#state)"
@@ -546,22 +660,24 @@ export function ModelSettingsSection(props: { controls: ModelControls }) {
 											placeholder="Paste the complete response"
 											onChange={answer.set}
 										/>
-										<Action
-											label="Send sign-in response"
-											disabled={c.busy() || !answer().trim()}
-											onPress={() => {
-												const v = challenge();
-												const text = answer();
-												answer.set("");
-												challenge.set(null);
-												if (v?.challenge) void c.signIn(v.run.id, "answer", v.challenge.id, text);
-											}}
-										/>
+										<Buttons>
+											<Button
+												label="Send sign-in response"
+												disabled={c.busy() || !answer().trim()}
+												onPress={() => {
+													const v = challenge();
+													const text = answer();
+													answer.set("");
+													challenge.set(null);
+													if (v?.challenge) void c.signIn(v.run.id, "answer", v.challenge.id, text);
+												}}
+											/>
+										</Buttons>
 									</If>
-								</QuietPanel>
+								</Block>
 							</If>
-						</View>
-					</View>
+						</Section>
+					</>
 				)}
 			</If>
 		</View>

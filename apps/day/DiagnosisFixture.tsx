@@ -1,9 +1,9 @@
 // Test-only scripted service. No operational evidence or network access.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { mount, Scroll, signal } from "nsh";
 import { DiagnosisReply, DiagnosisSettings } from "./DiagnosisSettings";
 import type { DiagnosisControls, DiagnosisOperation, DiagnosisSnapshot } from "./diagnosisControls";
 import { restoreDiagnosis, savedDiagnosis } from "./diagnosisDraft";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const snapshot = signal<DiagnosisSnapshot | null>({
 	version: 1,
@@ -53,21 +53,33 @@ const c: DiagnosisControls = {
 	},
 };
 mount(() => (
-	<View class="flex-1 bg-background">
-		<View class="flex-row gap-2 p-3">
-			<Action label="Restore draft" onPress={() => restoreDiagnosis(savedDiagnosis())} />
-			<Action label="Next unknown" onPress={() => nextUnknown.set(true)} />
-			<Action label="External edit" onPress={() => snapshot.set({ ...snapshot()!, binding: "c".repeat(64) })} />
-			<Action label="Show reply" onPress={() => reply.set(!reply())} />
-			<Text>{`Sends: ${sends()}, checks: ${checks()}, reads: ${reading()}`}</Text>
-		</View>
-		<Scroll class="flex-1">
-			<View class="w-full max-w-5xl self-center gap-5 px-6 py-6">
-				<Text class="text-xs text-muted-foreground">Mock data · no Pilot settings change</Text>
-				<If when={reply()} else={<DiagnosisSettings controls={c} />}>
-					<DiagnosisReply controls={c} sessionId="specialist" />
-				</If>
-			</View>
-		</Scroll>
-	</View>
+	<Scroll class="flex-1">
+		<Page width="form">
+			<Block>
+				<Caption tone="faint">Mock data · no Pilot settings change</Caption>
+				<Buttons>
+					<Button label="Restore draft" onPress={() => restoreDiagnosis(savedDiagnosis())} />
+					<Button label="Next unknown" onPress={() => nextUnknown.set(true)} />
+					<Button
+						label="External edit"
+						onPress={() => snapshot.set({ ...snapshot()!, binding: "c".repeat(64) })}
+					/>
+					<Button label="Show reply" onPress={() => reply.set(!reply())} />
+				</Buttons>
+				<Caption>{`Sends: ${sends()}, checks: ${checks()}, reads: ${reading()}`}</Caption>
+			</Block>
+			<If
+				when={reply()}
+				else={
+					<Panel>
+						<Column>
+							<DiagnosisSettings controls={c} />
+						</Column>
+					</Panel>
+				}
+			>
+				<DiagnosisReply controls={c} sessionId="specialist" />
+			</If>
+		</Page>
+	</Scroll>
 ));

@@ -1,9 +1,9 @@
 // Test-only invented source. No providers, accounts or files.
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { mount, Scroll, signal } from "nsh";
 import { SlackSettings } from "./SlackSettings";
 import type { SlackControls, SlackSnapshot } from "./slackControls";
 import { restoreSlackDraft, savedSlackDraft } from "./slackDraft";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, Page, Panel } from "./ui";
 
 const snapshot = signal<SlackSnapshot | null>({
 	version: 1,
@@ -72,43 +72,52 @@ const controls: SlackControls = {
 	},
 };
 mount(() => (
-	<Scroll class="flex-1 bg-background">
-		<View class="p-6 gap-4">
-			<Text>Mock data · Slack settings</Text>
-			<Text>{`Sends: ${sends()}, reads: ${reads()}, checks: ${checks()}, imports: ${imports()}`}</Text>
-			<View class="flex-row flex-wrap gap-2">
-				<Action label="Toggle Settings" onPress={() => shown.set(!shown())} />
-				{/* A read as Pilot starts one on its own (a change, the window coming back). */}
-				<Action label="Fixture read" onPress={() => void controls.read()} />
-				<Action label="Restore draft" onPress={() => restoreSlackDraft(savedSlackDraft())} />
-				<Action label="External change" onPress={() => snapshot.set({ ...snapshot()!, binding: "c".repeat(64) })} />
-				<Action
-					label="Other project"
-					onPress={() => snapshot.set({ ...snapshot()!, projectId: "other", projectName: "Other project" })}
-				/>
-				<Action label="Lose reply" onPress={() => lose.set(true)} />
-				<Action label="Delay write" onPress={() => hold.set(true)} />
-				<Action
-					label="Finish write"
-					onPress={() => {
-						hold.set(false);
-						finish?.();
-					}}
-				/>
-				<Action
-					label="Rate limit"
-					onPress={() =>
-						snapshot.set({
-							...snapshot()!,
-							source: { status: "error", error: "Slack rate limit", nextPollAt: 1794846000000 },
-						})
-					}
-				/>
-				<Action label="Unavailable" onPress={() => snapshot.set(null)} />
-			</View>
+	<Scroll class="flex-1">
+		<Page width="form">
+			<Block>
+				<Caption tone="faint">Mock data · Slack settings</Caption>
+				<Caption>{`Sends: ${sends()}, reads: ${reads()}, checks: ${checks()}, imports: ${imports()}`}</Caption>
+				<Buttons>
+					<Button label="Toggle Settings" onPress={() => shown.set(!shown())} />
+					{/* A read as Pilot starts one on its own (a change, the window coming back). */}
+					<Button label="Fixture read" onPress={() => void controls.read()} />
+					<Button label="Restore draft" onPress={() => restoreSlackDraft(savedSlackDraft())} />
+					<Button
+						label="External change"
+						onPress={() => snapshot.set({ ...snapshot()!, binding: "c".repeat(64) })}
+					/>
+					<Button
+						label="Other project"
+						onPress={() => snapshot.set({ ...snapshot()!, projectId: "other", projectName: "Other project" })}
+					/>
+					<Button label="Lose reply" onPress={() => lose.set(true)} />
+					<Button label="Delay write" onPress={() => hold.set(true)} />
+					<Button
+						label="Finish write"
+						onPress={() => {
+							hold.set(false);
+							finish?.();
+						}}
+					/>
+					<Button
+						label="Rate limit"
+						onPress={() =>
+							snapshot.set({
+								...snapshot()!,
+								source: { status: "error", error: "Slack rate limit", nextPollAt: 1794846000000 },
+							})
+						}
+					/>
+					<Button label="Unavailable" onPress={() => snapshot.set(null)} />
+				</Buttons>
+			</Block>
 			<If when={shown()}>
-				<SlackSettings controls={controls} />
+				<Panel>
+					<Column>
+						<SlackSettings controls={controls} />
+					</Column>
+				</Panel>
 			</If>
-		</View>
+		</Page>
 	</Scroll>
 ));
