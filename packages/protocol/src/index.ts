@@ -482,6 +482,8 @@ export interface SessionSummary {
 	 * reply (`waitsForReply`). Omitted otherwise.
 	 */
 	canContinue?: true;
+	/** This existing chat accepts an ordinary follow-up. The service rechecks on send. */
+	canReply?: true;
 	/**
 	 * A mission builder ended its turn with its task open, no new delivery and no question, even after Pilot's one
 	 * automatic reminder: it likely asks the user something in prose. Reply or Continue moves it. Omitted otherwise.

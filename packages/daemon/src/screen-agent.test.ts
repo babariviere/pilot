@@ -230,7 +230,8 @@ test("a screen chat takes replies and triages the feedback it helped write", asy
 	const reply = (sessionId: string, message: string) =>
 		f.operation("chat-reply", sessionId, { purpose: "chat-reply", sessionId, message }, "0".repeat(64));
 	assert.equal((await f.post(reply(screen, "And this one?"))).state, "accepted");
-	assert.equal((await f.post(reply(ask, "And this one?"))).state, "rejected");
+	// Ordinary Ask chats now accept their own follow-ups, but cannot be adopted for screen feedback.
+	assert.equal((await f.post(reply(ask, "And this one?"))).state, "accepted");
 	Object.assign(metas.get(screen)!, { pending: [] });
 
 	const saved = f.operation("user-feedback", randomUUID(), {

@@ -16267,6 +16267,27 @@ ${run.excerpt}`,
 				meta.missionUserStopGeneration !== undefined ||
 				(meta.outcome === "failed" && !!failedModelSource) ||
 				waitsForReply);
+		const canReply =
+			!retainedHistory &&
+			!coordinator &&
+			!meta.control &&
+			!meta.role &&
+			!meta.planning &&
+			membership.missionRole !== "explorer" &&
+			!awaitedQuestion &&
+			meta.outcome !== "question" &&
+			meta.outcome !== "failed" &&
+			kernelState !== "failed" &&
+			!heldAtQuota &&
+			!offlinePaused &&
+			!paused &&
+			!subscriptionPause &&
+			workHolds.every((hold) => hold === "User Stop hold") &&
+			!this.codingQueue.has(meta.id) &&
+			!meta.preparing &&
+			!meta.continuedTo &&
+			!meta.continuationPending &&
+			meta.archivedAt === undefined;
 		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const mcpAttention =
 			meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : undefined;
@@ -16418,6 +16439,7 @@ ${run.excerpt}`,
 			...(this.canRetryHandoff(meta) ? { canRetryHandoff: true } : {}),
 			...(canContinue ? { canContinue: true as const } : {}),
 			...(waitsForReply ? { waitsForReply: true as const } : {}),
+			...(canReply ? { canReply: true as const } : {}),
 			...(questionSettled ? { questionSettled: true as const } : {}),
 			...(explorer ? { mapExplorer: true as const } : {}),
 			...(meta.outcome === "failed" &&

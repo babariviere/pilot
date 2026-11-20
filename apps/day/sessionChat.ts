@@ -1,4 +1,4 @@
-// One chat Pilot started for the user, read only: a feedback triage or fix,
+// One chat Pilot started for the user: a feedback triage or fix,
 // or a chat started from New. `day.chat.read` opens it and reads its newest
 // rows, or the page before what shows; `day.chat.snapshot` reads what the
 // root last read (it reads the chat again as it changes, while it is open);
@@ -7,7 +7,7 @@
 // `day.chat.continue` asks a stopped or failed chat to go on with fixed words
 // the service writes, sent once. `day.chat.dismiss` takes a failed chat off
 // Needs you and sends nothing to it. `day.chat.reply` sends the user's own
-// words, once, to a chat waiting for a reply. `day.chat.check` reads any of
+// words, once, to an eligible chat. `day.chat.check` reads any of
 // these receipts.
 import { type Signal, signal } from "nsh";
 import type { ChatRow } from "pilot-day/native";
@@ -43,6 +43,8 @@ export type SessionChat = {
 	queue?: CodingQueue | null;
 	/** The service says Continue can move it: stopped, or failed with a safe retry. */
 	canContinue?: boolean;
+	canReply?: boolean;
+	reply?: ContinueResult | null;
 	/** Its question no longer needs the user: the plan settled it. */
 	questionSettled?: boolean;
 	specialist?: boolean;
@@ -85,7 +87,7 @@ export interface SessionChatSource {
 	handoffChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Takes failed chat `sessionId` off Needs you, once. It sends nothing to the chat. */
 	dismissChat?(sessionId: string): Promise<ContinueResult>;
-	/** Sends the user's own words once to chat `sessionId`, which waits for a reply. */
+	/** Sends the user's own words once to chat `sessionId`, if it accepts ordinary follow-ups. */
 	replyChat?(sessionId: string, message: string): Promise<ContinueResult>;
 	/** Reads one Continue's exact receipt. Nothing is sent again. */
 	checkContinue(operationId: string): Promise<ContinueResult>;
@@ -144,7 +146,7 @@ function refusedContinue(refusal: Refusal, unknown = CONTINUE_UNKNOWN): Continue
 				message:
 					unknown === RECOVERY_UNKNOWN
 						? "Recovery is Unknown. Reopen this chat to find its saved attempt. Nothing will be sent again."
-						: `${unknown} Press ${unknown === CONTINUE_UNKNOWN ? "Continue" : "Reply"} again to find it.`,
+						: `${unknown} ${unknown === CONTINUE_UNKNOWN ? "Press Continue again to find it." : "Check for its receipt."}`,
 			};
 		case "offline":
 			return { status: "rejected", message: "Pilot could not reach its service. Nothing was sent." };
@@ -174,6 +176,8 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		stateReason: typeof c.stateReason === "string" ? c.stateReason : "",
 		queue: queueOf(c.queue),
 		canContinue: c.canContinue === true,
+		canReply: c.canReply === true,
+		reply: c.reply ? continueOutcome(c.reply, REPLY_UNKNOWN) : null,
 		questionSettled: c.questionSettled === true,
 		specialist: c.specialist === true,
 		archived: c.archived === true,

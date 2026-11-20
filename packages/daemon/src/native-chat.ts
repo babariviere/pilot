@@ -15,7 +15,7 @@ export const RETRY_TEXT =
 	"The user asked you to retry after this chat failed. Continue the original work within its existing scope, access and remaining allowance.";
 /** Native operation kind: take one chat's failed outcome out of Needs you. Sends nothing to the chat. */
 export const CHAT_DISMISS = "chat-dismiss";
-/** Native operation kind: the user's own words to one chat waiting for a reply, sent once as ordinary input. */
+/** Native operation kind: the user's own words to one existing chat, sent once as ordinary input. */
 export const CHAT_REPLY = "chat-reply";
 /** Most characters a Reply carries: the same as a new chat's first message, which the user also types. */
 const REPLY_CHARS = 12_000;
@@ -399,8 +399,7 @@ export class NativeChat {
 		return { sessionId, operationId: op.operationId };
 	}
 	/**
-	 * Sends the user's words once, as ordinary input, to a chat waiting for a reply (SessionSummary.waitsForReply)
-	 * or to a screen agent chat.
+	 * Sends the user's words once, as ordinary follow-up input to an eligible existing chat.
 	 * Re-entry only reads whether the chat accepted it.
 	 */
 	async replyChat(op: DurableOperation, firstEntry: boolean) {
@@ -411,16 +410,22 @@ export class NativeChat {
 				return { sessionId, operationId: op.operationId };
 			throw new Error("Reply outcome is unknown; it is never sent again");
 		}
-		const chat = this.deps.sessions.get(sessionId);
-		if (!chat || chat.archivedAt || chat.continuedTo)
-			throw new OperationRejected("This chat can no longer take a reply");
-		if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause)
-			throw new OperationRejected("This chat is paused");
-		// The screen agent bar is a conversation: the user may write whenever its window is open.
-		if (!chat.waitsForReply && chat.role !== "screen")
-			throw new OperationRejected("This chat no longer waits for a reply");
+		const eligible = () => {
+			const chat = this.deps.sessions.get(sessionId);
+			if (!chat || chat.archivedAt !== undefined || chat.continuedTo)
+				throw new OperationRejected("This chat can no longer take a reply");
+			if (chat.sleepPaused || chat.offlinePaused || chat.subscriptionPause)
+				throw new OperationRejected("This chat is paused");
+			if (!chat.canReply && !chat.waitsForReply && chat.role !== "screen")
+				throw new OperationRejected("This chat cannot take a message right now");
+			return chat;
+		};
+		const chat = eligible();
 		await this.deps.sessions.sendDurable(sessionId, message, "followUp", op.operationId, {
 			inputGeneration: chat.inputGeneration ?? 0,
+			admissionGuard: () => {
+				eligible();
+			},
 		});
 		return { sessionId, operationId: op.operationId };
 	}

@@ -663,6 +663,9 @@ async fn run(
             .filter(|c| c.session == *session && c.reason.is_empty())
         {
             chat.pending_recovery = super::new_chat::pending_recovery(t, journal, session);
+            if let Some(reply) = super::new_chat::pending_reply(t, journal, session) {
+                chat.reply = Some(reply);
+            }
         }
         shared.open()?;
         call.command

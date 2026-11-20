@@ -19,6 +19,7 @@ const NEWEST: u64 = 9_007_199_254_740_991;
 /// At most this many UTF-8 bytes of one message are kept.
 const TEXT_BYTES: usize = 8_000;
 const TARGET_CHARS: usize = 200;
+const MAX_NESTED_STEPS: usize = 12;
 const ACTION_CHARS: usize = 80;
 /// Longest kept title and state reason.
 const LINE_CHARS: usize = 300;
@@ -94,6 +95,8 @@ pub(crate) struct ChatState {
     /// The service says it can take one Continue: stopped (also by a mission
     /// User Stop hold), or failed with a safe retry.
     pub can_continue: bool,
+    pub can_reply: bool,
+    pub reply: Option<Value>,
     /// Its question no longer needs the user: the plan settled it (an explorer chat).
     pub question_settled: bool,
     pub specialist: bool,
@@ -127,7 +130,7 @@ impl ChatState {
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"projectId":self.project.as_ref().map(|p| &p["projectId"]),"title":self.title,"state":self.state,
-            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,"questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
+            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,"canReply":self.can_reply,"reply":self.reply,"questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
             "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked,
             "fixHandoff":self.fix_handoff,"continuationOf":self.continuation_of,"continuedTo":self.continued_to,"liveChangesKey":self.live_workspace.as_ref().map(|(key, _)| key.to_string())})
     }
@@ -339,12 +342,12 @@ fn interview_evidence(entry: &Value) -> Option<(&'static str, String, bool)> {
 /// step done or failed. Only the newest page can have a running step: an
 /// older page's results may sit in a newer page.
 pub(crate) fn rows(entries: &[Value], cwd: &str, newest: bool) -> Vec<Value> {
-    let mut results: HashMap<&str, bool> = HashMap::new();
+    let mut results: HashMap<&str, &Value> = HashMap::new();
     for message in entries.iter().flat_map(messages) {
         if message["role"] == "toolResult"
             && let Some(id) = message["toolCallId"].as_str()
         {
-            results.insert(id, message["isError"] == true);
+            results.insert(id, message);
         }
     }
     let mut sorted: Vec<(u64, &Value)> = entries
@@ -393,12 +396,58 @@ pub(crate) fn rows(entries: &[Value], cwd: &str, newest: bool) -> Vec<Value> {
             .filter(|b| b["type"] == "toolCall" && b["id"].is_string() && b["name"].is_string());
         for (n, call) in calls.enumerate() {
             let id_of = call["id"].as_str().unwrap_or_default();
-            let failed = results
-                .get(id_of)
-                .copied()
-                .or(if newest { None } else { Some(false) });
+            let result = results.get(id_of).copied();
+            let failed =
+                result
+                    .map(|m| m["isError"] == true)
+                    .or(if newest { None } else { Some(false) });
             let name = call["name"].as_str().unwrap_or_default();
-            rows.push(json!({"key":format!("{id}.{n}"),"entryId":id,"role":"step",
+            let key = format!("{id}.{n}");
+            // Codemode saves observed calls in the tool result. Never show its
+            // source, argument previews or output (which may contain secrets).
+            let nested = result
+                .filter(|_| name == "codemode")
+                .and_then(|m| m["details"]["calls"].as_array());
+            if let Some(nested) = nested.filter(|calls| !calls.is_empty()) {
+                let valid = |call: &&Value| call["name"].is_string();
+                // Keep the first few observed calls and every failure in the
+                // aggregate count, even when its details do not fit.
+                let (mut shown, mut total) = (0, 0);
+                let (mut has_error, mut hidden_failed) = (false, false);
+                for child in nested.iter().filter(valid) {
+                    let error = matches!(child["status"].as_str(), Some("error" | "cancelled"));
+                    has_error |= error;
+                    total += 1;
+                    if shown == MAX_NESTED_STEPS {
+                        hidden_failed |= error;
+                        continue;
+                    }
+                    shown += 1;
+                    let child_key = if shown == 1 {
+                        key.clone()
+                    } else {
+                        format!("{key}.{shown}")
+                    };
+                    rows.push(json!({"key":child_key,"entryId":id,"role":"step","step":
+                        step(child["name"].as_str().unwrap_or_default(), &Value::Null, cwd, Some(error))}));
+                }
+                if total > shown {
+                    rows.push(json!({"key":format!("{key}.more"),"entryId":id,"role":"step","step":{
+                        "tool":"nested_more","target":format!("{} more tool calls",total - shown),
+                        "running":false,"failed":hidden_failed
+                    }}));
+                }
+                if failed == Some(true) && !has_error {
+                    rows.push(
+                        json!({"key":format!("{key}.script"),"entryId":id,"role":"step","step":
+                        step(name, &Value::Null, cwd, failed)}),
+                    );
+                }
+                if shown > 0 || failed == Some(true) {
+                    continue;
+                }
+            }
+            rows.push(json!({"key":key,"entryId":id,"role":"step",
                 "step":step(name, &call["arguments"], cwd, failed)}));
         }
     }
@@ -588,6 +637,7 @@ async fn read_chat(
                     (state.state, state.state_reason) = status(&read.session);
                     state.queue = queue(&read.session);
                     state.can_continue = read.session["canContinue"] == true;
+                    state.can_reply = read.session["canReply"] == true;
                     state.question_settled = read.session["questionSettled"] == true;
                     state.reason.clear();
                 }
@@ -947,6 +997,45 @@ mod tests {
         let words = crate::plan_activity::chat(&json!({"rows":rows}));
         assert_eq!(words.rows[2].text, "Read src/a.rs");
         assert!(words.rows[2].failed);
+    }
+
+    #[test]
+    fn codemode_projects_observed_nested_steps_in_order_without_arguments_or_output() {
+        let call = assistant(
+            1,
+            "",
+            json!([
+                {"type":"toolCall","id":"script","name":"codemode","arguments":{"code":"secret-code"}},
+                {"type":"toolCall","id":"other","name":"read","arguments":{"path":"a.txt"}}
+            ]),
+        );
+        let mut result = result(2, "script", false);
+        result["model"][0]["details"]["calls"] = json!([
+            {"name":"read","status":"ok","args":"secret-args"},
+            {"name":"bash","status":"error","error":"secret-output"},
+            {"name":"grep","status":"ok"}
+        ]);
+        let page = page(&json!({"entries":[call,result],"more":false}), "", true).unwrap();
+        let mut pages = Pages::default();
+        merge(&mut pages, &page, false);
+        let saved = json!({"rows":pages.rows});
+        let words = crate::plan_activity::chat(&saved);
+        assert_eq!(
+            words
+                .rows
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Read files",
+                "Ran a command",
+                "Searched files",
+                "Reading a.txt"
+            ]
+        );
+        assert!(words.rows[1].failed);
+        assert!(!words.rows[1].running);
+        assert!(!saved.to_string().contains("secret-"));
     }
 
     #[test]
