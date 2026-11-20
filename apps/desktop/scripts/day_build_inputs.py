@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile immutable Day package inputs. No signing, packaging, install or launch."""
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -18,7 +19,6 @@ TARGET = "aarch64-apple-darwin"
 CLI_VERSION = "nsh 0.5.0 (f4d68f7)"
 CLI_SHA256 = "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
-CONFIG_INPUTS = ("SIGNING_POLICY", "UPDATER_PUBLIC_KEY", "UPDATER_REPOSITORY", "UPDATER_BUILD")
 ARTIFACT_HOST = "pilot-artifact-host"
 HOST_MODULE = "packages/artifacts/src/nsh-host.ts"
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
@@ -43,16 +43,28 @@ NSH_CHECKSUMS = {
 
 def configuration(env):
     """Day names win by presence, including empty values; legacy is fallback only."""
-    import gui_release
-    supplied = {}
-    for suffix in CONFIG_INPUTS:
+    def required(suffix):
         canonical, legacy = "PILOT_" + suffix, "PILOT_NEXT_" + suffix
         value = env[canonical] if canonical in env else env.get(legacy, "")
         if not value:
             raise ValueError(f"Missing release configuration: {canonical}")
-        supplied[legacy] = value
-    # Keep the shared policy, validation and fixed native identity unchanged.
-    return gui_release.configuration(supplied)
+        return value
+
+    # Do not infer authorization for private ad-hoc signing from updater settings.
+    if required("SIGNING_POLICY") != "private-adhoc":
+        raise ValueError("Day requires approved private-adhoc policy; Developer ID/notarization is not configured")
+    key = required("UPDATER_PUBLIC_KEY")
+    if len(base64.b64decode(key, validate=True)) != 32:
+        raise ValueError("Rust updater public key must contain 32 bytes")
+    repo = required("UPDATER_REPOSITORY")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise ValueError("Invalid Rust updater repository")
+    build = required("UPDATER_BUILD")
+    if not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", build):
+        raise ValueError("Invalid Rust updater build")
+    return dict(schema=1, mode="configured", public_key=key, repository=repo,
+                application_id=bundle.APP_ID, build=build,
+                code_requirement=f'identifier "{bundle.APP_ID}"')
 
 
 def execute(args, *, cwd, env):

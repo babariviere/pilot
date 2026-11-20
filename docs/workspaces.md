@@ -32,7 +32,7 @@ being enabled. Existing idle-refresh guards preserve active and unpublished work
 Settings lists configured hooks; this section does not edit commands or grant
 new tool access. Unsent folder/import fields survive a saved close or update.
 
-### Existing project settings
+### Existing project settings (legacy client)
 
 Build normally uses an isolated workspace. jj projects have separate working copies
 but **share history and bookmarks**. Git-only projects use private clones.
@@ -43,8 +43,7 @@ mise configs, including copied ignored configs, before setup commands run.
 Pilot does not grant trust to configs outside the workspace.
 
 Project settings choose the default workspace policy. A new chat can override it.
-Build chats can use a workspace terminal; close live terminals before operations
-that need a safe workspace or daemon handoff.
+Pilot Next had a workspace terminal. Day shows the working-copy path for your own terminal.
 
 ## Review delivery
 

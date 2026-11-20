@@ -9,15 +9,15 @@ runner comparisons and the existing reopen benchmark, but is not needed by the d
 
 ## Commands
 
-| Command | Scope |
-| --- | --- |
-| `pnpm test:fast` | Explicitly selected unit and offline service tests for quick feedback |
-| `pnpm test:integration` | Real repository, process, persistence, transport and kernel integration tests |
-| `pnpm test:stress` | Large-file diff budgets, fan-out and 10,000-event notice regression tests |
-| `pnpm test` | Every group, including runner/helper tests, on the current host |
-| `pnpm test -- --lane=portable` | Broad Linux CI gate, excluding native-only integration files |
-| `pnpm test -- --lane=macos` | Native-only integration plus explicit Darwin smoke coverage |
-| `pnpm test:timings` | Full gate plus the slowest reported test-file execution times |
+| Command                        | Scope                                                                         |
+| ------------------------------ | ----------------------------------------------------------------------------- |
+| `pnpm test:fast`               | Explicitly selected unit and offline service tests for quick feedback         |
+| `pnpm test:integration`        | Real repository, process, persistence, transport and kernel integration tests |
+| `pnpm test:stress`             | Large-file diff budgets, fan-out and 10,000-event notice regression tests     |
+| `pnpm test`                    | Every group, including runner/helper tests, on the current host               |
+| `pnpm test -- --lane=portable` | Broad Linux CI gate, excluding native-only integration files                  |
+| `pnpm test -- --lane=macos`    | Native-only integration plus explicit Darwin smoke coverage                   |
+| `pnpm test:timings`            | Full gate plus the slowest reported test-file execution times                 |
 
 New tests default to integration unless explicitly admitted to the fast list in `scripts/test-suites.ts`.
 `*.stress.test.ts` belongs to stress. No group is silently dropped by the full command.
@@ -85,21 +85,21 @@ compilation so independent workspaces do not compete for the compiler lane.
 
 The obsolete Swift GUI and its lint/test/cache tooling are removed. A dependency-free
 helper-only SwiftPM package, shared SystemEvents sources and Rust sleep-parity inputs remain;
-see [shared macOS support](../../apps/macos/README.md). Use the GPUI and Day
-verification wrappers for native changes, not the removed Swift GUI suite.
+see [shared macOS support](../../apps/macos/README.md). Use [Day verification](../../apps/day/README.md#check)
+for the native app. The [shared tools](../../apps/desktop/README.md) are separate from the GUI.
 
 ### Local measurements
 
 On 2026-10-13, sequential runs on macOS arm64 (Node 24.21.0, pnpm 12.10.1, jj 0.46.0, 11 logical CPUs),
 the same installed dependencies, and no competing Swift build produced:
 
-| Selection | File concurrency | Wall time | Passed / skipped |
-| --- | --- | --- | --- |
-| Main `522759f`, original `tsx` full command | 2 | 197.11s | 867 / 14 |
-| Changed full command with `--tsx` | 2 | 212.78s | 877 / 14 |
-| Changed full command, native Node | 2 | 155.81s | 877 / 14 |
-| Changed full command, native Node | 4 | 90.41s | 877 / 14 |
-| Changed fast group, native Node | 2 | 5.63s | 341 / 0 |
+| Selection                                   | File concurrency | Wall time | Passed / skipped |
+| ------------------------------------------- | ---------------- | --------- | ---------------- |
+| Main `522759f`, original `tsx` full command | 2                | 197.11s   | 867 / 14         |
+| Changed full command with `--tsx`           | 2                | 212.78s   | 877 / 14         |
+| Changed full command, native Node           | 2                | 155.81s   | 877 / 14         |
+| Changed full command, native Node           | 4                | 90.41s    | 877 / 14         |
+| Changed fast group, native Node             | 2                | 5.63s     | 341 / 0          |
 
 The like-for-like default full command improved about 21%, despite adding ten tests. All original
 workspace/stress test declarations remain, and renderer-dependent skips are unchanged. These are single
@@ -136,12 +136,12 @@ Pi 1.1.0 runtime. This is a feature-overhead comparison, not a Pi 1.0.4 versus 1
 It alternates variants and excludes the first warmup pair from medians. On 2026-10-14, Node 24.21.0 on
 macOS arm64, five samples after the suites completed gave:
 
-| Metric | Baseline | Bundled |
-| --- | --- | --- |
-| First in-process profile startup | 93 ms | 579 ms |
-| Warm startup median | 23 ms | 103 ms |
-| Streaming median | 215 ms | 232 ms |
-| Streaming CPU median | 250 ms | 259 ms |
+| Metric                           | Baseline | Bundled |
+| -------------------------------- | -------- | ------- |
+| First in-process profile startup | 93 ms    | 579 ms  |
+| Warm startup median              | 23 ms    | 103 ms  |
+| Streaming median                 | 215 ms   | 232 ms  |
+| Streaming CPU median             | 250 ms   | 259 ms  |
 
 The added profile has a startup and small measured streaming cost, not a demonstrated speedup.
 RSS output is whole-process data with shared module caches and GC across alternating samples, not
@@ -277,11 +277,11 @@ using three in-memory missions, 120 members and 240 tasks with 8,000-character b
 setup/imports, discards one warmup pair and reports medians. No daemon, workers, accounts, network
 services or user state are opened. On 2026-10-16, macOS arm64/Node 24.21.0, three samples measured:
 
-| Metric | Before | After |
-| --- | --- | --- |
+| Metric                      | Before             | After        |
+| --------------------------- | ------------------ | ------------ |
 | Recovery wall / process CPU | 10,031 / 10,039 ms | 259 / 259 ms |
-| Mission notifications | 360 | 3 |
-| Full detail reads | 14,403 | 123 |
+| Mission notifications       | 360                | 3            |
+| Full detail reads           | 14,403             | 123          |
 
 Recovery still reconciles every member/hand-linked PR and completion. One transaction now publishes
 final contexts once per affected mission after phase reconciliation, instead of rebuilding all member
@@ -328,17 +328,17 @@ disables only the shared catalog capability; the merged per-runtime startup fixe
 
 On 2026-10-16, macOS arm64/Node 24.21.0, medians of the three sample measurements were:
 
-| Metric | Per-worker | Daemon-owned |
-| --- | ---: | ---: |
-| Shared discovery passes | 12 | 1 |
-| Canonical credential reads | 4,536 | 378 |
-| Median catalog startup | 102 ms | 22 ms |
-| p95 catalog startup | 141 ms | 72 ms |
-| Complete cohort startup (including child imports) | 3,497 ms | 3,082 ms |
-| Largest 5 ms heartbeat gap | 14.7 ms | 11.1 ms |
-| p95 broker status response | 2.37 ms | 1.65 ms |
-| Controller/daemon peak RSS | 262.7 MiB | 265.8 MiB |
-| Sum of resident worker RSS | 2,074.8 MiB | 2,067.7 MiB |
+| Metric                                            |  Per-worker | Daemon-owned |
+| ------------------------------------------------- | ----------: | -----------: |
+| Shared discovery passes                           |          12 |            1 |
+| Canonical credential reads                        |       4,536 |          378 |
+| Median catalog startup                            |      102 ms |        22 ms |
+| p95 catalog startup                               |      141 ms |        72 ms |
+| Complete cohort startup (including child imports) |    3,497 ms |     3,082 ms |
+| Largest 5 ms heartbeat gap                        |     14.7 ms |      11.1 ms |
+| p95 broker status response                        |     2.37 ms |      1.65 ms |
+| Controller/daemon peak RSS                        |   262.7 MiB |    265.8 MiB |
+| Sum of resident worker RSS                        | 2,074.8 MiB |  2,067.7 MiB |
 
 The static catalog snapshot was 2,799 bytes. An earlier full-copy implementation increased worker RSS
 by about 350 MiB for this cohort; static-definition reuse removed that cost. RSS differences in the final
@@ -398,14 +398,14 @@ reader entrypoints against accidentally restoring eager SDK imports.
 On 2026-10-15, macOS arm64/Node 24.21.0, five alternating pairs against `4cc44c17` with four busy
 threads and ambient one-minute load 35–61 gave the following medians (ranges in parentheses):
 
-| Metric | Baseline | Changed |
-| --- | --- | --- |
-| First snapshot | 10.93s (5.92–16.14s) | 5.94s (3.31–7.27s) |
-| Thread online | 83ms (47–204ms) | 101ms (36–209ms) |
-| After import completion to snapshot | 134ms (45–207ms) | 135ms (85–138ms) |
-| Import thread CPU | 1146ms | 430ms |
-| Module loads / source bytes | 1696 / 8.29MB | 752 / 1.67MB |
-| Heap after imports | 49.1MB | 24.5MB |
+| Metric                              | Baseline             | Changed            |
+| ----------------------------------- | -------------------- | ------------------ |
+| First snapshot                      | 10.93s (5.92–16.14s) | 5.94s (3.31–7.27s) |
+| Thread online                       | 83ms (47–204ms)      | 101ms (36–209ms)   |
+| After import completion to snapshot | 134ms (45–207ms)     | 135ms (85–138ms)   |
+| Import thread CPU                   | 1146ms               | 430ms              |
+| Module loads / source bytes         | 1696 / 8.29MB        | 752 / 1.67MB       |
+| Heap after imports                  | 49.1MB               | 24.5MB             |
 
 The unchanged live-reader fixture also failed on clean `4cc44c17` with no updates after its polls
 expired under load. The graph reached the SDK through `chat-events.ts`'s estimator and
@@ -440,16 +440,16 @@ labels, IPC content exclusion and that a simulated 2,041 ms asynchronous wait do
 
 On macOS arm64, Node 24.21.0, three alternating baseline/current pairs after one discarded warmup pair gave:
 
-| Large synthetic cohort | Baseline | Instrumented |
-| --- | ---: | ---: |
-| Median local startup, including metadata/outbox and cancellation | 2,432 ms | 2,446 ms |
-| Median update pause/resume including metadata persistence | 363 ms | 314 ms |
-| Median main-thread CPU, startup through update | 2,554 ms | 2,500 ms |
-| Largest heartbeat gap across measured pairs | 31 ms | 14 ms |
-| Largest daemon HTTP read latency across measured pairs | 43 ms | 17 ms |
-| Largest event-loop histogram sample across measured pairs | 31 ms | 14 ms |
-| CPU stalls above 250 ms / sleep pauses | 0 / 0 | 0 / 0 |
-| Provider time (no provider calls) | 0 ms | 0 ms |
+| Large synthetic cohort                                           | Baseline | Instrumented |
+| ---------------------------------------------------------------- | -------: | -----------: |
+| Median local startup, including metadata/outbox and cancellation | 2,432 ms |     2,446 ms |
+| Median update pause/resume including metadata persistence        |   363 ms |       314 ms |
+| Median main-thread CPU, startup through update                   | 2,554 ms |     2,500 ms |
+| Largest heartbeat gap across measured pairs                      |    31 ms |        14 ms |
+| Largest daemon HTTP read latency across measured pairs           |    43 ms |        17 ms |
+| Largest event-loop histogram sample across measured pairs        |    31 ms |        14 ms |
+| CPU stalls above 250 ms / sleep pauses                           |    0 / 0 |        0 / 0 |
+| Provider time (no provider calls)                                |     0 ms |         0 ms |
 
 This is attribution and regression coverage, not a verified repair of a historical stall. Neither revision
 reproduced the reported approximately two-second synchronous interval. Differences between these small samples
@@ -485,11 +485,11 @@ five alternating pairs. It seeded 150 initializing sessions with stable pending 
 faux workers with 2ms synchronous constructor work and held readiness promises. A 1ms heartbeat ran
 during metadata loading and admission. Medians, with no competing verification commands:
 
-| Metric | Before | After |
-| --- | --- | --- |
-| Workers constructed before releasing readiness | 150 | 2 |
-| Time until `load()` returned and metadata could be listed | 315ms | 13ms |
-| Largest heartbeat gap | 306ms | 5ms |
+| Metric                                                    | Before | After |
+| --------------------------------------------------------- | ------ | ----- |
+| Workers constructed before releasing readiness            | 150    | 2     |
+| Time until `load()` returned and metadata could be listed | 315ms  | 13ms  |
+| Largest heartbeat gap                                     | 306ms  | 5ms   |
 
 This isolates admission pressure, not real extension load time, provider streaming, large-history
 rendering, GUI launch latency or total retained worker memory. All admitted agents may still run
@@ -537,7 +537,10 @@ live under `packages/daemon/src/fixtures/cassettes`, and `service-cassettes.test
 adapters and parsers through them. The versioned JSON format is:
 
 ```json
-{"version":1,"entries":[{"request":{"tool":"issues","args":{"team":"example"}},"response":{"issues":[]}}]}
+{
+	"version": 1,
+	"entries": [{ "request": { "tool": "issues", "args": { "team": "example" } }, "response": { "issues": [] } }]
+}
 ```
 
 - `cassetteRunner` matches executable plus the complete argv, including GitHub's GraphQL query and

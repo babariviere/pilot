@@ -1,11 +1,10 @@
 # Pilot
 
-Pilot Day is the upcoming Pilot desktop app, built with Native Shell (NSH)
-TSX and a Rust core in `native/`.
+Pilot Day is the only Pilot desktop app. It uses Native Shell (NSH) TSX and a Rust
+core in `native/`. The desktop target is Apple Silicon macOS; Linux desktop is deferred.
 
 The default entry (`App.tsx`) runs `Connected.tsx`. It shows only what the
-window's native root reads from an existing Pilot service, never examples, and it
-does not replace the shipping GPUI app. The root comes from the production native
+window's native root reads from the Pilot service, never examples. The root comes from the native
 host in a separately verified distribution. Its
 [connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
 include explicit native selection and a compatible existing daemon. Build inputs
@@ -21,8 +20,9 @@ Command+K opens a palette over any screen. It goes to Day's places and to the
 missions Today and Planning list; it only navigates and never starts work.
 Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
 to prepare the real native app without installing or updating it.
-For personal connected use, see [installation preparation](../../docs/technical/day-install.md).
-It reuses the same profile, hands off the daemon and offers explicit legacy retirement.
+For private use, follow [installation and setup](../../docs/getting-started.md).
+The repository cutover does not install Day, uninstall Pilot Next, change user data,
+or publish a new Day release.
 Opening `Pilot.app` from Finder discovers the profile like GPUI. Every launch without `--journal`
 keeps its window and drafts in `~/Library/Application Support/Pilot Day/window-journal`.
 Logs: `~/Library/Logs/Pilot/day.log` (`.1`-`.3`) and `pilotd.log`.
@@ -30,8 +30,8 @@ Settings has separate local-count and remote-reporting consent, retained-copy de
 and **Ask about Pilot**, an on-demand read-only specialist. Day logs start only after
 verified local diagnostic controls arrive. Clear reports the service and this app
 writer separately; OS logs, service stdout, exports and prior agent replies can remain.
-New Day distributions are named `Pilot.app`, display Pilot, and can install at
-`~/Applications/Pilot.app`. Legacy app paths and all profile/service identities stay unchanged.
+The private install is `~/Applications/Pilot.app` and displays Pilot.
+Legacy app paths and stored profiles are not changed by this source cutover.
 
 ## Run
 

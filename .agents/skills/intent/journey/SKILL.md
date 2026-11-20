@@ -18,7 +18,7 @@ user-invocable: true
 
 <!-- Pilot compatibility: local addition. Delete from this line through the end marker to restore upstream. -->
 > **Pilot compatibility.** Before applying this skill in this repository, read [UPSTREAM.md](../UPSTREAM.md#applying-it-here).
-> Project decisions, `DESIGN.md` and [pilot-next-design](../../pilot-next-design/SKILL.md) take precedence; findings
+> Project decisions, `DESIGN.md` and [Day's design system](../../../../docs/technical/day-design-system.md) take precedence; findings
 > and plans do not authorize new scope. Keep deliverables out of the repository unless the user names a path.
 <!-- Pilot compatibility: end -->
 

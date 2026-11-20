@@ -14,6 +14,12 @@ not proof of runtime behavior or complete impact coverage.
 
 ## Steer the work
 
+In Day, open a chat from Today, its mission or Search. The chat page shows any available recovery actions.
+
+### Legacy composer controls
+
+The controls below describe Pilot Next.
+
 Send follow-ups to clarify direction. While the agent is busy, messages can queue.
 Open **Queued** to inspect them; supported text messages can be edited or removed.
 Image-bearing messages are kept intact rather than flattened into editable text.
@@ -26,6 +32,9 @@ jobs keep running, but their results wait with the other held inputs, so the cha
 not working. Stop also withdraws an open question. Send another message
 or explicitly send held inputs to continue. Stop does not undo changes already made.
 On macOS, **⌘.** stops the open chat's working agent.
+
+### Recovery in Day
+
 Day's **Continue** action sends one fixed follow-up to a stopped chat (native operation
 `chat-continue`, payload `{purpose, sessionId}`; the daemon writes the words and refuses a chat that
 is not stopped). A lost reply is checked by exact input lookup, never sent again.
@@ -39,7 +48,7 @@ Older service versions may refuse these recovery controls.
 ## Read and review
 
 Older history loads as you scroll. Work and tool activity can be expanded for details.
-In the additive NSH app, **Find** (⌘F) searches literal, case-sensitive message
+In Day, **Find** (⌘F) searches literal, case-sensitive message
 source. Choose **Load full history** to include older pages. The coverage label
 shows when only loaded messages were searched, or loading stopped or failed.
 Enter and Shift-Enter move through matches. Escape closes Find.

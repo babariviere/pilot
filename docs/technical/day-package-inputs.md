@@ -1,5 +1,8 @@
 # Source-matched Day package inputs
 
+For current private builds, use the [private build and install procedure](../getting-started.md#private-install).
+The public distribution and manifest examples below record prior qualification, not authority to publish.
+
 `apps/desktop/scripts/day_build_inputs.py` builds inputs for the existing
 `bundle_runtime` assembler. It does not sign, notarize, archive, release,
 install, register or start an app or service. The shipping desktop selection
@@ -94,7 +97,7 @@ python3 apps/desktop/scripts/bundle_runtime.py rust --gui day \
 ```
 
 The same implementation is available directly through `day_build_inputs.py`.
-The legacy `rust` default stays GPUI. `assemble(..., gui_resources=inputs / "nsh")`
+`assemble(..., gui_resources=inputs / "nsh")`
 (CLI: `bundle --gui-resources`) consumes these files in the unchanged trusted
 fixed app/helper layout. Assembly signs its output, so it is a **separately
 authorized** action, not part of input verification here. App/helper trust
@@ -106,19 +109,19 @@ signature and ExpectedTarget checks remain required.
 The ordinary assembler exposes `bundle --production --gui-resources`, using
 the **same** Day configuration adapter as `day_build_inputs.py --production`.
 It is mutually exclusive with `--unsigned-day`. It does not
-select Day implicitly: keep `--gui-resources` explicit. Development and GPUI
+infer the Day resource path: keep `--gui-resources` explicit. Development and legacy
 defaults are unchanged. No workflow enables production automatically.
 
 ### Environment names and compatibility
 
 Use these canonical public inputs for Day:
 
-| Canonical name | Compatibility alias |
-| --- | --- |
-| `PILOT_SIGNING_POLICY` | `PILOT_NEXT_SIGNING_POLICY` |
+| Canonical name             | Compatibility alias             |
+| -------------------------- | ------------------------------- |
+| `PILOT_SIGNING_POLICY`     | `PILOT_NEXT_SIGNING_POLICY`     |
 | `PILOT_UPDATER_PUBLIC_KEY` | `PILOT_NEXT_UPDATER_PUBLIC_KEY` |
 | `PILOT_UPDATER_REPOSITORY` | `PILOT_NEXT_UPDATER_REPOSITORY` |
-| `PILOT_UPDATER_BUILD` | `PILOT_NEXT_UPDATER_BUILD` |
+| `PILOT_UPDATER_BUILD`      | `PILOT_NEXT_UPDATER_BUILD`      |
 
 For each field, the canonical name wins **when present**, including an empty
 value. The alias is read only when the canonical name is absent. Empty or
@@ -131,7 +134,7 @@ Ambient trust inputs and secrets are not forwarded. Receipts still must match
 the exact source, recipe and compiled tuple.
 
 This adapter applies to Day input compilation and production assembly with
-`--gui-resources`. Without that flag, the GPUI parser and behavior are unchanged.
+`--gui-resources`.
 Repository/GitHub secrets, fnox entries, credentials, storage/profile names and
 bundle identities are unchanged. This does not rename `DAY_UPDATER_PRIVATE_KEY`
 or configure signing through a new private-key environment variable.
@@ -139,14 +142,14 @@ or configure signing through a new private-key environment variable.
 Public trust checked on 2026-11-13 against `DAY_UPDATER_PUBLIC_KEY` in
 `babariviere/pilot` and the [approved policy](day-signing-secrets.md):
 
-| Field | Value |
-| --- | --- |
-| Day Ed25519 public key | `MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=` |
-| Repository | `babariviere/pilot` |
-| Application ID | `com.babariviere.pilot-next` |
-| Code requirement | `identifier "com.babariviere.pilot-next"` |
-| Signing policy | `private-adhoc` (existing assembler policy, not Developer ID) |
-| Build | Explicit numeric target, identical in app, helper and bundle |
+| Field                  | Value                                                         |
+| ---------------------- | ------------------------------------------------------------- |
+| Day Ed25519 public key | `MbGhgDgZuJPyC81SSCJ8IVEyLks66acK5s9NKIudSsE=`                |
+| Repository             | `babariviere/pilot`                                           |
+| Application ID         | `com.babariviere.pilot-next`                                  |
+| Code requirement       | `identifier "com.babariviere.pilot-next"`                     |
+| Signing policy         | `private-adhoc` (existing assembler policy, not Developer ID) |
+| Build                  | Explicit numeric target, identical in app, helper and bundle  |
 
 Do not take the key from a GPUI installation. No private key is needed for
 input compilation or full bundle assembly under this existing policy.
@@ -263,7 +266,7 @@ The production bootstrap requires a verified, code-sealed native bundle.
 Unsigned build inputs and `nsh run Connected.tsx` are not connected launch
 substitutes. The [connected candidate recipe](day-connected-candidate.md) makes
 that minimal bundle without requiring a second bundled daemon. It is not an
-update/release distribution. Preserve the shipping app and use a separate
+update/release distribution. Preserve the installed app and use a separate
 candidate directory, with the required `Pilot.app` bundle name. This Day-only
 name is selected before assembly and sealing; GPUI and historical inputs keep
 their original names. Bundle, service, profile and credential IDs are unchanged.
@@ -304,7 +307,7 @@ these capabilities is unavailable, not an empty Today. Do not start a second
 daemon or bypass that check. A compatible daemon update requires separate
 authorization and the existing verified runtime, checkpoint/drain, signed
 reservation, exact-owner exit and new-boot handoff. See
-[Daemon upgrades](../../apps/desktop/docs/daemon-upgrades.md). A pause ACK is
+[Day daemon handoff](day-daemon-handoff.md). A pause ACK is
 not a drain proof, and an uncertain handoff cannot be retried.
 
 The mock test fixtures have no request source and show no request cards. In the

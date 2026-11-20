@@ -1,13 +1,14 @@
 ---
+
 name: rust-port
 description: >-
-  Port code from C, C++, Python, Go, JavaScript, or TypeScript into idiomatic Rust that
-  keeps the original behavior: ownership instead of manual memory, Result instead of error
-  codes and exceptions, enums instead of flag ints and magic strings, and tests that prove
-  the port matches. Use this whenever the user asks to port, translate, convert, migrate,
-  or rewrite code in Rust ("rewrite this in Rust", "what would this look like in Rust",
-  "move this module to Rust"), even if they don't say "port". Pairs with the
-  rust-best-practices skill, which covers the target code's style.
+Port code from C, C++, Python, Go, JavaScript, or TypeScript into idiomatic Rust that
+keeps the original behavior: ownership instead of manual memory, Result instead of error
+codes and exceptions, enums instead of flag ints and magic strings, and tests that prove
+the port matches. Use this whenever the user asks to port, translate, convert, migrate,
+or rewrite code in Rust ("rewrite this in Rust", "what would this look like in Rust",
+"move this module to Rust"), even if they don't say "port". Pairs with the
+rust-best-practices skill, which covers the target code's style.
 ---
 
 # Rust port
@@ -24,8 +25,8 @@ description: >-
 - Preserve runtime/resource bounds, durable operations and exact Unicode, UTF-16,
   whitespace and case-sensitive identity contracts. Generic porting simplifications
   do not authorize dropping limits or changing those behaviors.
-- GPUI work follows the [design skill](../pilot-next-design/SKILL.md) and
-  [design system](../../../apps/desktop/docs/design-system.md). This import authorizes
+- Day UI work follows the [NSH design guides](../nsh-design-guides/SKILL.md) and
+  [Day design system](../../../docs/technical/day-design-system.md). This import authorizes
   no mass refactor, dependency/lint/framework adoption, global install or extra access.
 
 See [UPSTREAM.md](UPSTREAM.md) for the pinned source and this sole local adaptation.
@@ -64,37 +65,37 @@ shape. Then implement against the ported tests.
 
 ### From C and C++
 
-| In the original | In Rust |
-|---|---|
-| `malloc`/`free`, `new`/`delete`, `create`/`destroy` pairs | Owned types (`String`, `Vec`, `Box`) dropped automatically; `Drop` for anything else |
-| `NULL` meaning "absent" | `Option<T>` |
-| Error codes (`-1`, `ERR_*` defines), `errno` | `Result<T, E>` with an error enum, one variant per code, implementing `Display` and `std::error::Error` |
-| Out-parameters (`int *err_line`, `long *out`) | Return values: put the data in the `Ok` value or the error variant |
-| Flag bitmasks (`FLAG_A \| FLAG_B`) | An options struct with named fields and `Default`, or the `bitflags` crate; never a raw `u32` |
-| `char *` plus length, `strcmp`, `strcasecmp` | `&str`/`String`, `==`, `eq_ignore_ascii_case` |
-| Pointer plus count, iterator by index | Slices, iterators |
-| Fixed-size buffers and their truncation | Growable types; drop the limit unless the limit is behavior |
-| `#define` constants and macros | `const`, enums, and functions |
-| Global or static mutable state | A struct the caller owns |
-| `strtol` and friends | `str::parse` with the matching integer type; map parse failures to your error enum |
+| In the original                                           | In Rust                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `malloc`/`free`, `new`/`delete`, `create`/`destroy` pairs | Owned types (`String`, `Vec`, `Box`) dropped automatically; `Drop` for anything else                    |
+| `NULL` meaning "absent"                                   | `Option<T>`                                                                                             |
+| Error codes (`-1`, `ERR_*` defines), `errno`              | `Result<T, E>` with an error enum, one variant per code, implementing `Display` and `std::error::Error` |
+| Out-parameters (`int *err_line`, `long *out`)             | Return values: put the data in the `Ok` value or the error variant                                      |
+| Flag bitmasks (`FLAG_A \| FLAG_B`)                        | An options struct with named fields and `Default`, or the `bitflags` crate; never a raw `u32`           |
+| `char *` plus length, `strcmp`, `strcasecmp`              | `&str`/`String`, `==`, `eq_ignore_ascii_case`                                                           |
+| Pointer plus count, iterator by index                     | Slices, iterators                                                                                       |
+| Fixed-size buffers and their truncation                   | Growable types; drop the limit unless the limit is behavior                                             |
+| `#define` constants and macros                            | `const`, enums, and functions                                                                           |
+| Global or static mutable state                            | A struct the caller owns                                                                                |
+| `strtol` and friends                                      | `str::parse` with the matching integer type; map parse failures to your error enum                      |
 
 Don't write `unsafe` or use raw pointers unless the port must talk to C through FFI, and
 then confine it as the `rust-best-practices` skill describes.
 
 ### From Python
 
-| In the original | In Rust |
-|---|---|
-| An exception hierarchy | One error enum (or one per area) with a variant per exception class; data attributes become variant fields |
-| `None` as a value | `Option<T>` |
-| Strings used as a closed set (`kind in ("build", "test")`) | An enum, with `FromStr` and `Display` for the text form |
-| Dicts or classes used as records | Structs with named fields |
-| `dict` iteration order (insertion order is guaranteed) | `Vec` or an ordered map when order is observable; a plain `HashMap` silently changes output order |
-| Duck typing, `isinstance` | Traits or enums |
-| Unbounded `int` | A sized integer chosen on purpose, with overflow handled (`checked_*`) where input can be large |
-| `sorted(..., key=...)` | `sort_by_key` or `sort_by`; both are stable, like Python's |
-| `str.splitlines()`, `strip()`, `isalnum()` | `lines()`, `trim()`, `char::is_alphanumeric`; check edge cases such as `\r\n`, Unicode, and empty strings against the original |
-| `try`/`except` around a parse | `?` with a mapped error, or `match` on the `Result` |
+| In the original                                            | In Rust                                                                                                                        |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| An exception hierarchy                                     | One error enum (or one per area) with a variant per exception class; data attributes become variant fields                     |
+| `None` as a value                                          | `Option<T>`                                                                                                                    |
+| Strings used as a closed set (`kind in ("build", "test")`) | An enum, with `FromStr` and `Display` for the text form                                                                        |
+| Dicts or classes used as records                           | Structs with named fields                                                                                                      |
+| `dict` iteration order (insertion order is guaranteed)     | `Vec` or an ordered map when order is observable; a plain `HashMap` silently changes output order                              |
+| Duck typing, `isinstance`                                  | Traits or enums                                                                                                                |
+| Unbounded `int`                                            | A sized integer chosen on purpose, with overflow handled (`checked_*`) where input can be large                                |
+| `sorted(..., key=...)`                                     | `sort_by_key` or `sort_by`; both are stable, like Python's                                                                     |
+| `str.splitlines()`, `strip()`, `isalnum()`                 | `lines()`, `trim()`, `char::is_alphanumeric`; check edge cases such as `\r\n`, Unicode, and empty strings against the original |
+| `try`/`except` around a parse                              | `?` with a mapped error, or `match` on the `Result`                                                                            |
 
 ### From Go, JavaScript, and TypeScript
 

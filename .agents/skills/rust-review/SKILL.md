@@ -1,13 +1,14 @@
 ---
+
 name: rust-review
 description: >-
-  Review existing Rust code for idiom, API design, error handling, safety, and
-  maintainability, and produce a prioritized report where every finding cites the rule it
-  breaks and gives a concrete fix. Use this whenever the user asks to review, audit,
-  critique, grade, or "check" Rust code, a crate, a module, a .rs file, a diff, or a pull
-  request, or asks what is wrong with their Rust or how to make it more idiomatic, even if
-  they don't say "review". Pairs with the rust-best-practices skill, which covers writing
-  new code.
+Review existing Rust code for idiom, API design, error handling, safety, and
+maintainability, and produce a prioritized report where every finding cites the rule it
+breaks and gives a concrete fix. Use this whenever the user asks to review, audit,
+critique, grade, or "check" Rust code, a crate, a module, a .rs file, a diff, or a pull
+request, or asks what is wrong with their Rust or how to make it more idiomatic, even if
+they don't say "review". Pairs with the rust-best-practices skill, which covers writing
+new code.
 ---
 
 # Rust review
@@ -24,8 +25,8 @@ description: >-
 - Preserve runtime/resource bounds, durable operations and exact Unicode, UTF-16,
   whitespace and case-sensitive identity contracts. Generic porting simplifications
   do not authorize dropping limits or changing those behaviors.
-- GPUI work follows the [design skill](../pilot-next-design/SKILL.md) and
-  [design system](../../../apps/desktop/docs/design-system.md). This import authorizes
+- Day UI work follows the [NSH design guides](../nsh-design-guides/SKILL.md) and
+  [Day design system](../../../docs/technical/day-design-system.md). This import authorizes
   no mass refactor, dependency/lint/framework adoption, global install or extra access.
 
 See [UPSTREAM.md](UPSTREAM.md) for the pinned source and this sole local adaptation.
@@ -128,31 +129,37 @@ you're unsure of. Otherwise, rely on the summary above.
 
 Use this structure:
 
-~~~markdown
+````markdown
 # Rust review: <what was reviewed>
 
 <One paragraph: what the code does, library or application, overall verdict, and the
 single most important thing to fix. Say whether clippy and tests were run.>
 
 ## Must fix
+
 ### 1. <Short title> (`src/file.rs:42`)
+
 **Rule:** <rule name and source, e.g. "Errors implement std::error::Error (C-GOOD-ERR,
 Rust API Guidelines)">
 **Problem:** <what is wrong and the concrete consequence, one or two sentences>
 **Fix:**
+
 ```rust
 <the smallest code change that fixes it>
 ```
 
 ## Should fix
+
 ### 2. ...
 
 ## Consider
+
 ### 3. ...
 
 ## What's already good
+
 - <2 to 4 specific things the code does well>
-~~~
+````
 
 How to sort findings:
 

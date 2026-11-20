@@ -236,19 +236,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(bundle.NSH_RELEASE, dict(tag="v0.5.0",
                          source="f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1"))
 
-    def test_shipping_source_and_signing_boundaries_stay_independent_of_day(self):
-        release = (ROOT / ".github/workflows/release.yaml").read_text()
-        package = (ROOT / ".github/workflows/gui-package.yml").read_text()
-        self.assertIn('if [ -n "$RELEASE_SHA" ] && [ "$RELEASE_SHA" != "$tag_sha" ]', release)
-        self.assertEqual(release.count("ref: ${{ needs.target.outputs.sha }}"), 3)
-        self.assertIn("ref: ${{ inputs.ref }}", package)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"', package)
-        self.assertNotIn("secrets: inherit", release + package)
-        self.assertNotIn("day-qualification.yml", release + package)
-        linux = package.split("      - name: Sign qualified Linux full-payload inventory", 1)[1]
-        self.assertIn("if: inputs.platform == 'linux'", linux)
-        self.assertIn("PILOT_NEXT_UPDATER_PRIVATE_KEY: ${{ secrets.PILOT_NEXT_UPDATER_PRIVATE_KEY }}", linux)
-
     def test_qualification_has_exact_source_callers_without_production_effects(self):
         workflow = (ROOT / ".github/workflows/day-qualification.yml").read_text()
         self.assertIn("  workflow_call:", workflow)
@@ -283,16 +270,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('test "$(xcodebuild -version | head -1)" = \'Xcode 26.2\'', workflow)
         self.assertIn('test "$(xcrun --sdk macosx --show-sdk-version)" = \'26.2\'', workflow)
         self.assertIn('day_ci_policy.py --source "$SOURCE"', workflow)
-        for name in ("release.yaml", "gui-package.yml", "linux-package.yml"):
-            self.assertNotIn("day_qualification", (ROOT / ".github/workflows" / name).read_text())
-        self.assertIn("snapshot_rust(expected, rust, production=config)",
-                      (ROOT / "apps/desktop/scripts/gui_release.py").read_text())
 
     def test_day_portable_tests_run_without_desktop_change_filter(self):
         workflow = (ROOT / ".github/workflows/tests.yaml").read_text()
         job = workflow.split("  day-contracts:\n", 1)[1].split("  node:\n", 1)[0]
         self.assertNotIn("if:", job)
-        self.assertIn("day_build_inputs day_qualification bundle_runtime gui_release", job)
+        self.assertIn("day_build_inputs day_qualification bundle_runtime ci verify_update_lifecycle", job)
         self.assertNotIn("day_artifact_host", job)
         self.assertIn("discover -s apps/day/scripts -p 'test_*.py'", job)
         native = (ROOT / ".github/workflows/day-qualification.yml").read_text()
@@ -308,13 +291,12 @@ class WorkflowTests(unittest.TestCase):
 
     def test_shared_ci_keeps_security_checks_without_gpui_jobs(self):
         workflow = (ROOT / ".github/workflows/tests.yaml").read_text()
-        for phase in ("updater-check", "updater-linux-tests", "updater-mac-tests", "power-check"):
+        for phase in ("updater-check", "updater-linux-tests", "updater-mac-tests", "power-check", "visual-check"):
             self.assertIn("ci.sh " + phase, workflow)
         self.assertIn("verify_update_lifecycle.py", workflow)
         self.assertIn("name: Shared Linux updater and power security", workflow)
         self.assertIn("name: Shared macOS updater and power security", workflow)
-        self.assertEqual(workflow.count("DESKTOP_CI_SHARED_ONLY: '1'"), 2)
-        for obsolete in ("rust-macos-bundle:", "rust-macos-release:", "ci.sh check\n",
+        for obsolete in ("rust-macos-bundle:", "rust-macos-release:", "DESKTOP_CI_SHARED_ONLY", "ci.sh check\n",
                          "ci.sh native\n", "ci.sh nsh-native\n", "ci.sh mac-tests\n"):
             self.assertNotIn(obsolete, workflow)
 

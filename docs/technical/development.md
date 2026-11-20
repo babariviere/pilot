@@ -1,13 +1,12 @@
 # Development reference
 
-For the current GPUI app, start with [desktop development](../../apps/desktop/README.md).
-For the next Native Shell app, use [Day development](../../apps/day/README.md).
-The obsolete Swift GUI is removed; [shared macOS support](../../apps/macos/README.md) remains.
-
+Start with [Day development](../../apps/day/README.md). It is the sole desktop app,
+for Apple Silicon macOS. [Shared desktop tools](../../apps/desktop/README.md) and
+[macOS support](../../apps/macos/README.md) are not app entry points.
 
 ### Build from source
 
-Use **Node 24+** and the pnpm version pinned in `package.json`. Follow each native app's
+Use **Node 24+** and the pnpm version pinned in `package.json`. Follow the Day
 README for its toolchain, build and isolated launch instructions.
 
 ```sh
@@ -54,20 +53,18 @@ pnpm test:fast                    # quick unit and offline feedback
 pnpm test                         # full gate, including integration and stress tests
 ```
 
-CI runs portable Node tests and typechecking on Linux, with a smaller macOS lane for native behavior
-and packaging, on PRs (`pr.yaml`) and after merging (`main.yaml`). Tests never block a release:
-`release.yaml` runs Release Please on every main push and, for a new stable draft, builds macOS and
-Linux GPUI packages from the release tag, then signs and publishes those same artifacts.
-Rust GUI signing/trust and native full-payload qualification are explicit publication prerequisites;
-future releases no longer publish a standalone headless Linux runtime. Swift GUI distribution is removed.
-See [Rust GUI releases](../../apps/desktop/docs/releases.md) for the required configuration and remaining gates.
+Linux remains useful for portable backend checks; Linux desktop is deferred. Use the
+[Day checks](../../apps/day/README.md#check) for native work on Apple Silicon. Qualification
+bundles are test evidence, not install or release artifacts. For an authorized update to
+`~/Applications/Pilot.app`, use the [private install path](../getting-started.md#private-install).
+There is no new public Day publication.
 
 See the [reliability roadmap](reliability/roadmap.md) for current risks and verification plans.
 
 See [testing](testing.md) for suite selection and offline fixtures, and the
 [CPU/memory](performance-check.md) and [I/O](io-performance-check.md) audits for measurement methods.
 Agents publish NSH and image artifacts. There is no screenshot preview host,
-browser installation or generated SwiftUI compilation. Use authorized GPUI fixtures for fidelity checks.
+browser installation or generated SwiftUI compilation. Use [Day fixtures](../../apps/day/README.md#screen-captures) for native fidelity checks.
 
 ### Dependency updates
 
@@ -80,8 +77,8 @@ success or failure on every update PR.
 Automerge is disabled. Renovate PRs also check an isolated production runtime before and after ZIP
 relocation in the macOS Node CI job. Review those checks and the existing tests before merging.
 
-Cargo covers the GPUI desktop, visual worker and independent updater. Toolchains, source-patched GPUI,
-the updater's parser-specific ZIP pin and experimental comparison baselines stay manual. See
+Cargo covers Day's native host, the visual-worker workspace and the independent updater.
+Review toolchain updates and the updater's parser-specific ZIP pin separately. See
 [dependency update policy](renovate.md) for the inventory and intentional exceptions.
 
 Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate).
@@ -89,7 +86,7 @@ Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate
 ### Architecture
 
 ```text
-Pilot Next.app (GPUI), or Pilot Day (Native Shell)
+Pilot.app (Day, Native Shell)
     │ HTTP / WebSocket on loopback
     ▼
 pilotd (per-user launchd agent)
@@ -100,15 +97,15 @@ Kernel worker
     └── native pi SDK: tools, prompts, extensions and provider authentication
 ```
 
-| Path | Responsibility |
-| --- | --- |
-| [`apps/desktop`](../../apps/desktop) | Current GPUI app, visual worker and shared lifecycle services |
-| [`apps/day`](../../apps/day) | Next Native Shell app and typed native host |
-| [`apps/macos`](../../apps/macos) | Shared helpers, C visual engine, assets and runtime/release scripts |
-| [`packages/daemon`](../../packages/daemon) | HTTP/WebSocket API, sessions, workspaces and worker supervision |
-| [`packages/kernel`](../../packages/kernel) | Durable agent worker and native pi SDK integration |
-| [`packages/protocol`](../../packages/protocol) | Shared client/daemon types |
-| [`packages/artifacts`](../../packages/artifacts) | Artifact storage, preview rendering and bundled libraries |
+| Path                                             | Responsibility                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------- |
+| [`apps/desktop`](../../apps/desktop/README.md)   | Visual-worker workspace, standalone updater and packaging helpers   |
+| [`apps/day`](../../apps/day/README.md)           | Native Shell app and typed native host                              |
+| [`apps/macos`](../../apps/macos)                 | Shared helpers, C visual engine, assets and runtime/release scripts |
+| [`packages/daemon`](../../packages/daemon)       | HTTP/WebSocket API, sessions, workspaces and worker supervision     |
+| [`packages/kernel`](../../packages/kernel)       | Durable agent worker and native pi SDK integration                  |
+| [`packages/protocol`](../../packages/protocol)   | Shared client/daemon types                                          |
+| [`packages/artifacts`](../../packages/artifacts) | Artifact storage, preview rendering and bundled libraries           |
 
 The Harness owns history and the model loop. The native SDK supplies tools and extensions, not a second
 model loop. Keep native client decoders in sync with the shared protocol.
@@ -130,13 +127,13 @@ Production no longer starts their chat, PR, Linear or mission sources, reconcile
 follow-through or delivers notices. Saved instructions are retained as history, not executed.
 Mission notices and ordinary chat PR tracking continue independently.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PILOT_HOME` | `~/.local/share/pilot` (or `$XDG_DATA_HOME/pilot`) | Local session data and managed repositories |
-| `PILOT_PORT` | `4319` | Daemon port |
-| `PILOT_AGENT_DIR` | pi's agent directory | Pi settings, packages and authentication |
-| `PILOT_WORKSPACE_RETENTION_DAYS` | unset (immediate) | Private workspace discard delay; explicit positive days delay deletion, explicit `0` disables automatic cleanup |
-| `PILOT_PERF_TIMINGS` | enabled | Set to `0` to disable local, content-free request timing logs for new workers |
+| Variable                         | Default                                            | Purpose                                                                                                         |
+| -------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `PILOT_HOME`                     | `~/.local/share/pilot` (or `$XDG_DATA_HOME/pilot`) | Local session data and managed repositories                                                                     |
+| `PILOT_PORT`                     | `4319`                                             | Daemon port                                                                                                     |
+| `PILOT_AGENT_DIR`                | pi's agent directory                               | Pi settings, packages and authentication                                                                        |
+| `PILOT_WORKSPACE_RETENTION_DAYS` | unset (immediate)                                  | Private workspace discard delay; explicit positive days delay deletion, explicit `0` disables automatic cleanup |
+| `PILOT_PERF_TIMINGS`             | enabled                                            | Set to `0` to disable local, content-free request timing logs for new workers                                   |
 
 These are daemon environment variables. The app-managed daemon runs under launchd; exporting a variable
 in your terminal does not change an already running daemon.
@@ -232,8 +229,8 @@ and deterministic compaction records activity without invented inference cost. I
 diagnostic export. Separate [background completions](background-inference-accounting.md), including titles,
 memory compaction (including historical Control usage), Slack classification and triage workers record observed usage before output validation
 or application. Capture and dashboard projections remain partial; neither establishes complete historical coverage
-or waives the dashboard performance/release gates. Pilot Next’s passive
-[Local Usage overview](../../apps/desktop/docs/usage-overview.md) filters historical totals
+or waives the dashboard performance/release gates. Pilot Next’s historical
+[Local Usage overview](../../apps/desktop/docs/usage-overview.md) filtered historical totals
 and daily trends by exact ledger project or Unattributed records, with a bounded
 project list. On-demand retained request pages expose exact selectable/copyable
 records without deriving totals from pages. Subscription limits remain global

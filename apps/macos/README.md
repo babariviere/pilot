@@ -1,9 +1,8 @@
 # Shared macOS support
 
-The obsolete Swift desktop GUI and its dependencies are removed. The current
-GPUI app lives in [`apps/desktop`](../desktop/README.md); the next Native Shell
-app lives in [`apps/day`](../day/README.md). This directory is **not** an app
-entry point and must not be deleted as a unit.
+The Swift GUI is gone. [`apps/day`](../day/README.md) is the only desktop app.
+This directory contains shared helpers, assets and runtime tooling, not an app
+entry point.
 
 ## Kept consumers
 
@@ -13,10 +12,10 @@ entry point and must not be deleted as a unit.
 | `Sources/PilotPowerSupport` | `apps/power/src/tests.rs` compares Rust sleep handling with the shared Swift implementation. Production power handling is in `apps/power`. |
 | `Package.swift`, `Tests/PilotPowerTests` | Dependency-free helper-only package and shared power-support tests, not a desktop app target. |
 | `Sources/PilotVisualEngine` and `include` | `apps/desktop/visual-worker/{engine.c,build.rs}` compile the shared C visual engine and header. |
-| `Resources/AppIcon*`, `scripts/icon*` | GPUI/Day runtime packaging and icon generation. |
-| `Resources/LegacyApp` | Unchanged images and notices from the old app. GPUI's `home_sky.rs` uses the day/night images; keep their credits. |
-| `scripts/{bundle-runtime,check-runtime}.sh`, `runtime-build.mjs` | Immutable runtime assembly, offline relocated-runtime checks and source receipts for GPUI/Day. |
-| `scripts/release_metadata.py`, `finalize-release.sh` | Shared macOS/Linux release metadata and signed GUI draft finalization. These are not Swift app publishing paths. |
+| `Resources/AppIcon*`, `scripts/icon*` | Day runtime packaging and icon generation. |
+| `Resources/LegacyApp` | Historical images and notices from the old app. Keep their credits. |
+| `scripts/{bundle-runtime,check-runtime}.sh`, `runtime-build.mjs` | Immutable runtime assembly, offline relocated-runtime checks and source receipts for Day. |
+| `scripts/release_metadata.py`, `finalize-release.sh` | Release metadata and draft finalization tooling. These are not private Day install steps or authorization to publish Day. |
 | `Tests/Fixtures` | Backend logical-mission producer and workspace-terminal regressions, plus the loopback WebSocket test harness. |
 
 The SystemEvents helper still uses Swift. It does not depend on SwiftUI,
@@ -36,6 +35,6 @@ node --test apps/macos/scripts/tests/*.test.mjs
 for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
 ```
 
-Use the desktop/Day verification wrappers for native changes. No full local
+Use the [Day checks](../day/README.md#check) for native app changes. No full local
 Swift GUI suite remains. Removing this source does not uninstall an app, change
 user data, stop services, select Day as default or qualify a live update.

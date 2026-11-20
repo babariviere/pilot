@@ -10,25 +10,24 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
-import zipfile
 
 import bundle_runtime as bundle
 import day_build_inputs as day
-import make_dev_icon
 
 
 class BundleCliTests(unittest.TestCase):
     def argv(self, *options):
         return ["bundle_runtime.py", "bundle", "--source", "a" * 40,
                 "--runtime", "/inputs/runtime", "--executables", "/inputs/day",
-                "--native", "/inputs/native", "--output", "/output/Pilot Next.app", *options]
+                "--native", "/inputs/native", "--output", "/output/Pilot.app",
+                "--gui-resources", "/inputs/day/nsh", *options]
 
     def test_production_uses_the_input_builder_configuration_parser(self):
         env = dict(PILOT_SIGNING_POLICY="private-adhoc",
                    PILOT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                    PILOT_UPDATER_REPOSITORY="owner/repo", PILOT_UPDATER_BUILD="200.1")
         with patch.dict(os.environ, env, clear=True), patch.object(sys, "argv", self.argv(
-                "--production", "--bundle-build", "200.1", "--gui-resources", "/inputs/day/nsh")), \
+                "--production", "--bundle-build", "200.1")), \
                 patch.object(bundle, "assemble") as assemble:
             bundle.main()
         self.assertEqual(assemble.call_args.kwargs["production"], day.configuration(env))
@@ -63,6 +62,30 @@ class BundleCliTests(unittest.TestCase):
                 patch.object(sys, "argv", self.argv()), patch.object(bundle, "assemble") as assemble:
             bundle.main()
         self.assertIsNone(assemble.call_args.kwargs["production"])
+
+    def test_production_cli_requires_day_resources_before_reading_configuration(self):
+        with patch.object(sys, "argv", self.argv()[:-2] + ["--production"]), \
+                patch.object(bundle, "assemble") as assemble, patch("sys.stderr"), \
+                patch.object(day, "configuration") as configuration:
+            with self.assertRaises(SystemExit) as error:
+                bundle.main()
+            self.assertEqual(error.exception.code, 2)
+        configuration.assert_not_called()
+        assemble.assert_not_called()
+
+    def test_day_native_compatibility_does_not_offer_the_retired_gui(self):
+        source = "a" * 40
+        argv = ["bundle_runtime.py", "native", "--source", source, "--output", "/output"]
+        for selector in ([], ["--gui", "day"]):
+            with patch.object(sys, "argv", argv + selector), patch.object(bundle, "snapshot_build") as snapshot:
+                bundle.main()
+            snapshot.assert_called_once_with(source, Path("/output"), True)
+        with patch.object(sys, "argv", argv + ["--gui", "gpui"]), \
+                patch.object(bundle, "snapshot_build") as snapshot, patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as error:
+                bundle.main()
+            self.assertEqual(error.exception.code, 2)
+        snapshot.assert_not_called()
 
 
 class SubprocessEnvironmentTests(unittest.TestCase):
@@ -303,14 +326,10 @@ class CapsuleIdentityTests(unittest.TestCase):
 
 
 class NativeSnapshotTests(unittest.TestCase):
-    def snapshot(self, root, fault=None, *, gui="gpui"):
+    def snapshot(self, root, fault=None):
         staged = root / "staged"
         source = "a" * 40
         host = root / "host"
-        (host / "apps/desktop/.tools/rustup").mkdir(parents=True)
-        (host / "apps/desktop/.tools/bin").mkdir()
-        (host / "apps/desktop/.tools/bin/mbx").write_text("tool, not source")
-
         def command(args, **kwargs):
             if args[:2] == ["git", "archive"]:
                 self.assertEqual(args[-1], source)
@@ -320,10 +339,9 @@ class NativeSnapshotTests(unittest.TestCase):
             script, bin_path = Path(args[1]), Path(args[2])
             checkout = script.parents[3]
             self.assertEqual(args, ["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"),
-                                    str(checkout / "apps/desktop/target/native-helpers")] + (["--day"] if gui == "day" else []))
+                                    str(checkout / "apps/desktop/target/native-helpers"), "--day"])
             self.assertNotEqual(checkout, host)
-            self.assertEqual((checkout / "apps/desktop/.tools/rustup").is_symlink(), gui != "day")
-            self.assertFalse((checkout / "apps/desktop/.tools/bin/mbx").exists())
+            self.assertFalse((checkout / "apps/desktop/.tools").exists())
             if fault == "escaped-directory":
                 bin_path.parent.mkdir(parents=True)
                 bin_path.symlink_to(root, target_is_directory=True)
@@ -358,7 +376,7 @@ class NativeSnapshotTests(unittest.TestCase):
              patch.object(bundle.sys, "platform", "darwin"), \
              patch.object(bundle, "run", side_effect=query), \
              patch.object(bundle.subprocess, "run", side_effect=command):
-            bundle.snapshot_build(source, staged, native=True, gui=gui)
+            bundle.snapshot_build(source, staged, native=True)
         return staged
 
     def test_helper_only_build_and_source_matched_receipts(self):
@@ -374,11 +392,6 @@ class NativeSnapshotTests(unittest.TestCase):
                 self.assertEqual(entry["bytes"], helper.stat().st_size)
                 self.assertEqual(helper.stat().st_mode & 0o777, 0o755)
 
-    def test_day_uses_global_tools_without_legacy_rustup(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            staged = self.snapshot(Path(temporary), gui="day")
-            self.assertEqual(bundle.read_json(staged / "manifest.json")["source"], "a" * 40)
-
     def test_invalid_paths_and_missing_helpers_fail_before_staging(self):
         for fault in ("escaped-directory", "missing-PilotPower", "missing-PilotSystemEvents",
                       "escaped-helper", "directory-helper", "nonexecutable-helper"):
@@ -390,7 +403,9 @@ class NativeSnapshotTests(unittest.TestCase):
 
     def test_native_build_has_no_swift_gui_or_vendor_dependency(self):
         script = (bundle.ROOT / "apps/desktop/scripts/build-native-helpers.sh").read_text()
-        self.assertIn('apps/power/scripts/cargo.sh" build --locked --release', script)
+        self.assertIn('apps/day/scripts/cargo" build --locked --release', script)
+        self.assertIn('--manifest-path "$root/apps/power/Cargo.toml"', script)
+        self.assertIn('CARGO_NET_OFFLINE=true', script)
         self.assertIn('xcrun swiftc', script)
         self.assertIn('Sources/PilotSystemEvents/main.swift', script)
         for obsolete in ("apps/macos/scripts/build.sh", "swift build", "Package.swift", "vendor-", "Ghostty", "QuickJS"):
@@ -404,14 +419,6 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertTrue(bundle.supports_macos_15("Load command 0\n cmd LC_VERSION_MIN_MACOSX\n version 11.0\n"))
         for bad in ("",current.replace("15.0","15.0.1"),current.replace("platform 1","platform 2"),current.replace("minos 15.0","minos unknown")):
             self.assertFalse(bundle.supports_macos_15(bad))
-    def test_next_development_icon_is_deterministic_and_self_contained(self):
-        first = make_dev_icon.icon()
-        self.assertEqual(first, make_dev_icon.icon())
-        self.assertEqual(first[:4], b"icns")
-        self.assertEqual(int.from_bytes(first[4:8], "big"), len(first))
-        self.assertIn(b"ic09", first)
-        self.assertIn(b"\x89PNG\r\n\x1a\n", first)
-
     @unittest.skipUnless(sys.platform == "darwin" and shutil.which("clang"), "needs macOS lipo and clang")
     def test_universal_prebuilds_keep_only_the_arm64_slice(self):
         with tempfile.TemporaryDirectory(prefix="next-thin-") as directory:
@@ -433,7 +440,7 @@ class BundleRuntimeTests(unittest.TestCase):
         self.runtime = self.root / "runtime"
         self.executables = self.root / "executables"
         self.native = self.root / "native"
-        self.output = self.root / "Pilot Next.app"
+        self.output = self.root / "Pilot.app"
         self.source = "a" * 40
         for directory in (self.runtime, self.executables, self.native):
             directory.mkdir()
@@ -453,16 +460,18 @@ class BundleRuntimeTests(unittest.TestCase):
                 binaries.append(dict(name=name, bytes=path.stat().st_size, sha256=bundle.digest(path)))
             bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", updater_configuration=dict(schema=1, mode="unconfigured"), binaries=binaries))
 
+        self.resources, self.resource_receipt = self.make_gui_resources()
+
     def assemble(self):
         with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
-            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=self.resources)
 
     def test_relocatable_closed_inventory_without_checkout_or_external_runtime(self):
         link = self.runtime / "node_modules/@pilot/daemon"
         link.parent.mkdir(parents=True)
         link.symlink_to("../../packages/daemon")
         self.assemble()
-        relocated = self.root / "unrelated" / "Pilot Next.app"
+        relocated = self.root / "unrelated" / "Pilot.app"
         relocated.parent.mkdir()
         shutil.move(self.output, relocated)
         shutil.rmtree(self.runtime)
@@ -473,40 +482,29 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertEqual(manifest["build"]["source"], self.source)
         self.assertTrue((relocated / "Contents/Resources/runtime/node_modules/@pilot/daemon/src/main.ts").is_file())
 
-    def test_prior_release_admission_uses_real_inventory_and_protocol_verification(self):
-        import macos_release_capsules as prior
-        self.assemble()
-        stamp = self.output / "Contents/Resources/runtime/runtime-build.json"
+    def test_legacy_signed_layout_is_still_readable_without_day_resources(self):
+        # Read an old inventory without calling the retired assembler. Signature
+        # verification remains the migration caller's separate responsibility.
+        legacy = self.root / "Pilot Next.app"
+        runtime = legacy / "Contents/Resources/runtime"
+        shutil.copytree(self.runtime, runtime)
+        main = legacy / "Contents/MacOS/pilot-desktop"
+        main.parent.mkdir()
+        main.write_bytes(b"legacy main under the outer code seal")
+        stamp = runtime / "runtime-build.json"
         for protocol in (1, 2):
-            bundle.write_json(stamp, bundle.read_json(stamp) | {"protocol": protocol})
-            metadata = bundle.read_json(self.output / bundle.MANIFEST)
-            metadata["build"]["protocol"] = protocol
-            metadata["files"] = [item for item in bundle.inventory(self.output)
-                                 if item["path"] not in (bundle.MANIFEST, "Contents/MacOS/pilot-desktop")
-                                 and not item["path"].startswith("Contents/_CodeSignature")]
-            bundle.write_json(self.output / bundle.MANIFEST, metadata)
-            bundle.verify(self.output, protocol=protocol)
-            directory = self.root / f"prior-{protocol}"
-            directory.mkdir()
-            archive_path = directory / "release.zip"
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                for path in [self.output] + sorted(self.output.rglob("*")):
-                    name = "Pilot Next.app" + ("/" + path.relative_to(self.output).as_posix() if path != self.output else "")
-                    entry = zipfile.ZipInfo(name + ("/" if path.is_dir() else ""))
-                    entry.create_system = 3
-                    entry.external_attr = path.lstat().st_mode << 16
-                    archive.writestr(entry, b"" if path.is_dir() else path.read_bytes())
-            def native(args, **kwargs):
-                if args[0] == "/usr/bin/ditto":
-                    shutil.copytree(self.output, Path(args[-1]) / "Pilot Next.app")
-                return subprocess.CompletedProcess(args, 0)
-            with patch.object(prior.subprocess, "run", side_effect=native), \
-                    patch.object(bundle, "native_closure", return_value=[]):
-                identity = prior._verify(archive_path, {"build": "1.64.0", "short_version": "1.64.0"}, 1)
-            self.assertEqual(identity, bundle.capsule_identity(self.output) if protocol == 1 else None)
-        # Default development/current-runtime verification remains protocol 1.
-        with self.assertRaises(ValueError):
-            bundle.verify(self.output)
+            build = bundle.read_json(stamp) | {"protocol": protocol}
+            bundle.write_json(stamp, build)
+            files = [row for row in bundle.inventory(legacy)
+                     if row["path"] not in (bundle.MANIFEST, "Contents/MacOS/pilot-desktop")]
+            bundle.write_json(legacy / bundle.MANIFEST,
+                              dict(schema=1, kind="production-bundled-runtime", build=build, files=files))
+            bundle.verify(legacy, protocol=protocol)
+        with self.assertRaisesRegex(ValueError, "Runtime build identity mismatch"):
+            bundle.verify(legacy)
+        (runtime / "node/LICENSE").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "inventory/hash mismatch"):
+            bundle.verify(legacy, protocol=2)
 
     def test_runtime_source_arch_protocol_version_and_node_mismatch(self):
         path = self.runtime / "runtime-build.json"
@@ -536,13 +534,16 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_stock_day_bundle_name_does_not_expand_the_trusted_target(self):
-        output = self.root / "Pilot Day.app"
-        with patch.object(bundle, "run") as command, patch.object(bundle, "native_closure") as native:
-            with self.assertRaisesRegex(ValueError, "fresh output named Pilot Next.app"):
-                bundle.assemble(self.runtime, self.executables, self.native, output, self.source)
-        command.assert_not_called()
-        native.assert_not_called()
-        self.assertFalse(output.exists())
+        for name in ("Pilot Day.app", "Pilot Next.app"):
+            output = self.root / name
+            with self.subTest(name=name), patch.object(bundle, "run") as command, \
+                    patch.object(bundle, "native_closure") as native:
+                with self.assertRaisesRegex(ValueError, "fresh output named Pilot.app"):
+                    bundle.assemble(self.runtime, self.executables, self.native, output, self.source,
+                                    gui_resources=self.resources)
+            command.assert_not_called()
+            native.assert_not_called()
+            self.assertFalse(output.exists())
         self.assertFalse(self.output.exists())
 
     def test_stock_day_runner_name_cannot_replace_the_receipted_executable(self):
@@ -558,7 +559,7 @@ class BundleRuntimeTests(unittest.TestCase):
         bundle.write_json(self.executables / "manifest.json", receipt)
         with patch.object(bundle, "run") as command, patch.object(bundle, "native_closure") as native:
             with self.assertRaisesRegex(ValueError, "Executable receipt mismatch: pilot-desktop"):
-                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=self.resources)
         command.assert_not_called()
         native.assert_not_called()
         self.assertFalse(self.output.exists())
@@ -582,8 +583,7 @@ class BundleRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source/target mismatch"):
             self.assemble()
 
-    def gui_resources(self):
-        self.output = self.root / "Pilot.app"
+    def make_gui_resources(self):
         # Day alone adds a native source host. It is never executed by these synthetic fixtures.
         binary = self.executables / day.ARTIFACT_HOST
         binary.write_bytes(b"\xcf\xfa\xed\xfe" + b"synthetic only")
@@ -610,7 +610,7 @@ class BundleRuntimeTests(unittest.TestCase):
         return resources, value
 
     def test_nsh_resources_keep_the_exact_native_layout_and_closed_inventory(self):
-        resources, value = self.gui_resources()
+        resources, value = self.resources, self.resource_receipt
         with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
             bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
                             gui_resources=resources)
@@ -628,7 +628,7 @@ class BundleRuntimeTests(unittest.TestCase):
             bundle.verify(self.output)
 
     def test_unsigned_day_assembly_is_explicit_and_never_signs(self):
-        resources, _ = self.gui_resources()
+        resources = self.resources
         manifest = self.executables / "manifest.json"
         value = bundle.read_json(manifest)
         value.update(kind="development-rust-inputs", profile="dev", installable_update=False)
@@ -659,7 +659,7 @@ class BundleRuntimeTests(unittest.TestCase):
             bundle.verify(self.output, unsigned_day=True)
 
     def test_unsigned_day_refuses_legacy_release_and_configured_inputs_before_copy(self):
-        resources, _ = self.gui_resources()
+        resources = self.resources
         manifest = self.executables / "manifest.json"
         original = bundle.read_json(manifest)
         development = original | {"kind": "development-rust-inputs", "profile": "dev", "installable_update": False}
@@ -670,11 +670,10 @@ class BundleRuntimeTests(unittest.TestCase):
                                 gui_resources=resources, unsigned_day=True)
             self.assertFalse(self.output.exists())
         bundle.write_json(manifest, development)
-        for options in ({}, {"gui_resources": resources, "production": {}},
-                        {"gui_resources": resources, "accepted_capsules": ["a" * 64]}):
+        for options in ({"production": {}}, {"accepted_capsules": ["a" * 64]}):
             with self.assertRaisesRegex(ValueError, "no shipping configuration"):
                 bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
-                                unsigned_day=True, **options)
+                                unsigned_day=True, gui_resources=resources, **options)
             self.assertFalse(self.output.exists())
         bundle.write_json(manifest, development | {"updater_configuration": {"mode": "configured"}})
         with self.assertRaisesRegex(ValueError, "explicit unconfigured"):
@@ -682,7 +681,7 @@ class BundleRuntimeTests(unittest.TestCase):
                             gui_resources=resources, unsigned_day=True)
 
     def test_nsh_resources_refuse_wrong_release_runner_source_and_changed_bytes(self):
-        resources, original = self.gui_resources()
+        resources, original = self.resources, self.resource_receipt
         for changes in (dict(source="b" * 40), dict(target="x86_64-apple-darwin"),
                         dict(nsh_release=dict(tag="main", source="5" * 40)),
                         dict(executable=original["executable"] | {"sha256": "b" * 64}), dict(files=[])):
@@ -695,13 +694,13 @@ class BundleRuntimeTests(unittest.TestCase):
                 self.assertFalse(self.output.exists())
         bundle.write_json(self.executables / "gui-resources.json", original)
         with self.assertRaisesRegex(ValueError, "explicit resource closure"):
-            self.assemble()
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=None)
         (resources / "bundle.nshc").write_text("changed source bytes")
         with self.assertRaisesRegex(ValueError, "inventory mismatch"):
             bundle.checked_gui_resources(resources, self.executables, self.source)
 
     def test_nsh_helper_binds_final_signed_bytes_and_keeps_input_unchanged(self):
-        resources, _ = self.gui_resources()
+        resources = self.resources
         copied = self.output / "Contents/Resources/runtime/packages/artifacts/native/pilot-artifact-host"
         original = (self.executables / "pilot-artifact-host").read_bytes()
         def sign(*args, **kwargs):
@@ -718,7 +717,7 @@ class BundleRuntimeTests(unittest.TestCase):
         bundle.verify(self.output)
 
     def test_nsh_helper_copy_tamper_is_refused_before_signing(self):
-        resources, _ = self.gui_resources()
+        resources = self.resources
         copy = bundle.shutil.copyfile
         def tamper(src, dest, *args, **kwargs):
             result = copy(src, dest, *args, **kwargs)
@@ -732,7 +731,7 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_nsh_helper_parent_alias_is_refused_before_signing(self):
-        resources, _ = self.gui_resources()
+        resources = self.resources
         parent = self.runtime / "packages/artifacts"
         parent.rmdir()
         parent.symlink_to("kernel", target_is_directory=True)
@@ -743,7 +742,7 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_nsh_resource_copy_tampering_is_not_signed_or_kept_as_output(self):
-        resources, _ = self.gui_resources()
+        resources = self.resources
         copy = bundle.shutil.copytree
         def tamper(src, dest, *args, **kwargs):
             result = copy(src, dest, *args, **kwargs)
@@ -783,10 +782,10 @@ class BundleRuntimeTests(unittest.TestCase):
         shutil.copytree(self.executables, separate)
         bundle.write_json(separate / "manifest.json", original_receipt | {"updater_configuration": "different"})
         with self.assertRaisesRegex(ValueError, "configuration receipts differ"):
-            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, separate)
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, separate, gui_resources=self.resources)
         for policy in [["wrong"], ["a" * 64] * 2, [str(i) * 64 for i in range(5)]]:
             with self.subTest(policy=policy), self.assertRaisesRegex(ValueError, "exact bounded"):
-                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, accepted_capsules=policy)
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=self.resources, accepted_capsules=policy)
 
     def test_production_requires_matching_configured_optimized_inputs(self):
         config = dict(schema=1, mode="configured", build="200.1", repository="owner/repo")
@@ -797,18 +796,18 @@ class BundleRuntimeTests(unittest.TestCase):
             bundle.write_json(path, original | changes)
             with self.assertRaisesRegex(ValueError, "Production"):
                 bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
-                                bundle_build="200.1", production=config)
+                                bundle_build="200.1", production=config, gui_resources=self.resources)
             self.assertFalse(self.output.exists())
         bundle.write_json(path, original | dict(updater_configuration=config, profile="release", kind="production-rust-inputs"))
         with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
             bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
-                            bundle_build="200.1", production=config)
+                            bundle_build="200.1", production=config, gui_resources=self.resources)
         self.assertEqual(bundle.read_json(self.output / bundle.MANIFEST)["kind"], "production-bundled-runtime")
         bundle.verify(self.output)
 
     def test_production_day_cli_keeps_full_inventory_and_rejects_resource_tampering(self):
         import day_build_inputs
-        resources, _ = self.gui_resources()
+        resources = self.resources
         env = dict(PILOT_SIGNING_POLICY="private-adhoc",
                    PILOT_UPDATER_PUBLIC_KEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                    PILOT_UPDATER_REPOSITORY="owner/repo", PILOT_UPDATER_BUILD="200.1")
@@ -838,7 +837,6 @@ class BundleRuntimeTests(unittest.TestCase):
         plane = bundle.ROOT / "apps/macos/Resources/AppIcon.icns"
         approved = plane.read_bytes()
         self.assertEqual(approved[:4], b"icns")
-        self.assertNotEqual(approved, make_dev_icon.icon())
         # A live checkout has a different icon. Only the archived source is authoritative.
         repository = self.root / "repository"
         live_icon = repository / "apps/macos/Resources/AppIcon.icns"
@@ -877,55 +875,13 @@ class BundleRuntimeTests(unittest.TestCase):
             updater_configuration=config, profile="release", kind="production-rust-inputs"))
         with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
             bundle.assemble(staged, self.executables, self.native, self.output, self.source,
-                            bundle_build="200.1", production=config)
+                            bundle_build="200.1", production=config, gui_resources=self.resources)
         with (self.output / "Contents/Info.plist").open("rb") as stream:
             info = plistlib.load(stream)
         self.assertEqual(info["CFBundleIdentifier"], "com.babariviere.pilot-next")
         self.assertEqual(info["CFBundleIconFile"], "AppIcon")
         self.assertEqual((self.output / "Contents/Resources/AppIcon.icns").read_bytes(), approved)
         bundle.verify(self.output)
-
-    def test_immutable_rust_commands_build_release_with_only_explicit_public_trust(self):
-        repository = self.root / "repository"
-        tools = repository / "apps/desktop/.tools"
-        (tools / "bin").mkdir(parents=True)
-        (tools / "bin/mbx").touch()
-        (tools / "rustup").mkdir()
-        config = dict(schema=1, mode="configured", public_key="public-only", repository="owner/repo",
-                      application_id=bundle.APP_ID, build="200.1", code_requirement="explicit")
-        calls = []
-        def command(args, **kwargs):
-            calls.append((args, kwargs))
-            if args[:2] == ["git", "archive"]:
-                with tarfile.open(fileobj=kwargs["stdout"], mode="w"):
-                    pass
-            if "build" in args:
-                desktop = kwargs["cwd"] / "apps/desktop"
-                output = desktop / "target/dev/release"
-                output.mkdir(parents=True, exist_ok=True)
-                for name in ("pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper"):
-                    (output / name).write_text("synthetic build output, never executed or qualified")
-        def query(*args, **kwargs):
-            return "commit" if "cat-file" in args else "arm64"
-        with patch.object(bundle, "ROOT", repository), patch.object(bundle.sys, "platform", "darwin"), \
-             patch.object(bundle, "run", side_effect=query), patch.object(bundle.subprocess, "run", side_effect=command), \
-             patch.dict(os.environ, {"PILOT_NEXT_UPDATER_PRIVATE_KEY": "must-not-inherit", "PILOT_NEXT_UPDATER_PUBLIC_KEY": "wrong-ambient",
-                                     "GH_TOKEN": "api-only", "GITHUB_TOKEN": "api-only"}):
-            bundle.snapshot_rust(self.source, self.root / "release-inputs", production=config)
-        builds = [(args, opts) for args, opts in calls if "build" in args]
-        self.assertEqual(len(builds), 2)
-        for args, options in builds:
-            self.assertIn("--locked", args)
-            self.assertIn("--release", args)
-            self.assertNotIn("PILOT_NEXT_UPDATER_PRIVATE_KEY", options["env"])
-            self.assertNotIn("GH_TOKEN", options["env"])
-            self.assertNotIn("GITHUB_TOKEN", options["env"])
-            self.assertEqual(options["env"]["PILOT_NEXT_UPDATER_PUBLIC_KEY"], config["public_key"])
-        self.assertTrue(any(args[-1] == "--fetch" and "prepare-patches.py" in args[-2] for args, _ in calls))
-        receipt = bundle.read_json(self.root / "release-inputs/manifest.json")
-        self.assertEqual(receipt["profile"], "release")
-        self.assertEqual(receipt["source"], self.source)
-        self.assertEqual(receipt["updater_configuration"], config)
 
     def test_escape_links_and_unsafe_file_objects_are_refused_before_copy(self):
         link = self.runtime / "escape"
@@ -967,7 +923,7 @@ class BundleRuntimeTests(unittest.TestCase):
     def test_platform_signing_failure_removes_only_fresh_staging(self):
         with patch.object(bundle, "native_closure", side_effect=ValueError("wrong native architecture")):
             with self.assertRaisesRegex(ValueError, "architecture"):
-                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=self.resources)
         self.assertFalse(self.output.exists())
         self.assertTrue((self.runtime / "node/bin/node").exists())
 
@@ -985,7 +941,7 @@ class BundleRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform == "darwin" and os.environ.get("PILOT_DESKTOP_BUNDLE_NATIVE_TEST") == "1",
                          "explicit macOS faux-Mach-O packaging lane only")
     def test_native_faux_bundle_signs_and_relocates_without_installing_or_running(self):
-        # Real macOS tools, five synthetic executables. No Swift, real daemon,
+        # Real macOS tools, synthetic executables. No Swift, real daemon,
         # LaunchServices registration, application launch, user profile or production artifact.
         source, binary = self.root / "faux.c", self.root / "faux-executable"
         source.write_text("int main(void) { return 0; }\n")
@@ -1000,11 +956,22 @@ class BundleRuntimeTests(unittest.TestCase):
                 (directory / name).chmod(0o755)
                 entries.append(dict(name=name, bytes=(directory / name).stat().st_size, sha256=bundle.digest(directory / name)))
             bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", updater_configuration=dict(schema=1, mode="unconfigured"), binaries=entries))
+        main = self.executables / "pilot-desktop"
+        resources = self.resource_receipt | {"executable": dict(
+            name=main.name, bytes=main.stat().st_size, sha256=bundle.digest(main))}
+        bundle.write_json(self.executables / "gui-resources.json", resources)
+        host = self.executables / day.ARTIFACT_HOST
+        shutil.copyfile(binary, host)
+        manifest = self.executables / "manifest.json"
+        value = bundle.read_json(manifest)
+        value.update(source=self.source, recipe_sha256="b" * 64)
+        value["binaries"].append(dict(name=host.name, bytes=host.stat().st_size, sha256=bundle.digest(host)))
+        bundle.write_json(manifest, value)
         node = self.runtime / "node/bin/node"
         shutil.copyfile(binary, node)
         node.chmod(0o755)
-        bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
-        moved = self.root / "relocated" / "Pilot Next.app"
+        bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, gui_resources=self.resources)
+        moved = self.root / "relocated" / "Pilot.app"
         moved.parent.mkdir()
         shutil.move(self.output, moved)
         shutil.rmtree(self.runtime)

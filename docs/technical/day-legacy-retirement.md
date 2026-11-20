@@ -1,9 +1,18 @@
 # Pilot Day #35: legacy retirement audit
 
-**Blocked.** This is a source and task-record audit, not an approved removal list.
+**Pre-cutover audit.** This records the earlier task gates and surviving callers.
 Source baseline: `00fdadfb`. Mission brief: revision 45.
 
-## What blocks removal
+The user separately authorized removal of Pilot Next GPUI source. Day is the sole
+app on Apple Silicon macOS, with a [private install](../getting-started.md#private-install).
+Linux desktop is deferred. This is not proof of parity, Linux or accessibility qualification,
+or approval to publish Day. It does not remove installed apps, services, or user data.
+
+Keep [shared desktop tools](../../apps/desktop/README.md) and [macOS support](../../apps/macos/README.md),
+Day's legacy readers and [explicit mission migration](day-mission-migration.md), and the daemon
+behavior they depend on. No broad backend retirement follows from deleting the GPUI client.
+
+## Gates recorded before the source cutover
 
 | Gate                                                            | Status in Pilot Day on 2026-11-20                                                                                |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -33,18 +42,15 @@ itself proves neither that they persist nor that they are fixed in a package.
 
 ## Surviving callers and data
 
-- **GPUI:** [Keep it usable](../../apps/desktop/README.md) through cutover. The daemon
-  database feature was removed in `692a5716`, but mission decision #1 defers the
-  [GPUI database question code](../../apps/desktop/src/database_access.rs) to #35.
+- **GPUI (historical):** The daemon database feature was removed in `692a5716`.
+  Mission decision #1 deferred removal of the GPUI database question code to #35.
   Do not reopen database access or change saved GPUI drafts as a side effect.
-- **Build, update, and release:** [Day's native manifest](../../apps/day/native/Cargo.toml)
+- **Build and update:** [Day's native manifest](../../apps/day/native/Cargo.toml)
   depends on the updater under `apps/desktop` on Mac and Linux.
   [Day qualification CI](../../.github/workflows/day-qualification.yml) calls shared
   build, helper, packaging, and verification scripts there. Its unsigned qualification
-  bundle is not the signed release path. [GUI Package](../../.github/workflows/gui-package.yml)
-  and [Release](../../.github/workflows/release.yaml) still call tooling under
-  `apps/desktop` or `apps/macos`. Prove a working replacement before dropping any
-  old entry point.
+  bundle is not a signed install package. The [former packaging and release workflows](day-ci-packaging.md#shipping-workflow-audit)
+  also called tooling under `apps/desktop` or `apps/macos`.
 - **Swift GUI and helpers:** The obsolete Swift GUI was removed in `632281f4`.
   [The helper-only Swift package](../../apps/macos/Package.swift) and
   [bundle tooling](../../apps/desktop/scripts/bundle_runtime.py) still support
@@ -75,7 +81,7 @@ itself proves neither that they persist nor that they are fixed in a package.
   sleep notifications, and selective connectivity recovery. Reconcile any Pilot-owned
   setting before dropping the old path.
 
-## Evidence needed for an exact removal proposal
+## Evidence needed for any further retirement
 
 1. Record the completed gates and identify the exact replacement source, packaged builds,
    app and service owners, and recovery path on each supported platform.

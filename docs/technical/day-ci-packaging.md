@@ -1,12 +1,15 @@
 # Day CI and release preparation
 
-This prepares **unsigned build inputs**, not a release or desktop cutover.
+**Pre-cutover record.** This documents the former GUI workflows and the original unsigned
+Day qualification. Paths and selection flags below describe that baseline, not the current
+build, shipping selection or publication policy. See [Day development](../../apps/day/README.md)
+and the [private install path](../getting-started.md#private-install).
 
 For the separate opt-in credential setup and qualification limits,
 see [Day signing secrets](day-signing-secrets.md). The manual readiness workflow
 does not sign bundles or change this unsigned workflow.
-The shipping GPUI path stays selected and usable. No Day lane publishes,
-uploads, signs, installs, opens a window, contacts a daemon or changes a service.
+At this baseline, GPUI stayed selected. The Day lane did not publish, upload,
+sign, install, open a window, contact a daemon or change a service.
 
 ## CI paths
 
@@ -137,13 +140,13 @@ CLI change does not claim a genuinely produced signed bundle.
 
 ## Shipping workflow audit
 
-| Existing path | Actual behavior and preparation boundary |
-| --- | --- |
-| `release.yaml` | Main pushes run Release Please. Created stable drafts or explicit retries resolve a tag to an immutable SHA; macOS and Linux packages build that SHA, then upload/sign manifests and publish. Unchanged. Tests do not gate publication. Do not insert Day here before acceptance and explicit cutover. |
-| `gui-package.yml` | Existing GPUI macOS/Linux builders. Uses tagged app source with a current packaging-helper overlay. Only the Linux inventory-signing step receives the updater private key; publication has its separate key scope. No Day selection, added secrets or key inheritance. |
-| `linux-package.yml` | Reusable x64 headless runtime build in pinned manylinux, relocated runtime checks and CI artifact upload. Still called by PR CI, not changed into a Day desktop. |
-| `main.yaml`, `pr.yaml` | Existing shared tests plus exact-source unsigned Day qualification. PRs also build the Linux runtime. No Day release or production selection. |
-| `tests.yaml` | Existing Node/GPUI/native helper checks kept, plus portable Day package regressions. No release permissions. |
+| Existing path          | Actual behavior and preparation boundary                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `release.yaml`         | Main pushes run Release Please. Created stable drafts or explicit retries resolve a tag to an immutable SHA; macOS and Linux packages build that SHA, then upload/sign manifests and publish. Unchanged. Tests do not gate publication. Do not insert Day here before acceptance and explicit cutover. |
+| `gui-package.yml`      | Existing GPUI macOS/Linux builders. Uses tagged app source with a current packaging-helper overlay. Only the Linux inventory-signing step receives the updater private key; publication has its separate key scope. No Day selection, added secrets or key inheritance.                                |
+| `linux-package.yml`    | Reusable x64 headless runtime build in pinned manylinux, relocated runtime checks and CI artifact upload. Still called by PR CI, not changed into a Day desktop.                                                                                                                                       |
+| `main.yaml`, `pr.yaml` | Existing shared tests plus exact-source unsigned Day qualification. PRs also build the Linux runtime. No Day release or production selection.                                                                                                                                                          |
+| `tests.yaml`           | Existing Node/GPUI/native helper checks kept, plus portable Day package regressions. No release permissions.                                                                                                                                                                                           |
 
 Linux GPUI release inventory already checks bundled-launch, installer and
 updater capability flags and refuses an unqualified package. Those existing
@@ -154,14 +157,14 @@ qualification on those platforms. Never distribute GPUI with a Day label.
 
 ## Shared inputs that must survive Swift GUI removal
 
-| Shared input | Current consumer |
-| --- | --- |
+| Shared input                                                                        | Current consumer                                                           |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `apps/macos/scripts/bundle-runtime.sh`, `check-runtime.sh` and their shared helpers | `bundle_runtime.snapshot_build`, GPUI release and relocated runtime checks |
-| `apps/macos/scripts/release_metadata.py`, `finalize-release.sh`, release tests | Current release publication/metadata contracts |
-| `apps/macos/Resources/AppIcon.icns` and required license/attribution assets | Immutable runtime/package assets, not a new Day identity |
-| `apps/macos/Sources/PilotSystemEvents/{main.swift,SystemPowerMonitor.swift}` | `build-native-helpers.sh`, authenticated system-event accessory |
-| `apps/macos/Sources/PilotVisualEngine` (C source and headers) | Existing isolated `pilot-visual-worker` build |
-| `apps/power`, `apps/desktop/updater`, `apps/desktop/visual-worker` | Shared native power, verification/update and artifact execution inputs |
+| `apps/macos/scripts/release_metadata.py`, `finalize-release.sh`, release tests      | Current release publication/metadata contracts                             |
+| `apps/macos/Resources/AppIcon.icns` and required license/attribution assets         | Immutable runtime/package assets, not a new Day identity                   |
+| `apps/macos/Sources/PilotSystemEvents/{main.swift,SystemPowerMonitor.swift}`        | `build-native-helpers.sh`, authenticated system-event accessory            |
+| `apps/macos/Sources/PilotVisualEngine` (C source and headers)                       | Existing isolated `pilot-visual-worker` build                              |
+| `apps/power`, `apps/desktop/updater`, `apps/desktop/visual-worker`                  | Shared native power, verification/update and artifact execution inputs     |
 
 Keep these consumers intact or update them together if paths move. Directory
 names alone do not identify obsolete GUI-only code.

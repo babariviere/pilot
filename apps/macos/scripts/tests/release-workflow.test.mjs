@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const read = (name) => readFileSync(new URL(`../../../../.github/workflows/${name}`, import.meta.url), "utf8");
@@ -12,42 +9,6 @@ const jobOf = (workflow) => (name) => {
 	return parts[1].split(/\n  [a-z-]+:\n/)[0];
 };
 const condition = (job) => job.match(/^    if: (.+)$/m)[1];
-// GitHub permits hyphenated identifiers; JavaScript requires bracket notation.
-const evaluate = (source, context) =>
-	new Function("github", "needs", "inputs", "always", "cancelled", `return ${source.replace(/^\$\{\{ (.+) \}\}$/, "$1").replace(/needs\.([a-z-]+)/g, 'needs["$1"]')}`)(
-		context.github,
-		context.needs,
-		context.inputs,
-		() => true,
-		() => context.cancelled ?? false,
-	);
-const run = (block, env, prefix = "") => {
-	const dir = mkdtempSync(join(tmpdir(), "pilot-workflow-"));
-	try {
-		const output = join(dir, "outputs");
-		writeFileSync(output, "");
-		const result = spawnSync("bash", ["-euo", "pipefail", "-c", `${prefix}\n${block}`], {
-			encoding: "utf8",
-			env: { ...process.env, GITHUB_OUTPUT: output, ...env },
-		});
-		return { status: result.status, stderr: result.stderr, output: readFileSync(output, "utf8") };
-	} finally {
-		rmSync(dir, { recursive: true, force: true });
-	}
-};
-const runBlock = (job, marker) => {
-	const start = job.indexOf(marker);
-	// The block ends at the first line indented less than a run script (the next step, job or comment).
-	const next = job.slice(start).search(/\n(?! {10}|\n| *$)/);
-	const end = next < 0 ? job.length : start + next;
-	assert.ok(start >= 0 && end > start, marker);
-	return job
-		.slice(start, end)
-		.split("\n")
-		.map((line) => line.slice(10))
-		.join("\n");
-};
-
 test("CI is split into PR, main and release entry points sharing one test workflow", () => {
 	const pr = read("pr.yaml");
 	const main = read("main.yaml");
@@ -57,7 +18,7 @@ test("CI is split into PR, main and release entry points sharing one test workfl
 	assert.doesNotMatch(pr, /\n  push:|workflow_dispatch/);
 	assert.match(main, /^on:\n  push:\n    branches: \[main\]\n\n/m);
 	assert.match(release, /^on:\n  push:\n    branches: \[main\]\n  workflow_dispatch:\n/m);
-	assert.doesNotMatch(release, /pull_request/);
+	assert.doesNotMatch(release, /^  pull_request:/m);
 	assert.match(tests, /^on:\n  workflow_call:\n/m);
 	const sharedTrigger = tests.split("on:\n")[1].split("\npermissions:")[0];
 	assert.doesNotMatch(sharedTrigger, /^  (push|pull_request|workflow_dispatch):/m);
@@ -69,28 +30,62 @@ test("CI is split into PR, main and release entry points sharing one test workfl
 	for (const workflow of [pr, main, release, tests]) {
 		assert.match(workflow, /^permissions:\n  contents: read$/m);
 	}
-	for (const name of ["release.yml", "linux-headless.yml"]) {
-		assert.throws(() => read(name), /ENOENT/, `${name} was merged into the split workflows`);
+	for (const name of ["release.yml", "gui-package.yml", "linux-headless.yml"]) {
+		assert.throws(() => read(name), /ENOENT/, `${name} is not a workflow entry point`);
 	}
 });
 
-test("tests never block a release and Release Please never waits for tests", () => {
+test("Release Please bookkeeping runs on trusted main without waiting for tests", () => {
 	const release = read("release.yaml");
-	assert.doesNotMatch(release, /tests\.yaml|lane=|apps\/macos\/scripts\/test\.sh|pnpm test/);
-	assert.doesNotMatch(release, /workflow_run/);
-	const job = jobOf(release);
-	assert.doesNotMatch(job("release-please"), /^    needs:/m);
-	assert.match(job("target"), /^    needs: release-please$/m);
-	assert.match(job("macos-gui"), /^    needs: target$/m);
-	assert.match(job("linux-gui"), /^    needs: target$/m);
-	assert.match(job("gui-publish"), /^    needs: \[target, macos-gui, linux-gui\]$/m);
-	assert.match(job("publish"), /^    needs: \[target, gui-publish\]$/m);
+	assert.doesNotMatch(release, /tests\.yaml|workflow_run|^    needs:/m);
+	const job = jobOf(release)("release-please");
+	const allowed = new Function("github", `return ${condition(job)}`);
+	for (const [ref, fork, expected] of [
+		["refs/heads/main", false, true],
+		["refs/heads/main", true, false],
+		["refs/heads/other", false, false],
+		["refs/tags/main", false, false],
+	]) {
+		assert.equal(allowed({ ref, event: { repository: { fork } } }), expected, `${ref}, fork=${fork}`);
+	}
+	assert.match(job, /group: pilot-release-please-\$\{\{ github\.repository \}\}/);
+	assert.doesNotMatch(job, /skip-github-pull-request/);
 	for (const name of ["pr.yaml", "main.yaml", "tests.yaml"]) {
 		assert.doesNotMatch(read(name), /release-please-action|contents: write|secrets\./, name);
 	}
 });
 
-test("Release Please PRs and release commits start no test runs", () => {
+test("only an explicit dispatch can create a release, and it stays a draft", () => {
+	const workflow = read("release.yaml");
+	assert.match(workflow, /create_draft:\n(?:        description: .*\n)?        type: boolean\n        default: false/);
+	const config = JSON.parse(readFileSync(new URL("../../../../release-please-config.json", import.meta.url), "utf8"));
+	assert.equal(config.draft, true);
+	assert.equal(config.packages["."].draft, undefined, "the root package must use the global draft setting");
+	const expression = workflow.match(/skip-github-release: \$\{\{ (.+) \}\}/)[1];
+	const skip = new Function("github", "inputs", `return ${expression}`);
+	for (const event_name of ["push", "workflow_dispatch"]) {
+		for (const create_draft of [undefined, false, true]) {
+			assert.equal(
+				skip({ event_name }, { create_draft }),
+				event_name !== "workflow_dispatch" || create_draft !== true,
+			);
+		}
+	}
+});
+
+test("release automation cannot build, sign, upload or publish a payload", () => {
+	const workflow = read("release.yaml");
+	const jobs = workflow.split("\njobs:\n")[1];
+	assert.deepEqual([...jobs.matchAll(/^  ([a-z-]+):$/gm)].map((match) => match[1]), ["release-please"]);
+	assert.deepEqual([...jobs.matchAll(/^\s+-? ?uses: (.+)$/gm)].map((match) => match[1]), [
+		"googleapis/release-please-action@v4",
+	]);
+	assert.doesNotMatch(jobs, /^ +(?:- )?(?:run|env|secrets):|^    uses:/m, "no commands or delegated workflow");
+	assert.doesNotMatch(workflow, /release_tag|UPDATER_PRIVATE_KEY|secrets\.|gh release/);
+	assert.throws(() => readFileSync(new URL("../finalize-release.sh", import.meta.url)), /ENOENT/);
+});
+
+test("Release Please PRs and release commits skip the shared test lanes", () => {
 	const pr = read("pr.yaml");
 	const ignored = pr.split("    paths-ignore:\n")[1].split("\n\n")[0].trim().split("\n").map((line) => line.trim());
 	assert.deepEqual(ignored, ["- CHANGELOG.md", "- .release-please-manifest.json", "- package.json"]);
@@ -152,7 +147,7 @@ test("both Node lanes install architecture-matched checksum-verified jj before t
 
 test("shared CI never builds or tests the legacy Swift app", () => {
 	const workflow = read("tests.yaml");
-	for (const name of ["pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "gui-package.yml", "linux-package.yml"]) {
+	for (const name of ["pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "linux-package.yml"]) {
 		const source = read(name);
 		assert.doesNotMatch(source, /apps\/macos\/scripts\/(?:build|test|bundle)\.sh|swift (?:build|test)\b/, name);
 		assert.doesNotMatch(source, /steps\.(?:swift[\w-]*|pr-fixtures)\.|outputs\.swift/, name);
@@ -161,7 +156,7 @@ test("shared CI never builds or tests the legacy Swift app", () => {
 	}
 	assert.doesNotMatch(jobOf(workflow)("macos"), /id: changes|fetch-depth:|upload-artifact|actions\/cache|PILOT_SWIFT_JOBS/);
 	assert.doesNotMatch(workflow, /^    needs:/m, "remaining test lanes are independent");
-	// Obsolete Swift GUI tooling may be removed; shared runtime/release tools stay.
+	// Shared runtime tools stay; GUI release automation does not.
 	assert.doesNotMatch(read("release.yaml"), /macos-app:|macos-publish|SPARKLE_|macos-production-app/);
 	assert.doesNotMatch(read("release.yaml"), /swift-build|actions\/cache\/restore|actions\/cache\/save|stable-mtimes/);
 });
@@ -173,7 +168,6 @@ test("shared Rust helper jobs keep platform boundaries without building GPUI art
 	const native = job("rust-macos-native");
 	for (const lane of [portable, native]) {
 		assert.doesNotMatch(lane, /^    needs:/m);
-		assert.match(lane, /DESKTOP_CI_SHARED_ONLY: '1'/);
 		assert.match(lane, /ci\.sh power-check/);
 		assert.doesNotMatch(lane, /ci\.sh (?:check|build|artifact|native|mac-tests)\b|upload-artifact|secrets\.|contents: write|gh release|scripts\/publish/);
 	}
@@ -193,114 +187,4 @@ test("obsolete Swift GUI lint tooling is not a shared CI dependency", () => {
 	const macos = jobOf(read("tests.yaml"))("macos");
 	assert.doesNotMatch(macos, /SwiftLint|scripts\/lint\.sh/);
 	assert.match(macos, /scripts\/tests\/\*\.test\.mjs/);
-});
-
-test("release builds run only for newly created stable drafts or explicit retries on trusted main", () => {
-	const job = jobOf(read("release.yaml"));
-	assert.match(condition(job("release-please")), /inputs\.release_tag == ''/);
-	const source = condition(job("target"));
-	const context = () => ({
-		github: { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } },
-		needs: { "release-please": { result: "success", outputs: { release_created: "false" } } },
-		inputs: { release_tag: "" },
-	});
-	let c = context();
-	assert.equal(evaluate(source, c), false, "ordinary main pushes only update the release PR");
-	c.needs["release-please"].outputs.release_created = "true";
-	assert.equal(evaluate(source, c), true);
-	c.needs["release-please"].result = "failure";
-	assert.equal(evaluate(source, c), false);
-	c = context();
-	c.github.event_name = "workflow_dispatch";
-	c.needs["release-please"].result = "skipped";
-	c.inputs.release_tag = "v1.2.3";
-	assert.equal(evaluate(source, c), true, "explicit retry");
-	c.inputs.release_tag = "";
-	assert.equal(evaluate(source, c), false);
-	c.inputs.release_tag = "v1.2.3";
-	c.github.ref = "refs/heads/other";
-	assert.equal(evaluate(source, c), false);
-	c.github.ref = "refs/heads/main";
-	c.github.event.repository.fork = true;
-	assert.equal(evaluate(source, c), false);
-	for (const name of ["macos-gui", "linux-gui", "gui-publish", "publish"]) {
-		const gate = condition(job(name));
-		const dependencies = job(name).match(/^    needs: (.+)$/m)[1].replace(/[\[\]]/g, "").split(/,\s*/);
-		const current = context();
-		current.needs = Object.fromEntries(dependencies.map((dependency) => [dependency, { result: "success" }]));
-		assert.equal(evaluate(gate, current), true, `${name} admits complete dependencies`);
-		for (const dependency of dependencies) {
-			for (const result of ["failure", "skipped", "cancelled"]) {
-				current.needs[dependency].result = result;
-				assert.equal(evaluate(gate, current), false, `${name} refuses ${dependency}: ${result}`);
-			}
-			current.needs[dependency].result = "success";
-		}
-		current.cancelled = true;
-		assert.equal(evaluate(gate, current), false, `${name} refuses cancellation`);
-	}
-});
-
-test("the release target resolves the tagged commit and rejects unstable or mismatched tags", () => {
-	const target = jobOf(read("release.yaml"))("target");
-	const block = runBlock(target, "          set -euo pipefail");
-	const prefix = 'gh() { test "$*" = "api repos/owner/repo/commits/v1.2.3 --jq .sha" && printf "%s\n" "$TAG_SHA"; }';
-	const sha = "a".repeat(40);
-	const cases = [
-		[{ RELEASE_TAG: "v1.2.3", RELEASE_SHA: sha }, `tag=v1.2.3\nsha=${sha}\n`],
-		[{ RELEASE_TAG: "v1.2.3", RELEASE_SHA: "" }, `tag=v1.2.3\nsha=${sha}\n`],
-		[{ RELEASE_TAG: "v1.2.3", RELEASE_SHA: "b".repeat(40) }, null],
-		[{ RELEASE_TAG: "v1.2.3-beta.1", RELEASE_SHA: "" }, null],
-		[{ RELEASE_TAG: "v1.2.3; rm -rf /", RELEASE_SHA: "" }, null],
-		[{ RELEASE_TAG: "", RELEASE_SHA: "" }, null],
-	];
-	for (const [env, expected] of cases) {
-		const result = run(block, { ...env, GITHUB_REPOSITORY: "owner/repo", TAG_SHA: sha }, prefix);
-		assert.equal(result.status === 0, expected !== null, `${JSON.stringify(env)}: ${result.stderr}`);
-		assert.equal(result.output, expected ?? "", JSON.stringify(env));
-	}
-	assert.match(target, /RELEASE_TAG: \$\{\{ inputs\.release_tag \|\| needs\.release-please\.outputs\.tag_name \}\}/);
-});
-
-test("release jobs build and publish the tagged commit, never this run's newer main", () => {
-	const job = jobOf(read("release.yaml"));
-	for (const name of ["gui-publish"]) {
-		assert.match(job(name), /- uses: actions\/checkout@v4\n        with:\n(?:          .*\n)*?          ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
-	}
-	for (const name of ["macos-gui", "linux-gui"]) {
-		assert.match(job(name), /ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
-	}
-	for (const name of ["gui-publish", "publish"]) {
-		assert.match(job(name), /RELEASE_TAG: \$\{\{ needs\.target\.outputs\.tag \}\}/, name);
-	}
-	assert.doesNotMatch(read("release.yaml"), /linux-release-rebuild|rebuild=true|production-source/);
-});
-
-test("GUI release signing follows successful package verification", () => {
-	const job = jobOf(read("release.yaml"));
-	assert.doesNotMatch(job("macos-gui"), /secrets\.|contents: write/);
-	const publish = job("gui-publish");
-	assert.match(publish, /contents: write/);
-	assert.match(publish, /name: gui-production-\$\{\{ matrix\.platform \}\}/);
-	assert.ok(publish.indexOf("gui-release-manifest.mjs") < publish.indexOf("gh release upload"));
-	const packaging = read("gui-package.yml");
-	assert.match(packaging, /permissions:\n  contents: read/);
-	assert.doesNotMatch(packaging, /contents: write|gh release upload/);
-});
-
-test("one serialized job publishes the complete draft after both platforms upload", () => {
-	const publish = jobOf(read("release.yaml"))("publish");
-	assert.match(publish, /group: pilot-macos-release-\$\{\{ github\.repository \}\}-stable\n      cancel-in-progress: false/);
-	assert.match(publish, /ref: \$\{\{ github\.sha \}\}/);
-	assert.match(publish, /run: bash apps\/macos\/scripts\/finalize-release\.sh/);
-	assert.doesNotMatch(publish, /secrets\./);
-});
-
-test("finalization verifies GUI signatures without requiring legacy Sparkle assets", () => {
-	const script = readFileSync(new URL("../finalize-release.sh", import.meta.url), "utf8");
-	assert.match(script, /complete-draft/);
-	assert.match(script, /gui-release-manifest\.mjs" verify-release/);
-	assert.match(script, /is-newer "\$app_version" "\$latest_tag"/);
-	assert.doesNotMatch(script, /appcast|Sparkle|is-newer-build|publish-release\.sh/);
-	assert.ok(script.indexOf("verify-release") < script.indexOf("gh release edit"));
 });

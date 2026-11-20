@@ -17,7 +17,7 @@ or copied without retrying the run.
 Stop cancels work, not prior file edits. A crash-interrupted native tool is not
 automatically replayed.
 
-New message sends and chat creation save an immutable delivery intent before
+In Pilot Next, message sends and chat creation saved an immutable delivery intent before
 contacting the daemon. Lost replies and offline periods reconcile automatically,
 including after restarting the app. Pending or Reconnecting is not Sent. Delivery…
 keeps details, copy and discard available without a routine Check or Send again.
@@ -28,17 +28,6 @@ message to send a new intent. Discard prevents future retries, but cannot retrac
 an already accepted message.
 
 ## Ask about Pilot
-
-On macOS, **Help → Ask about Pilot…** opens a read-only diagnostics conversation.
-Describe the problem and include the reported error. Diagnostics reads limited,
-sanitized evidence; it does not gain arbitrary shell or filesystem access.
-
-A repair is separate Build work, not something an investigation silently starts.
-Diagnostic availability varies by client; do not assume a legacy repair control is
-available in Pilot Next. Local diagnostic capture and optional reporting are separate
-settings. Remote reporting and product analytics default off.
-
-### Day diagnostics
 
 In Day, open **Settings → Diagnostics & privacy**. Local operational evidence,
 local feature counts, remote reporting and product analytics have separate controls.
@@ -59,7 +48,21 @@ backups, previous agent replies and uploaded data can remain. Service receipts d
 not prove another writer physically deleted its files. See
 [native diagnostics controls](technical/native-diagnostics-controls.md) for limits.
 
-## Updates and the daemon
+## Private updates
+
+Use the [private install and update procedure](getting-started.md#private-install) for the app at
+`~/Applications/Pilot.app`. There is no new public Day release. An update can restart the managed
+service. If the update refuses while work is active, let the work finish or ask before stopping it.
+An unknown result is not permission to retry the action.
+
+Day reports service status separately from update package readiness. Missing signed packages do not
+mean the local service is down. Connecting to an existing service does not take ownership of it.
+Keep the daemon on loopback; its local API must not be exposed publicly.
+
+## Historical update and daemon controls
+
+The Pilot Next menus and distribution-driven update controls below are reference, not the private
+Day update procedure.
 
 On macOS, choose **Pilot Next → Daemon → Reload** after changing pi extensions
 or MCP configuration. This applies across chats without restarting the daemon.

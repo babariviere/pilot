@@ -24,6 +24,8 @@ See the [Day service contract](technical/day-insights-wire.md).
 
 ## Legacy desktop
 
+The following setup and controls are kept for reference. They are not Day setup instructions.
+
 **Status: weekly Insights can be enabled from Automations. Review settings are editable; Apply uses them.**
 
 The app-owned workspace backend is a separate foundation. It does not yet replace these

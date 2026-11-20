@@ -79,7 +79,7 @@ Pilot sends no completion reaction and does not remove the start reaction.
 
 Labels can organize or hide reports. Older close-label settings now hide only.
 Use **Show hidden** or **Show dismissed**
-(the **Filters** menu in Pilot Next) to include them.
+(the **Filters** menu in the historical Pilot Next client) to include them.
 Corrections help future classification. Common cases group related reports so you
 can review recurring problems together.
 

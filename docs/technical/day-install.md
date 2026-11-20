@@ -1,4 +1,9 @@
-# Install Pilot from apps/day
+# First Day handoff and legacy recovery
+
+**Historical install procedure.** For a current private install or update, use the
+[private install path](../getting-started.md#private-install). The commands below describe an
+explicit handoff from an installed Pilot Next app and recovery of specific earlier attempts.
+The repository cutover does not run them, retire installed apps or runtimes, or change user data.
 
 The prepared installer stages a verified full app, updates the existing daemon,
 and offers separate, explicit old-app/runtime retirement. It launches no GUI.
@@ -68,21 +73,21 @@ the digest is the sealed executable's `shasum -a 256` result.
 
 ```json
 {
-  "app": "/absolute/input/Pilot.app",
-  "trustFrom": "/absolute/installed/Pilot Next.app",
-  "source": "FULL_40_CHARACTER_COMMIT",
-  "build": "NUMERIC_DOTTED_BUILD",
-  "binarySha256": "FULL_64_CHARACTER_SHA256",
-  "updaterPublicKey": "APPROVED_TARGET_BASE64_PUBLIC_KEY",
-  "operationId": "EXPLICIT_STABLE_UUID",
-  "savedState": "/Users/you/Library/Application Support/Pilot Next/state-v1.json",
-  "sourceProfile": "/absolute/existing/pilot-profile",
-  "targetProfile": "/absolute/existing/pilot-profile",
-  "installDirectory": "/Users/you/Applications/Pilot-install",
-  "appDestination": "/Users/you/Applications/Pilot.app",
-  "port": 24680,
-  "daemonId": "EXACT_DAEMON_ID",
-  "lineageId": "EXACT_STORAGE_LINEAGE"
+	"app": "/absolute/input/Pilot.app",
+	"trustFrom": "/absolute/installed/Pilot Next.app",
+	"source": "FULL_40_CHARACTER_COMMIT",
+	"build": "NUMERIC_DOTTED_BUILD",
+	"binarySha256": "FULL_64_CHARACTER_SHA256",
+	"updaterPublicKey": "APPROVED_TARGET_BASE64_PUBLIC_KEY",
+	"operationId": "EXPLICIT_STABLE_UUID",
+	"savedState": "/Users/you/Library/Application Support/Pilot Next/state-v1.json",
+	"sourceProfile": "/absolute/existing/pilot-profile",
+	"targetProfile": "/absolute/existing/pilot-profile",
+	"installDirectory": "/Users/you/Applications/Pilot-install",
+	"appDestination": "/Users/you/Applications/Pilot.app",
+	"port": 24680,
+	"daemonId": "EXACT_DAEMON_ID",
+	"lineageId": "EXACT_STORAGE_LINEAGE"
 }
 ```
 

@@ -2,15 +2,10 @@
 
 Pilot's app should be calm and beautiful. It runs agents in the background so the user does not have to watch
 them. The interface reports what matters, stays out of the way, and is a pleasure to look at.
-[AGENTS.md](AGENTS.md) holds the working rules. This file records the intent. It covers three apps:
-
-- **Pilot Day** (`apps/day`), the upcoming app. [Pilot Day](#pilot-day) is its current design. Where an older line
-  below names a different look, that section wins for Day. Its parts live in `apps/day/ui`
-  ([guide](apps/day/ui/README.md)).
-- **Pilot Next** (`apps/desktop`, GPUI), the shipping app. Lines marked "Pilot Next" apply to it, and its
-  components are indexed in `apps/desktop/docs/design-system.md`.
-- The Swift app is removed. Sections and lines that name Swift files or types are historical design context.
-  Pilot Next and Day keep Swift's intent, not its looks.
+[AGENTS.md](AGENTS.md) holds the working rules. This file records the intent.
+[**Pilot Day**](#pilot-day) is the current design. Its parts live in the [Day UI library](apps/day/ui/README.md).
+Where older text names Swift or Pilot Next GPUI views, read it as historical design context, not an
+implementation instruction. Day keeps their intent, not their looks.
 
 ## Calm
 
@@ -142,16 +137,16 @@ the reference). The parts, their props and their exact sizes are in the [library
 One mark and one word per state, the same on every screen. Marks are built from squares and never animate. The
 word and the accessible name always carry the state, so colour is never the only signal.
 
-| State | Mark | Meaning | Asks for the user |
-| --- | --- | --- | --- |
-| Needs you | Filled amber square | A question, an unreviewed result, a sign-in (see Attention budget) | Yes |
-| Failed | Broken red square | Work stopped on an error | Yes |
-| Ready to merge | Green square with a tick | An open pull request that nothing blocks | No, it waits |
-| Working | Hollow square | An agent, or its background jobs, runs | No |
-| Paused | Two bars | Held on purpose: a Pause, or set aside with Later | No |
-| New | Small square | It came in and nobody started it | Slack requests queue in Needs you |
-| Done | A tick | Finished and reviewed | No |
-| Unconfirmed | Hollow amber square | Pilot could not read or confirm it, such as a lost answer | Not by itself |
+| State          | Mark                     | Meaning                                                            | Asks for the user                 |
+| -------------- | ------------------------ | ------------------------------------------------------------------ | --------------------------------- |
+| Needs you      | Filled amber square      | A question, an unreviewed result, a sign-in (see Attention budget) | Yes                               |
+| Failed         | Broken red square        | Work stopped on an error                                           | Yes                               |
+| Ready to merge | Green square with a tick | An open pull request that nothing blocks                           | No, it waits                      |
+| Working        | Hollow square            | An agent, or its background jobs, runs                             | No                                |
+| Paused         | Two bars                 | Held on purpose: a Pause, or set aside with Later                  | No                                |
+| New            | Small square             | It came in and nobody started it                                   | Slack requests queue in Needs you |
+| Done           | A tick                   | Finished and reviewed                                              | No                                |
+| Unconfirmed    | Hollow amber square      | Pilot could not read or confirm it, such as a lost answer          | Not by itself                     |
 
 - A screen may use a more exact word for the same state ("Did not confirm", "Pausing"), never a new mark or colour.
 - Unconfirmed never looks empty or done. It is not Needs you and does not ask for the user by itself.
@@ -192,13 +187,13 @@ Swift (historical) and Pilot Next. There, Linear tickets and mission tasks share
 ladder: empty circle to do, one-third filled in progress, two-thirds filled in review, then done.
 The progress pies fill clockwise from 12 o'clock.
 
-| State | Meaning | Interrupts |
-| --- | --- | --- |
-| Working | An agent is running, or it is idle while its background jobs or subagents run | No |
-| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, limit reached, stuck pull request, code changes without a PR, MCP server needing sign-in, job running over an hour. Clears itself (see Attention budget) | Yes |
-| Ready to merge | Open PR with no blockers (only the user can confirm a merge) | Optional notification |
-| Blocked or pending | PR waiting on checks, reviews or conflicts | No |
-| Done | Finished and reviewed | No |
+| State              | Meaning                                                                                                                                                                                                                                             | Interrupts            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Working            | An agent is running, or it is idle while its background jobs or subagents run                                                                                                                                                                       | No                    |
+| Needs you          | Failed, unreviewed result, agent or mission question, scheduled item that could not start, limit reached, stuck pull request, code changes without a PR, MCP server needing sign-in, job running over an hour. Clears itself (see Attention budget) | Yes                   |
+| Ready to merge     | Open PR with no blockers (only the user can confirm a merge)                                                                                                                                                                                        | Optional notification |
+| Blocked or pending | PR waiting on checks, reviews or conflicts                                                                                                                                                                                                          | No                    |
+| Done               | Finished and reviewed                                                                                                                                                                                                                               | No                    |
 
 Swift (historical): in the sidebar, a chat's state was its dithered corner (`DitherCorner`), not an icon column:
 an ordered dither growing from the row's bottom-right corner in the state's tint. Working is a soft indigo ripple,
@@ -401,6 +396,7 @@ and accessory, the content, an inline error slot, and a footer pinned to the bot
 on the right (a sheet with nothing to confirm has a single Done). Esc cancels. Return confirms a form of single-line
 fields; a form with a multi-line editor confirms with Command-Return, because Return inserts a newline there, and its
 button shows ⌘↩.
+
 - Check every change with long content and with loading, empty, error and disabled states. Keep keyboard access
   and readable contrast.
 

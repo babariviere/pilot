@@ -31,16 +31,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B -m unittest discover -s apps/day/scripts -p 'test_*.py'
-          for suite in day_ci_policy day_build_inputs day_qualification bundle_runtime gui_release; do
+          for suite in day_ci_policy day_build_inputs day_qualification bundle_runtime ci verify_update_lifecycle; do
             python3 -B -m unittest discover -s apps/desktop/scripts -p "test_$suite.py"
           done
-          PYTHONPATH=apps/desktop/scripts python3 -B -m unittest \
-            test_ci.CiTests.test_updater_portable_invokes_real_manifest_fmt_strict_clippy_and_nonzero_core_suite \
-            test_ci.CiTests.test_linux_updater_native_checks_do_not_use_macos_platform_or_release \
-            test_ci.CiTests.test_updater_native_builds_real_helper_and_exact_registered_tests_without_metal \
-            test_ci.CiTests.test_updater_missing_registration_zero_counts_and_failed_commands_are_failures \
-            test_ci.CiTests.test_missing_local_signed_source_native_test_fails_before_execution \
-            test_ci.CiTests.test_missing_temporary_payload_native_tests_fail_before_execution
 
   # Portable tests use Linux so they do not compete for macOS runner capacity.
   node:
@@ -124,13 +117,12 @@ jobs:
         if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/')
         run: bash scripts/check-packaged-dependencies.sh
 
-  # Shared updater and power helper tests, without the GPUI workspace.
+  # Shared native helpers only. This is not Linux desktop qualification.
   rust:
     name: Shared Linux updater and power security
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      DESKTOP_CI_SHARED_ONLY: '1'
       RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       - uses: actions/checkout@v4
@@ -157,13 +149,13 @@ jobs:
           python3 apps/desktop/scripts/verify_update_lifecycle.py
       - name: Test shared power helper
         run: bash apps/desktop/scripts/ci.sh power-check
+      - name: Check shared visual worker
+        run: bash apps/desktop/scripts/ci.sh visual-check
 
   rust-macos-native:
     name: Shared macOS updater and power security
     runs-on: macos-15
     timeout-minutes: 60
-    env:
-      DESKTOP_CI_SHARED_ONLY: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -177,3 +169,5 @@ jobs:
         run: bash apps/desktop/scripts/ci.sh updater-mac-tests
       - name: Test shared power helper
         run: bash apps/desktop/scripts/ci.sh power-check
+      - name: Check shared visual worker
+        run: bash apps/desktop/scripts/ci.sh visual-check

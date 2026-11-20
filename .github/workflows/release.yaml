@@ -1,30 +1,24 @@
 name: Release
 
-# Runs Release Please on every main push, without waiting for tests. When it creates a stable draft,
-# this workflow builds Rust GUI apps from the tagged commit, signs and uploads them,
-# then publishes the draft. Tests run separately in main.yaml and never block a release.
+# Main pushes maintain the Release Please PR only. An explicit dispatch can create
+# a draft for a merged release PR. Nothing here builds, signs, uploads or publishes.
 on:
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: 'Existing stable draft tag to retry (for example v0.2.0). Leave empty to run Release Please.'
-        type: string
-        required: false
+      create_draft:
+        description: 'Create a draft for a merged release PR (no assets or publishing)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-env:
-  # Native Swift helpers still use the pinned macOS SDK; the legacy app is not built.
-  DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
-  NODE_VERSION: 24.21.0
-
 jobs:
   release-please:
     # Never expose write permissions to forks.
-    if: github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
+    if: github.ref == 'refs/heads/main' && github.event.repository.fork == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -34,156 +28,10 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      sha: ${{ steps.release.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v4
-        id: release
         with:
           token: ${{ github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-  # Resolves the immutable release source: a draft Release Please just created, or an explicit retry.
-  # Release Please may tag an earlier merged release commit than this push, so every job builds the tag.
-  target:
-    needs: release-please
-    # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      tag: ${{ steps.resolve.outputs.tag }}
-      sha: ${{ steps.resolve.outputs.sha }}
-    steps:
-      - name: Resolve the release tag and commit
-        id: resolve
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
-          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
-        run: |
-          set -euo pipefail
-          if ! [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo '::error::Only stable tags such as v1.2.3 can be released.'
-            exit 1
-          fi
-          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
-          if [ -n "$RELEASE_SHA" ] && [ "$RELEASE_SHA" != "$tag_sha" ]; then
-            echo '::error::Release Please reported a different commit than its tag.'
-            exit 1
-          fi
-          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
-
-  macos-gui:
-    needs: target
-    if: ${{ !cancelled() && needs.target.result == 'success' }}
-    uses: ./.github/workflows/gui-package.yml
-    with:
-      ref: ${{ needs.target.outputs.sha }}
-      platform: macos
-      build: ${{ github.run_number }}.${{ github.run_attempt }}
-
-  linux-gui:
-    needs: target
-    if: ${{ !cancelled() && needs.target.result == 'success' }}
-    uses: ./.github/workflows/gui-package.yml
-    with:
-      ref: ${{ needs.target.outputs.sha }}
-      platform: linux
-      build: ${{ github.run_number }}.${{ github.run_attempt }}
-    secrets:
-      PILOT_NEXT_UPDATER_PRIVATE_KEY: ${{ secrets.PILOT_NEXT_UPDATER_PRIVATE_KEY }}
-
-  gui-publish:
-    needs: [target, macos-gui, linux-gui]
-    if: ${{ !cancelled() && needs.target.result == 'success' && needs.macos-gui.result == 'success' && needs.linux-gui.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    strategy:
-      matrix:
-        platform: [macos, linux]
-    permissions:
-      contents: write
-    env:
-      RELEASE_TAG: ${{ needs.target.outputs.tag }}
-      RELEASE_SOURCE: ${{ needs.target.outputs.sha }}
-      PLATFORM: ${{ matrix.platform }}
-      PILOT_NEXT_UPDATER_PUBLIC_KEY: ${{ vars.PILOT_NEXT_UPDATER_PUBLIC_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.target.outputs.sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: gui-production-${{ matrix.platform }}
-          path: release
-      - name: Sign and upload source-matched GUI assets to the stable draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PILOT_NEXT_UPDATER_PRIVATE_KEY: ${{ secrets.PILOT_NEXT_UPDATER_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          test -n "$PILOT_NEXT_UPDATER_PUBLIC_KEY" && test -n "$PILOT_NEXT_UPDATER_PRIVATE_KEY" || { echo '::error::Configure matching PILOT_NEXT_UPDATER_PUBLIC_KEY variable and PILOT_NEXT_UPDATER_PRIVATE_KEY Ed25519 PEM secret.'; exit 1; }
-          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"
-          test "$RELEASE_SOURCE" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
-          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease > release-state.json
-          python3 apps/macos/scripts/release_metadata.py release-state release-state.json
-          case "$PLATFORM" in
-            macos) archive=Pilot-Next-macos-arm64.zip; manifest=desktop-macos-arm64-update.json ;;
-            linux) archive=Pilot-Next-linux-x64.zip; manifest=desktop-linux-x64-update.json ;;
-            *) exit 1 ;;
-          esac
-          # Validate hashes and signing key before any draft upload. Asset ID is rebound below.
-          node apps/desktop/scripts/gui-release-manifest.mjs "$PLATFORM" release 1
-          gh release upload "$RELEASE_TAG" "release/$archive" --clobber
-          release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId)"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" > release-assets.json
-          asset_id="$(node --input-type=module - "$archive" <<'JS'
-          import fs from 'node:fs';
-          const matches = JSON.parse(fs.readFileSync('release-assets.json')).filter(a => a.name === process.argv[2] && a.state === 'uploaded');
-          if (matches.length !== 1 || !Number.isSafeInteger(matches[0].id)) throw Error('Expected one uploaded GUI archive');
-          console.log(matches[0].id);
-          JS
-          )"
-          node apps/desktop/scripts/gui-release-manifest.mjs "$PLATFORM" release "$asset_id"
-          gh release upload "$RELEASE_TAG" "release/$manifest" --clobber
-
-  publish:
-    needs: [target, gui-publish]
-    if: ${{ !cancelled() && needs.target.result == 'success' && needs.gui-publish.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # Serialize stable publishing. Semantic-version ordering protects latest.
-    concurrency:
-      group: pilot-macos-release-${{ github.repository }}-stable
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      # Current release tools, as in the packaging overlay. No tagged source is built here.
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          sparse-checkout: |
-            apps/macos/scripts
-            apps/desktop/scripts
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Publish the complete stable draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ needs.target.outputs.tag }}
-          RELEASE_SOURCE: ${{ needs.target.outputs.sha }}
-          PILOT_NEXT_UPDATER_PUBLIC_KEY: ${{ vars.PILOT_NEXT_UPDATER_PUBLIC_KEY }}
-        run: bash apps/macos/scripts/finalize-release.sh
+          skip-github-release: ${{ github.event_name != 'workflow_dispatch' || inputs.create_draft != true }}

@@ -13,13 +13,6 @@ import xml.etree.ElementTree as ET
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE)
-# Every platform's assets must be on the draft before it is published.
-DRAFT_ASSETS = (
-    "Pilot-Next-macos-arm64.zip",
-    "desktop-macos-arm64-update.json",
-    "Pilot-Next-linux-x64.zip",
-    "desktop-linux-x64-update.json",
-)
 
 
 def repository(value):
@@ -46,21 +39,6 @@ def stable_version(value):
     return value
 
 
-def release_state(release):
-    if release["isPrerelease"] or not release["isDraft"]:
-        raise ValueError("Only stable drafts can be published")
-    return "draft"
-
-
-def complete_draft(release):
-    release_state(release)
-    uploaded = {a["name"] for a in release["assets"] if a["state"] == "uploaded"}
-    missing = [name for name in DRAFT_ASSETS if name not in uploaded]
-    if missing:
-        raise ValueError("Draft is missing uploaded assets: " + ", ".join(missing))
-    return "complete"
-
-
 def appcast_build(appcast, app_version):
     item = ET.parse(appcast).find("channel/item")
     if item is None:
@@ -72,6 +50,7 @@ def appcast_build(appcast, app_version):
     if build is None or not build.text:
         raise ValueError("Draft appcast is missing its Sparkle build version")
     return version(build.text)
+
 def write_plist(source, destination, repo_path, release=False, env=None, app_version=None):
     env = os.environ if env is None else env
     with open(source, "rb") as handle:
@@ -157,20 +136,6 @@ def prepare_runtime(root):
             helper.chmod(0o755)
 
 
-def newer_than_latest(app_version, latest_tag):
-    current = tuple(map(int, stable_version(app_version).split(".")))
-    if not latest_tag:
-        return True
-    # One-way migration from the former workflow-build tags to stable version tags.
-    if latest_tag.startswith("pilot-"):
-        version(latest_tag.removeprefix("pilot-"))
-        return True
-    if not latest_tag.startswith("v"):
-        raise ValueError("Latest release has an unrecognized tag; refusing to change latest")
-    latest = tuple(map(int, stable_version(latest_tag.removeprefix("v")).split(".")))
-    return current > latest
-
-
 def newer_build_than_latest(build_version, latest_appcast):
     item = ET.parse(latest_appcast).find("channel/item")
     latest = None if item is None else item.find(f"{{{SPARKLE}}}version")
@@ -202,16 +167,9 @@ def main():
     links.add_argument("root")
     prepare = commands.add_parser("prepare-runtime")
     prepare.add_argument("root")
-    latest = commands.add_parser("is-newer")
-    latest.add_argument("version")
-    latest.add_argument("latest_tag")
     build = commands.add_parser("is-newer-build")
     build.add_argument("version")
     build.add_argument("appcast")
-    state = commands.add_parser("release-state")
-    state.add_argument("release_json")
-    complete = commands.add_parser("complete-draft")
-    complete.add_argument("release_json")
     draft_build = commands.add_parser("appcast-build")
     draft_build.add_argument("appcast")
     draft_build.add_argument("version")
@@ -232,17 +190,10 @@ def main():
         validate_symlinks(args.root)
     elif args.command == "prepare-runtime":
         prepare_runtime(args.root)
-    elif args.command == "is-newer":
-        raise SystemExit(0 if newer_than_latest(args.version, args.latest_tag) else 1)
     elif args.command == "is-newer-build":
         raise SystemExit(0 if newer_build_than_latest(args.version, args.appcast) else 1)
     elif args.command == "appcast-build":
         print(appcast_build(args.appcast, args.version))
-    else:
-        with open(args.release_json) as handle:
-            release = json.load(handle)
-        check = {"complete-draft": complete_draft}.get(args.command, release_state)
-        print(check(release))
 
 
 if __name__ == "__main__":

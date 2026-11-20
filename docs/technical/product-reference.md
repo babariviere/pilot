@@ -18,9 +18,9 @@ Chat uses the SwiftUI transcript. The AppKit transcript transition has been reve
 
 ![A Build chat with grouped tool activity, task progress and code changes side by side](../screenshots/readme-build.png)
 
-*Screenshots are rendered from native views with demo data, not live conversations. Chat captures use a
+_Screenshots are rendered from native views with demo data, not live conversations. Chat captures use a
 stand-in window header; Build and mission captures are cropped to their working areas.
-See [screenshot notes](../screenshots/README.md) to regenerate them.*
+See [screenshot notes](../screenshots/README.md) to regenerate them._
 
 ## What you can do
 
@@ -213,7 +213,7 @@ the daemon report; check, sign-in and setup actions are not included. See the
 ### Install a release
 
 New releases contain the Rust GPUI desktop, with `Pilot-Next-macos-arm64.zip` for macOS 15+
-and `Pilot-Next-linux-x64.zip` for Wayland Linux. See [Pilot Next](../../apps/desktop/README.md).
+and `Pilot-Next-linux-x64.zip` for Wayland Linux. See [the pre-cutover Pilot Next guide](https://github.com/babariviere/pilot/blob/094f295850010f2217bdd7f47f1397ab0319d1f0/apps/desktop/README.md).
 Pilot Next uses the native macOS menu bar for application, editing and navigation commands.
 Packaged managed Local connections also expose **Pilot Next → Daemon → Start / Stop / Restart**.
 These explicit controls preserve the existing runtime and login settings. Active or uninspectable work
@@ -257,7 +257,7 @@ xattr -d com.apple.quarantine /Applications/Pilot.app
 ```
 
 **System Settings → Privacy & Security → Open Anyway** also works.
-[Release and update setup](../../apps/macos/UPDATES.md) explains signing, packaging and automatic updates.
+[Release and update setup](https://github.com/babariviere/pilot/blob/6e1285e766fb37cd9e17203fe8c7f137dda86d63/apps/macos/UPDATES.md) explains signing, packaging and automatic updates.
 Updates pause agents after active tool calls finish, update the app and daemon, then resume unfinished
 chats and subagents automatically. They do not wait for entire conversations to finish.
 Chats with working subagents stay Working, even when the parent has finished its current reply.
@@ -551,11 +551,11 @@ Finish or stop background jobs and close live terminals before changing the mode
 
 ### Ask and Build
 
-| | Ask | Build |
-| --- | --- | --- |
-| Purpose | Understand code, discuss options, plan | Implement, test and deliver changes |
-| Code source | Current checkout or a pinned origin-branch snapshot | Project workspace setting, with a per-chat override |
-| Tools | Pilot's read/search tools, bundled web and session-local artifacts | Pi tools, bundled capabilities, compatible extensions, MCP and shell tools |
+|             | Ask                                                                | Build                                                                      |
+| ----------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| Purpose     | Understand code, discuss options, plan                             | Implement, test and deliver changes                                        |
+| Code source | Current checkout or a pinned origin-branch snapshot                | Project workspace setting, with a per-chat override                        |
+| Tools       | Pilot's read/search tools, bundled web and session-local artifacts | Pi tools, bundled capabilities, compatible extensions, MCP and shell tools |
 
 Built-in shell tool calls have a 120-second execution deadline. Set `timeout` (seconds) explicitly
 for intentionally longer commands, or use session-owned `jobs` for long-running work. A command

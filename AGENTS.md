@@ -9,10 +9,11 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - `packages/kernel`: one worker process per session. Owns the Harness, its SQLite storage and the
   native Pi SDK kernel that loads the user's pi packages and extensions.
 - `packages/daemon`: `pilotd`. HTTP + WebSocket API, session registry and worker supervision.
-- `apps/desktop`: current GPUI desktop app. Keep it usable until Day acceptance and authorized cutover.
+- `apps/day`: Pilot Day, the only desktop app, on Apple Silicon macOS. See the [Day guide](apps/day/README.md)
+  for Native Shell builds, fixtures and checks.
+- `apps/desktop`: [shared tools](apps/desktop/README.md), not an app. Keep the workspace visual worker,
+  standalone updater and Day packaging helpers.
 - `apps/macos`: shared native helpers, C visual engine, assets and runtime/release scripts, not a GUI app.
-- `apps/day`: Pilot Day, the upcoming Native Shell TSX desktop app (not the default yet). Its mock worlds are test
-  fixtures only. [apps/day/README.md](apps/day/README.md) has how to run and check it. `apps/day/fixtures` is optional evidence.
 
 Docs to use when the task touches them:
 
@@ -27,6 +28,11 @@ Docs to use when the task touches them:
   and move detail into skill references or tool descriptions that load only when needed.
 
 ## Working conventions
+
+- The source cutover removes Pilot Next GPUI. Keep installed apps, services and user data unchanged.
+  Preserve Day's history readers and explicit migration paths. Backend retirement is separate.
+- For an authorized private install or update to `~/Applications/Pilot.app`, use
+  [update-pilot](.agents/skills/update-pilot/SKILL.md). Linux desktop is deferred; no public Day publication.
 
 - For code review, read [CODING_STANDARDS.md](CODING_STANDARDS.md).
 - TypeScript, ESM, `.ts` import extensions, strict mode. Node 24+.
@@ -53,14 +59,8 @@ Docs to use when the task touches them:
 
 ## UI and design system
 
-- GPUI desktop components and contracts are indexed in `apps/desktop/docs/design-system.md`.
-  Reuse `src/ui.rs` and its compiled native catalog; keep data, control state and guarded callbacks with callers.
 - Pilot Day's look lives only in its library, `apps/day/ui` (guide: `apps/day/ui/README.md`); screens compose parts.
   DESIGN.md "Pilot Day" holds its intent.
-- For Pilot Next GPUI planning, implementation and visual review, read and use
-  [pilot-next-design](.agents/skills/pilot-next-design/SKILL.md). Its calm, just-enough-information
-  workflow applies the existing contracts; generic frontend-design boldness must not override that restraint.
-
 - For interface work, read and use `.agents/skills/frontend-design/SKILL.md` for
   planning and visual critique. Apply it within `DESIGN.md` and the approved product
   brief, using the native renderer and shared tokens rather than importing web defaults.
@@ -69,7 +69,7 @@ Docs to use when the task touches them:
   contracts above take precedence.
 - Keep screens calm and focused: one primary action, progressive disclosure for the rest, and existing
   layouts, terminology and hierarchy. DESIGN.md explains the intent.
-- Reuse each native app's shared tokens and components. Add missing tokens centrally with a note on their
+- Reuse Day's shared tokens and components. Add missing tokens centrally with a note on their
   intended use rather than adding one-off styles or a parallel system.
 
 ## Formatting and checks
@@ -87,7 +87,7 @@ Docs to use when the task touches them:
   Use `pnpm test:fast` for quick feedback and `pnpm test` for the full suite.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
   your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test`.
-  For native changes, use the verification wrappers in the desktop and Day READMEs.
+  For native app changes, use the [Day checks](apps/day/README.md#check).
 
 ## Repository safety
 

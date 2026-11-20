@@ -18,8 +18,8 @@ ARCHIVES = {
     ("Darwin", "arm64"): ("darwin_arm64", "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"),
     ("Linux", "x86_64"): ("linux_amd64", "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"),
 }
-WORKFLOWS = [ROOT / ".github/workflows" / name for name in
-             ("pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "gui-package.yml", "linux-package.yml", "day-qualification.yml")]
+WORKFLOWS = sorted(path for path in (ROOT / ".github/workflows").iterdir()
+                   if path.suffix in {".yaml", ".yml"})
 
 
 def prepare():

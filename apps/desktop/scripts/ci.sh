@@ -9,11 +9,11 @@ export MACOSX_DEPLOYMENT_TARGET=15.0
 
 macos_host() {
   [[ "$(uname -s):$(uname -m)" == Darwin:arm64 ]] || {
-    echo 'Desktop Rust CI requires macOS Apple Silicon; no Intel/Linux claim.' >&2; exit 1;
+    echo 'Native helper CI requires macOS Apple Silicon; no Intel/Linux claim.' >&2; exit 1;
   }
   # Apple's Bash 3.2 does not apply errexit to bare [[ ... ]] commands.
   [[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ]] || {
-    echo 'Desktop Rust CI requires macOS 15 or newer.' >&2; exit 1;
+    echo 'Native helper CI requires macOS 15 or newer.' >&2; exit 1;
   }
   xcrun --show-sdk-version
 }
@@ -27,7 +27,7 @@ host() {
 cargo() { bash scripts/cargo.sh "$@"; }
 
 # The updater has its own workspace/lockfile. Always name its real manifest;
-# the desktop workspace alone does not register or execute these tests.
+# the visual-worker workspace does not register or execute these tests.
 updater=(--manifest-path updater/Cargo.toml)
 # cargo-nextest (installed by bootstrap) runs each libtest test in its own process.
 # --no-tests=fail turns an empty selection into a failure instead of a silent pass.
@@ -35,35 +35,6 @@ nextest() { cargo nextest run --locked --profile ci --no-tests=fail "$@"; }
 updater_test() { nextest "${updater[@]}" --lib "$@"; }
 
 case "${1:-}" in
-  changed)
-    # PR merge first parent is its base. Main/unknown diffs fail open to checks.
-    python3 - <<'PY'
-import fnmatch, os, subprocess
-def is_input(path):
-    if path.startswith('apps/desktop/evidence/'):
-        return False
-    roots = ('apps/desktop/', 'apps/power/', 'apps/macos/Sources/PilotSystemEvents/',
-             'apps/macos/Sources/PilotPowerSupport/', 'apps/macos/Sources/PilotVisualEngine/',
-             'apps/macos/Resources/LegacyApp/',
-             'packages/artifacts/src/visual/', 'packages/protocol/fixtures/visual/', '.cargo/')
-    workflows = {'.github/workflows/tests.yaml', '.github/workflows/pr.yaml',
-                 '.github/workflows/main.yaml', '.github/workflows/desktop-rust.yml'}
-    return (path.startswith(roots) or path in workflows or
-            ('/' not in path and (fnmatch.fnmatchcase(path, 'Cargo.*') or
-                                  fnmatch.fnmatchcase(path, 'rust-toolchain*'))))
-changed = True
-if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request':
-    try:
-        files = subprocess.check_output(['git', 'diff', '--name-only', '-z', 'HEAD^1', 'HEAD'])
-        changed = any(is_input(p) for p in os.fsdecode(files).split('\0') if p)
-    except subprocess.CalledProcessError:
-        pass
-value = str(changed).lower()
-print(f'Rust checks: {value}')
-with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-    output.write(f'rust={value}\n')
-PY
-    ;;
   host) host ;;
   power-check)
     host
@@ -76,59 +47,13 @@ PY
   bootstrap)
     host
     bash scripts/bootstrap.sh
-    if [[ "${DESKTOP_CI_SHARED_ONLY:-}" == 1 ]]; then
-      exit 0
-    fi
-    python3 scripts/prepare-visual-worker.py
-    rustc -vV
-    # Patched GPUI sources are path dependencies, so Cargo fingerprints them by
-    # mtime. Fixed mtimes let the dependency cache (keyed by patch specs) reuse them.
-    python3 - <<'PY'
-import os, pathlib
-for path in pathlib.Path('.patched').rglob('*'):
-    os.utime(path, (1700000000, 1700000000), follow_symlinks=False)
-PY
     ;;
-  cache-prune)
-    # Keep third-party dependency outputs only; workspace crates and test binaries rebuild.
-    profile=target/dev/debug
-    if [[ -d "$profile" ]]; then
-      rm -rf "$profile/incremental" "$profile/examples" "$profile"/.fingerprint/pilot-* "$profile"/build/pilot-*
-      find "$profile" -maxdepth 1 -type f -delete
-      find "$profile/deps" -maxdepth 1 -type f \( -name 'pilot_*' -o -name 'libpilot_*' -o ! -name '*.*' \) -delete
-      du -sh "$profile"
-    fi
-    ;;
-  check)
+  visual-check)
     host
+    python3 scripts/prepare-visual-worker.py
     cargo fmt --all -- --check
-    # Build the real production app/helper, not a copied portable-core fixture.
-    cargo build --locked --workspace --bins
-    cargo clippy --locked --workspace --all-targets --features native-probes -- -D warnings
-    # The helper's tests are macOS-only, so an empty Linux selection is expected here.
-    cargo nextest run --locked --profile ci --no-tests=warn -p pilot-visual-worker --bin pilot-visual-worker
-    # Library suite plus the auto-discovered path-import harness settings_state (not part of --lib).
-    nextest -p pilot-desktop --lib --test settings_state
-    # NSH renders separately but uses the same real Local reader/courier/Store.
-    cargo test --locked -p pilot-nsh --features native-probes --test chat --test work --test history --test images -- --test-threads=1
-    if [[ "$(uname -s)" == Linux ]]; then
-      # Compile native probes and verify unsupported instruction counters fail closed.
-      cargo test --locked -p pilot-desktop --features native-probes --lib unsupported_counters_fail_closed
-      # Actual native request bytes over a socket pair, no compositor/display.
-      cargo test --locked -p gpui-pre-linux --lib background_blur_tests
-    fi
-    python3 -m unittest discover -s scripts -p 'test_*.py' -v
-    ;;
-  linux-gui-check)
-    [[ "$(uname -s):$(uname -m)" == Linux:x86_64 ]] || {
-      echo 'Linux GUI fixture checks require native Linux x86_64.' >&2; exit 1;
-    }
-    # Uses the debug binaries already built by check. No duplicate Cargo build.
-    mkdir -p target
-    python3 scripts/linux_gui_package_native.py --binaries target/dev/debug \
-      --source "${GITHUB_SHA:?Exact tested source required}" \
-      --output target/ci-linux-gui-fixture.json
-    cat target/ci-linux-gui-fixture.json
+    cargo clippy --locked -p pilot-visual-worker --all-targets -- -D warnings
+    cargo build --locked -p pilot-visual-worker --bin pilot-visual-worker
     ;;
   updater-check)
     host
@@ -156,8 +81,7 @@ PY
     echo 'Standalone updater macOS Security/ACL/stage/swap/helper checks started.'
     cargo clippy --locked "${updater[@]}" --all-targets --features native-macos -- -D warnings
     cargo build --locked "${updater[@]}" --features native-macos --bin pilot-desktop-update-helper
-    # Run OS-bound tests independently of Metal availability. Common lifecycle
-    # tests run here too because their fixture/platform paths differ on macOS.
+    # Run the common lifecycle tests, too: their fixture paths differ on macOS.
     updater_native_tests=(
       staging_keeps_installed_app_unchanged_and_holds_permanent_target_lock
       macos_staging_never_exposes_intermediate_apps_beside_installation
@@ -201,134 +125,5 @@ PY
     # capsule/reservation modules. Serial, since these share OS-level fixtures.
     updater_test --features native-macos --test-threads=1
     ;;
-  build)
-    macos_host
-    # No test-support/native-probes feature in these normal optimized binaries.
-    cargo build --locked --release --workspace --bins
-    ;;
-  artifact)
-    macos_host
-    : "${DESKTOP_CI_OUTPUT:?Set a fresh output directory outside the checkout}"
-    # Refuse stale contents, including artifacts from a failed previous build.
-    mkdir "$DESKTOP_CI_OUTPUT"
-    for binary in pilot-desktop pilot-visual-worker; do
-      source="target/dev/release/$binary"
-      [[ "$(lipo -archs "$source")" == arm64 ]] || {
-        echo "Refusing non-arm64 CI artifact: $binary" >&2; exit 1;
-      }
-      install -m 755 "$source" "$DESKTOP_CI_OUTPUT/$binary"
-    done
-    python3 - "$DESKTOP_CI_OUTPUT" <<'PY'
-import hashlib, json, os, pathlib, re, subprocess, sys, tomllib
-def command(*args):
-    return subprocess.check_output(args, text=True).strip()
-def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-tested = command('git', 'rev-parse', 'HEAD')
-if tested != os.environ['GITHUB_SHA'] or not re.fullmatch('[0-9a-f]{40}', tested):
-    raise SystemExit('Checkout does not match tested GITHUB_SHA')
-head = os.environ.get('PR_HEAD_SHA') or None
-if head is not None and not re.fullmatch('[0-9a-f]{40}', head):
-    raise SystemExit('Invalid PR head SHA')
-output = pathlib.Path(sys.argv[1])
-packages = [('pilot-desktop', pathlib.Path('Cargo.toml')),
-            ('pilot-visual-worker', pathlib.Path('visual-worker/Cargo.toml'))]
-manifest = {
-    'schema': 1, 'kind': 'unsigned-ci-executables', 'installable_update': False,
-    'tested_sha': tested, 'pr_head_sha': head,
-    'source_tree': command('git', 'rev-parse', 'HEAD^{tree}'),
-    'target': 'aarch64-apple-darwin', 'deployment_target': '15.0',
-    'profile': 'release', 'features': [],
-    'rustc': command('rustc', '-vV'),
-    'sdk_version': command('xcrun', '--show-sdk-version'),
-    'xcode': command('xcodebuild', '-version'),
-    'lock_sha256': digest(pathlib.Path('Cargo.lock')),
-    'binaries': [dict(name=name, version=tomllib.loads(path.read_text())['package']['version'],
-                      sha256=digest(output / name), bytes=(output / name).stat().st_size)
-                 for name, path in packages],
-    'native_verification': 'see separate desktop-rust-native-status artifact; not implied by build',
-}
-(output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-print(json.dumps(manifest, indent=2))
-PY
-    ;;
-  mac-tests)
-    macos_host
-    cargo build --locked -p pilot-visual-worker
-    mkdir -p target
-    # These existing tests are #[cfg(target_os = "macos")]. Never rerun the
-    # portable library suite here or silently succeed with a zero-test filter.
-    tests=(
-      visual_runtime::tests::restart_fence_reserves_all_capacity_and_releases_it_on_cancel
-      visual_runtime::tests::shared_draw_errors_match_without_relaxing_the_production_budget
-      visual_runtime::tests::native_canvas_packets_match_shared_commands_ops_and_strings
-      visual_runtime::tests::shared_api_one_view_event_and_state_corpus_matches_the_native_worker
-      visual_runtime::tests::real_sandbox_load_event_and_oom_null_discard
-      visual_runtime::tests::stopped_owned_worker_hits_parent_hard_deadline_and_is_killed_reaped
-      visual_session::tests::failed_handler_state_is_not_committed_and_retry_has_a_fresh_vm
-      visual_session::tests::draw_interrupt_or_null_error_discards_vm_and_keeps_committed_state
-      artifact_worker::tests::explicit_scoped_read_and_event_use_only_faux_gets_and_close_reaps
-    )
-    cargo test --locked -p pilot-desktop --lib -- --list > target/ci-macos-tests.txt
-    filter=()
-    for test in "${tests[@]}"; do
-      grep -Fqx "$test: test" target/ci-macos-tests.txt || {
-        echo "Missing required macOS test: $test" >&2; exit 1;
-      }
-      filter+=("test(=$test)")
-    done
-    # One serial run of exactly these tests (they own helper processes and sandboxes).
-    nextest -p pilot-desktop --lib --test-threads=1 -E "$(IFS='|'; echo "${filter[*]}")"
-    ;;
-  nsh-native)
-    macos_host
-    mkdir -p target
-    # AppKit NSH is separate from the GPUI Metal capability check.
-    cargo build --locked -p pilot-nsh --features native-probes
-    python3 nsh/scripts/native-check.py --binary target/dev/debug/pilot-nsh --output target/nsh-native
-    ;;
-  native)
-    macos_host
-    mkdir -p target
-    status="$root/target/ci-native-status.txt"
-    echo 'Native capability/probes started; no success recorded.' > "$status"
-    trap 'code=$?; if [[ $code -ne 0 ]]; then echo "FAILED (exit $code), not skipped/passed" >> "$status"; fi' EXIT
-    # Compile every ordinary probe even on hosts without a Metal device.
-    tests=(rendering chrome visuals disclosure style scrollbar_track icons motion controls history shell navigation inbox jump workbench glass native_glass catalog settings chat_settings dogfooding_diagnostics mission project_creation subscription_limits missions native_review native_review_host project_add scoped_models artifact_images artifact_gallery inline_visual delivery_diagnostics mission_inspector chat_actions questions mission_tasks composer_controls mission_activity mission_brief mission_task_create mission_update fonts mission_create chat_rename task_status mission_metadata session_failure diagnostic_repair context_usage task_model task_edit conversation_links mission_lifecycle usage_overview provider_usage session_file_view conversation_images queued_message mission_decisions transcript_find session_todos session_jobs session_subagents tool_diff_preview message_fold question_entry github_events compaction_events message_footer new_chat_view path_completion slash_commands native_mermaid visual_mockups chart_keyboard mission_comments mission_artifacts mission_resources side_panel native_menus daemon_upgrade chat_links project_settings project_memory knowledge mcp_status markdown_fidelity shortcuts visual_links automations slack_triage insights insights_native insights_enable insights_settings insights_replace workflow_confirmation)
-    tests+=(archive)
-    tests+=(lost_ack)
-    tests+=(application_quit chat_update database_access automation_hooks)
-    args=()
-    for test in "${tests[@]}"; do args+=(--test "$test"); done
-    cargo test --locked --features native-probes --no-run "${args[@]}"
-    # Hosted VMs may have no Metal device. Only that precise capability absence
-    # is unsupported. Compiler errors, crashes and probe assertions remain failures.
-    cat > target/ci-metal.m <<'OBJC'
-#import <Metal/Metal.h>
-int main(void) {
-    @autoreleasepool { return MTLCreateSystemDefaultDevice() == nil ? 78 : 0; }
-}
-OBJC
-    xcrun clang -fobjc-arc -framework Foundation -framework Metal target/ci-metal.m -o target/ci-metal
-    capability=0
-    target/ci-metal || capability=$?
-    if [[ "$capability" == 78 ]]; then
-      echo 'UNSUPPORTED: no Metal device. Native probes compiled/linted, NOT executed or passed.' | tee "$status"
-      echo '::warning::No Metal device. Rust build/library checks do not establish native renderer support.'
-    elif [[ "$capability" != 0 ]]; then
-      echo "Metal capability check failed ($capability)." >&2
-      exit "$capability"
-    else
-      echo 'Metal device available; executing synthetic offscreen probes.' > "$status"
-      for test in "${tests[@]}"; do
-        echo "Running $test" | tee -a "$status"
-        cargo test --locked --features native-probes --test "$test"
-      done
-      echo 'PASSED: synthetic offscreen native probes. Not visible motion/OS IME/performance acceptance.' | tee -a "$status"
-    fi
-    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-      { echo '### Rust desktop native coverage'; cat "$status"; } >> "$GITHUB_STEP_SUMMARY"
-    fi
-    ;;
-  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|linux-gui-check|updater-check|updater-linux-tests|updater-mac-tests|build|artifact|mac-tests|nsh-native|native}' >&2; exit 2 ;;
+  *) echo 'Usage: ci.sh {host|bootstrap|visual-check|power-check|updater-check|updater-linux-tests|updater-mac-tests}' >&2; exit 2 ;;
 esac

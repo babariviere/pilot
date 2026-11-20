@@ -24,14 +24,19 @@ class ConfigurationTests(unittest.TestCase):
         self.legacy = {key.replace("PILOT_", "PILOT_NEXT_", 1): value for key, value in self.env.items()}
 
     def test_canonical_legacy_and_mixed_inputs_preserve_exact_values(self):
-        import gui_release
-        expected = gui_release.configuration(self.legacy)
+        expected = {
+            "schema": 1,
+            "mode": "configured",
+            "public_key": self.env["PILOT_UPDATER_PUBLIC_KEY"],
+            "repository": "Owner/Repo.Name",
+            "application_id": "com.babariviere.pilot-next",
+            "build": "100.1",
+            "code_requirement": 'identifier "com.babariviere.pilot-next"',
+        }
         self.assertEqual(day.configuration(self.env), expected)
         self.assertEqual(day.configuration(self.legacy), expected)
         mixed = self.legacy | {"PILOT_UPDATER_BUILD": "100.2"}
         self.assertEqual(day.configuration(mixed), expected | {"build": "100.2"})
-        self.assertEqual(expected["repository"], self.env["PILOT_UPDATER_REPOSITORY"])
-        self.assertEqual(expected["public_key"], self.env["PILOT_UPDATER_PUBLIC_KEY"])
 
     def test_canonical_presence_wins_even_when_empty_or_invalid(self):
         conflicting = {name: "invalid" for name in self.legacy}
@@ -63,7 +68,7 @@ class ConfigurationTests(unittest.TestCase):
                 day.main()
                 self.assertEqual(build.call_args.args[2], day.configuration(self.env))
 
-    def test_bundle_cli_selects_day_adapter_without_changing_gpui(self):
+    def test_bundle_cli_uses_day_configuration(self):
         argv = ["bundle_runtime.py", "bundle", "--production", "--source", "a" * 40,
                 "--runtime", "/runtime", "--executables", "/executables", "--native", "/native",
                 "--output", "/output"]
@@ -73,14 +78,6 @@ class ConfigurationTests(unittest.TestCase):
                     patch.object(bundle, "assemble") as assemble:
                 bundle.main()
                 self.assertEqual(assemble.call_args.kwargs["production"], day.configuration(self.env))
-        with patch.dict(os.environ, self.env, clear=True), patch.object(sys, "argv", argv), \
-                patch.object(bundle, "assemble") as assemble, self.assertRaises(ValueError):
-            bundle.main()
-        assemble.assert_not_called()
-        with patch.dict(os.environ, self.legacy, clear=True), patch.object(sys, "argv", argv), \
-                patch.object(bundle, "assemble") as assemble:
-            bundle.main()
-            self.assertEqual(assemble.call_args.kwargs["production"], day.configuration(self.env))
 
 
 class RecipeTests(unittest.TestCase):
@@ -382,15 +379,10 @@ fi
                     day.build_artifact(self.root, self.root / "native/Cargo.toml", "pilot-desktop", "macos-host",
                                        env, "debug", self.root / "cargo.jsonl")
 
-    def test_existing_assembler_keeps_visual_worker_and_helper_equality(self):
-        # The selector cannot substitute a renamed stock runner or bypass the
-        # existing bundle admission contract. Existing assembler tests cover
-        # actual missing-worker and differing compiled configuration refusal.
+    def test_native_input_builder_calls_day_recipe(self):
         with patch.object(day, "snapshot_day") as build:
-            bundle.snapshot_rust(self.source, self.root / "inputs", gui="day")
-            build.assert_called_once_with(self.source, self.root / "inputs", None)
-        with self.assertRaisesRegex(ValueError, "Unknown"):
-            bundle.snapshot_rust(self.source, self.root / "inputs", gui="stock-runner")
+            bundle.snapshot_rust(self.source, self.root / "inputs")
+            build.assert_called_once_with(self.source, self.root / "inputs")
 
     def test_platform_and_immutable_source_are_fail_closed_before_build(self):
         with patch.object(day.os.sys, "platform", "linux"):

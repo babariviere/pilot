@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.dont_write_bytecode = True
 from release_metadata import (
-    DRAFT_ASSETS, SPARKLE, appcast, appcast_build, complete_draft, newer_build_than_latest,
-    newer_than_latest, prepare_runtime, release_state, stable_version, validate_symlinks, write_plist,
+    SPARKLE, appcast, appcast_build, newer_build_than_latest, prepare_runtime,
+    stable_version, validate_symlinks, write_plist,
 )
 
 
@@ -82,35 +82,6 @@ class ReleaseMetadataTests(unittest.TestCase):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
                 write_plist(self.source, self.output, "/checkout", True,
                             {**self.env, "RELEASE_KIND": kind}, app_version="0.2.0")
-
-    def test_only_matching_drafts_can_be_modified(self):
-        draft = {"isDraft": True, "isPrerelease": False, "assets": []}
-        self.assertEqual(release_state(draft), "draft")
-        for release in [{**draft, "isPrerelease": True}, {**draft, "isDraft": False},
-                        {**draft, "isDraft": False, "isPrerelease": True}]:
-            with self.subTest(release=release), self.assertRaises(ValueError):
-                release_state(release)
-
-    def test_draft_publication_requires_every_platform_asset(self):
-        draft = {"isDraft": True, "isPrerelease": False, "assets": [
-            {"name": name, "state": "uploaded"} for name in DRAFT_ASSETS
-        ]}
-        self.assertEqual(complete_draft(draft), "complete")
-        self.assertIn("Pilot-Next-linux-x64.zip", DRAFT_ASSETS)
-        self.assertIn("desktop-macos-arm64-update.json", DRAFT_ASSETS)
-        self.assertNotIn("Pilot-arm64.zip", DRAFT_ASSETS)
-        self.assertNotIn("appcast.xml", DRAFT_ASSETS)
-        self.assertEqual(len(DRAFT_ASSETS), 4)
-        self.assertNotIn("runtime-manifest.json.sig", DRAFT_ASSETS)
-        self.assertNotIn("Pilot-linux-x64.tar.gz", DRAFT_ASSETS)
-        for name in DRAFT_ASSETS:
-            with self.subTest(missing=name), self.assertRaises(ValueError):
-                complete_draft({**draft, "assets": [a for a in draft["assets"] if a["name"] != name]})
-            with self.subTest(pending=name), self.assertRaises(ValueError):
-                complete_draft({**draft, "assets": [
-                    {**a, "state": "new"} if a["name"] == name else a for a in draft["assets"]]})
-        with self.assertRaises(ValueError):
-            complete_draft({**draft, "isDraft": False})
 
     def test_draft_appcast_build_matches_release_version(self):
         feed = self.root / "appcast.xml"
@@ -248,20 +219,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         os.mkfifo(pipe)
         prepare_runtime(runtime)
         self.assertTrue(stat.S_ISFIFO(pipe.lstat().st_mode))
-
-    def test_latest_stable_version_never_regresses_after_old_run_rerun(self):
-        self.assertFalse(newer_than_latest("0.2.0", "v0.3.0"))
-        self.assertFalse(newer_than_latest("0.3.0", "v0.3.0"))
-        self.assertTrue(newer_than_latest("0.3.1", "v0.3.0"))
-        self.assertTrue(newer_than_latest("1.0.0", "v0.99.99"))
-        self.assertTrue(newer_than_latest("1.10.0", "v1.9.9"))
-        self.assertTrue(newer_than_latest("0.2.0", ""))
-        for latest in ["other-release", "v1.2.3-beta.1", "pilot-bad"]:
-            with self.subTest(latest=latest), self.assertRaises(ValueError):
-                newer_than_latest("1.2.3", latest)
-
-    def test_stable_release_can_replace_legacy_build_release(self):
-        self.assertTrue(newer_than_latest("0.2.0", "pilot-123.1"))
 
     def test_delayed_stable_release_cannot_regress_sparkle_build_version(self):
         feed = self.root / "appcast.xml"

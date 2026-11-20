@@ -16,8 +16,8 @@ def main():
     for manifest in ("apps/day/native/Cargo.toml", "apps/desktop/updater/Cargo.toml"):
         subprocess.run([cargo, "fetch", "--locked", "--target", day.TARGET,
                         "--manifest-path", root / manifest], cwd=root, check=True, timeout=600)
-    # Same isolated visual-worker recipe and lock-subset admission as the input
-    # builder. Never resolve or build the GPUI workspace to prepare Day inputs.
+    # Use the same isolated recipe and lock-subset admission as the Day
+    # input builder, rather than resolving against the developer workspace.
     with tempfile.TemporaryDirectory(prefix="day-visual-deps-") as directory:
         visual = Path(directory) / "visual-worker"
         shutil.copytree(root / "apps/desktop/visual-worker", visual,

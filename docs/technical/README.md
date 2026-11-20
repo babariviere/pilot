@@ -9,7 +9,7 @@ Read its status and platform limitations. For usage, start with the [user guides
 - `README.md`: a short introduction, setup entry point, and links.
 - `docs/`: concise feature guides explaining what users can do and important limits.
 - `docs/technical/`: APIs, storage, architecture, security details, plans, and evidence.
-- Component-local docs (for example `apps/desktop/docs/`) retain their implementation contracts.
+- Component-local docs hold implementation contracts. `apps/desktop/docs/` is the historical Pilot Next collection.
 
 Update the relevant guide when behavior changes. Keep implementation journals and test inventories
 out of user guides. Link to an existing contract rather than duplicating it.
@@ -32,9 +32,9 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Verified NSH app-relative daemon handoff](day-bundled-service.md)
 - [Day executable self-update handoff and exact production blockers](day-executable-handoff.md)
 - [Source-matched Day executable and package inputs](day-package-inputs.md)
-- [Day CI and release preparation, with unchanged shipping selection](day-ci-packaging.md)
 - [Connected native candidate preparation and launch](day-connected-candidate.md)
-- [Day installation preparation and current native handoff blockers](day-install.md)
+- [Private Day installation and setup](../getting-started.md#private-install)
+- [Shared desktop tools](../../apps/desktop/README.md) and [macOS support](../../apps/macos/README.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)
 - [Skill and prompt review index](skill-prompt-review.md)
@@ -59,7 +59,6 @@ out of user guides. Link to an existing contract rather than duplicating it.
 
 - [Proposed mission authority, review and delivery policy](mission-authority-review-policy.md)
 - [Proposed cost-aware coordinator wakes and stall recovery](mission-coordinator-wakeups.md)
-- [Coordinator-first desktop workflow](mission-desktop-workflow.md)
 - [Proposed worker escalation and human handoff contract](mission-escalation-handoff.md)
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
 - [Decision notice routing and durable batches](mission-decision-routing.md)
@@ -185,16 +184,27 @@ out of user guides. Link to an existing contract rather than duplicating it.
 
 ## Reference collections
 
-- [Desktop implementation contracts](../../apps/desktop/docs/design-system.md)
-- [Pilot Day, the upcoming Native Shell TSX app](../../apps/day/README.md)
+- [Pilot Day, the Native Shell app](../../apps/day/README.md)
 - [Day design system](day-design-system.md): tokens, the `apps/day/ui` library, screens, and the library in artifacts.
 - [Day authenticated native host and control journal](day-native-host.md)
 - [Day Native Shell release qualification](day-nsh-release.md)
-- [Day legacy retirement gates and surviving callers](day-legacy-retirement.md)
+- [Day legacy mission reads and explicit migration](day-mission-migration.md)
 - [Day released public JSON bridge and lifecycle limits](day-public-bridge.md)
 - [Day local projects, source copies and import recovery](day-local-projects.md)
 - [NSH artifact helpers and examples](nsh-artifact-helpers.md): trusted diagram/chart helpers, not a runtime.
 - [Reliability roadmap](reliability/roadmap.md) and [testing strategy](reliability/testing-strategy.md)
+## Historical desktop references
+
+These records preserve former behavior and qualification evidence. They are not current
+installation or release instructions. Keep Pilot Next contracts in place so incoming links
+continue to work; review links before any later move or cleanup.
+
+- [Pilot Next contracts](../../apps/desktop/docs/), including the [GPUI design system](../../apps/desktop/docs/design-system.md)
+- [Former packaging and release selection](day-ci-packaging.md)
+- [Pre-cutover legacy retirement audit](day-legacy-retirement.md)
+- [First Day handoff and legacy recovery](day-install.md)
+- [Coordinator-first desktop workflow](mission-desktop-workflow.md)
+- [Schedules](../schedules.md) and [project hooks](../automations.md) (legacy controls; backend paths kept)
 - [Historical product reference](product-reference.md), preserved from the previous README
 - [Screenshot provenance](../screenshots/README.md)
 

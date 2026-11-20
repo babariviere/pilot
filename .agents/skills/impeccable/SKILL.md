@@ -12,8 +12,8 @@ allowed-tools:
 > **Pilot compatibility.** Before using this skill in this repository, read [UPSTREAM.md](UPSTREAM.md#applying-it-here).
 > `scripts/`, design hooks, live/browser modes and `npx impeccable` are not installed and must not be fetched or run:
 > skip Setup step 1 and follow its *Launcher unavailable* path without the announcement. `DESIGN.md`,
-> `apps/desktop/docs/design-system.md`, project decisions and [pilot-next-design](../pilot-next-design/SKILL.md) take
-> precedence. Treat Pilot's native apps as Operate mode and map web/CSS advice onto their existing tokens and components.
+> [Day's design system](../../../docs/technical/day-design-system.md) and project decisions take
+> precedence. Treat Day as Operate mode and map web/CSS advice onto its existing tokens and components.
 > Do not create or rewrite `PRODUCT.md`, `DESIGN.md` or `.impeccable/` unless the user asks.
 <!-- Pilot compatibility: end -->
 

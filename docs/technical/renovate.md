@@ -33,9 +33,9 @@ PR #1100's ZIP resolution error was not reproduced with its manifest updates and
 Renovate's `cargo update --workspace` command against crates.io. The updater's
 exact ZIP pin stays unchanged; a failed hosted artifact update still needs a retry.
 
-Cargo discovers the desktop workspace (`apps/desktop/Cargo.toml`), its
-`visual-worker` member and the independent `updater` workspace. The desktop and
-updater each retain their own committed `Cargo.lock`. Ordinary exact dependency
+The shared tools under `apps/desktop` have two Cargo workspaces:
+`visual-worker` is a member of the parent workspace, and `updater` is standalone.
+They retain separate committed lockfiles. Day's native host also has its own lockfile. Ordinary exact dependency
 requirements remain exact when updated. Native artifact generation keeps
 `Cargo.lock` and `pnpm-lock.yaml` in sync with manifest updates. Lockfile
 maintenance also refreshes locked versions without requiring manifest changes,
@@ -44,14 +44,10 @@ Maintenance PRs require review, just like dependency updates.
 
 Intentional exceptions:
 
-- `gpui-*` dependencies require coordinated updates to checksum-pinned patches in
-  `apps/desktop/patches`, generated `.patched` sources and native qualification.
-  Renovate must not independently change the Kit 0.8.0 / GPUI 0.3.9 baseline.
 - The updater's `zip =8.6.0` stays manual. Its archive admission code deliberately
   mirrors that parser's ZIP32/ZIP64 dispatch and fallback behavior. Re-audit and
   rerun the adversarial archive tests before changing it.
-- The Rust toolchain manager is not enabled. Desktop Rust 1.98.1, experimental
-  Rust 1.99.1 and separately pinned build tools remain deliberate manual choices.
+- Toolchain and build-tool updates are deliberate. See the [Day build prerequisites](../../apps/day/README.md#run).
 
 `scripts/renovate.test.ts` checks repository policy. The pinned Renovate image in
 `.github/workflows/renovate-config.yml` validates configuration and runs

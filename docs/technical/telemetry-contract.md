@@ -40,11 +40,11 @@ Its allowlisted model and attribution identifiers do not expand any telemetry se
 
 The three controls are independent. Turning one on never turns on another.
 
-| Class | Default | Purpose | Storage and deletion |
-| --- | --- | --- | --- |
-| Local operational diagnostics | On | Explain current and recent lifecycle state on the selected host | Owner-only, bounded files beside session state. Session deletion removes session evidence. A separate clear action removes retained diagnostic files without deleting chats. |
-| Remote operational telemetry | Off | Export allowlisted traces and aggregate performance measurements | Memory only before export. Disable/revoke drops queued data and stops new export. No offline disk spool in v1. |
-| Product analytics | Off | Export only cataloged feature eligibility, exposure, attempt and outcome events | Memory only before export. Requires both remote export and analytics consent. Disable/revoke drops queued events and rotates the analytics identifier. |
+| Class                         | Default | Purpose                                                                         | Storage and deletion                                                                                                                                                         |
+| ----------------------------- | ------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local operational diagnostics | On      | Explain current and recent lifecycle state on the selected host                 | Owner-only, bounded files beside session state. Session deletion removes session evidence. A separate clear action removes retained diagnostic files without deleting chats. |
+| Remote operational telemetry  | Off     | Export allowlisted traces and aggregate performance measurements                | Memory only before export. Disable/revoke drops queued data and stops new export. No offline disk spool in v1.                                                               |
+| Product analytics             | Off     | Export only cataloged feature eligibility, exposure, attempt and outcome events | Memory only before export. Requires both remote export and analytics consent. Disable/revoke drops queued events and rotates the analytics identifier.                       |
 
 Local collection has no network side effects. Remote export is an explicit per-host setting so enabling a local Mac
 does not silently enable a devbox. A remote host reports its own effective settings. A disconnected host is
@@ -52,7 +52,7 @@ does not silently enable a devbox. A remote host reports its own effective setti
 
 ### Local Next capture integration (v4)
 
-The macOS Rust/GPUI Next fixed `next_app` reader admits only closed version 2 numeric transport
+For old Pilot Next installations, the fixed `next_app` reader admits only closed version 2 numeric transport
 capture rows with exact current daemon/lineage and persisted diagnostic-specialist role. The
 separate Swift `app` schema, confirmed-repair grants and linked-host forwarding are unchanged.
 No new exported resource/event fields are authorized. See the full
@@ -118,20 +118,20 @@ identity in v1.
 
 All exported resources use OpenTelemetry semantic conventions where stable. The complete v3 allowlist is:
 
-| Attribute | Values |
-| --- | --- |
-| `service.namespace` | `com.babariviere.pilot` |
-| `service.name` | `pilot.app`, `pilot.daemon` or `pilot.kernel` |
-| `service.version` | Numeric Pilot release, without branch, path or commit message |
-| `service.instance.id` | Random process-lifetime UUID. Traces only, never metrics |
-| `deployment.environment.name` | `release`, `development` or `test` |
-| `os.type` | `darwin` or `linux` |
-| `process.runtime.name` | `swift` or `nodejs` |
-| `process.runtime.version` | Bounded numeric runtime version |
-| `pilot.schema.version` | `3` |
-| `pilot.host.kind` | `local` or `devbox` |
-| `pilot.host.id` | Operational traces only, as defined above |
-| `pilot.analytics.id` | Cataloged analytics spans only |
+| Attribute                     | Values                                                        |
+| ----------------------------- | ------------------------------------------------------------- |
+| `service.namespace`           | `com.babariviere.pilot`                                       |
+| `service.name`                | `pilot.app`, `pilot.daemon` or `pilot.kernel`                 |
+| `service.version`             | Numeric Pilot release, without branch, path or commit message |
+| `service.instance.id`         | Random process-lifetime UUID. Traces only, never metrics      |
+| `deployment.environment.name` | `release`, `development` or `test`                            |
+| `os.type`                     | `darwin` or `linux`                                           |
+| `process.runtime.name`        | `swift` or `nodejs`                                           |
+| `process.runtime.version`     | Bounded numeric runtime version                               |
+| `pilot.schema.version`        | `3`                                                           |
+| `pilot.host.kind`             | `local` or `devbox`                                           |
+| `pilot.host.id`               | Operational traces only, as defined above                     |
+| `pilot.analytics.id`          | Cataloged analytics spans only                                |
 
 No hostname, username, hardware serial, IP address, executable path, repository, working directory or environment
 variable is a resource attribute.
@@ -142,18 +142,18 @@ Every lifecycle event is a JSON object with only these fields:
 
 ```json
 {
-  "v": 1,
-  "id": "opaque-owner-sequence",
-  "at": "2026-10-17T08:00:00.000Z",
-  "source": "daemon",
-  "release": "1.45.1",
-  "hostKind": "local",
-  "kind": "pause.changed",
-  "reason": "quota",
-  "state": "paused",
-  "traceId": "0123456789abcdef0123456789abcdef",
-  "durationMs": 1250,
-  "count": 1
+	"v": 1,
+	"id": "opaque-owner-sequence",
+	"at": "2026-10-17T08:00:00.000Z",
+	"source": "daemon",
+	"release": "1.45.1",
+	"hostKind": "local",
+	"kind": "pause.changed",
+	"reason": "quota",
+	"state": "paused",
+	"traceId": "0123456789abcdef0123456789abcdef",
+	"durationMs": 1250,
+	"count": 1
 }
 ```
 
@@ -311,24 +311,24 @@ rejected value.
 
 ## Concrete budgets
 
-| Budget | Limit | Overload behavior |
-| --- | --- | --- |
-| Local lifecycle event | 1 KiB encoded | Drop event |
-| Per-session lifecycle writer queue | 64 events plus active write | Drop newest, report `droppedBefore` later |
-| Per-session lifecycle storage | 2 x 256 KiB, 256 events visible, 7-day read window | Rotate/compact |
-| Per-session tool evidence | 32 active calls, 64 queued writes, 2 x 256 KiB, 64 completed items visible | Drop newest/rotate and report loss |
-| Per-session AI accounting | 32 attempts, 4 timing epochs/attempt, 128 KiB aggregate file | Roll old attempts/timing into content-free totals; reject malformed/oversize state |
-| Native crash/hang archive | 32 items, 32 KiB, 7-day read window | Drop oldest, report count |
-| Diagnostic API | 128 evidence items, 64 KiB encoded | Truncate oldest detail, report counts/window |
-| Explicit target history page | 20 returned entries, 200 scanned records, 64 KiB entry data, 8 KiB/entry | Continue with an exclusive entry cursor; report per-entry truncation and source availability |
-| Node spans | 512 queued per process, batches of 128, 5 s schedule, 3 s export timeout | Drop newest; never await from product path |
-| Swift spans | 256 queued, batches of 64, 5 s schedule, 3 s export timeout | Drop newest; serial utility queue, never main actor |
-| Export retries | At most one SDK attempt per batch; no Pilot retry and no disk spool | Drop batch and count locally |
-| Span/event attributes | 24 attributes, names <= 64 bytes, enum values <= 64 bytes | Reject whole observation |
-| Span events | 16 per span | Drop excess and count |
-| Trace lifetime | 5 minutes | End timed-out trace with reviewed reason |
-| Metrics cardinality | 128 attribute sets per instrument/process | Fold to `other` |
-| Analytics event rate | 120/hour/installation, burst 20 | Drop excess and count locally |
+| Budget                             | Limit                                                                      | Overload behavior                                                                            |
+| ---------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Local lifecycle event              | 1 KiB encoded                                                              | Drop event                                                                                   |
+| Per-session lifecycle writer queue | 64 events plus active write                                                | Drop newest, report `droppedBefore` later                                                    |
+| Per-session lifecycle storage      | 2 x 256 KiB, 256 events visible, 7-day read window                         | Rotate/compact                                                                               |
+| Per-session tool evidence          | 32 active calls, 64 queued writes, 2 x 256 KiB, 64 completed items visible | Drop newest/rotate and report loss                                                           |
+| Per-session AI accounting          | 32 attempts, 4 timing epochs/attempt, 128 KiB aggregate file               | Roll old attempts/timing into content-free totals; reject malformed/oversize state           |
+| Native crash/hang archive          | 32 items, 32 KiB, 7-day read window                                        | Drop oldest, report count                                                                    |
+| Diagnostic API                     | 128 evidence items, 64 KiB encoded                                         | Truncate oldest detail, report counts/window                                                 |
+| Explicit target history page       | 20 returned entries, 200 scanned records, 64 KiB entry data, 8 KiB/entry   | Continue with an exclusive entry cursor; report per-entry truncation and source availability |
+| Node spans                         | 512 queued per process, batches of 128, 5 s schedule, 3 s export timeout   | Drop newest; never await from product path                                                   |
+| Swift spans                        | 256 queued, batches of 64, 5 s schedule, 3 s export timeout                | Drop newest; serial utility queue, never main actor                                          |
+| Export retries                     | At most one SDK attempt per batch; no Pilot retry and no disk spool        | Drop batch and count locally                                                                 |
+| Span/event attributes              | 24 attributes, names <= 64 bytes, enum values <= 64 bytes                  | Reject whole observation                                                                     |
+| Span events                        | 16 per span                                                                | Drop excess and count                                                                        |
+| Trace lifetime                     | 5 minutes                                                                  | End timed-out trace with reviewed reason                                                     |
+| Metrics cardinality                | 128 attribute sets per instrument/process                                  | Fold to `other`                                                                              |
+| Analytics event rate               | 120/hour/installation, burst 20                                            | Drop excess and count locally                                                                |
 
 Telemetry failure must not extend an API response, durable admission, tool execution, UI render or shutdown by more
 than the asynchronous enqueue cost. Shutdown may request a best-effort flush for up to 1 second, off the main actor

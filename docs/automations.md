@@ -1,5 +1,8 @@
 # Automations
 
+The Pilot Next controls below are historical. Day shows configured setup hooks in
+[Local projects](workspaces.md#add-a-local-project-in-day); the repository cutover does not retire backend hooks or flows.
+
 Hooks run personal commands around Build work. They are stored in Pilot's project
 settings, not committed to the repository.
 

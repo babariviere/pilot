@@ -1,5 +1,8 @@
 # Schedules
 
+This guide records Pilot Next schedule controls and shared daemon behavior. Those
+controls are historical; existing schedules and saved history are not removed by the source cutover.
+
 In Day, open **Settings → Schedules…**, or choose **Schedules** in the command
 palette. Opening the page only reads saved state.
 

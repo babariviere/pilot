@@ -1,4 +1,17 @@
-# Projects, Home, and Inbox
+# Projects and Today
+
+Add a repository in **Settings → Local projects**. See [Add a local project](workspaces.md#add-a-local-project-in-day)
+for source-copy and import options. Registering a project does not start work. In **New**, choose the project
+for that draft explicitly.
+
+**Today** shows attention, working chats and missions across projects. Its filter does not change the project
+of your drafts. **Search** (⌘K) finds saved chats, missions, results, artifacts and Knowledge across projects.
+Reading a result or chat starts nothing. Go Back to return to your earlier place and draft.
+
+## Historical Pilot Next navigation
+
+The following controls describe Pilot Next, not Day. For kept private working copies and archive behavior,
+see [archive and restore](workspaces.md#archive-and-restore).
 
 Add a local repository from the sidebar's project selector with **Add project…**.
 Registration does not start a chat or change a draft's destination. Select the

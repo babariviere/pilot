@@ -1,13 +1,14 @@
 ---
+
 name: rust-best-practices
 description: >-
-  Write idiomatic, robust, maintainable Rust. Use this skill whenever you write, review,
-  refactor, debug, or explain Rust code: new crates, modules, functions, structs, traits,
-  error types, async code, unsafe or FFI code, Cargo.toml, tests, or rustdoc. Trigger on
-  any mention of Rust, cargo, crates, .rs files, the borrow checker, lifetimes, traits,
-  clippy, or rustfmt, even when the user does not ask for "best practices" or "idiomatic"
-  code. Synthesized from the Google Rust Style Guide, the Rust API Guidelines,
-  Effective Rust, Rust Design Patterns, and Microsoft's Pragmatic Rust Guidelines.
+Write idiomatic, robust, maintainable Rust. Use this skill whenever you write, review,
+refactor, debug, or explain Rust code: new crates, modules, functions, structs, traits,
+error types, async code, unsafe or FFI code, Cargo.toml, tests, or rustdoc. Trigger on
+any mention of Rust, cargo, crates, .rs files, the borrow checker, lifetimes, traits,
+clippy, or rustfmt, even when the user does not ask for "best practices" or "idiomatic"
+code. Synthesized from the Google Rust Style Guide, the Rust API Guidelines,
+Effective Rust, Rust Design Patterns, and Microsoft's Pragmatic Rust Guidelines.
 ---
 
 # Rust best practices
@@ -24,8 +25,8 @@ description: >-
 - Preserve runtime/resource bounds, durable operations and exact Unicode, UTF-16,
   whitespace and case-sensitive identity contracts. Generic porting simplifications
   do not authorize dropping limits or changing those behaviors.
-- GPUI work follows the [design skill](../pilot-next-design/SKILL.md) and
-  [design system](../../../apps/desktop/docs/design-system.md). This import authorizes
+- Day UI work follows the [NSH design guides](../nsh-design-guides/SKILL.md) and
+  [Day design system](../../../docs/technical/day-design-system.md). This import authorizes
   no mass refactor, dependency/lint/framework adoption, global install or extra access.
 
 See [UPSTREAM.md](UPSTREAM.md) for the pinned source and this sole local adaptation.
@@ -132,13 +133,13 @@ implements a cheap `Clone` by wrapping its state in `Arc<Inner>` internally.
 
 ### Naming
 
-| Item | Case | Notes |
-|---|---|---|
-| Types, traits, enum variants | `UpperCamelCase` | Acronyms are one word: `Uuid`, `HttpClient` |
-| Functions, methods, modules, locals | `snake_case` | |
-| Constants, statics | `SCREAMING_SNAKE_CASE` | |
-| Type parameters | short, from the main bound | `T`, `R: Read`, `W: Write` |
-| Lifetimes | short lowercase | descriptive when on a type |
+| Item                                | Case                       | Notes                                       |
+| ----------------------------------- | -------------------------- | ------------------------------------------- |
+| Types, traits, enum variants        | `UpperCamelCase`           | Acronyms are one word: `Uuid`, `HttpClient` |
+| Functions, methods, modules, locals | `snake_case`               |                                             |
+| Constants, statics                  | `SCREAMING_SNAKE_CASE`     |                                             |
+| Type parameters                     | short, from the main bound | `T`, `R: Read`, `W: Write`                  |
+| Lifetimes                           | short lowercase            | descriptive when on a type                  |
 
 - No `get_` prefix on getters: `fn len(&self)`, `fn name(&self) -> &str`,
   `fn name_mut(&mut self)`. Use bare `get` only when there is one obvious thing to get
@@ -293,10 +294,10 @@ docs which fields equality ignores.
 
 Pick the mechanism by contract:
 
-| Situation | Use |
-|---|---|
-| Absence is normal (`first()`, `checked_add`) | `Option<T>` |
-| The caller may need to know what went wrong | `Result<T, E>` |
+| Situation                                    | Use                                    |
+| -------------------------------------------- | -------------------------------------- |
+| Absence is normal (`first()`, `checked_add`) | `Option<T>`                            |
+| The caller may need to know what went wrong  | `Result<T, E>`                         |
 | A bug or violated invariant inside your code | `panic!` / `assert!` / `expect("why")` |
 
 **Panics are not exceptions.** A panic means "stop now". Never use one to report bad
@@ -462,7 +463,7 @@ panic, `# Safety` for every `unsafe fn`.
 - Document what the signature can't say: preconditions, side effects, ownership
   transfer, complexity, and why. Don't restate the type or the name;
   `/// Removes an element.` on `remove_element` is noise.
-- Link items with `` [`Type`] ``. Hide impls users never trigger
+- Link items with ``[`Type`]``. Hide impls users never trigger
   (`From<PrivateError> for PublicError`) with `#[doc(hidden)]`.
 - `//` comments explain why, not what: `// SAFETY:`, `// TODO(issue-123):`, non-obvious
   magic values, workarounds with a link. No design journals, "why we chose X" essays, or

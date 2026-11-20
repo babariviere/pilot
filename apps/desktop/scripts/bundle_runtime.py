@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Immutable macOS runtime staging and explicitly configured GUI bundles, never installation."""
+"""Immutable macOS runtime staging and Day bundle assembly, never installation."""
 import argparse
 import hashlib
 import json
@@ -303,7 +303,7 @@ def receipt(directory, expected_source, names):
 
 
 def checked_gui_resources(resources, executables, expected_source):
-    """Bind an optional NSH resource closure to the exact compiled GUI receipt.
+    """Bind Day's NSH resource closure to the exact compiled GUI receipt.
 
     This consumes build evidence; it does not build, install or attest the native
     input-capture lifecycle. The existing app/helper identity stays unchanged.
@@ -330,18 +330,18 @@ def checked_gui_resources(resources, executables, expected_source):
     return value
 
 
-def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None, *, gui_resources=None, unsigned_day=False):
+def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None, *, gui_resources, unsigned_day=False):
+    if gui_resources is None:
+        raise ValueError("Day assembly requires its explicit resource closure")
     if unsigned_day:
-        if production is not None or gui_resources is None or accepted_capsules:
+        if production is not None or accepted_capsules:
             raise ValueError("Unsigned Day assembly requires explicit Day resources and no shipping configuration")
         inputs = read_json(executables / "manifest.json")
         if (inputs.get("kind") != "development-rust-inputs" or inputs.get("profile") != "dev"
                 or inputs.get("installable_update") is not False):
             raise ValueError("Unsigned Day assembly requires development inputs, not a release")
-    bundle_name = "Pilot.app" if gui_resources is not None else "Pilot Next.app"
-    display_name = "Pilot" if gui_resources is not None else "Pilot Next"
-    if output.exists() or output.is_symlink() or output.name != bundle_name:
-        raise ValueError("Use a fresh output named " + bundle_name)
+    if output.exists() or output.is_symlink() or output.name != "Pilot.app":
+        raise ValueError("Use a fresh output named Pilot.app")
     build = validate_runtime(runtime, expected_source)
     bundle_build = bundle_build or build["version"]
     if not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", bundle_build):
@@ -367,9 +367,7 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
     elif app_config != dict(schema=1, mode="unconfigured"):
         raise ValueError("Development assembly requires explicit unconfigured app/helper input receipts")
     receipt(native, expected_source, ["PilotPower", "PilotSystemEvents"])
-    resources = checked_gui_resources(gui_resources, executables, expected_source) if gui_resources is not None else None
-    if resources is None and (executables / "gui-resources.json").exists():
-        raise ValueError("GUI resource receipt requires its explicit resource closure")
+    resources = checked_gui_resources(gui_resources, executables, expected_source)
     inventory(runtime)  # Admission before any recursive copy can follow external input.
     output.mkdir(mode=0o755)
     try:
@@ -384,28 +382,26 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
             shutil.copyfile(executables / name, contents / "MacOS" / name)
             (contents / "MacOS" / name).chmod(0o755)
         shutil.copytree(runtime, contents / "Resources/runtime", symlinks=True)
-        if resources is not None:
-            # Explicit Day only. GPUI assembly and release selection are unchanged.
-            from day_build_inputs import artifact_host
-            host_input = artifact_host(executables, expected_source)
-            host_directory = contents / "Resources/runtime/packages/artifacts/native"
-            for parent in (host_directory.parent.parent, host_directory.parent):
-                if not stat.S_ISDIR(parent.lstat().st_mode):
-                    raise ValueError("Artifact helper parents must be real runtime directories")
-            if host_directory.exists() or host_directory.is_symlink():
-                raise ValueError("Artifact helper destination must be absent")
-            host_directory.mkdir(mode=0o755)
-            host = host_directory / "pilot-artifact-host"
-            shutil.copyfile(executables / "pilot-artifact-host", host)
-            host.chmod(0o755)
-            if host.stat().st_size != host_input["bytes"] or digest(host) != host_input["sha256"]:
-                raise ValueError("Artifact helper copy changed")
-            destination = contents / "Resources/nsh"
-            shutil.copytree(gui_resources, destination, symlinks=True)
-            # A changed input or copy is never signed as the reviewed closure.
-            if inventory(destination) != resources["files"]:
-                raise ValueError("GUI resource copy changed")
-            write_json(contents / "Resources/gui-resources.json", resources)
+        from day_build_inputs import artifact_host
+        host_input = artifact_host(executables, expected_source)
+        host_directory = contents / "Resources/runtime/packages/artifacts/native"
+        for parent in (host_directory.parent.parent, host_directory.parent):
+            if not stat.S_ISDIR(parent.lstat().st_mode):
+                raise ValueError("Artifact helper parents must be real runtime directories")
+        if host_directory.exists() or host_directory.is_symlink():
+            raise ValueError("Artifact helper destination must be absent")
+        host_directory.mkdir(mode=0o755)
+        host = host_directory / "pilot-artifact-host"
+        shutil.copyfile(executables / "pilot-artifact-host", host)
+        host.chmod(0o755)
+        if host.stat().st_size != host_input["bytes"] or digest(host) != host_input["sha256"]:
+            raise ValueError("Artifact helper copy changed")
+        destination = contents / "Resources/nsh"
+        shutil.copytree(gui_resources, destination, symlinks=True)
+        # A changed input or copy is never signed as the reviewed closure.
+        if inventory(destination) != resources["files"]:
+            raise ValueError("GUI resource copy changed")
+        write_json(contents / "Resources/gui-resources.json", resources)
         shutil.copyfile(runtime / "desktop-assets/AppIcon.icns", contents / "Resources/AppIcon.icns")
         for name, directory in (("rust-inputs.json", executables), ("native-inputs.json", native)):
             value = read_json(directory / "manifest.json")
@@ -420,11 +416,11 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         shutil.copyfile(native / "PilotSystemEvents", helper / "MacOS/PilotSystemEvents")
         (helper / "MacOS/PilotSystemEvents").chmod(0o755)
         with (helper / "Info.plist").open("wb") as stream:
-            plistlib.dump(dict(CFBundleIdentifier=APP_ID + ".system-events", CFBundleName=display_name + " System Events",
+            plistlib.dump(dict(CFBundleIdentifier=APP_ID + ".system-events", CFBundleName="Pilot System Events",
                                CFBundleExecutable="PilotSystemEvents", CFBundlePackageType="APPL", CFBundleVersion="1",
                                LSUIElement=True, LSMinimumSystemVersion="15.0"), stream)
         with (contents / "Info.plist").open("wb") as stream:
-            plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName=display_name, CFBundleDisplayName=display_name,
+            plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName="Pilot", CFBundleDisplayName="Pilot",
                                CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion=bundle_build,
                                CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True,
                                CFBundleURLTypes=[dict(CFBundleURLName=APP_ID + ".chat", CFBundleURLSchemes=["pilot"], CFBundleTypeRole="Viewer")]), stream)
@@ -438,13 +434,12 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
                 run("/usr/bin/codesign", "--force", "--sign", "-", str(binary))
         if not unsigned_day:
             run("/usr/bin/codesign", "--force", "--sign", "-", str(helper.parent))
-        if resources is not None:
-            if host_input["identity"]["source"] != build["source"]:
-                raise ValueError("Artifact helper/runtime source mismatch")
-            # Signing changes bytes, not the source identity already checked on the
-            # exact copied image. Write one final binding before the outer seal.
-            write_json(host_directory / "artifact-host.json", dict(host_input,
-                       bytes=host.stat().st_size, sha256=digest(host)))
+        if host_input["identity"]["source"] != build["source"]:
+            raise ValueError("Artifact helper/runtime source mismatch")
+        # Signing changes bytes, not the source identity already checked on the
+        # exact copied image. Write one final binding before the outer seal.
+        write_json(host_directory / "artifact-host.json", dict(host_input,
+                   bytes=host.stat().st_size, sha256=digest(host)))
         # Only a signed main executable cannot hash itself. Unsigned evidence
         # includes its exact bytes, rather than relying on a nonexistent seal.
         payload = [item for item in inventory(output, unsigned_day=unsigned_day) if (unsigned_day or item["path"] != "Contents/MacOS/pilot-desktop")
@@ -461,6 +456,10 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
 
 
 def verify(output, *, protocol=1, unsigned_day=False):
+    """Verify inventory bytes, including legacy signed bundle layouts.
+
+    Callers relying on a signature must also verify the outer code seal.
+    """
     value = read_json(output / MANIFEST)
     kinds = ("unsigned-day-bundled-runtime",) if unsigned_day else ("development-bundled-runtime", "production-bundled-runtime")
     if value.get("schema") != 1 or value.get("kind") not in kinds:
@@ -477,7 +476,7 @@ def verify(output, *, protocol=1, unsigned_day=False):
         raise ValueError("Runtime manifest/build identity mismatch")
 
 
-def snapshot_build(expected_source, output, native=False, *, gui="gpui"):
+def snapshot_build(expected_source, output, native=False):
     source(expected_source)
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("Runtime/helper staging requires native arm64 macOS")
@@ -485,7 +484,7 @@ def snapshot_build(expected_source, output, native=False, *, gui="gpui"):
         raise ValueError("Runtime source must identify a commit, not a tree or tag")
     if output.exists() or output.is_symlink():
         raise ValueError("Staging output must not already exist")
-    with tempfile.TemporaryDirectory(prefix="next-runtime-source-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="day-runtime-source-") as temporary:
         temporary = Path(temporary)
         archive, checkout = temporary / "source.tar", temporary / "source"
         checkout.mkdir()
@@ -495,17 +494,9 @@ def snapshot_build(expected_source, output, native=False, *, gui="gpui"):
             tar.extractall(checkout, filter="data")
         if native:
             checkout = checkout.resolve(strict=True)
-            if gui != "day":
-                tools = ROOT / "apps/desktop/.tools"
-                if not (tools / "rustup").is_dir():
-                    raise ValueError("Bootstrap the pinned build-host Rust tools first")
-                snapshot_tools = checkout / "apps/desktop/.tools"
-                (snapshot_tools / "bin").mkdir(parents=True)
-                (snapshot_tools / "rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
             bin_path = checkout / "apps/desktop/target/native-helpers"
-            command = ["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"), str(bin_path)]
-            if gui == "day":
-                command.append("--day")
+            # Older Day source commits need --day to select stock Cargo.
+            command = ["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"), str(bin_path), "--day"]
             subprocess.run(command, env=subprocess_env(), check=True, timeout=1200)
             bin_path = bin_path.resolve(strict=True)
             if not bin_path.is_relative_to(checkout) or not bin_path.is_dir():
@@ -542,62 +533,9 @@ def snapshot_build(expected_source, output, native=False, *, gui="gpui"):
             validate_runtime(output, expected_source)
 
 
-def snapshot_rust(expected_source, output, production=None, *, gui="gpui"):
-    """Build all three Rust inputs from immutable objects; production is explicit only."""
-    if gui == "day":
-        from day_build_inputs import snapshot_day
-        return snapshot_day(expected_source, output, production)
-    if gui != "gpui":
-        raise ValueError("Unknown GUI input builder")
-    source(expected_source)
-    if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
-        raise ValueError("Rust bundle inputs require native arm64 macOS")
-    if output.exists() or output.is_symlink():
-        raise ValueError("Rust input output must be fresh")
-    if run("git", "cat-file", "-t", expected_source, cwd=ROOT) != "commit":
-        raise ValueError("Rust input source must identify a commit")
-    tools = ROOT / "apps/desktop/.tools"
-    if not (tools / "rustup").is_dir():
-        raise ValueError("Bootstrap the pinned build-host Rust tools first")
-    with tempfile.TemporaryDirectory(prefix="next-rust-input-source-") as temporary:
-        temporary = Path(temporary)
-        checkout, archive = temporary / "source", temporary / "source.tar"
-        checkout.mkdir()
-        with archive.open("wb") as stream:
-            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, env=subprocess_env(), check=True, timeout=60)
-        with tarfile.open(archive) as tar:
-            tar.extractall(checkout, filter="data")
-        desktop = checkout / "apps/desktop"
-        (desktop / ".tools/bin").mkdir(parents=True)
-        (desktop / ".tools/rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
-        env = {key: value for key, value in subprocess_env().items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
-        # No trust/feed/public-key variables are inherited. Only explicit
-        # production configuration may enable the configured optimized lane.
-        if production is not None:
-            for key in ("public_key", "repository", "application_id", "build", "code_requirement"):
-                env["PILOT_NEXT_UPDATER_" + key.upper()] = production[key]
-        # Bootstrap downloads live in the original checkout's private .tools,
-        # not necessarily Cargo's cache. Materialize the immutable snapshot too.
-        subprocess.run([sys.executable, str(desktop / "scripts/prepare-patches.py"), "--fetch"], env=env, check=True, timeout=120)
-        subprocess.run([sys.executable, str(desktop / "scripts/prepare-visual-worker.py")], env=env, check=True, timeout=120)
-        cargo = str(desktop / "scripts/cargo.sh")
-        for command in (["build", "--locked", "-p", "pilot-desktop", "-p", "pilot-visual-worker"],
-                        ["build", "--manifest-path", "updater/Cargo.toml", "--locked", "--features", "native-macos", "--bin", "pilot-desktop-update-helper"]):
-            subprocess.run(["/bin/bash", cargo, *command, *(["--release"] if production else [])], cwd=checkout, env=env, check=True, timeout=2400)
-        paths = [desktop / ("target/dev/release" if production else "target/dev/debug") / name for name in
-                 ("pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper")]
-        for path in paths:
-            if run("/usr/bin/lipo", "-archs", str(path)) != "arm64":
-                raise ValueError("Rust input architecture mismatch")
-        output.mkdir(mode=0o700)
-        binaries = []
-        for path in paths:
-            shutil.copyfile(path, output / path.name)
-            (output / path.name).chmod(0o755)
-            binaries.append(dict(name=path.name, bytes=path.stat().st_size, sha256=digest(path)))
-        write_json(output / "manifest.json", dict(schema=1, kind="production-rust-inputs" if production else "development-rust-inputs", source=expected_source,
-                   target="aarch64-apple-darwin", deployment_target="15.0", profile="release" if production else "dev", installable_update=bool(production),
-                   updater_configuration=production or dict(schema=1, mode="unconfigured"), binaries=binaries))
+def snapshot_rust(expected_source, output):
+    from day_build_inputs import snapshot_day
+    return snapshot_day(expected_source, output)
 
 
 def main():
@@ -608,7 +546,7 @@ def main():
         command.add_argument("--source", required=True)
         command.add_argument("--output", type=Path, required=True)
         if name in ("rust", "native"):
-            command.add_argument("--gui", choices=("gpui", "day"), default="gpui")
+            command.add_argument("--gui", choices=("day",), help=argparse.SUPPRESS)
     bundle = commands.add_parser("bundle")
     for name in ("runtime", "executables", "native", "output"):
         bundle.add_argument("--" + name, type=Path, required=True)
@@ -616,7 +554,7 @@ def main():
     bundle.add_argument("--updater", type=Path)
     bundle.add_argument("--bundle-build")
     bundle.add_argument("--accepted-capsule", action="append", default=[])
-    bundle.add_argument("--gui-resources", type=Path)
+    bundle.add_argument("--gui-resources", type=Path, required=True)
     mode = bundle.add_mutually_exclusive_group()
     mode.add_argument("--production", action="store_true", help="Use explicit public updater environment configuration, matching day_build_inputs.py --production; signs the bundle")
     mode.add_argument("--unsigned-day", action="store_true", help="Unsigned Day development bundle only; no shipping/signing policy changes")
@@ -625,18 +563,14 @@ def main():
     check.add_argument("--unsigned-day", action="store_true", help="Inspect unsigned Day development inventory, not shipping acceptance")
     args = parser.parse_args()
     if args.action == "rust":
-        snapshot_rust(args.source, args.output.absolute(), gui=args.gui)
+        snapshot_rust(args.source, args.output.absolute())
     elif args.action in ("runtime", "native"):
-        snapshot_build(args.source, args.output.absolute(), args.action == "native", gui=getattr(args, "gui", "gpui"))
+        snapshot_build(args.source, args.output.absolute(), args.action == "native")
     elif args.action == "bundle":
         config = None
         if args.production:
-            if args.gui_resources is not None:
-                import day_build_inputs
-                config = day_build_inputs.configuration(os.environ)
-            else:
-                import gui_release
-                config = gui_release.configuration(os.environ)
+            from day_build_inputs import configuration
+            config = configuration(os.environ)
         assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, production=config, gui_resources=args.gui_resources, unsigned_day=args.unsigned_day)
     else:
         verify(args.output, unsigned_day=args.unsigned_day)

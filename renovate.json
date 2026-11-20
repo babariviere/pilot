@@ -38,12 +38,6 @@
 			"groupSlug": "rust-dependencies"
 		},
 		{
-			"description": "GPUI upgrades require coordinated source patches and native qualification",
-			"matchManagers": ["cargo"],
-			"matchPackageNames": ["gpui-*"],
-			"enabled": false
-		},
-		{
 			"description": "ZIP admission mirrors zip 8.6.0 parser behavior; re-audit before upgrading",
 			"matchManagers": ["cargo"],
 			"matchFileNames": ["apps/desktop/updater/Cargo.toml"],

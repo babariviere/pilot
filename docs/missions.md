@@ -1,6 +1,6 @@
 # Missions
 
-The upcoming connected native path starts with **New → Plan a mission**. Pilot saves the complete
+In Day, start with **New → Plan a mission**. Pilot saves the complete
 interview up front. Answer one question at a time, or choose **See all**; skipped questions still need
 answers before the final submission. Back-navigation keeps drafts. After a read failure, **Read again**
 keeps the earlier page visibly stale until a fresh read succeeds. If creation is not confirmed,
@@ -11,17 +11,9 @@ While Pilot plans, the planning page shows the agent's current step, such as "Re
 docs/missions.md", how long it has worked and when it last saved a step. After 5 minutes with no
 new step, it says so. **Show planning chat** opens the agent's conversation and steps, read only.
 Neither sends anything, stops the agent or tries again.
-After publication, **Start work** asks you to confirm one ready task and its model. **Start task**
-admits one background worker under existing project permissions and limits. The worker
-follows the bundled upstream implement skill: test-first at the seams the plan agreed (tdd and
-codebase-design), then a code review before it reports. Other tasks do not start
-automatically. If the acknowledgement is lost, use **Check Start**, not another Start. Admission is not
-progress or acceptance. Read the agent's report in the mission overview. This connected path is
-qualified with an isolated daemon and faux workers, not enabled against your live profile. The current app
-is unchanged.
-
-Direct chat creation, automatic continuation after human actions and budget increases are not supported
-by this connected path. Unavailable controls do not grant permission or start work.
+After publication, **Start work** needs separate confirmation. Day checks dependencies, current permissions,
+project slots and user holds. If Pilot cannot confirm a start, check the original attempt rather than sending it
+again. Read the agent's report in the mission overview. A start does not mean progress or acceptance.
 
 The connected overview shows each task's agent report, next step, evidence and
 linked outputs without opening its chat. PR states and check health are saved
@@ -34,6 +26,15 @@ problems, their cause and a recommended next step. Saved or unfinished work
 stays explicitly unverified when the record cannot prove it. Diagnostic chat
 addresses remain available as selectable text. Reading a problem never retries
 work or grants permission. Earlier/offline reads keep their warnings visible.
+
+You can [re-plan an older mission](technical/day-mission-migration.md) and open **Read previous mission**
+from its successor. History, chats and unpublished work stay with the original. Managed Linear resources
+are not transferred automatically.
+
+## Legacy mission controls and backend reference
+
+The Pilot Next toolbar, phases and coordinator workflow below are historical or backend reference.
+For current Day navigation and actions, see [Using Pilot](README.md).
 
 Use a mission when one goal needs several chats. Its **brief** describes the goal,
 **decisions** record agreed choices, and **tasks** track ownership and progress.
@@ -56,8 +57,7 @@ plans or retired decision bodies. History remains available on demand. This does
 earlier chat text or reset chats. See [the backend contract](technical/mission-revisions.md)
 for its safety limits.
 
-Pilot Day shows **Revisit mission** on an older mission's overview and planning page, on mock
-data for now. It keeps three steps apart:
+An early Revisit mockup kept three steps apart:
 
 1. **Answer new questions.** Pilot asks only about gaps, in a saved interview round. Drafts save
    as you go. Submit once, after every question has an answer. Submitting completes that round
@@ -70,7 +70,7 @@ data for now. It keeps three steps apart:
    resumes and permits nothing. A lost answer stays unconfirmed until you check; Pilot never
    sends it twice.
 
-The connected app says Revisit is not connected yet.
+For the current Day flow, see [revisions and migration](technical/day-mission-migration.md).
 
 In coordinator-owned planning, the coordinator maintains scope, assignments, and
 acceptance criteria. Workers report progress, evidence, and blockers and propose
@@ -79,8 +79,7 @@ planning changes. Evidence alone is not acceptance or permission to expand scope
 Task owners can save versioned movement reports through the mission tool. These are
 agent assessments, not verified progress or accepted delivery. Old reports can become
 stale when their assignment, owner or context changes. Missing reports mean unknown.
-The upcoming Day overview and separate Mission Pause/Resume controls are backend
-contracts only; the current desktop app has not gained those controls yet.
+Day's current [Pause and Resume controls](technical/day-execution-controls.md) have their own admission and receipt checks.
 
 Coordinators can answer ordinary member questions within the approved mission scope.
 Replies are attributed to the coordinator.

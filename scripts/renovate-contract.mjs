@@ -91,7 +91,6 @@ console.log("Native Git digest updates schedule pnpm-lock.yaml regeneration.");
 // Real Cargo file matching/extraction, without fetching crates or running Cargo.
 assert.ok(config.enabledManagers.includes("cargo"));
 const manifests = [
-	["apps/desktop/Cargo.toml", "apps/desktop/Cargo.lock", "serde"],
 	["apps/desktop/visual-worker/Cargo.toml", "apps/desktop/Cargo.lock", "cc"],
 	["apps/desktop/updater/Cargo.toml", "apps/desktop/updater/Cargo.lock", "ring"],
 ];
@@ -119,7 +118,7 @@ for (const [packageFile, lockFile, representative] of manifests) {
 			packageFile,
 			updateType: "patch",
 		});
-		const paused = dep.depName.startsWith("gpui-") || dep.depName === "zip";
+		const paused = dep.depName === "zip";
 		assert.equal(configured.enabled === false, paused, `${packageFile}: ${dep.depName}`);
 		assert.equal(configured.automerge, false);
 		if (dep.depName === "pilot-desktop-updater") {

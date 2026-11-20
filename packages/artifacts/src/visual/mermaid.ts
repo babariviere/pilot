@@ -1,5 +1,5 @@
 /** Closed native Mermaid admission, not the Mermaid language or a renderer.
- * Mirrors apps/desktop/src/native_mermaid.rs; both consume the shared syntax corpus.
+ * Uses the shared Mermaid syntax corpus.
  * Runs only in the existing bounded visual-check worker, never a browser/VM binding.
  */
 export type MermaidFailureKind = "invalid" | "unsupported" | "limit";

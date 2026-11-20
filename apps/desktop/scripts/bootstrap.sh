@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [[ "${1:-}" == --blaze ]]; then
-  exec bash scripts/bootstrap-blaze.sh
+if [[ $# != 0 ]]; then
+  echo 'Usage: bootstrap.sh' >&2; exit 2
 fi
 root="$PWD"
 export RUSTUP_HOME="$root/.tools/rustup"
 mkdir -p .tools/bin
 rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --no-self-update
-if [[ "${DESKTOP_CI_SHARED_ONLY:-}" != 1 ]]; then
-  python3 scripts/prepare-patches.py --fetch
-fi
 # Pinned cargo-nextest for the libtest suites (local and CI). Checksummed, worktree-private.
 nextest=0.9.150
 case "$(uname -s):$(uname -m)" in

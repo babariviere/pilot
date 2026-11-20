@@ -1,6 +1,7 @@
 """Shared source closure after removal of the obsolete Swift GUI. No builds or launches."""
 from pathlib import Path
 import re
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -29,19 +30,19 @@ class SourceBoundaryTests(unittest.TestCase):
             "apps/macos/scripts/check-runtime.sh",
             "apps/macos/scripts/runtime-build.mjs",
             "apps/macos/scripts/release_metadata.py",
-            "apps/macos/scripts/finalize-release.sh",
         ):
             with self.subTest(path=path):
                 self.assertTrue((ROOT / path).is_file(), path)
 
-    def test_gpui_sky_includes_resolve_to_kept_images(self):
-        source = ROOT / "apps/desktop/src/home_sky.rs"
-        paths = re.findall(r'include_bytes!\("([^"]+)"\)', source.read_text())
-        self.assertEqual(len(paths), 2)
-        for path in paths:
-            image = (source.parent / path).resolve(strict=True)
-            self.assertEqual(image.parent, ROOT / "apps/macos/Resources/LegacyApp")
-            self.assertTrue(image.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+    def test_desktop_workspace_only_builds_a_shared_helper(self):
+        desktop = ROOT / "apps/desktop"
+        manifest = tomllib.loads((desktop / "Cargo.toml").read_text())
+        self.assertNotIn("package", manifest)
+        self.assertEqual(manifest["workspace"]["members"], ["visual-worker"])
+        for folder in ["src", "tests", "nsh", "patches"]:
+            self.assertFalse(any(p.is_file() for p in (desktop / folder).rglob("*")), folder)
+        lock = tomllib.loads((desktop / "Cargo.lock").read_text())
+        self.assertTrue(all(not p["name"].startswith("gpui-") for p in lock["package"]))
 
     def test_no_gui_package_or_app_entry_point(self):
         manifest = (ROOT / "apps/macos/Package.swift").read_text()
@@ -59,7 +60,7 @@ class SourceBoundaryTests(unittest.TestCase):
     def test_active_source_and_workflows_have_no_removed_path_consumers(self):
         roots = [ROOT / ".github/workflows", ROOT / "scripts"]
         roots += [ROOT / path for path in (
-            "apps/desktop/src", "apps/desktop/scripts", "apps/day/scripts", "apps/day/native/src",
+            "apps/desktop/scripts", "apps/day/scripts", "apps/day/native/src",
             "apps/power/src", "apps/power/scripts", "apps/native-daemon",
             "apps/desktop/updater/src", "apps/desktop/visual-worker",
         )]

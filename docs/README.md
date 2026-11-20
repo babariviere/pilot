@@ -1,8 +1,8 @@
 # Using Pilot
 
-Short guides for the desktop app. Start with [installation and setup](getting-started.md).
-
-The upcoming interface can be prepared locally as a [connected candidate](technical/day-connected-candidate.md).
+Guides for Pilot Day on Apple Silicon macOS. Start with [private installation and setup](getting-started.md).
+Linux desktop is deferred. For a development build that does not replace an app, see the
+[connected candidate](technical/day-connected-candidate.md).
 
 In Day, each page is one panel, with tabs on its top edge where the page has parts. The top bar is a path:
 **Pilot** goes to Today, the part before the last goes back one level (as Escape does), and the last part
@@ -197,22 +197,22 @@ sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing t
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |
-| Projects, Home, and Inbox                       | [Find and organize work](projects.md)         |
+| Projects, Today, and Search                     | [Find and organize work](projects.md)         |
 | Ask, Build, questions, and queued messages      | [Chats](chats.md)                             |
 | Isolated edits, pull requests, and cleanup      | [Workspaces and pull requests](workspaces.md) |
-| Briefs, tasks, phases, and coordinators         | [Missions](missions.md)                       |
-| One-time and recurring messages                 | [Schedules](schedules.md)                     |
-| Setup commands, checks, and todo continuation   | [Project hooks](automations.md)               |
+| Planning, tasks, results, and older missions    | [Missions](missions.md)                       |
 | Generated visuals and attachments               | [Artifacts](artifacts.md)                     |
 | Connections, authentication, models, profiles   | [Models and MCP](connections.md)              |
 | Slack triage                                    | [Slack](slack.md)                             |
 | Linear tickets                                  | [Linear](linear.md)                           |
 | Subscription limits, token history, and context | [Usage](usage.md)                             |
 | Project notes and research                      | [Memory and knowledge](knowledge.md)          |
-| Sleep, offline work, and closed-lid mode        | [Energy and connectivity](energy.md)          |
+| Sleep and offline work                          | [Energy and connectivity](energy.md)          |
 | Failures, diagnostics, and updates              | [Troubleshooting](troubleshooting.md)         |
 
-[Insights](insights.md) covers chosen-source reports and findings in Day, and the separate legacy weekly setup.
+[Insights](insights.md) covers chosen-source reports and findings in Day.
+The [historical index](technical/README.md#historical-desktop-references) points to Pilot Next
+contracts and older guides, including schedules and project hooks.
 
 Pilot runs work locally. Remote devbox execution is retired; saved history and
 drafts are not migrated or submitted elsewhere.
