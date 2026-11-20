@@ -2,7 +2,7 @@
 // Today with a scripted project scope, where Today's own read names its
 // project as the native root's does. Switching projects must never show the
 // previous project's read, even when its answer comes late.
-import { mount, Scroll, Text, View } from "nsh";
+import { type JSX, mount, Scroll, View } from "nsh";
 import { PlanFeed, type Today, TodayFeed } from "pilot-day/native";
 import { ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
@@ -13,7 +13,7 @@ import { mirrorPlanning } from "./planning";
 import { ScriptedScope } from "./scopeDemo";
 import { todayScope } from "./ScopeRows";
 import { mirrorScope } from "./todayScope";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 // Today's own read: pilot's, from the decisions world.
 const real = new TodayFeed("decisions");
@@ -54,33 +54,47 @@ const toWebsite = () => deliver({ ...website.snapshot(), project: "demo-website"
 function Others() {
 	const ctx = todayScope(day, plans);
 	return (
-		<Text testID="others">{`Others: [${ctx
+		<Caption testID="others">{`Others: [${ctx
 			.others()
 			.map((p) => p.id)
-			.join(",")}] in ${ctx.scope()}`}</Text>
+			.join(",")}] in ${ctx.scope()}`}</Caption>
+	);
+}
+
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
 	);
 }
 
 mount(() => (
-	<View class="flex-1 bg-background">
+	<FixtureWindow>
 		<View class="flex-1">
 			<MockDayScreen day={day} plans={plans} />
 		</View>
-		<Scroll class="max-h-40 border-t border-border">
-			<View class="flex-row flex-wrap gap-1 px-6 py-3">
-				<Action label="Hold reads" onPress={() => (scope.script.hold = true)} />
-				<Action label="Release older read" onPress={() => scope.release(false)} />
-				<Action
-					label="Release newer read"
-					onPress={() => {
-						scope.script.hold = false;
-						scope.release(true);
-					}}
-				/>
-				<Action label="Reads time out" onPress={() => (scope.script.refusal = "offline")} />
-				<Action label="Today moves to website" onPress={toWebsite} />
-				<Others />
-			</View>
+		<Scroll class="max-h-40">
+			<Block>
+				<Buttons>
+					<Button small label="Hold reads" onPress={() => (scope.script.hold = true)} />
+					<Button small label="Release older read" onPress={() => scope.release(false)} />
+					<Button
+						small
+						label="Release newer read"
+						onPress={() => {
+							scope.script.hold = false;
+							scope.release(true);
+						}}
+					/>
+					<Button small label="Reads time out" onPress={() => (scope.script.refusal = "offline")} />
+					<Button small label="Today moves to website" onPress={toWebsite} />
+					<Others />
+				</Buttons>
+			</Block>
 		</Scroll>
-	</View>
+	</FixtureWindow>
 ));

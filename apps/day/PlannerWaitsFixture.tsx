@@ -2,11 +2,11 @@
 // a request in prose: the plan page shows its last words, a reply field,
 // Reply and Continue; Today's planning row shows them with a way there.
 // Reads arrive by shortcut, so the focused field keeps the focus.
-import { keymap, mount, Scroll, signal, Text, View } from "nsh";
+import { type JSX, keymap, mount, Scroll, signal, View } from "nsh";
 import type { PlanPage, PlanRow } from "pilot-day/native";
 import { MockDayScreen, openDay, openPlanning } from "./mockFeeds";
 import { PlannerWaits } from "./Unstick";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, Column, GridBackdrop, Page, Panel, Section } from "./ui";
 
 const SAYS = "Which database should the export use? Tell me and I will go on.";
 const plans = openPlanning("wayfinder");
@@ -67,23 +67,45 @@ todayPlans.planning.update((p) => ({ ...p, plans: [row, ...p.plans] }));
 const day = openDay();
 const showToday = signal(false);
 
-mount(() => (
-	<View class="flex-1 bg-background">
-		<If
-			when={showToday()}
-			else={
-				<Scroll class="flex-1">
-					<View class="gap-4 p-8">
-						<PlannerWaits plans={plans} page={page()} />
-					</View>
-				</Scroll>
-			}
-		>
-			<MockDayScreen day={day} plans={todayPlans} />
-		</If>
-		<View class="flex-row gap-2 border-t border-border px-6 py-2">
-			<Text testID="sent">{`Sent: ${sent().join(", ") || "nothing"}`}</Text>
-			<Action label="Show Today" onPress={() => showToday.set(true)} />
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
-	</View>
+	);
+}
+
+// The planning page shows the planner's request first in its Planning agent section; this fixture does the same.
+mount(() => (
+	<FixtureWindow>
+		<View class="min-h-0 flex-1">
+			<If
+				when={showToday()}
+				else={
+					<Scroll class="flex-1">
+						<Page>
+							<Panel>
+								<Column>
+									<Section title="Planning agent">
+										<PlannerWaits plans={plans} page={page()} />
+									</Section>
+								</Column>
+							</Panel>
+						</Page>
+					</Scroll>
+				}
+			>
+				<MockDayScreen day={day} plans={todayPlans} />
+			</If>
+		</View>
+		<Block>
+			<Buttons>
+				<Caption testID="sent">{`Sent: ${sent().join(", ") || "nothing"}`}</Caption>
+				<Button small label="Show Today" onPress={() => showToday.set(true)} />
+			</Buttons>
+		</Block>
+	</FixtureWindow>
 ));

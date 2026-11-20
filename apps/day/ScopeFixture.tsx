@@ -3,7 +3,7 @@
 // project (pilot) from the decisions world, website with its rows, and billing
 // unreadable until the script says otherwise. Save and reopen restores only
 // the window's screen state, as an update or a close would.
-import { effect, mount, Scroll, signal, Text, untracked, View } from "nsh";
+import { effect, type JSX, mount, Scroll, signal, untracked, View } from "nsh";
 import { PlanFeed, TodayFeed } from "pilot-day/native";
 import { ScriptedChats } from "./chatDemo";
 import { mirrorChats } from "./chatFeed";
@@ -12,7 +12,7 @@ import { MockDayScreen } from "./mockFeeds";
 import { mirrorPlanning } from "./planning";
 import { ScriptedScope } from "./scopeDemo";
 import { mirrorScope, todayProject } from "./todayScope";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 const feed = new TodayFeed("decisions");
@@ -28,50 +28,66 @@ effect(() => {
 });
 const readAgain = () => void day.scope?.read(todayProject());
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 bg-background">
+	<FixtureWindow>
 		<View class="flex-1">
 			<MockDayScreen day={day} plans={plans} />
 		</View>
-		<Scroll class="max-h-40 border-t border-border">
-			<View class="gap-1 px-6 py-3">
-				<Text testID="reads">{`Reads: ${scope.reads()} · Sent: ${day.today().notes.length}`}</Text>
-				<Text testID="views">{`Scope views: ${views()}`}</Text>
-				<View class="flex-row flex-wrap gap-1">
-					<Action
+		<Scroll class="max-h-40">
+			<Block gap={1}>
+				<Caption testID="reads">{`Reads: ${scope.reads()} · Sent: ${day.today().notes.length}`}</Caption>
+				<Caption testID="views">{`Scope views: ${views()}`}</Caption>
+				<Buttons>
+					<Button
+						small
 						label="Global window"
 						onPress={() => {
 							chats.current = null;
 							chats.publish();
 						}}
 					/>
-					<Action label="Scope unavailable" onPress={() => (scope.script.unavailable = true)} />
-					<Action label="Hold reads" onPress={() => (scope.script.hold = true)} />
-					<Action
+					<Button small label="Scope unavailable" onPress={() => (scope.script.unavailable = true)} />
+					<Button small label="Hold reads" onPress={() => (scope.script.hold = true)} />
+					<Button
+						small
 						label="Release newer read"
 						onPress={() => {
 							scope.script.hold = false;
 							scope.release(true);
 						}}
 					/>
-					<Action label="Release older read" onPress={() => scope.release(false)} />
-					<Action label="Billing readable" onPress={() => (scope.script.billingReadable = true)} />
-					<Action
+					<Button small label="Release older read" onPress={() => scope.release(false)} />
+					<Button small label="Billing readable" onPress={() => (scope.script.billingReadable = true)} />
+					<Button
+						small
 						label="Focus website"
 						onPress={() => {
 							scope.script.own = "demo-website";
 							readAgain();
 						}}
 					/>
-					<Action label="Read scope again" onPress={readAgain} />
-					<Action
+					<Button small label="Read scope again" onPress={readAgain} />
+					<Button
+						small
 						label="Changed meanwhile"
 						onPress={() => {
 							scope.script.refusal = "stale";
 							readAgain();
 						}}
 					/>
-					<Action
+					<Button
+						small
 						label="Save and reopen"
 						onPress={() => {
 							const view = captureView(day.today());
@@ -79,8 +95,8 @@ mount(() => (
 							restoreView(view);
 						}}
 					/>
-				</View>
-			</View>
+				</Buttons>
+			</Block>
 		</Scroll>
-	</View>
+	</FixtureWindow>
 ));

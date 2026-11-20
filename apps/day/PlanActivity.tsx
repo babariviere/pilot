@@ -1,23 +1,20 @@
 // What Pilot's planning agent does now, and its chat, read only. Activity,
 // not progress: a step is not a result and a time is not an estimate.
 // Reading the chat sends nothing; while it is open, Pilot reads it again as
-// the agent works.
-import { cleanup, signal, Text, View } from "nsh";
+// the agent works. The chat is the planning page's Activity tab.
+import { cleanup, signal, View } from "nsh";
 import type { PlanActivity, PlanPage } from "pilot-day/native";
 import { activityQuiet, activityTime } from "./activityWords";
 import { ChatTranscript } from "./ChatRows";
 import type { Plans } from "./planning";
-import { chatOpen, put } from "./planView";
-import { Action, MarkLine, Notice, SectionTitle } from "./ui";
+import { Block, Body, Caption, Mark, Notice, Section } from "./ui";
 
 /** How often the times read again while the line shows. */
 const CLOCK_MS = 15_000;
 
-/** The agent's step now, how long, a quiet warning, and the way into its chat. */
+/** The agent's step now, how long, and a quiet warning. Its chat is the page's Activity tab. */
 export function ActivityLine(props: { plans: Plans; page: PlanPage; activity: PlanActivity }) {
-	const id = () => props.page.missionId;
-	const open = () => chatOpen()[id()] === true;
-	// The status line only while it works or plans; otherwise only the chat link.
+	// The status line only while it works or plans.
 	const status = () => props.activity.working || props.page.stage === "planning";
 	const now = signal(Date.now());
 	const clock = setInterval(() => now.set(Date.now()), CLOCK_MS);
@@ -25,47 +22,37 @@ export function ActivityLine(props: { plans: Plans; page: PlanPage; activity: Pl
 	const time = () => activityTime(props.activity, now());
 	const quiet = () => activityQuiet(props.activity, now());
 	return (
-		<View testID="plan-activity" class="gap-3">
+		<View testID="plan-activity">
 			<If when={status()}>
-				<MarkLine kind={props.activity.working ? "moving" : "still"}>
-					<Text testID="plan-activity-step" class="text-sm text-foreground">
-						{props.activity.working
-							? props.activity.step || "Working"
-							: "Pilot's planning agent is not working now."}
-					</Text>
-					<If when={time()}>
-						<Text testID="plan-activity-time" class="text-xs text-faint">
-							{time()}
-						</Text>
-					</If>
-				</MarkLine>
+				<Block>
+					{/* LIBRARY GAP: Row cannot put a test ID on its title or meta, and tests read the step and its time by
+					    their own IDs. This mark-and-words line uses layout classes only until Row offers them. */}
+					<View class="flex-row items-start gap-2.5">
+						<Mark kind={props.activity.working ? "working" : "new"} />
+						<View class="min-w-0 flex-1 gap-0.5">
+							<Body testID="plan-activity-step">
+								{props.activity.working
+									? props.activity.step || "Working"
+									: "Pilot's planning agent is not working now."}
+							</Body>
+							<If when={time()}>
+								<Caption testID="plan-activity-time" tone="faint">
+									{time()}
+								</Caption>
+							</If>
+						</View>
+					</View>
+				</Block>
 			</If>
 			<If when={quiet()}>
-				<Notice testID="plan-activity-quiet" kind="needs" role="alert" text={quiet()} />
-			</If>
-			<If when={props.plans.feed.readChat}>
-				<View class="-ml-3 flex-row">
-					<Action
-						label={open() ? "Hide planning chat" : "Show planning chat"}
-						testID="plan-chat-toggle"
-						accessibilityLabel={
-							open()
-								? "Hide the planning chat."
-								: "Show the planning agent's chat, read only. This sends nothing."
-						}
-						onPress={() => put(chatOpen, id(), !open())}
-					/>
-				</View>
-			</If>
-			<If when={open() && props.plans.feed.readChat}>
-				<PlanChatView plans={props.plans} missionId={id()} />
+				<Notice testID="plan-activity-quiet" kind="needs" role="alert" placement="section" text={quiet()} />
 			</If>
 		</View>
 	);
 }
 
 /** The agent's chat while it shows: read on open, closed when it goes. */
-function PlanChatView(props: { plans: Plans; missionId: string }) {
+export function PlanChat(props: { plans: Plans; missionId: string }) {
 	const feed = props.plans.feed;
 	const id = props.missionId;
 	void feed.readChat?.(id, false);
@@ -75,19 +62,18 @@ function PlanChatView(props: { plans: Plans; missionId: string }) {
 		return feed.chat?.(id) ?? null;
 	};
 	return (
-		<View testID="plan-chat" class="gap-3 border-l-2 border-border pl-4">
-			<View class="gap-1">
-				<SectionTitle title="Planning chat" />
-				<Text class="text-xs text-muted-foreground">Read only. Reading it sends nothing and changes nothing.</Text>
-			</View>
-			<ChatTranscript
-				id="plan-chat"
-				chat={chat()}
-				readingWords="Reading the planning chat…"
-				emptyWords="The planning agent has no messages yet."
-				onEarlier={() => void feed.readChat?.(id, true)}
-				read={() => feed.readChat?.(id, false) ?? Promise.resolve()}
-			/>
-		</View>
+		<Section testID="plan-chat" title="Planning chat">
+			<Block gap={3}>
+				<Caption>Read only. Reading it sends nothing and changes nothing.</Caption>
+				<ChatTranscript
+					id="plan-chat"
+					chat={chat()}
+					readingWords="Reading the planning chat…"
+					emptyWords="The planning agent has no messages yet."
+					onEarlier={() => void feed.readChat?.(id, true)}
+					read={() => feed.readChat?.(id, false) ?? Promise.resolve()}
+				/>
+			</Block>
+		</Section>
 	);
 }

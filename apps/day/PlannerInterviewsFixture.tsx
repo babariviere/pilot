@@ -1,9 +1,10 @@
 // Real Day views with bounded, fictional scope replies and the saved interview fixture.
-import { keymap, mount, Text, View } from "nsh";
+import { type JSX, keymap, mount, View } from "nsh";
 import { type Planning, type PlanRow, TodayFeed } from "pilot-day/native";
 import { mirrorDay } from "./day";
 import { MockDayScreen, openPlanning } from "./mockFeeds";
 import { mirrorScope, type ScopeSource, todayProject } from "./todayScope";
+import { Block, Caption, GridBackdrop } from "./ui";
 
 const plans = openPlanning("interview");
 const today = new TodayFeed("quiet");
@@ -127,9 +128,24 @@ keymap.bind(
 	{ when: "always" },
 );
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 bg-background">
-		<MockDayScreen day={day} plans={plans} />
-		<Text testID="sent">{`Today notes: ${day.today().notes.length}`}</Text>
-	</View>
+	<FixtureWindow>
+		<View class="min-h-0 flex-1">
+			<MockDayScreen day={day} plans={plans} />
+		</View>
+		<Block>
+			<Caption testID="sent">{`Today notes: ${day.today().notes.length}`}</Caption>
+		</Block>
+	</FixtureWindow>
 ));

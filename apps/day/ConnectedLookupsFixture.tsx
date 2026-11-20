@@ -1,11 +1,11 @@
 // Test-only: threads, preferences and results over the injected native host
 // channel, showing only where one lost write of each stands. The test
 // scripts every root reply.
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal } from "nsh";
 import { ConnectedDelivery } from "./deliveryFeed";
 import { ConnectedPreferences } from "./preferencesFeed";
 import { ConnectedThreads } from "./threadFeed";
-import { Action } from "./ui";
+import { Block, Body, Button } from "./ui";
 
 const threads = new ConnectedThreads("fixture");
 const preferences = new ConnectedPreferences("fixture");
@@ -26,10 +26,10 @@ const readAll = () => {
 };
 readAll();
 mount(() => (
-	<View>
-		<Text>{`thread: ${thread()}`}</Text>
-		<Text>{`preference: ${preference()}`}</Text>
-		<Text>{`result: ${result()}`}</Text>
-		<Action label="Read again" onPress={readAll} />
-	</View>
+	<Block>
+		<Body>{`thread: ${thread()}`}</Body>
+		<Body>{`preference: ${preference()}`}</Body>
+		<Body>{`result: ${result()}`}</Body>
+		<Button label="Read again" onPress={readAll} />
+	</Block>
 ));

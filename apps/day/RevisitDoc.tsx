@@ -4,7 +4,7 @@
 // changes the goal, agreement, open tasks and decisions as shown. Neither
 // starts, resumes or permits work. Finished tasks and earlier decisions
 // stay as history, readable here on request.
-import { type JSX, Text, View } from "nsh";
+import { type JSX, View } from "nsh";
 import type {
 	ChangeKind,
 	Correction,
@@ -19,7 +19,27 @@ import type {
 import { askRevisit, checkRevision, confirmRevision, resumeRevision } from "./planCommands";
 import type { Plans } from "./planning";
 import { drop, put, revisionShown, revisitBusy, revisitMessages, revisitOpen } from "./planView";
-import { Action, Disclosure, glide, Mark, type MarkKind, MarkLine, Notice, QuietPanel, SectionTitle } from "./ui";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Disclosure,
+	EmptyLine,
+	glide,
+	Mark,
+	type MarkKind,
+	Notice,
+	Num,
+	Question,
+	Row,
+	RowDetail,
+	RowGroup,
+	Rows,
+	Section,
+} from "./ui";
 
 /** The words beside a part a revision touches. */
 export function changeWord(kind: ChangeKind): string {
@@ -35,16 +55,16 @@ export function changeWord(kind: ChangeKind): string {
 	}
 }
 
+/** A part's mark: what changes or is new needs your confirmation; what stays is settled; a drop is quiet. */
 function changeMark(kind: ChangeKind): MarkKind {
 	switch (kind) {
 		case "stays":
-			return "still";
+			return "done";
 		case "changes":
-			return "needs";
-		case "drops":
-			return "unreported";
 		case "adds":
 			return "needs";
+		case "drops":
+			return "new";
 	}
 }
 
@@ -59,8 +79,20 @@ function Fold(props: { missionId: string; part: string; label: string; children?
 			open={open()}
 			onToggle={() => put(revisitOpen, key(), !open())}
 		>
-			<View class="gap-2 pl-4 pt-2">{props.children}</View>
+			<View class="gap-2">{props.children}</View>
 		</Disclosure>
+	);
+}
+
+/** A label and its words, inside a fold. */
+function Said(props: { label: string; text: string; tone?: "default" | "muted" }) {
+	return (
+		<View class="gap-0.5">
+			<Caption tone="faint">{props.label}</Caption>
+			<Body tone={props.tone ?? "default"} measure>
+				{props.text}
+			</Body>
+		</View>
 	);
 }
 
@@ -70,13 +102,11 @@ function Now(props: { missionId: string; revisit: Revisit }) {
 	return (
 		<Fold missionId={props.missionId} part="now" label="The agreement now">
 			<View testID="agreement-now" selectable class="gap-2">
-				<Text class="text-xs text-faint">Goal</Text>
-				<Text class="text-sm leading-relaxed text-foreground">{r().goal}</Text>
-				<Text class="text-xs text-faint">Agreement</Text>
-				<Text class="text-sm leading-relaxed text-foreground">{r().plan}</Text>
-				<Text class="text-xs text-muted-foreground">
+				<Said label="Goal" text={r().goal} />
+				<Said label="Agreement" text={r().plan} />
+				<Caption>
 					{`${r().openTasks} open tasks · ${r().finishedTasks} finished · ${r().decisions} active decisions`}
-				</Text>
+				</Caption>
 			</View>
 		</Fold>
 	);
@@ -86,21 +116,26 @@ function Now(props: { missionId: string; revisit: Revisit }) {
 function TextPart(props: { missionId: string; title: string; part: string; change: TextChange }) {
 	const c = () => props.change;
 	return (
-		<View testID={`revision-${props.part}`} selectable class="gap-1.5">
-			<View class="flex-row items-center gap-2">
-				<Mark kind={changeMark(c().kind)} />
-				<Text class="text-sm font-medium text-foreground">{props.title}</Text>
-				<Text class="text-xs text-muted-foreground">{changeWord(c().kind)}</Text>
-			</View>
-			<Text class="pl-4 text-sm leading-relaxed text-foreground">{c().after}</Text>
-			<If when={c().kind !== "stays"}>
-				<View class="pl-4">
-					<Fold missionId={props.missionId} part={`${props.part}-before`} label="Show it now">
-						<Text class="text-sm leading-relaxed text-muted-foreground">{c().before}</Text>
-					</Fold>
-				</View>
-			</If>
-		</View>
+		<Row
+			testID={`revision-${props.part}`}
+			mark={changeMark(c().kind)}
+			title={props.title}
+			state={changeWord(c().kind)}
+			stateTone={c().kind === "stays" ? "quiet" : "needs"}
+			selectable
+			detail={
+				<RowDetail>
+					<Body measure>{c().after}</Body>
+					<If when={c().kind !== "stays"}>
+						<Fold missionId={props.missionId} part={`${props.part}-before`} label="Show it now">
+							<Body tone="muted" measure>
+								{c().before}
+							</Body>
+						</Fold>
+					</If>
+				</RowDetail>
+			}
+		/>
 	);
 }
 
@@ -108,30 +143,30 @@ function TextPart(props: { missionId: string; title: string; part: string; chang
 function TaskRow(props: { task: TaskChange }) {
 	const t = () => props.task;
 	return (
-		<View testID={`revision-task-${t().id}`} class="gap-1 border-t border-border py-2.5">
-			<View class="flex-row items-baseline gap-3">
-				<Text class="w-7 text-xs text-faint">{t().kind === "adds" ? "" : `#${t().number}`}</Text>
-				<Text class="flex-1 text-sm text-foreground">{t().title}</Text>
-				<View class="flex-row items-center gap-1.5">
-					<Mark kind={changeMark(t().kind)} />
-					<Text
-						class="text-xs"
-						classList={{
-							"text-needs-ink": t().kind !== "stays",
-							"text-muted-foreground": t().kind === "stays",
-						}}
-					>
-						{changeWord(t().kind)}
-					</Text>
-				</View>
-			</View>
-			<Each of={t().lines} key={(l) => l}>
-				{(l) => <Text class="pl-10 text-sm leading-relaxed text-muted-foreground">{l()}</Text>}
-			</Each>
-			<If when={t().kind === "drops"}>
-				<Text class="pl-10 text-xs text-faint">Dropped, not deleted. Its history stays.</Text>
-			</If>
-		</View>
+		<Row
+			testID={`revision-task-${t().id}`}
+			mark={changeMark(t().kind)}
+			title={t().title}
+			state={changeWord(t().kind)}
+			stateTone={t().kind === "stays" ? "quiet" : "needs"}
+			trailing={
+				<If when={t().kind !== "adds"}>
+					<Num>{`#${t().number}`}</Num>
+				</If>
+			}
+			detail={
+				<If when={t().lines.length > 0 || t().kind === "drops"}>
+					<RowDetail>
+						<Each of={t().lines} key={(l) => l}>
+							{(l) => <Body tone="muted">{l()}</Body>}
+						</Each>
+						<If when={t().kind === "drops"}>
+							<Caption tone="faint">Dropped, not deleted. Its history stays.</Caption>
+						</If>
+					</RowDetail>
+				</If>
+			}
+		/>
 	);
 }
 
@@ -139,17 +174,24 @@ function TaskRow(props: { task: TaskChange }) {
 function DecisionRow(props: { change: DecisionChange }) {
 	const d = () => props.change;
 	return (
-		<View testID={`revision-decision-${d().id}`} selectable class="gap-1 border-t border-border py-2.5">
-			<View class="flex-row items-baseline gap-3">
-				<Text class="w-7 text-xs text-faint">{`D${d().number}`}</Text>
-				<Text class="flex-1 text-sm text-muted-foreground">{d().before}</Text>
-				<Text class="text-xs text-needs-ink">{d().action === "replace" ? "Replaced" : "Withdrawn"}</Text>
-			</View>
-			<If when={d().action === "replace"}>
-				<Text class="pl-10 text-sm text-foreground">{`New: ${d().after}`}</Text>
-			</If>
-			<Text class="pl-10 text-xs text-muted-foreground">{`Why: ${d().reason}`}</Text>
-		</View>
+		<Row
+			testID={`revision-decision-${d().id}`}
+			mark="needs"
+			title={d().before}
+			state={d().action === "replace" ? "Replaced" : "Withdrawn"}
+			stateTone="needs"
+			trailing={<Num>{`D${d().number}`}</Num>}
+			wrap
+			selectable
+			detail={
+				<RowDetail>
+					<If when={d().action === "replace"}>
+						<Body>{`New: ${d().after}`}</Body>
+					</If>
+					<Caption>{`Why: ${d().reason}`}</Caption>
+				</RowDetail>
+			}
+		/>
 	);
 }
 
@@ -202,73 +244,91 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 	const pinned = () => pin()?.revisionId === r().id && pin()?.digest === r().digest;
 	const unknown = () => r().confirm === "unknown" || r().confirm === "checking";
 	const message = () => revisitMessages()[id()] ?? "";
+	const asking = () => !!pin() && !unknown();
 	return (
-		<QuietPanel testID="revision-confirm" size="lg" class="gap-3">
-			<If when={message()}>
-				<Text testID="revisit-message" role="alert" class="text-sm text-foreground">
-					{message()}
-				</Text>
-			</If>
+		<View testID="revision-confirm">
 			<If when={why()}>
-				<MarkLine kind="unknown">
-					<Text role="alert" class="text-sm text-foreground">
-						{why()}
-					</Text>
-				</MarkLine>
+				<Notice placement="section" role="alert" text={why()} />
 			</If>
-			<If when={r().pause === "paused" && !why()}>
-				<Text class="text-xs text-muted-foreground">
-					{r().selectivePause
-						? "Affected work is paused. Applying keeps it paused; release it explicitly below when ready."
-						: "The mission's work is paused. Confirming keeps it paused; resume it on its overview when you want."}
-				</Text>
-			</If>
-			<If when={r().selectivePause && r().pause === "needed"}>
-				<Text class="text-sm text-muted-foreground">{`Applying pauses ${r().affectedWork} affected agents first. Unaffected work continues. The exact revision applies only after safe pause is confirmed.`}</Text>
-				<Each of={r().affectedTasks ?? []} key={(t) => t}>
-					{(t) => <Text class="text-sm text-foreground">{t()}</Text>}
-				</Each>
-			</If>
-			<If when={unknown()}>
-				<Text role="alert" class="text-sm text-foreground">
-					{r().confirm === "checking"
-						? "Checking. This only reads; it sends nothing again."
-						: "Pilot sent your confirmation but heard nothing back. It will not send it again until it checks."}
-				</Text>
-			</If>
-			<If when={pin() && !unknown()}>
-				<View testID="revision-confirm-ask" class="gap-2">
-					<Text class="text-sm font-medium text-foreground">Apply exactly this revision?</Text>
-					<Text class="text-xs leading-relaxed text-muted-foreground">{confirmLine(r())}</Text>
-					<If when={!pinned()}>
-						<Text class="text-xs text-needs-ink">
-							The revision changed after you opened this. Read it again and confirm again.
-						</Text>
+			<If
+				when={
+					message() ||
+					(r().pause === "paused" && !why()) ||
+					(r().selectivePause && r().pause === "needed") ||
+					unknown()
+				}
+			>
+				<Block>
+					<If when={message()}>
+						<Body testID="revisit-message" role="alert">
+							{message()}
+						</Body>
 					</If>
-				</View>
+					<If when={r().pause === "paused" && !why()}>
+						<Caption>
+							{r().selectivePause
+								? "Affected work is paused. Applying keeps it paused; release it explicitly below when ready."
+								: "The mission's work is paused. Confirming keeps it paused; resume it on its overview when you want."}
+						</Caption>
+					</If>
+					<If when={r().selectivePause && r().pause === "needed"}>
+						<Body tone="muted">{`Applying pauses ${r().affectedWork} affected agents first. Unaffected work continues. The exact revision applies only after safe pause is confirmed.`}</Body>
+						<Each of={r().affectedTasks ?? []} key={(t) => t}>
+							{(t) => <Body>{t()}</Body>}
+						</Each>
+					</If>
+					<If when={unknown()}>
+						<Body role="alert">
+							{r().confirm === "checking"
+								? "Checking. This only reads; it sends nothing again."
+								: "Pilot sent your confirmation but heard nothing back. It will not send it again until it checks."}
+						</Body>
+					</If>
+				</Block>
 			</If>
-			<View class="flex-row flex-wrap items-center gap-2">
-				<If
-					when={unknown()}
-					else={
-						<If
-							when={pin()}
-							else={
-								<Action
-									variant="primary"
-									testID="confirm-revision"
-									label="Confirm revision"
-									disabled={!!why() || busy() || r().confirm !== "open"}
-									onPress={() => {
-										glide();
-										put(revisitMessages, id(), "");
-										put(revisionShown, id(), { revisionId: r().id, digest: r().digest });
-									}}
+			<If
+				when={asking()}
+				else={
+					<Block>
+						<Buttons>
+							<If
+								when={unknown()}
+								else={
+									<Button
+										kind="primary"
+										testID="confirm-revision"
+										label="Confirm revision"
+										disabled={!!why() || busy() || r().confirm !== "open"}
+										onPress={() => {
+											glide();
+											put(revisitMessages, id(), "");
+											put(revisionShown, id(), { revisionId: r().id, digest: r().digest });
+										}}
+									/>
+								}
+							>
+								<Button
+									kind="primary"
+									testID="check-revision"
+									label="Check again"
+									icon="refresh"
+									disabled={busy() || r().confirm === "checking"}
+									onPress={() => void checkRevision(props.plans, id(), r().id)}
 								/>
-							}
-						>
-							<Action
-								variant="primary"
+							</If>
+							<AskAgain plans={props.plans} page={props.page} revision={r()} canAsk={props.revisitCanAsk} />
+						</Buttons>
+					</Block>
+				}
+			>
+				{/* The second press waits for the user's answer on the exact revision shown. */}
+				<Question
+					testID="revision-confirm-ask"
+					title="Apply exactly this revision?"
+					foot={
+						<>
+							<Button
+								kind="primary"
 								testID="confirm-revision-now"
 								label={
 									busy() || r().confirm === "confirming"
@@ -280,7 +340,7 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 								disabled={!!why() || busy() || !pinned()}
 								onPress={() => void confirmRevision(props.plans, id())}
 							/>
-							<Action
+							<Button
 								label="Cancel"
 								disabled={busy()}
 								onPress={() => {
@@ -288,29 +348,36 @@ function Confirm(props: { plans: Plans; page: PlanPage; revision: Revision; revi
 									drop(revisionShown, id());
 								}}
 							/>
-						</If>
+							<AskAgain plans={props.plans} page={props.page} revision={r()} canAsk={props.revisitCanAsk} />
+						</>
 					}
 				>
-					<Action
-						variant="primary"
-						testID="check-revision"
-						label="Check again"
-						icon="refresh"
-						disabled={busy() || r().confirm === "checking"}
-						onPress={() => void checkRevision(props.plans, id(), r().id)}
-					/>
-				</If>
-				{/* Kept in place while Revisit is briefly unavailable (a read refreshing, the planner working), so it does not flicker. */}
-				<If when={!r().current && !!props.plans.feed.revisit}>
-					<Action
-						testID="ask-again"
-						label="Ask for a new revision"
-						disabled={busy() || !props.revisitCanAsk}
-						onPress={() => void askRevisit(props.plans, id())}
-					/>
-				</If>
-			</View>
-		</QuietPanel>
+					<Caption>{confirmLine(r())}</Caption>
+					<If when={!pinned()}>
+						<Caption tone="needs">
+							The revision changed after you opened this. Read it again and confirm again.
+						</Caption>
+					</If>
+				</Question>
+			</If>
+		</View>
+	);
+}
+
+/** Ask for a new revision, once this one no longer fits the mission. */
+function AskAgain(props: { plans: Plans; page: PlanPage; revision: Revision; canAsk: boolean }) {
+	const id = () => props.page.missionId;
+	const busy = () => revisitBusy()[id()] === true;
+	return (
+		// Kept in place while Revisit is briefly unavailable (a read refreshing, the planner working), so it does not flicker.
+		<If when={!props.revision.current && !!props.plans.feed.revisit}>
+			<Button
+				testID="ask-again"
+				label="Ask for a new revision"
+				disabled={busy() || !props.canAsk}
+				onPress={() => void askRevisit(props.plans, id())}
+			/>
+		</If>
 	);
 }
 
@@ -321,74 +388,64 @@ function RevisionView(props: { plans: Plans; page: PlanPage; revisit: Revisit; r
 	const instructions = () => r().corrections.filter((c) => c.kind === "instruction");
 	const permissions = () => r().corrections.filter((c) => c.kind === "permission");
 	return (
-		<View testID="revision" class="gap-6">
-			<View class="gap-1.5">
-				<Text class="text-xs text-faint">Proposed revision</Text>
-				<View selectable>
-					<Text class="text-base leading-relaxed text-foreground">{r().summary}</Text>
-				</View>
-				<Text class="text-xs text-muted-foreground">
-					Pilot proposed this from your answers. Read it in full. Nothing has changed yet.
-				</Text>
+		<Section testID="revision" title="Proposed revision">
+			<Block selectable>
+				<Body measure>{r().summary}</Body>
+				<Caption>Pilot proposed this from your answers. Read it in full. Nothing has changed yet.</Caption>
 				<If when={r().waiting > 0}>
-					<Text testID="revision-waiting" class="text-xs text-muted-foreground">
+					<Caption testID="revision-waiting">
 						{r().waiting === 1
 							? "1 more proposed revision waits after this one."
 							: `${r().waiting} more proposed revisions wait after this one.`}
-					</Text>
+					</Caption>
 				</If>
-			</View>
-			<TextPart missionId={id()} title="Goal" part="goal" change={r().goal} />
-			<TextPart missionId={id()} title="Agreement" part="plan" change={r().plan} />
-			<View testID="revision-tasks" class="gap-0">
-				<Text class="pb-1 text-sm font-medium text-foreground">{`Open tasks · ${r().tasks.length}`}</Text>
+			</Block>
+			<Rows>
+				<TextPart missionId={id()} title="Goal" part="goal" change={r().goal} />
+				<TextPart missionId={id()} title="Agreement" part="plan" change={r().plan} />
+			</Rows>
+			<RowGroup label={`Open tasks · ${r().tasks.length}`} />
+			<Rows testID="revision-tasks">
 				<Each of={r().tasks} key={(t) => t.id}>
 					{(t) => <TaskRow task={t()} />}
 				</Each>
-				<Text class="pt-2 text-xs text-faint">
-					{r().finished === 1
+			</Rows>
+			<EmptyLine
+				text={
+					r().finished === 1
 						? "1 finished task stays as it is, with its history."
-						: `${r().finished} finished tasks stay as they are, with their history.`}
-				</Text>
-			</View>
+						: `${r().finished} finished tasks stay as they are, with their history.`
+				}
+			/>
 			<If when={r().added.length > 0}>
-				<View testID="revision-added" class="gap-0">
-					<Text class="pb-1 text-sm font-medium text-foreground">{`New tasks · ${r().added.length}`}</Text>
+				<RowGroup label={`New tasks · ${r().added.length}`} />
+				<Rows testID="revision-added">
 					<Each of={r().added} key={(t) => t.id}>
 						{(t) => <TaskRow task={t()} />}
 					</Each>
-					<Text class="pt-2 text-xs text-faint">
-						Confirming adds them to the plan. Each starts when the tasks it waits for are done, like the others.
-					</Text>
-				</View>
+				</Rows>
+				<EmptyLine text="Confirming adds them to the plan. Each starts when the tasks it waits for are done, like the others." />
 			</If>
-			<View testID="revision-decisions" class="gap-0">
-				<Text class="pb-1 text-sm font-medium text-foreground">Decisions</Text>
+			<RowGroup label="Decisions" />
+			<Rows testID="revision-decisions">
 				<Each of={r().decisions} key={(d) => d.id}>
 					{(d) => <DecisionRow change={d()} />}
 				</Each>
-				<Text class="pt-2 text-xs text-faint">
-					{`${r().keptDecisions} other active ${r().keptDecisions === 1 ? "decision stays" : "decisions stay"}. Replaced and withdrawn decisions stay as history, with their reasons.`}
-				</Text>
-			</View>
+			</Rows>
+			<EmptyLine
+				text={`${r().keptDecisions} other active ${r().keptDecisions === 1 ? "decision stays" : "decisions stay"}. Replaced and withdrawn decisions stay as history, with their reasons.`}
+			/>
 			<If when={r().corrections.length > 0}>
-				<View testID="revision-corrections" class="gap-1.5">
-					<Text class="text-sm font-medium text-foreground">Not part of this revision</Text>
-					<Text class="text-xs leading-relaxed text-muted-foreground">
-						Pilot also suggests these. Confirming applies neither; each has its own setting.
-					</Text>
+				<Block testID="revision-corrections" selectable>
+					<BodyStrong>Not part of this revision</BodyStrong>
+					<Caption>Pilot also suggests these. Confirming applies neither; each has its own setting.</Caption>
 					<Each of={[...instructions(), ...permissions()]} key={(c) => `${c.kind}:${c.text}`}>
-						{(c) => (
-							<View class="gap-0.5 pl-4">
-								<Text class="text-xs text-faint">{correctionWord(c())}</Text>
-								<Text class="text-sm text-foreground">{c().text}</Text>
-							</View>
-						)}
+						{(c) => <Said label={correctionWord(c())} text={c().text} />}
 					</Each>
-				</View>
+				</Block>
 			</If>
 			<Confirm plans={props.plans} page={props.page} revision={r()} revisitCanAsk={props.revisit.canAsk} />
-		</View>
+		</Section>
 	);
 }
 
@@ -396,28 +453,39 @@ function RevisionView(props: { plans: Plans; page: PlanPage; revisit: Revisit; r
 function History(props: { missionId: string; lines: RevisionLine[] }) {
 	return (
 		<If when={props.lines.length > 0}>
-			<Fold missionId={props.missionId} part="history" label={`Earlier revisions · ${props.lines.length}`}>
-				<Text class="text-xs leading-relaxed text-muted-foreground">
-					History, not guidance. Pilot works from the agreement now.
-				</Text>
-				<Each of={props.lines} key={(l) => l.id}>
-					{(l) => (
-						<View testID={`revision-history-${l().id}`} selectable class="gap-1.5 border-t border-border py-2.5">
-							<Text class="text-sm text-foreground">{l().summary}</Text>
-							<Text class="text-xs text-faint">{l().line}</Text>
-							<Each of={l().retired} key={(x) => x}>
-								{(x) => <Text class="text-xs text-muted-foreground">{x()}</Text>}
-							</Each>
-							<Fold missionId={props.missionId} part={`earlier-${l().id}`} label="The agreement before it">
-								<Text class="text-xs text-faint">Goal</Text>
-								<Text class="text-sm text-muted-foreground">{l().earlierGoal}</Text>
-								<Text class="text-xs text-faint">Agreement</Text>
-								<Text class="text-sm text-muted-foreground">{l().earlierPlan}</Text>
-							</Fold>
-						</View>
-					)}
-				</Each>
-			</Fold>
+			<Block>
+				<Fold missionId={props.missionId} part="history" label={`Earlier revisions · ${props.lines.length}`}>
+					<Caption>History, not guidance. Pilot works from the agreement now.</Caption>
+					<Rows>
+						<Each of={props.lines} key={(l) => l.id}>
+							{(l) => (
+								<Row
+									testID={`revision-history-${l().id}`}
+									title={l().summary}
+									meta={l().line}
+									wrap
+									selectable
+									detail={
+										<RowDetail>
+											<Each of={l().retired} key={(x) => x}>
+												{(x) => <Caption>{x()}</Caption>}
+											</Each>
+											<Fold
+												missionId={props.missionId}
+												part={`earlier-${l().id}`}
+												label="The agreement before it"
+											>
+												<Said label="Goal" text={l().earlierGoal} tone="muted" />
+												<Said label="Agreement" text={l().earlierPlan} tone="muted" />
+											</Fold>
+										</RowDetail>
+									}
+								/>
+							)}
+						</Each>
+					</Rows>
+				</Fold>
+			</Block>
 		</If>
 	);
 }
@@ -440,7 +508,7 @@ function stageLine(page: PlanPage, revisit: Revisit): string {
 	}
 }
 
-/** The Revisit section of a mission's planning page. */
+/** The Revisit section of a mission's planning page, then the proposed revision in its own section. */
 export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: Revisit }) {
 	const r = () => props.revisit;
 	const id = () => props.page.missionId;
@@ -448,79 +516,101 @@ export function RevisitSection(props: { plans: Plans; page: PlanPage; revisit: R
 	const message = () => revisitMessages()[id()] ?? "";
 	const canAsk = () => r().available && r().canAsk && !!props.plans.feed.revisit && props.page.fresh;
 	return (
-		<View testID="revisit" class="gap-4">
-			<SectionTitle title="Revisit" />
-			<If when={r().pausedWork}>
-				<View class="gap-2 rounded-xl bg-muted p-4">
-					<Text class="text-sm text-foreground">{`Revisit holds ${r().pausedWork?.members ?? 0} work participants. Other holds remain separate.`}</Text>
-					<If
-						when={r().pausedWork?.state === "paused" && props.plans.feed.resumeRevision}
-						else={
-							<Action
-								label="Check status"
-								disabled={busy()}
-								onPress={() => void checkRevision(props.plans, id(), "")}
-							/>
+		<>
+			<Section testID="revisit" title="Revisit">
+				<If when={r().pausedWork}>
+					<Notice
+						placement="section"
+						text={`Revisit holds ${r().pausedWork?.members ?? 0} work participants. Other holds remain separate.`}
+						action={
+							<If
+								when={r().pausedWork?.state === "paused" && props.plans.feed.resumeRevision}
+								else={
+									<Button
+										small
+										label="Check status"
+										disabled={busy()}
+										onPress={() => void checkRevision(props.plans, id(), "")}
+									/>
+								}
+							>
+								<Button
+									small
+									label="Release affected work"
+									testID="release-revision-work"
+									disabled={busy() || !props.page.fresh}
+									onPress={() => void resumeRevision(props.plans, id(), r().pausedWork?.operationId ?? "")}
+								/>
+							</If>
 						}
-					>
-						<Action
-							label="Release affected work"
-							testID="release-revision-work"
-							disabled={busy() || !props.page.fresh}
-							onPress={() => void resumeRevision(props.plans, id(), r().pausedWork?.operationId ?? "")}
-						/>
-					</If>
-				</View>
-			</If>
-			<If when={r().available} else={<Notice testID="revisit-unavailable" text={r().reason} />}>
-				<If when={r().stage === "idle" || r().stage === "confirmed"}>
-					<Text class="text-sm leading-relaxed text-muted-foreground">
-						Check the goal, agreement and open tasks against what you want now. Pilot asks only about gaps, then
-						shows exactly what would change. Nothing changes until you confirm.
-					</Text>
-				</If>
-				<If when={stageLine(props.page, r())}>
-					<MarkLine kind={r().stage === "confirmed" ? "done" : "moving"}>
-						<Text testID="revisit-stage" class="text-sm leading-relaxed text-foreground">
-							{stageLine(props.page, r())}
-						</Text>
-					</MarkLine>
-				</If>
-				<Now missionId={id()} revisit={r()} />
-				<If when={props.page.stage === "unknown" && !r().revision}>
-					<Action
-						testID="check-revisit"
-						label="Check again"
-						icon="refresh"
-						disabled={busy()}
-						onPress={() => void checkRevision(props.plans, id(), "")}
 					/>
 				</If>
-				<If when={r().revision}>
-					<Each of={r().revision ? [r().revision as Revision] : []} key={(x) => x.id}>
-						{(x) => <RevisionView plans={props.plans} page={props.page} revisit={r()} revision={x()} />}
-					</Each>
+				<If
+					when={r().available}
+					else={<Notice testID="revisit-unavailable" placement="section" text={r().reason} />}
+				>
+					<Block gap={3}>
+						<If when={r().stage === "idle" || r().stage === "confirmed"}>
+							<Body tone="muted" measure>
+								Check the goal, agreement and open tasks against what you want now. Pilot asks only about gaps,
+								then shows exactly what would change. Nothing changes until you confirm.
+							</Body>
+						</If>
+						<If when={stageLine(props.page, r())}>
+							{/* LIBRARY GAP: Row cannot put a test ID on its title, and tests read this line by its own ID.
+							    This mark-and-words line uses layout classes only until Row offers it. */}
+							<View class="flex-row items-start gap-2.5">
+								<Mark kind={r().stage === "confirmed" ? "done" : "working"} />
+								<Body testID="revisit-stage" grow>
+									{stageLine(props.page, r())}
+								</Body>
+							</View>
+						</If>
+						<Now missionId={id()} revisit={r()} />
+						{/* With a revision shown, its confirmation shows the message, next to the button that sent it. */}
+						<If when={message() && !r().revision}>
+							<Body testID="revisit-message" role="alert" tone="muted">
+								{message()}
+							</Body>
+						</If>
+						<If
+							when={
+								(props.page.stage === "unknown" && !r().revision) ||
+								r().stage === "idle" ||
+								r().stage === "confirmed"
+							}
+						>
+							<Buttons>
+								<If when={props.page.stage === "unknown" && !r().revision}>
+									<Button
+										testID="check-revisit"
+										label="Check again"
+										icon="refresh"
+										disabled={busy()}
+										onPress={() => void checkRevision(props.plans, id(), "")}
+									/>
+								</If>
+								<If when={r().stage === "idle" || r().stage === "confirmed"}>
+									<Button
+										kind={r().stage === "idle" ? "primary" : "secondary"}
+										testID="ask-revisit"
+										label={busy() ? "Asking…" : "Revisit mission"}
+										accessibilityLabel="Revisit mission: Pilot compares it with what you agreed and asks about gaps. Nothing changes until you confirm."
+										disabled={!canAsk() || busy()}
+										onPress={() => void askRevisit(props.plans, id())}
+									/>
+								</If>
+							</Buttons>
+						</If>
+					</Block>
+					<History missionId={id()} lines={r().history} />
 				</If>
-				{/* With a revision shown, its Confirm box shows the message, next to the button that sent it. */}
-				<If when={message() && !r().revision}>
-					<Text testID="revisit-message" role="alert" class="text-sm text-muted-foreground">
-						{message()}
-					</Text>
-				</If>
-				<If when={r().stage === "idle" || r().stage === "confirmed"}>
-					<View class="flex-row">
-						<Action
-							variant={r().stage === "idle" ? "primary" : "plain"}
-							testID="ask-revisit"
-							label={busy() ? "Asking…" : "Revisit mission"}
-							accessibilityLabel="Revisit mission: Pilot compares it with what you agreed and asks about gaps. Nothing changes until you confirm."
-							disabled={!canAsk() || busy()}
-							onPress={() => void askRevisit(props.plans, id())}
-						/>
-					</View>
-				</If>
-				<History missionId={id()} lines={r().history} />
+			</Section>
+			<If when={r().available && r().revision}>
+				<Each of={r().revision ? [r().revision as Revision] : []} key={(x) => x.id}>
+					{(x) => <RevisionView plans={props.plans} page={props.page} revisit={r()} revision={x()} />}
+				</Each>
 			</If>
-		</View>
+		</>
 	);
 }

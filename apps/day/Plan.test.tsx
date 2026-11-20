@@ -326,8 +326,9 @@ test("a Wayfinder map shows what is open, waiting, settled and in fog, each with
 		"Where it should end up: Pilot runs on Linux with the same Today and planning as on macOS.",
 		"Revision 6",
 		"3 settled · 4 open now · 1 waiting · 2 in fog",
-		"Open now  4",
-		"Waiting  1",
+		// Group labels read "Open now · 4" now, as every row group does (ui/README.md, RowGroup).
+		"Open now · 4",
+		"Waiting · 1",
 		"Running · A research chat, started 12 min ago",
 		"Waits for: Packaging formats",
 		"Needs a prototype",
@@ -668,7 +669,8 @@ test("while Pilot plans, the page says what its agent does now and opens its cha
 	expect(app.shows("Working for 2 min · last step 10 s ago")).toBe(true);
 	expect(app.shows("id:plan-activity-quiet")).toBe(false);
 	expect(app.shows("id:plan-chat")).toBe(false);
-	await app.press("id:plan-chat-toggle");
+	// The planning chat is the page's Activity tab now: opening the tab reads it, leaving it closes it.
+	await app.press("id:plan-tab-activity");
 	await app.waitFor("id:plan-chat");
 	for (const text of [
 		"Read only. Reading it sends nothing and changes nothing.",
@@ -678,10 +680,11 @@ test("while Pilot plans, the page says what its agent does now and opens its cha
 	]) {
 		expect(app.shows(text)).toBe(true);
 	}
-	// The running step shows in the chat too, still in the present.
-	expect(app.count("text:Reading docs/missions.md")).toBe(2);
-	await app.press("id:plan-chat-toggle");
-	await app.waitFor("Show planning chat");
+	// The running step shows in the chat too, still in the present. The status line with the same step stays on the
+	// Questions tab, beside the questions, so the Activity tab shows it once.
+	expect(app.shows("id:plan-chat >> Reading docs/missions.md")).toBe(true);
+	await app.press("id:plan-tab-questions");
+	await app.waitFor("id:plan-activity");
 	expect(app.shows("id:plan-chat")).toBe(false);
 });
 

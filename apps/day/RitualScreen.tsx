@@ -3,11 +3,12 @@
 // intent. Next, Back, Done and Skip save only the ritual's own progress for
 // the day it opened on; Escape and Back to Today save nothing. Decisions stay
 // on Today.
-import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
+// Each is a form-width page: its head says where the user is, one panel holds
+// the step's sections, and the step's commands end the panel.
+import { effect, type JSX, keymap, Scroll, signal, View, type ViewRef } from "nsh";
 import type { DoneEntry, MissionRow } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
-import { todayWarning } from "./freshness";
 import { keepScroll } from "./kept";
 import {
 	greeting,
@@ -26,10 +27,31 @@ import {
 } from "./ritual";
 import type { Rituals } from "./ritualFeed";
 import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
-import { FreshnessNote, MissionStatus } from "./TodayScreen";
-import { Action, Mark, type MarkKind, MarkLine, Notice, Page, SectionTitle } from "./ui";
+import { FreshnessNote } from "./TodayScreen";
+import {
+	Block,
+	Body,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	EmptyLine,
+	Link,
+	type MarkKind,
+	Notice,
+	Num,
+	Page,
+	PageFoot,
+	PageHead,
+	Panel,
+	Row,
+	RowDetail,
+	Rows,
+	Section,
+	Spacer,
+} from "./ui";
 import { focusFront, queue, releaseFront, type Work } from "./view";
-import { provenance } from "./words";
+import { provenance, stateMark, stateTone, stateWord } from "./words";
 
 const STEPS = ["Since you looked", "Needs you", "Coming up today"].slice(0, START_STEPS);
 
@@ -49,14 +71,12 @@ function resultMark(entry: DoneEntry): MarkKind {
 	return "done";
 }
 
-function Title(props: { text: string; lead: string }) {
+/** The step's commands, at the end of its panel: the primary first, Skip at the far end. */
+function Commands(props: { children?: JSX.Element }) {
 	return (
-		<View class="gap-2">
-			<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
-				{props.text}
-			</Text>
-			<Text class="text-base leading-relaxed text-muted-foreground">{props.lead}</Text>
-		</View>
+		<Block>
+			<Buttons>{props.children}</Buttons>
+		</Block>
 	);
 }
 
@@ -69,34 +89,24 @@ function Results(props: { day: Day; rituals: Rituals; title: string }) {
 			? "Pilot could not read results here. This is not the same as none."
 			: "No results since then.";
 	return (
-		<View testID="results" class="gap-1">
-			<View class="pb-1">
-				<SectionTitle title={props.title} />
-			</View>
-			<If when={shown().length > 0} else={<Text class="text-sm text-muted-foreground">{none()}</Text>}>
-				<Each of={shown()} key={(d) => d.id}>
-					{(d) => (
-						<View class="py-2">
-							<MarkLine kind={resultMark(d())}>
-								<Text class="text-sm text-foreground">{d().text}</Text>
-								<Text class="text-xs text-faint">{resultSource(d())}</Text>
-							</MarkLine>
-						</View>
-					)}
-				</Each>
+		<Section testID="results" title={props.title}>
+			<If when={shown().length > 0} else={<EmptyLine text={none()} />}>
+				<Rows>
+					<Each of={shown()} key={(d) => d.id}>
+						{(d) => <Row mark={resultMark(d())} title={d().text} meta={resultSource(d())} wrap selectable />}
+					</Each>
+				</Rows>
 			</If>
 			<If when={moreResults(recap()) > 0}>
-				<Text class="pt-1 text-xs text-faint">{`${moreResults(recap())} more not listed here.`}</Text>
+				<EmptyLine text={`${moreResults(recap())} more not listed here.`} />
 			</If>
 			<If when={recap().state === "live" && (recap() as { limited: boolean }).limited}>
-				<Text class="pt-1 text-xs text-faint">Only the newest kept changes were read.</Text>
+				<EmptyLine text="Only the newest kept changes were read." />
 			</If>
 			<If when={shown().some((d) => d.basis === "reported")}>
-				<Text class="pt-1 text-xs text-faint">
-					Agent reports are the agents' own words. Pilot has not checked them.
-				</Text>
+				<EmptyLine text="Agent reports are the agents' own words. Pilot has not checked them." />
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -104,10 +114,11 @@ function Results(props: { day: Day; rituals: Rituals; title: string }) {
 function LeftOff(props: { day: Day }) {
 	return (
 		<If when={props.day.today().leftOff}>
-			<View testID="left-off" class="gap-1">
-				<SectionTitle title="Where you left off" />
-				<Text class="text-sm text-foreground">{props.day.today().leftOff ?? ""}</Text>
-			</View>
+			<Section testID="left-off" title="Where you left off">
+				<Block>
+					<Body measure>{props.day.today().leftOff ?? ""}</Body>
+				</Block>
+			</Section>
 		</If>
 	);
 }
@@ -115,54 +126,57 @@ function LeftOff(props: { day: Day }) {
 /** What waits for the user, in Today's order. */
 function Waiting(props: { items: Work[] }) {
 	return (
-		<View class="gap-0.5">
+		<Rows>
 			<Each of={props.items} key={(item) => item.id}>
 				{(item) => (
-					<View class="flex-row items-center gap-2.5 py-1.5">
-						<Mark
-							kind={
-								item().kind === "decision"
-									? decisionMark((item() as Extract<Work, { kind: "decision" }>).decision)
-									: "needs"
-							}
-						/>
-						<Text class="flex-1 text-sm text-foreground">{itemTitle(item())}</Text>
-						<Text class="text-xs text-faint">{itemEffort(item())}</Text>
-					</View>
+					<Row
+						mark={
+							item().kind === "decision"
+								? decisionMark((item() as Extract<Work, { kind: "decision" }>).decision)
+								: "needs"
+						}
+						title={itemTitle(item())}
+						trailing={<Num>{itemEffort(item())}</Num>}
+					/>
 				)}
 			</Each>
-		</View>
+		</Rows>
 	);
 }
 
 /** One mission and its agent's next step, with where that comes from. */
 function MissionPlan(props: { row: MissionRow }) {
 	return (
-		<View class="gap-1 border-t border-border py-3">
-			<View class="flex-row items-baseline gap-3">
-				<Text class="flex-1 text-sm font-medium text-foreground">{props.row.title}</Text>
-				<MissionStatus row={props.row} />
-			</View>
-			<Text class="text-sm text-muted-foreground">{nextLine(props.row)}</Text>
-			<If when={props.row.report}>
-				<Text class="text-xs text-faint">{props.row.report ? provenance(props.row.report) : ""}</Text>
-			</If>
-		</View>
+		<Row
+			mark={stateMark(props.row)}
+			title={props.row.title}
+			meta={nextLine(props.row)}
+			state={stateWord(props.row)}
+			stateTone={stateTone(props.row)}
+			wrap
+			detail={
+				<If when={props.row.report}>
+					<RowDetail>
+						<Caption tone="faint">{props.row.report ? provenance(props.row.report) : ""}</Caption>
+					</RowDetail>
+				</If>
+			}
+		/>
 	);
 }
 
-function Missions(props: { rows: MissionRow[] }) {
+/** A titled list of missions, each with its next step. */
+function MissionList(props: { title: string; rows: MissionRow[]; empty?: string }) {
 	return (
-		<View class="gap-1">
-			<View class="pb-1">
-				<SectionTitle title="Missions" count={props.rows.length} />
-			</View>
-			<If when={props.rows.length > 0} else={<Text class="text-sm text-muted-foreground">No active missions.</Text>}>
-				<Each of={props.rows} key={(m) => m.id}>
-					{(m) => <MissionPlan row={m()} />}
-				</Each>
+		<Section title={props.title} count={props.rows.length}>
+			<If when={props.rows.length > 0} else={<EmptyLine text={props.empty ?? ""} />}>
+				<Rows>
+					<Each of={props.rows} key={(m) => m.id}>
+						{(m) => <MissionPlan row={m()} />}
+					</Each>
+				</Rows>
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -170,19 +184,13 @@ function Missions(props: { rows: MissionRow[] }) {
 function Scheduled(props: { day: Day }) {
 	return (
 		<If when={props.day.today().comingUp.length > 0}>
-			<View class="gap-1">
-				<View class="pb-1">
-					<SectionTitle title="Scheduled" />
-				</View>
-				<Each of={props.day.today().comingUp} key={(s) => s.id}>
-					{(s) => (
-						<View class="flex-row gap-3 py-1.5">
-							<Text class="flex-1 text-sm text-foreground">{s().text}</Text>
-							<Text class="text-xs text-faint">{s().when}</Text>
-						</View>
-					)}
-				</Each>
-			</View>
+			<Section title="Scheduled">
+				<Rows>
+					<Each of={props.day.today().comingUp} key={(s) => s.id}>
+						{(s) => <Row title={s().text} trailing={<Num>{s().when}</Num>} wrap />}
+					</Each>
+				</Rows>
+			</Section>
 		</If>
 	);
 }
@@ -206,11 +214,11 @@ function SavedNote(props: { rituals: Rituals; context: string }) {
 		<If when={line()}>
 			<Notice
 				testID="ritual-note"
-				kind={r.uncertain() ? "unknown" : "still"}
+				placement="section"
 				text={line()}
 				action={
 					<If when={r.uncertain()}>
-						<Action label="Read again" icon="refresh" testID="ritual-read" onPress={() => void r.refresh()} />
+						<Link label="Read again" icon="refresh" testID="ritual-read" onPress={() => void r.refresh()} />
 					</If>
 				}
 			/>
@@ -268,62 +276,69 @@ function StartDay(props: { day: Day; rituals: Rituals }) {
 	keymap.bind({ escape: closeRitual, "mod+enter": primary });
 
 	return (
-		<View testID="start-of-day" class="gap-8">
-			<Text class="text-xs text-muted-foreground">{`Step ${step() + 1} of ${STEPS.length} · ${STEPS[step()]}`}</Text>
-			<If when={step() === 0}>
-				<View class="gap-8">
-					<View class="gap-3">
-						<Title text={greeting(today())} lead={sinceLine(today())} />
-						<FreshnessNote day={props.day} />
-					</View>
-					<LeftOff day={props.day} />
-					<If when={today().visit !== "first"}>
-						<Results day={props.day} rituals={r} title="Results" />
-					</If>
-				</View>
-			</If>
-			<If when={step() === 1}>
-				<View class="gap-6">
-					<Title
-						text={
-							items().length > 0
+		<View testID="start-of-day">
+			<PageHead
+				pre={<Caption>{`Step ${step() + 1} of ${STEPS.length} · ${STEPS[step()]}`}</Caption>}
+				title={
+					step() === 0
+						? greeting(today())
+						: step() === 1
+							? items().length > 0
 								? `${things(items().length)} ${items().length === 1 ? "needs" : "need"} you.`
 								: "Nothing needs you."
-						}
-						lead={
-							items().length > 0
+							: "Coming up today"
+				}
+				text={
+					step() === 0
+						? sinceLine(today())
+						: step() === 1
+							? items().length > 0
 								? "Each waits on Today with its context and Pilot's recommendation. They stay there until you answer them."
 								: "Pilot keeps going on its own."
-						}
-					/>
-					<Waiting items={items()} />
-				</View>
-			</If>
-			<If when={step() === 2}>
-				<View class="gap-8">
-					<Title
-						text="Coming up today"
-						lead="From each mission's latest agent report. These are the agents' own plans; Pilot has not checked them."
-					/>
-					<Missions rows={missionRows(today())} />
-					<Scheduled day={props.day} />
-				</View>
-			</If>
-			<SavedNote rituals={r} context={context} />
-			<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-5">
-				<Action variant="primary" label={primaryLabel()} shortcut={NEXT_KEY} anchor={anchor} onPress={primary} />
-				<If when={step() === 1 && items().length > 0}>
-					<Action label="Next" onPress={next} />
-				</If>
-				<If when={step() === 2}>
-					<Action label="Standup notes" onPress={() => openStandup("start")} />
-				</If>
-				<If when={step() > 0}>
-					<Action label="Back" onPress={back} />
-				</If>
-				<View class="flex-1" />
-				<Action label="Skip for today" onPress={() => void finish("skipped")} />
-			</View>
+							: "From each mission's latest agent report. These are the agents' own plans; Pilot has not checked them."
+				}
+			/>
+			<Panel
+				testID="ritual-panel"
+				notice={
+					<If when={step() === 0}>
+						<FreshnessNote day={props.day} placement="panel" />
+					</If>
+				}
+			>
+				<Column>
+					<If when={step() === 0}>
+						<LeftOff day={props.day} />
+						<If when={today().visit !== "first"}>
+							<Results day={props.day} rituals={r} title="Results" />
+						</If>
+					</If>
+					<If when={step() === 1 && items().length > 0}>
+						<Section title="Needs you" count={items().length}>
+							<Waiting items={items()} />
+						</Section>
+					</If>
+					<If when={step() === 2}>
+						<MissionList title="Missions" rows={missionRows(today())} empty="No active missions." />
+						<Scheduled day={props.day} />
+					</If>
+					<SavedNote rituals={r} context={context} />
+					<Commands>
+						<Button kind="primary" label={primaryLabel()} shortcut={NEXT_KEY} anchor={anchor} onPress={primary} />
+						<If when={step() === 1 && items().length > 0}>
+							<Button label="Next" onPress={next} />
+						</If>
+						<If when={step() === 2}>
+							<Button label="Standup notes" onPress={() => openStandup("start")} />
+						</If>
+						<If when={step() > 0}>
+							<Button label="Back" onPress={back} />
+						</If>
+						<Spacer />
+						<Button label="Skip for today" onPress={() => void finish("skipped")} />
+					</Commands>
+				</Column>
+			</Panel>
 		</View>
 	);
 }
@@ -337,21 +352,29 @@ function Closed(props: { day: Day; anchor: (node: ViewRef) => void }) {
 		return today().leftOff ? `Where you left off: ${today().leftOff}` : "";
 	};
 	return (
-		<View testID="day-closed" class="gap-6 pt-6">
-			<Title text="Done for today." lead="Moving missions keep going. Pilot tells you if something needs you." />
-			<If when={cue()}>
-				<Text class="text-sm text-foreground">{cue()}</Text>
-			</If>
-			<View class="flex-row flex-wrap items-center gap-2">
-				<Action
-					variant="primary"
-					label="Back to Today"
-					testID="closed-today"
-					anchor={props.anchor}
-					onPress={closeRitual}
-				/>
-				<Action label="Standup notes" onPress={() => openStandup("end")} />
-			</View>
+		<View testID="day-closed">
+			<PageHead title="Done for today." text="Moving missions keep going. Pilot tells you if something needs you." />
+			<Panel>
+				<Column>
+					<If when={cue()}>
+						<Section title="Tomorrow">
+							<Block>
+								<Body measure>{cue()}</Body>
+							</Block>
+						</Section>
+					</If>
+					<Commands>
+						<Button
+							kind="primary"
+							label="Back to Today"
+							testID="closed-today"
+							anchor={props.anchor}
+							onPress={closeRitual}
+						/>
+						<Button label="Standup notes" onPress={() => openStandup("end")} />
+					</Commands>
+				</Column>
+			</Panel>
 		</View>
 	);
 }
@@ -384,53 +407,36 @@ function EndDay(props: { day: Day; rituals: Rituals }) {
 	keymap.bind({ escape: closeRitual, "mod+enter": () => (closed() ? closeRitual() : close()) });
 
 	return (
-		<View testID="end-of-day" class="gap-8">
+		<View testID="end-of-day">
 			<If when={!closed()} else={<Closed day={props.day} anchor={anchor} />}>
-				<View class="gap-10">
-					<View class="gap-3">
-						<Title
-							text="Wrapping up."
-							lead={`${resultsLine(today(), r.recap(today()))} ${waitingLine(today())}`}
-						/>
-						<FreshnessNote day={props.day} />
-					</View>
-					<Results day={props.day} rituals={r} title="Done since you looked" />
-					<If when={items().length > 0}>
-						<View class="gap-1">
-							<SectionTitle title="Still waiting" count={items().length} />
-							<Text class="pb-1 text-xs text-muted-foreground">They stay on Today until you answer them.</Text>
-							<Waiting items={items()} />
-						</View>
-					</If>
-					<If when={stopped().length > 0}>
-						<View class="gap-1">
-							<View class="pb-1">
-								<SectionTitle title="Not moving or no current report" count={stopped().length} />
-							</View>
-							<Each of={stopped()} key={(m) => m.id}>
-								{(m) => <MissionPlan row={m()} />}
-							</Each>
-						</View>
-					</If>
-					<If when={today().moving.length > 0}>
-						<View class="gap-1">
-							<View class="pb-1">
-								<SectionTitle title="Keeps moving" count={today().moving.length} />
-							</View>
-							<Each of={today().moving} key={(m) => m.id}>
-								{(m) => <MissionPlan row={m()} />}
-							</Each>
-						</View>
-					</If>
-					<Scheduled day={props.day} />
-					<SavedNote rituals={r} context={context} />
-					<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-5">
-						<Action variant="primary" label="Close the day" shortcut={NEXT_KEY} anchor={anchor} onPress={close} />
-						<Action label="Standup notes" onPress={() => openStandup("end")} />
-						<View class="flex-1" />
-						<Action label="Skip for today" onPress={() => void skip()} />
-					</View>
-				</View>
+				<PageHead title="Wrapping up." text={`${resultsLine(today(), r.recap(today()))} ${waitingLine(today())}`} />
+				<Panel testID="ritual-panel" notice={<FreshnessNote day={props.day} placement="panel" />}>
+					<Column>
+						<Results day={props.day} rituals={r} title="Done since you looked" />
+						<If when={items().length > 0}>
+							<Section title="Still waiting" count={items().length}>
+								<Block>
+									<Caption>They stay on Today until you answer them.</Caption>
+								</Block>
+								<Waiting items={items()} />
+							</Section>
+						</If>
+						<If when={stopped().length > 0}>
+							<MissionList title="Not moving or no current report" rows={stopped()} />
+						</If>
+						<If when={today().moving.length > 0}>
+							<MissionList title="Keeps moving" rows={today().moving} />
+						</If>
+						<Scheduled day={props.day} />
+						<SavedNote rituals={r} context={context} />
+						<Commands>
+							<Button kind="primary" label="Close the day" shortcut={NEXT_KEY} anchor={anchor} onPress={close} />
+							<Button label="Standup notes" onPress={() => openStandup("end")} />
+							<Spacer />
+							<Button label="Skip for today" onPress={() => void skip()} />
+						</Commands>
+					</Column>
+				</Panel>
 			</If>
 		</View>
 	);
@@ -439,35 +445,31 @@ function EndDay(props: { day: Day; rituals: Rituals }) {
 /** Standup notes from Today's read and the recap's results: done, next and waiting. Select the text to copy it. */
 function Standup(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
-	const note = () => todayWarning(props.day.freshness, today().freshness);
 	keymap.bind("escape", backFromStandup);
 	return (
-		<View testID="standup-notes" class="gap-6">
-			<Title text="Standup notes" lead="Written from Pilot's latest read. Select the text to copy it." />
-			<View selectable class="gap-5 rounded-2xl border border-border bg-card px-6 py-5">
-				<If when={note()}>
-					<Text class="text-sm text-muted-foreground">{note()}</Text>
-				</If>
-				<Each of={standup(today(), props.rituals.recap(today()))} key={(part) => part.title}>
-					{(part) => (
-						<View class="gap-1">
-							<Text class="text-sm font-semibold text-card-foreground">{part().title}</Text>
-							<If
-								when={part().lines.length > 0}
-								else={<Text class="text-sm text-muted-foreground">- Nothing</Text>}
-							>
-								<Each of={part().lines.map((line, at) => ({ line, at }))} key={(l) => String(l.at)}>
-									{(l) => <Text class="text-sm text-card-foreground">{`- ${l().line}`}</Text>}
-								</Each>
-							</If>
-						</View>
-					)}
-				</Each>
-			</View>
-			<Text class="text-xs text-faint">
-				Each line keeps where it comes from. Agent reports are the agents' own words; Pilot has not checked them.
-			</Text>
-		</View>
+		<>
+			<PageHead title="Standup notes" text="Written from Pilot's latest read. Select the text to copy it." />
+			<Panel notice={<FreshnessNote day={props.day} placement="panel" />}>
+				<Column>
+					<View testID="standup-notes" selectable>
+						<Each of={standup(today(), props.rituals.recap(today()))} key={(part) => part.title}>
+							{(part) => (
+								<Section title={part().title}>
+									<Block gap={1}>
+										<If when={part().lines.length > 0} else={<Body tone="muted">- Nothing</Body>}>
+											<Each of={part().lines.map((line, at) => ({ line, at }))} key={(l) => String(l.at)}>
+												{(l) => <Body>{`- ${l().line}`}</Body>}
+											</Each>
+										</If>
+									</Block>
+								</Section>
+							)}
+						</Each>
+					</View>
+				</Column>
+			</Panel>
+			<PageFoot text="Each line keeps where it comes from. Agent reports are the agents' own words; Pilot has not checked them." />
+		</>
 	);
 }
 
@@ -477,22 +479,15 @@ export function RitualScreen(props: { day: Day; rituals: Rituals }) {
 	const readable = () => props.day.today().freshness.state !== "unreadable";
 	const scroll = keepScroll("ritual");
 	return (
-		<Scroll
-			class="flex-1 bg-background"
-			contentOffset={scroll.contentOffset}
-			scrollEventThrottle={100}
-			onScroll={scroll.onScroll}
-		>
-			<Page gap={8}>
+		<Scroll class="flex-1" contentOffset={scroll.contentOffset} scrollEventThrottle={100} onScroll={scroll.onScroll}>
+			<Page width="form">
 				<If
 					when={readable()}
 					else={
-						<View class="gap-6">
-							<Title
-								text="Nothing to recap."
-								lead="Pilot could not read Today, so it shows no recap. Nothing here is guessed."
-							/>
-						</View>
+						<PageHead
+							title="Nothing to recap."
+							text="Pilot could not read Today, so it shows no recap. Nothing here is guessed."
+						/>
 					}
 				>
 					<If when={at()?.kind === "start"}>

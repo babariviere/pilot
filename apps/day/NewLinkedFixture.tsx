@@ -1,6 +1,6 @@
 // Isolated fixture: a linked mission draft from Feedback in New, beside an
 // existing New draft. Mock data. No service, provider or real creation.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import type { NewIntent, PlanOutcome } from "pilot-day/native";
 import type { ScriptedChats } from "./chatDemo";
 import type { PlanningFeed } from "./feeds";
@@ -22,7 +22,7 @@ import {
 	resetPlanningView,
 	restorePlanningDraft,
 } from "./planView";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const plans = openPlanning("fresh");
 const original = plans.feed;
@@ -123,58 +123,75 @@ chatPick.set({ projectId: "demo-website", mode: "ask" });
 requestDraft.set({ itemId: "slack-1", revision: 2, title: "Shortcuts please", source: "Slack" });
 
 const last = () => sent().at(-1);
-mount(() => (
-	<View class="flex-1">
-		<Text>Mock data · Linked mission from Feedback</Text>
-		<View class="flex-row flex-wrap gap-2">
-			<Action label="Draft a linked mission" onPress={() => draftLinkedMission(item, triage, proposal)} />
-			<Action
-				label="Draft another suggestion"
-				onPress={() => draftLinkedMission(another, { ...triage, sessionId: "triage-2" }, anotherProposal)}
-			/>
-			<Action label="Open New" onPress={openNew} />
-			<Action
-				label="Show Docs mission"
-				onPress={() => {
-					planRoute.set(null);
-					missionShown.set(true);
-				}}
-			/>
-			<Action label="Next accepted" onPress={() => next.set("accepted")} />
-			<Action label="Next unknown" onPress={() => next.set("unknown")} />
-			<Action
-				label="Older receipt with the same words"
-				onPress={() =>
-					plans.planning.update((p) => ({
-						...p,
-						setup: {
-							...p.setup,
-							unconfirmed: true,
-							creations: [{ operationId: "older-op", goal: goalDraft(), projectId: "demo-pilot" }],
-						},
-					}))
-				}
-			/>
-			<Action
-				label="Close and restore window"
-				onPress={() => {
-					const saved = capturePlanningDraft();
-					resetPlanningView();
-					restorePlanningDraft(saved);
-					openNew();
-				}}
-			/>
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
 		</View>
-		<Text testID="linked-state">{`Draft: [${goalDraft().split("\n")[0]}] · ${chatPick()?.projectId ?? "none"}/${chatPick()?.mode ?? "none"} · request ${requestDraft()?.itemId ?? "none"} · linked ${linkedMission() ? "yes" : "no"}`}</Text>
-		<Text testID="linked-sent">{`Plans: ${sent().length} · Checks: ${checks()}`}</Text>
-		<Text>{`Chats started: ${chats.counts().sends}`}</Text>
-		<Text testID="linked-intent">{`Sent: ${last() ? JSON.stringify({ goal: last()!.goal.split("\n")[0], feedback: last()!.feedback, request: last()!.request, replaces: last()!.replaces }) : "none"}`}</Text>
-		<Text testID="linked-route">{`Route: ${planRoute()?.kind ?? "closed"}${planRoute()?.kind === "plan" ? `/${(planRoute() as { missionId: string }).missionId}` : ""} · Feedback ${feedbackOpen() ? "open" : "closed"}`}</Text>
+	);
+}
+
+mount(() => (
+	<FixtureWindow>
+		<Block gap={1}>
+			<Caption>Mock data · Linked mission from Feedback</Caption>
+			<Buttons>
+				<Button small label="Draft a linked mission" onPress={() => draftLinkedMission(item, triage, proposal)} />
+				<Button
+					small
+					label="Draft another suggestion"
+					onPress={() => draftLinkedMission(another, { ...triage, sessionId: "triage-2" }, anotherProposal)}
+				/>
+				<Button small label="Open New" onPress={openNew} />
+				<Button
+					small
+					label="Show Docs mission"
+					onPress={() => {
+						planRoute.set(null);
+						missionShown.set(true);
+					}}
+				/>
+				<Button small label="Next accepted" onPress={() => next.set("accepted")} />
+				<Button small label="Next unknown" onPress={() => next.set("unknown")} />
+				<Button
+					small
+					label="Older receipt with the same words"
+					onPress={() =>
+						plans.planning.update((p) => ({
+							...p,
+							setup: {
+								...p.setup,
+								unconfirmed: true,
+								creations: [{ operationId: "older-op", goal: goalDraft(), projectId: "demo-pilot" }],
+							},
+						}))
+					}
+				/>
+				<Button
+					small
+					label="Close and restore window"
+					onPress={() => {
+						const saved = capturePlanningDraft();
+						resetPlanningView();
+						restorePlanningDraft(saved);
+						openNew();
+					}}
+				/>
+			</Buttons>
+			<Caption testID="linked-state">{`Draft: [${goalDraft().split("\n")[0]}] · ${chatPick()?.projectId ?? "none"}/${chatPick()?.mode ?? "none"} · request ${requestDraft()?.itemId ?? "none"} · linked ${linkedMission() ? "yes" : "no"}`}</Caption>
+			<Caption testID="linked-sent">{`Plans: ${sent().length} · Checks: ${checks()}`}</Caption>
+			<Caption>{`Chats started: ${chats.counts().sends}`}</Caption>
+			<Caption testID="linked-intent">{`Sent: ${last() ? JSON.stringify({ goal: last()!.goal.split("\n")[0], feedback: last()!.feedback, request: last()!.request, replaces: last()!.replaces }) : "none"}`}</Caption>
+			<Caption testID="linked-route">{`Route: ${planRoute()?.kind ?? "closed"}${planRoute()?.kind === "plan" ? `/${(planRoute() as { missionId: string }).missionId}` : ""} · Feedback ${feedbackOpen() ? "open" : "closed"}`}</Caption>
+		</Block>
 		<If when={missionShown() && !planRoute()}>
 			<MissionScreen day={day} missionId="docs" />
 		</If>
 		<If when={planRoute()?.kind === "new"}>
 			<NewScreen plans={{ ...plans, feed }} />
 		</If>
-	</View>
+	</FixtureWindow>
 ));
