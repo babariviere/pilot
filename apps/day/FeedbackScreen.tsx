@@ -7,11 +7,11 @@
 // or the exact mission it was opened from). Send sends it once; only an
 // accepted receipt clears it. A Send whose answer was lost stays Unknown:
 // Check only reads its result. Leaving, closing or updating keeps the draft.
-import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
+import { effect, keymap, Scroll, type ScrollRef, signal, View } from "nsh";
 import { namedFeedbackPaths } from "../../packages/kernel/src/feedback-paths";
 import type { Day } from "./day";
 import { clearFeedbackImagePreviews, FeedbackImages } from "./FeedbackImages";
-import { FeedbackRow } from "./FeedbackRow";
+import { FeedbackListRow } from "./FeedbackRow";
 import {
 	type FeedbackItem,
 	type FeedbackMirror,
@@ -42,7 +42,26 @@ import {
 } from "./feedbackView";
 import { keepRead, staleLine } from "./freshness";
 import { keepField, keepScroll } from "./kept";
-import { Action, glide, Notice, Page, PageTitle, Picker, SectionTitle, TextField } from "./ui";
+import {
+	Block,
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Column,
+	EmptyLine,
+	glide,
+	Link,
+	Notice,
+	Page,
+	PageHead,
+	Panel,
+	Picker,
+	Rows,
+	Section,
+	TextField,
+} from "./ui";
 
 const SEND_KEYS = keymap.label("mod+enter");
 
@@ -77,7 +96,7 @@ function AgentProject(props: { mirror: FeedbackMirror }) {
 	return (
 		<View testID="feedback-agents" class="gap-1">
 			<View class="flex-row items-center gap-2.5">
-				<Text class="text-xs text-faint">Agent triage in</Text>
+				<Caption tone="faint">Agent triage in</Caption>
 				<Picker
 					testID="feedback-project"
 					label="Project where agents triage and fix your feedback"
@@ -93,14 +112,22 @@ function AgentProject(props: { mirror: FeedbackMirror }) {
 					}}
 				/>
 				<If when={chosen()}>
-					<Action label="No triage" testID="feedback-project-none" onPress={() => feedbackProject.set(null)} />
+					<Link label="No triage" testID="feedback-project-none" onPress={() => feedbackProject.set(null)} />
 				</If>
 			</View>
-			<Text testID="feedback-agents-note" class="text-xs text-faint">
-				{chosen()
-					? "A read-only agent reads that project and proposes what to do. It changes nothing; you pick the next step."
-					: "Choose the project with Pilot's code to have an agent triage what you send."}
-			</Text>
+			{/* Two notes, not one whose words change: a note that grows from one line to two kept its old height. */}
+			<If
+				when={chosen()}
+				else={
+					<Caption testID="feedback-agents-note" tone="faint">
+						Choose the project with Pilot's code to have an agent triage what you send.
+					</Caption>
+				}
+			>
+				<Caption testID="feedback-agents-note" tone="faint">
+					A read-only agent reads that project and proposes what to do. It changes nothing; you pick the next step.
+				</Caption>
+			</If>
 		</View>
 	);
 }
@@ -196,148 +223,157 @@ function Compose(props: { day: Day; mirror: FeedbackMirror }) {
 		() => feedbackDraft().text,
 	);
 	return (
-		<View testID="feedback-compose" class="gap-4">
-			<View class="flex-row items-baseline gap-3 border-t border-border pt-3">
-				<Text class="text-sm text-muted-foreground">About</Text>
-				<Text testID="feedback-about" class="flex-1 text-sm font-medium text-foreground">
-					{originName(props.day, d().origin)}
-				</Text>
-				<If when={d().origin}>
-					<Action
-						label="Make it general"
-						testID="feedback-general"
-						accessibilityLabel="Send this as feedback about Pilot in general. Nothing is sent now."
-						onPress={() => setOrigin(null)}
-					/>
+		<Section title="Write feedback" testID="feedback-compose">
+			<Block gap={3}>
+				<Buttons>
+					<Caption>About</Caption>
+					<BodyStrong testID="feedback-about" grow>
+						{originName(props.day, d().origin)}
+					</BodyStrong>
+					<If when={d().origin}>
+						<Link
+							label="Make it general"
+							testID="feedback-general"
+							accessibilityLabel="Send this as feedback about Pilot in general. Nothing is sent now."
+							onPress={() => setOrigin(null)}
+						/>
+					</If>
+				</Buttons>
+				<Each
+					of={feedbackOffer() ? [feedbackOffer() as { origin: UserFeedbackOriginRef | null }] : []}
+					key={(o) => originKey(o.origin)}
+				>
+					{(o) => (
+						// LIBRARY GAP: Notice takes one way out, and this choice has two (use the context the page was
+						// opened from, or keep the draft's). Both are Links in Notice's action slot until it offers a pair.
+						<Notice
+							testID="feedback-offer"
+							text={`Your unsent feedback is about ${originName(props.day, d().origin)}.`}
+							detail={`You opened this page from ${originName(props.day, o().origin)}. Your words keep their context unless you change it.`}
+							action={
+								<>
+									<Link
+										label={o().origin ? "Use this one instead" : "Make it general"}
+										testID="feedback-offer-use"
+										onPress={() => setOrigin(o().origin)}
+									/>
+									<Link label="Keep it" testID="feedback-offer-keep" onPress={() => feedbackOffer.set(null)} />
+								</>
+							}
+						/>
+					)}
+				</Each>
+				<FeedbackImages
+					disabled={v().sending || v().unsettled.some((o) => sameFeedback(o, d()))}
+					protectedUploads={v().unsettled.flatMap((o) => (o.attachments ?? []).map((a) => a.uploadId))}
+				>
+					{(onPaste) => (
+						<TextField
+							testID="feedback-text"
+							ref={field.ref}
+							multiline
+							autoFocus
+							readonly={v().sending}
+							value={d().text}
+							accessibilityLabel="Your feedback about Pilot"
+							placeholder="What happened, and what would make it better?"
+							onChange={({ value }) => edit(value)}
+							onPaste={onPaste}
+							onFocus={field.focus}
+							onSelectionChange={field.select}
+							rows={5}
+						/>
+					)}
+				</FeedbackImages>
+				<AgentProject mirror={props.mirror} />
+				<If when={namedFeedbackPaths(d().text).length > 0}>
+					<View class="gap-1" testID="feedback-named-paths">
+						<Caption>Read access for this investigation</Caption>
+						<Each of={namedFeedbackPaths(d().text)} key={(path) => path}>
+							{(path) => <Body>{path()}</Body>}
+						</Each>
+						<Caption tone="faint">
+							Sending includes read-only access to these named files or folders and their subfolders, if
+							available. No unrelated files. Whole-home, filesystem root and repository metadata access are
+							excluded. Put paths with spaces in quotes or backticks.
+						</Caption>
+					</View>
 				</If>
-			</View>
-			<Each
-				of={feedbackOffer() ? [feedbackOffer() as { origin: UserFeedbackOriginRef | null }] : []}
-				key={(o) => originKey(o.origin)}
-			>
-				{(o) => (
-					<Notice
-						testID="feedback-offer"
-						text={`Your unsent feedback is about ${originName(props.day, d().origin)}.`}
-						detail={`You opened this page from ${originName(props.day, o().origin)}. Your words keep their context unless you change it.`}
-					>
-						<View class="flex-row gap-2">
-							<Action
-								label={o().origin ? "Use this one instead" : "Make it general"}
-								testID="feedback-offer-use"
-								onPress={() => setOrigin(o().origin)}
-							/>
-							<Action label="Keep it" testID="feedback-offer-keep" onPress={() => feedbackOffer.set(null)} />
-						</View>
-					</Notice>
-				)}
-			</Each>
-			<FeedbackImages
-				disabled={v().sending || v().unsettled.some((o) => sameFeedback(o, d()))}
-				protectedUploads={v().unsettled.flatMap((o) => (o.attachments ?? []).map((a) => a.uploadId))}
-			>
-				{(onPaste) => (
-					<TextField
-						testID="feedback-text"
-						ref={field.ref}
-						multiline
-						autoFocus
-						readonly={v().sending}
-						value={d().text}
-						accessibilityLabel="Your feedback about Pilot"
-						placeholder="What happened, and what would make it better?"
-						onChange={({ value }) => edit(value)}
-						onPaste={onPaste}
-						onFocus={field.focus}
-						onSelectionChange={field.select}
-						rows={5}
-					/>
-				)}
-			</FeedbackImages>
-			<AgentProject mirror={props.mirror} />
-			<If when={namedFeedbackPaths(d().text).length > 0}>
-				<View class="gap-1.5" testID="feedback-named-paths">
-					<Text class="text-xs font-medium text-muted-foreground">Read access for this investigation</Text>
-					<Each of={namedFeedbackPaths(d().text)} key={(path) => path}>
-						{(path) => <Text class="text-sm text-foreground">{path()}</Text>}
-					</Each>
-					<Text class="text-xs text-faint">
-						Sending includes read-only access to these named files or folders and their subfolders, if available.
-						No unrelated files. Whole-home, filesystem root and repository metadata access are excluded. Put paths
-						with spaces in quotes or backticks.
-					</Text>
-				</View>
-			</If>
-			<If when={blocker()}>
-				<Text testID="feedback-blocked" class="text-xs text-needs-ink">
-					{blocker()}
-				</Text>
-			</If>
-			<Each of={v().unsettled} key={(o) => o.operationId}>
-				{(o) => (
-					<Notice
-						testID="feedback-unknown"
-						text={o().text}
-						detail="Save not confirmed. Check only reads this item's result. Other feedback can still be sent."
-					>
-						<View class="flex-row">
-							<Action
-								label={o().state === "checking" ? "Checking…" : "Check"}
-								testID="feedback-check"
-								disabled={o().state === "checking"}
-								onPress={() => void check(o().operationId)}
-							/>
-							<If when={sameFeedback(o(), d())}>
-								<Action
-									label="Write another"
-									testID="feedback-another"
+				<If when={blocker()}>
+					<Caption testID="feedback-blocked" tone="needs">
+						{blocker()}
+					</Caption>
+				</If>
+				<Each of={v().unsettled} key={(o) => o.operationId}>
+					{(o) => (
+						// LIBRARY GAP: Notice takes one way out. A lost Send offers Check and, for the draft on screen,
+						// Write another; both are Links in Notice's action slot until it offers a pair.
+						<Notice
+							testID="feedback-unknown"
+							text={o().text}
+							detail="Save not confirmed. Check only reads this item's result. Other feedback can still be sent."
+							action={
+								<>
+									<Link
+										label={o().state === "checking" ? "Checking…" : "Check"}
+										testID="feedback-check"
+										disabled={o().state === "checking"}
+										onPress={() => void check(o().operationId)}
+									/>
+									<If when={sameFeedback(o(), d())}>
+										<Link
+											label="Write another"
+											testID="feedback-another"
+											disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
+											onPress={() => {
+												keepFeedbackDraft(d());
+												feedbackDraft.set({ text: "", origin: d().origin });
+												clearFeedbackImagePreviews();
+											}}
+										/>
+									</If>
+								</>
+							}
+						/>
+					)}
+				</Each>
+				<Each of={feedbackKeptDrafts()} key={feedbackDraftKey}>
+					{(kept) => (
+						<Notice
+							testID="feedback-kept"
+							text={kept().text}
+							detail="Kept draft. Resume keeps your current words too. Images already saved with another item must be attached again."
+							action={
+								<Link
+									label="Resume draft"
+									testID="feedback-resume"
 									disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
 									onPress={() => {
-										keepFeedbackDraft(d());
-										feedbackDraft.set({ text: "", origin: d().origin });
+										resumeFeedbackDraft(kept());
 										clearFeedbackImagePreviews();
 									}}
 								/>
-							</If>
-						</View>
-					</Notice>
-				)}
-			</Each>
-			<Each of={feedbackKeptDrafts()} key={feedbackDraftKey}>
-				{(kept) => (
-					<Notice
-						testID="feedback-kept"
-						text={kept().text}
-						detail="Kept draft. Resume keeps your current words too. Images already saved with another item must be attached again."
-					>
-						<Action
-							label="Resume draft"
-							testID="feedback-resume"
-							disabled={v().sending || feedbackImageBusy() || feedbackImagePending()}
-							onPress={() => {
-								resumeFeedbackDraft(kept());
-								clearFeedbackImagePreviews();
-							}}
+							}
 						/>
-					</Notice>
-				)}
-			</Each>
-			<View class="flex-row items-center gap-3">
-				<Action
-					variant="primary"
-					label={v().sending ? "Sending…" : "Send"}
-					shortcut={SEND_KEYS}
-					testID="feedback-send"
-					disabled={!canSend()}
-					onPress={() => void send()}
-				/>
-				<If when={feedbackMessage()}>
-					<Text testID="feedback-message" class="flex-1 text-xs text-muted-foreground">
-						{feedbackMessage()}
-					</Text>
-				</If>
-			</View>
-		</View>
+					)}
+				</Each>
+				<Buttons>
+					<Button
+						kind="primary"
+						label={v().sending ? "Sending…" : "Send"}
+						shortcut={SEND_KEYS}
+						testID="feedback-send"
+						disabled={!canSend()}
+						onPress={() => void send()}
+					/>
+					<If when={feedbackMessage()}>
+						<Caption testID="feedback-message" grow>
+							{feedbackMessage()}
+						</Caption>
+					</If>
+				</Buttons>
+			</Block>
+		</Section>
 	);
 }
 
@@ -363,29 +399,29 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 		loading.set(false);
 	};
 	return (
-		<View testID="feedback-sent" class="gap-3">
-			<View class="gap-1.5">
-				<SectionTitle title="Sent" count={v().items.length} />
-				<Text class="text-sm leading-relaxed text-muted-foreground">
+		<Section title="Sent" count={v().items.length} testID="feedback-sent">
+			<Block gap={3}>
+				<Caption>
 					Pilot keeps your feedback here, in your words. A fix or a mission link starts only when you press it, and
 					only you mark feedback resolved.
-				</Text>
-			</View>
-			<TextField
-				testID="feedback-search"
-				value={feedbackSearch()}
-				accessibilityLabel="Search feedback history"
-				placeholder="Search feedback history"
-				onChange={({ value }) => feedbackSearch.set(value)}
-			/>
-			<Text class="text-xs text-faint">
-				{v().more
-					? "Open items first. Search covers loaded feedback; Show earlier searches older items."
-					: "Open items first, then resolved history."}
-			</Text>
+				</Caption>
+				<TextField
+					testID="feedback-search"
+					value={feedbackSearch()}
+					accessibilityLabel="Search feedback history"
+					placeholder="Search feedback history"
+					onChange={({ value }) => feedbackSearch.set(value)}
+				/>
+				<Caption tone="faint">
+					{v().more
+						? "Open items first. Search covers loaded feedback; Show earlier searches older items."
+						: "Open items first, then resolved history."}
+				</Caption>
+			</Block>
 			<If when={v().reason && (v().availability !== "live" || reads.stale())}>
 				<Notice
 					testID="feedback-off"
+					placement="section"
 					text={
 						v().availability === "live"
 							? staleLine(reads.readAt() ?? 0)
@@ -395,22 +431,21 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 				/>
 			</If>
 			<If when={v().availability === "reading" && v().items.length === 0}>
-				<Text class="text-sm text-muted-foreground">Reading your feedback…</Text>
+				<EmptyLine text="Reading your feedback…" />
 			</If>
 			<If when={v().availability === "live" && v().items.length === 0}>
-				<Text testID="feedback-empty" class="border-t border-border py-3.5 text-sm text-muted-foreground">
-					No feedback sent yet.
-				</Text>
+				<EmptyLine testID="feedback-empty" text="No feedback sent yet." />
 			</If>
-			<View>
-				<If when={v().availability === "live" && v().items.length > 0 && items().length === 0}>
-					<Text testID="feedback-no-matches" class="text-sm text-muted-foreground">
-						No matches in loaded feedback. Change your search or read earlier items.
-					</Text>
-				</If>
+			<If when={v().availability === "live" && v().items.length > 0 && items().length === 0}>
+				<EmptyLine
+					testID="feedback-no-matches"
+					text="No matches in loaded feedback. Change your search or read earlier items."
+				/>
+			</If>
+			<Rows>
 				<Each of={items()} key={(i) => i.id}>
 					{(i) => (
-						<FeedbackRow
+						<FeedbackListRow
 							day={props.day}
 							mirror={props.mirror}
 							item={i()}
@@ -419,18 +454,20 @@ function Sent(props: { day: Day; mirror: FeedbackMirror }) {
 						/>
 					)}
 				</Each>
-			</View>
+			</Rows>
 			<If when={v().more}>
-				<View class="flex-row">
-					<Action
-						label={loading() ? "Reading…" : "Show earlier"}
-						testID="feedback-more"
-						disabled={loading()}
-						onPress={() => void more()}
-					/>
-				</View>
+				<Block>
+					<View class="flex-row">
+						<Link
+							label={loading() ? "Reading…" : "Show earlier"}
+							testID="feedback-more"
+							disabled={loading()}
+							onPress={() => void more()}
+						/>
+					</View>
+				</Block>
 			</If>
-		</View>
+		</Section>
 	);
 }
 
@@ -461,23 +498,24 @@ export function FeedbackScreen(props: { day: Day; onBackFromJump?: () => boolean
 		<Scroll
 			testID="feedback-scroll"
 			ref={(node) => scroller.set(node)}
-			class="flex-1 bg-background"
+			class="flex-1"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
 			onScroll={(e) => {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<Page testID="feedback" gap={10}>
-				<View class="gap-3">
-					<PageTitle title="Feedback" />
-					<Text class="text-base leading-relaxed text-muted-foreground">
-						Tell Pilot what works and what gets in your way. Your words are saved with the context you choose.
-						Sending feedback approves nothing.
-					</Text>
-				</View>
-				<Compose day={props.day} mirror={mirror} />
-				<Sent day={props.day} mirror={mirror} />
+			<Page testID="feedback">
+				<PageHead
+					title="Feedback"
+					text="Tell Pilot what works and what gets in your way. Your words are saved with the context you choose. Sending feedback approves nothing."
+				/>
+				<Panel>
+					<Column>
+						<Compose day={props.day} mirror={mirror} />
+						<Sent day={props.day} mirror={mirror} />
+					</Column>
+				</Panel>
 			</Page>
 		</Scroll>
 	);

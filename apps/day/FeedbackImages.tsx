@@ -1,6 +1,6 @@
 // Image imports are explicit user actions. The host owns upload identities,
 // credentials and storage. A failed upload retries the same bytes and ID.
-import { Image, type JSX, type PasteEvent, Picker, signal, Text, View } from "nsh";
+import { Image, type JSX, type PasteEvent, Picker, signal, View } from "nsh";
 import type { StagedAttachmentRef } from "../../packages/protocol/src/transfers.ts";
 import { call, windowId } from "./bridge";
 import {
@@ -10,7 +10,7 @@ import {
 	feedbackMessage,
 	feedbackPendingImage as pending,
 } from "./feedbackView";
-import { Action } from "./ui";
+import { Button, Buttons, Caption } from "./ui";
 
 const MAX_IMAGE = 8 * 1024 * 1024;
 
@@ -125,21 +125,22 @@ export function FeedbackImages(props: {
 	const blocked = () =>
 		props.disabled || feedbackImageBusy() || pending() !== null || (feedbackDraft().attachments?.length ?? 0) >= 4;
 	return (
-		<View class="gap-4">
-			<View class="flex-row items-center gap-3">
-				<Action
+		<View class="gap-3">
+			<Buttons>
+				<Button
 					label="Add image…"
 					icon="plus"
 					iconOnly
+					small
 					testID="feedback-image-add"
 					disabled={blocked()}
 					onPress={() => void choose()}
 				/>
-				<Text class="text-xs text-faint">PNG · up to four · 8 MiB each</Text>
-			</View>
+				<Caption tone="faint">PNG · up to four · 8 MiB each</Caption>
+			</Buttons>
 			<Each of={feedbackDraft().attachments ?? []} key={(r) => r.uploadId}>
 				{(r, index) => (
-					<View class="flex-row items-center gap-3">
+					<Buttons>
 						<If when={previews()[r().uploadId]}>
 							<Image
 								testID={`feedback-image-preview-${r().uploadId}`}
@@ -148,30 +149,31 @@ export function FeedbackImages(props: {
 								class="h-24 w-36"
 							/>
 						</If>
-						<Text class="flex-1 text-xs text-muted-foreground">{`Image ${index() + 1} attached`}</Text>
-						<Action
+						<Caption grow>{`Image ${index() + 1} attached`}</Caption>
+						<Button
+							small
 							label="Remove"
 							accessibilityLabel={`Remove image ${index() + 1}`}
 							disabled={props.disabled || feedbackImageBusy()}
 							onPress={() => remove(r().uploadId)}
 						/>
-					</View>
+					</Buttons>
 				)}
 			</Each>
 			<If when={pending()}>
 				<View class="gap-2">
 					<Image src={pending()?.data ?? ""} class="h-32 w-48" />
-					<Text class="text-xs text-muted-foreground">
-						{feedbackImageBusy() ? "Uploading image…" : "Image not attached"}
-					</Text>
-					<View class="flex-row gap-3">
-						<Action
+					<Caption>{feedbackImageBusy() ? "Uploading image…" : "Image not attached"}</Caption>
+					<Buttons>
+						<Button
+							small
 							label="Retry upload"
 							testID="feedback-image-retry"
 							disabled={feedbackImageBusy()}
 							onPress={() => void upload()}
 						/>
-						<Action
+						<Button
+							small
 							label="Remove image"
 							disabled={feedbackImageBusy()}
 							onPress={() => {
@@ -180,7 +182,7 @@ export function FeedbackImages(props: {
 								feedbackMessage.set("");
 							}}
 						/>
-					</View>
+					</Buttons>
 				</View>
 			</If>
 			{props.children((event) => void paste(event))}

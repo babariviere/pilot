@@ -1,6 +1,6 @@
 // Feedback adapter for the same presentation used by mission and standalone interviews.
 // The feedback source still owns exact question delivery and receipt reconciliation.
-import { cleanup, computed, signal, Text, View } from "nsh";
+import { cleanup, computed, signal, View } from "nsh";
 import type { Interview, Question } from "pilot-day/native";
 import type { ArtifactSource } from "./artifactReads";
 import type { FeedbackItem, StepIntent, StepResult, UserFeedbackQuestion } from "./feedbackFeed";
@@ -9,7 +9,7 @@ import { answerKey, answerMessage, type ChatStep } from "./feedbackSteps";
 import { answerDrafts, setAnswerDraft, stepMessages } from "./feedbackView";
 import { type InterviewRead, InterviewRenderer, type InterviewSource } from "./InterviewRenderer";
 import { QuestionArtifacts } from "./QuestionArtifacts";
-import { ToggleChip } from "./ui";
+import { Body, Chip, Chips } from "./ui";
 
 // Only the form the user last touched owns its shortcuts, even in feedback history.
 const activeQuestion = signal<string | null>(null);
@@ -186,11 +186,11 @@ export function FeedbackQuestion(props: {
 		questionHelp: () => (
 			<If when={props.question.context}>
 				<View class="gap-2">
-					<View class="flex-row">
-						<ToggleChip label="More context" pressed={context()} onChange={() => context.set(!context())} />
-					</View>
+					<Chips>
+						<Chip label="More context" pressed={context()} onChange={() => context.set(!context())} />
+					</Chips>
 					<If when={context()}>
-						<Text class="text-sm text-muted-foreground">{props.question.context ?? ""}</Text>
+						<Body tone="muted">{props.question.context ?? ""}</Body>
 					</If>
 				</View>
 			</If>

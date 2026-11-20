@@ -1,11 +1,11 @@
-import { cleanup, keymap, Scroll, signal, Text, View } from "nsh";
+import { cleanup, keymap, Scroll, signal } from "nsh";
 import type { KnowledgeDetail } from "../../packages/protocol/src/knowledge";
 import { type Shown, readRefused } from "./artifactReads";
 import { ArtifactBody, ArtifactTools, paneLine } from "./ArtifactViewer";
 import { artifactPreviewsAvailable } from "./bridge";
 import { InspectInWindow } from "./InspectionWindow";
 import { backTarget, type Places } from "./nav";
-import { Action, Page, PageTitle } from "./ui";
+import { Block, Body, Button, Buttons, Caption, Column, EmptyLine, Link, Page, PageHead, Panel, Section } from "./ui";
 import type { DetailHit, WorkSearchSource } from "./workSearch";
 
 export function SearchDetailScreen(props: { places: Places; hit: DetailHit; source: WorkSearchSource }) {
@@ -48,72 +48,88 @@ export function SearchDetailScreen(props: { places: Places; hit: DetailHit; sour
 		artifact()?.state === "shown" && artifact()?.artifact?.content.state !== "unavailable";
 	keymap.bind("escape", () => backTarget(props.places)?.go(), { when: "always" });
 	return (
-		<Scroll class="flex-1 bg-background">
-			<Page gap={8}>
-				<View class="gap-1">
-					<Text class="text-xs text-muted-foreground">
-						{`${props.hit.projectName} · ${props.hit.kind === "output" ? "Saved output" : "Knowledge"}`}
-					</Text>
-					<PageTitle title={props.hit.title} />
-					<If when={!reading() && (readableArtifact() || knowledge())}>
-						<InspectInWindow
-							title={props.hit.title}
-							context={`${props.hit.projectName} · Revision ${props.hit.target.revision}`}
-							text={knowledge()?.revision.body}
-							artifact={artifact() ?? undefined}
-						/>
-					</If>
-				</View>
-				<If when={reading()}>
-					<Text class="text-sm text-muted-foreground">Reading the saved revision…</Text>
-				</If>
-				<Each of={artifact() && !reading() ? [artifact() as Shown] : []} key={(item) => item.pin.revision}>
-					{(item) => (
-						<View class="gap-3">
-							<View class="flex-row items-center gap-2">
-								<Text class="min-w-0 flex-1 text-sm text-muted-foreground">{paneLine(item())}</Text>
-								<If
-									when={
-										item().artifact?.content.state === "text" &&
-										item().kind === "nsh" &&
-										artifactPreviewsAvailable()
+		<Scroll class="flex-1">
+			<Page>
+				<PageHead
+					pre={
+						<Caption>{`${props.hit.projectName} · ${props.hit.kind === "output" ? "Saved output" : "Knowledge"}`}</Caption>
+					}
+					title={props.hit.title}
+					actions={
+						<If when={!reading() && (readableArtifact() || knowledge())}>
+							<InspectInWindow
+								title={props.hit.title}
+								context={`${props.hit.projectName} · Revision ${props.hit.target.revision}`}
+								text={knowledge()?.revision.body}
+								artifact={artifact() ?? undefined}
+							/>
+						</If>
+					}
+				/>
+				<Panel>
+					<Column>
+						<If when={reading()}>
+							<Section title={props.hit.kind === "output" ? "Saved output" : "Knowledge"}>
+								<EmptyLine text="Reading the saved revision…" />
+							</Section>
+						</If>
+						<Each of={artifact() && !reading() ? [artifact() as Shown] : []} key={(item) => item.pin.revision}>
+							{(item) => (
+								<Section
+									title="Saved output"
+									note={paneLine(item())}
+									action={
+										<If when={item().state === "refused"}>
+											<Link label="Try again" onPress={() => void read()} />
+										</If>
 									}
 								>
-									<Action
-										label={item().preview ? "Inspect source" : "Show preview"}
-										onPress={() => artifact.set({ ...item(), preview: !item().preview })}
-									/>
-									<If when={item().preview}>
-										<Action label="Reset" onPress={() => void read()} />
-									</If>
-								</If>
-								<ArtifactTools shown={item()} testID="search-output" />
-							</View>
-							<ArtifactBody shown={item()} />
-							<If when={item().state === "refused"}>
-								<Action label="Try again" onPress={() => void read()} />
+									<Block gap={3}>
+										<Buttons>
+											<If
+												when={
+													item().artifact?.content.state === "text" &&
+													item().kind === "nsh" &&
+													artifactPreviewsAvailable()
+												}
+											>
+												<Button
+													small
+													label={item().preview ? "Inspect source" : "Show preview"}
+													onPress={() => artifact.set({ ...item(), preview: !item().preview })}
+												/>
+												<If when={item().preview}>
+													<Button small label="Reset" onPress={() => void read()} />
+												</If>
+											</If>
+											<ArtifactTools shown={item()} testID="search-output" />
+										</Buttons>
+										<ArtifactBody shown={item()} />
+									</Block>
+								</Section>
+							)}
+						</Each>
+						<If when={props.hit.kind === "knowledge" && !reading()}>
+							<If
+								when={knowledge()}
+								else={
+									<Section title="Knowledge" action={<Link label="Try again" onPress={() => void read()} />}>
+										<EmptyLine text="This Knowledge revision could not be read." />
+									</Section>
+								}
+							>
+								<Section
+									title="Knowledge"
+									note={`Revision ${knowledge()?.revision.revision}${knowledge()?.freshness.state === "needs_check" ? " · Needs a check" : ""}`}
+								>
+									<Block selectable>
+										<Body measure>{knowledge()?.revision.body ?? ""}</Body>
+									</Block>
+								</Section>
 							</If>
-						</View>
-					)}
-				</Each>
-				<If when={props.hit.kind === "knowledge" && !reading()}>
-					<If
-						when={knowledge()}
-						else={
-							<View class="items-start gap-2">
-								<Text class="text-sm text-muted-foreground">This Knowledge revision could not be read.</Text>
-								<Action label="Try again" onPress={() => void read()} />
-							</View>
-						}
-					>
-						<View selectable class="gap-3">
-							<Text class="text-xs text-muted-foreground">
-								{`Revision ${knowledge()?.revision.revision}${knowledge()?.freshness.state === "needs_check" ? " · Needs a check" : ""}`}
-							</Text>
-							<Text class="text-sm text-foreground">{knowledge()?.revision.body ?? ""}</Text>
-						</View>
-					</If>
-				</If>
+						</If>
+					</Column>
+				</Panel>
 			</Page>
 		</Scroll>
 	);

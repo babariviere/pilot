@@ -13,3 +13,23 @@ test("capture the native Insights workspace", async () => {
 	await app.waitFor("Applying settings will not resume Insights.");
 	await app.screenshot("output/insights-settings.png");
 });
+
+const LOOKS = [
+	["light", 1100],
+	["dark", 1100],
+	["light", 480],
+	["dark", 480],
+] as const;
+
+test("Insights on the parts in light and dark, wide and narrow", async () => {
+	for (const [colorScheme, width] of LOOKS) {
+		// Dark captures fit the screen: a taller window leaves its lower part unpainted.
+		const app = await open("./InsightsCaptureFixture.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.waitFor("Partial coverage");
+		await app.wait(500);
+		await app.screenshot(`output/feeds-insights-${colorScheme}-${width}.png`);
+		await app.press("id:insights-settings");
+		await app.wait(300);
+		await app.screenshot(`output/feeds-insights-settings-${colorScheme}-${width}.png`);
+	}
+});

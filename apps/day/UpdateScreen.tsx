@@ -5,7 +5,7 @@
 // where the user is. A lost answer says so and offers only Check again,
 // which reads and sends nothing. A finished update is said only once Rust
 // reports the new version running.
-import { effect, keymap, Scroll, signal, Text, View } from "nsh";
+import { effect, keymap, Scroll, signal, View } from "nsh";
 import type {
 	AgentLine,
 	AgentState,
@@ -19,7 +19,27 @@ import type {
 import type { Changes } from "./changeFeed";
 import type { Day } from "./day";
 import type { Plans } from "./planning";
-import { Action, Arrive, glide, Mark, type MarkKind, Page, QuietPanel, SectionTitle } from "./ui";
+import {
+	Arrive,
+	Block,
+	Body,
+	Button,
+	Caption,
+	Column,
+	EmptyLine,
+	glide,
+	Mark,
+	type MarkKind,
+	Notice,
+	Page,
+	PageHead,
+	Panel,
+	Question,
+	Row,
+	type RowTone,
+	Rows,
+	Section,
+} from "./ui";
 import type { Update } from "./updateFeed";
 import { closeUpdate, updateBusy, updateMessage } from "./updateView";
 import { captureView, restoreView, saveForms, startFresh } from "./windowState";
@@ -38,7 +58,7 @@ function sentence(text: string): string {
 export function serviceWords(service: ServiceView): { mark: MarkKind; words: string } {
 	switch (service.state) {
 		case "registered":
-			return { mark: "ready", words: "Pilot's service is running" };
+			return { mark: "done", words: "Pilot's service is running" };
 		case "absent":
 			return { mark: "needs", words: "Pilot's service is not registered" };
 		case "offline":
@@ -46,7 +66,7 @@ export function serviceWords(service: ServiceView): { mark: MarkKind; words: str
 		case "incompatible":
 			return { mark: "needs", words: "Pilot's service does not match this app" };
 		default:
-			return { mark: "unknown", words: "Pilot cannot tell whether its service is registered" };
+			return { mark: "needs", words: "Pilot cannot tell whether its service is registered" };
 	}
 }
 
@@ -104,26 +124,20 @@ function runTitle(run: UpdateRun): string {
 	}
 }
 
-function runMark(run: UpdateRun): MarkKind {
-	switch (run.phase) {
-		case "done":
-			return "ready";
-		case "stopped":
-			return "failed";
-		case "unknown":
-		case "checking":
-			return "unknown";
-		default:
-			return "moving";
-	}
-}
-
 const STEP_MARKS: Record<UpdateStepState, MarkKind> = {
-	waiting: "unreported",
-	now: "moving",
+	waiting: "new",
+	now: "working",
 	done: "done",
 	failed: "failed",
-	unknown: "unknown",
+	unknown: "needs",
+};
+
+const STEP_TONES: Record<UpdateStepState, RowTone> = {
+	waiting: "quiet",
+	now: "quiet",
+	done: "quiet",
+	failed: "failed",
+	unknown: "needs",
 };
 
 const STEP_WORDS: Record<UpdateStepState, string> = {
@@ -144,11 +158,20 @@ const AGENT_WORDS: Record<AgentState, string> = {
 };
 
 const AGENT_MARKS: Record<AgentState, MarkKind> = {
-	working: "moving",
+	working: "working",
 	paused: "paused",
-	resuming: "unknown",
-	resumed: "ready",
+	resuming: "needs",
+	resumed: "done",
 	held: "paused",
+	unknown: "needs",
+};
+
+const AGENT_TONES: Record<AgentState, RowTone> = {
+	working: "quiet",
+	paused: "quiet",
+	resuming: "needs",
+	resumed: "quiet",
+	held: "quiet",
 	unknown: "needs",
 };
 
@@ -302,26 +325,6 @@ export function bindRestore(update: Update, changes?: Changes, day?: Day) {
 	});
 }
 
-function ServiceLine(props: { service: ServiceView }) {
-	const words = () => serviceWords(props.service);
-	return (
-		<View class="gap-1.5">
-			<View class="flex-row items-center gap-2">
-				<Mark kind={words().mark} />
-				<Text role="header" class="text-xl font-semibold tracking-tight text-foreground">
-					{words().words}
-				</Text>
-			</View>
-			<Text class="text-sm text-muted-foreground">
-				{`This app ${props.service.app} · Service ${props.service.service || "unknown"}`}
-			</Text>
-			<If when={props.service.reason}>
-				<Text class="text-sm text-muted-foreground">{props.service.reason}</Text>
-			</If>
-		</View>
-	);
-}
-
 function Offer(props: { update: Update }) {
 	const service = () => props.update.service();
 	const offer = () => service().offer;
@@ -332,32 +335,43 @@ function Offer(props: { update: Update }) {
 		return o.kind === "register" ? "Register Pilot's service" : `Pilot ${o.version} is ready ${kindWords(o.kind)}`;
 	};
 	return (
-		<QuietPanel size="lg" class="gap-3">
-			<Text class="text-base font-medium text-foreground">{title()}</Text>
-			<Text class="text-sm text-muted-foreground">{offer()?.note ?? ""}</Text>
-			<If when={service().blocked}>
-				<Text testID="update-blocked" class="text-sm text-needs-ink">
-					{service().blocked}
-				</Text>
-			</If>
-			<View class="flex-row gap-2">
-				<Action
-					variant="primary"
-					testID="update-prepare"
-					label={offer()?.kind === "register" ? "Register…" : "Update…"}
-					disabled={!!service().blocked || updateBusy() || refused()}
-					onPress={() => void prepare(props.update)}
-				/>
-				<If when={service().forceAvailable && offer()?.kind !== "register"}>
-					<Action
-						testID="update-force-prepare"
-						label="Force update…"
-						disabled={!!service().blocked || updateBusy() || refusedOffer() === offerKey(service(), "force")}
-						onPress={() => void prepare(props.update, "force")}
-					/>
-				</If>
-			</View>
-		</QuietPanel>
+		<Section title={offer()?.kind === "register" ? "Registration" : "Update"}>
+			<Question
+				title={title()}
+				meta={
+					<If when={service().blocked}>
+						<Caption testID="update-blocked" tone="needs">
+							{service().blocked}
+						</Caption>
+					</If>
+				}
+				foot={
+					<>
+						<Button
+							kind="primary"
+							testID="update-prepare"
+							label={offer()?.kind === "register" ? "Register…" : "Update…"}
+							disabled={!!service().blocked || updateBusy() || refused()}
+							onPress={() => void prepare(props.update)}
+						/>
+						<If when={service().forceAvailable && offer()?.kind !== "register"}>
+							<Button
+								testID="update-force-prepare"
+								label="Force update…"
+								disabled={
+									!!service().blocked || updateBusy() || refusedOffer() === offerKey(service(), "force")
+								}
+								onPress={() => void prepare(props.update, "force")}
+							/>
+						</If>
+					</>
+				}
+			>
+				<Body tone="muted" measure>
+					{offer()?.note ?? ""}
+				</Body>
+			</Question>
+		</Section>
 	);
 }
 
@@ -371,32 +385,39 @@ function Confirm(props: { update: Update; day: Day; plans?: Plans; pending: Conf
 				: `${c().mode === "force" ? "Force update" : "Update"} to ${c().to}?`;
 	return (
 		<Arrive>
-			<QuietPanel size="lg" class="gap-3">
-				<Text role="header" class="text-base font-medium text-foreground">
-					{title()}
-				</Text>
-				<View class="gap-1">
-					<Each of={confirmLines(c())} key={(line) => line}>
-						{(line) => <Text class="text-sm text-muted-foreground">{line()}</Text>}
-					</Each>
-				</View>
-				<View class="flex-row gap-2">
-					<Action
-						variant="primary"
-						testID="update-confirm"
-						label={
-							c().kind === "register"
-								? "Register"
-								: c().mode === "force"
-									? "Force update and accept loss"
-									: "Update"
-						}
-						disabled={updateBusy()}
-						onPress={() => void confirm(props.update, props.day, props.plans)}
-					/>
-					<Action label="Cancel" disabled={updateBusy()} onPress={() => void cancel(props.update)} />
-				</View>
-			</QuietPanel>
+			<Section title={c().kind === "register" ? "Registration" : "Update"}>
+				<Question
+					title={title()}
+					foot={
+						<>
+							<Button
+								kind="primary"
+								testID="update-confirm"
+								label={
+									c().kind === "register"
+										? "Register"
+										: c().mode === "force"
+											? "Force update and accept loss"
+											: "Update"
+								}
+								disabled={updateBusy()}
+								onPress={() => void confirm(props.update, props.day, props.plans)}
+							/>
+							<Button label="Cancel" disabled={updateBusy()} onPress={() => void cancel(props.update)} />
+						</>
+					}
+				>
+					<View class="gap-1">
+						<Each of={confirmLines(c())} key={(line) => line}>
+							{(line) => (
+								<Body tone="muted" measure>
+									{line()}
+								</Body>
+							)}
+						</Each>
+					</View>
+				</Question>
+			</Section>
 		</Arrive>
 	);
 }
@@ -405,62 +426,61 @@ function Run(props: { update: Update; run: UpdateRun }) {
 	const r = () => props.run;
 	const lost = () => r().phase === "unknown";
 	return (
-		<View testID="update-run" class="gap-3">
-			<View class="flex-row items-center gap-2">
-				<Mark kind={runMark(r())} />
-				<Text role="header" class="text-base font-medium text-foreground">
-					{runTitle(r())}
-				</Text>
-			</View>
-			<View class="gap-1.5">
+		<Section title={runTitle(r())} testID="update-run">
+			<Rows>
 				<Each of={r().steps} key={(s) => s.label}>
 					{(s) => (
-						<View class="flex-row items-center gap-2">
-							<Mark kind={STEP_MARKS[s().state]} />
-							<Text class="flex-1 text-sm text-foreground">{s().label}</Text>
-							<Text class="text-xs text-faint">{STEP_WORDS[s().state]}</Text>
-						</View>
+						<Row
+							mark={STEP_MARKS[s().state]}
+							title={s().label}
+							state={STEP_WORDS[s().state]}
+							stateTone={STEP_TONES[s().state]}
+						/>
 					)}
 				</Each>
-			</View>
-			<If when={r().message}>
-				<Text class="text-sm text-foreground">{r().message}</Text>
+			</Rows>
+			<If when={r().message || r().next || lost()}>
+				<Block>
+					<If when={r().message}>
+						<Body measure>{r().message}</Body>
+					</If>
+					<If when={r().next}>
+						<Body tone="muted" measure>
+							{r().next}
+						</Body>
+					</If>
+					<If when={lost()}>
+						<Button
+							kind="primary"
+							testID="update-check"
+							label="Check again"
+							disabled={updateBusy()}
+							onPress={() => void check(props.update)}
+						/>
+					</If>
+				</Block>
 			</If>
-			<If when={r().next}>
-				<Text class="text-sm text-muted-foreground">{r().next}</Text>
-			</If>
-			<If when={lost()}>
-				<View class="flex-row">
-					<Action
-						variant="primary"
-						testID="update-check"
-						label="Check again"
-						disabled={updateBusy()}
-						onPress={() => void check(props.update)}
-					/>
-				</View>
-			</If>
-		</View>
+		</Section>
 	);
 }
 
 function Agents(props: { agents: AgentLine[] }) {
 	return (
-		<View class="gap-1">
-			<SectionTitle title="Agents" count={props.agents.length} />
-			<Each of={props.agents} key={(a) => a.chat}>
-				{(a) => (
-					<View class="flex-row items-center gap-3 border-t border-border py-2.5">
-						<View class="flex-1 gap-0.5">
-							<Text class="text-sm text-foreground">{a().chat}</Text>
-							<Text class="text-xs text-faint">{[a().mission, a().note].filter(Boolean).join(" · ")}</Text>
-						</View>
-						<Mark kind={AGENT_MARKS[a().state]} />
-						<Text class="text-xs text-muted-foreground">{AGENT_WORDS[a().state]}</Text>
-					</View>
-				)}
-			</Each>
-		</View>
+		<Section title="Agents" count={props.agents.length}>
+			<Rows>
+				<Each of={props.agents} key={(a) => a.chat}>
+					{(a) => (
+						<Row
+							mark={AGENT_MARKS[a().state]}
+							title={a().chat}
+							meta={[a().mission, a().note].filter(Boolean).join(" · ")}
+							state={AGENT_WORDS[a().state]}
+							stateTone={AGENT_TONES[a().state]}
+						/>
+					)}
+				</Each>
+			</Rows>
+		</Section>
 	);
 }
 
@@ -472,54 +492,72 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 		const r = run();
 		return !r || r.phase === "done" || r.phase === "stopped";
 	};
+	const words = () => serviceWords(service());
 	keymap.bind("escape", () => {
 		if (service().pending) void cancel(props.update);
 		else closeUpdate();
 	});
 	return (
-		<Scroll class="flex-1 bg-background">
-			<Page gap={8}>
-				<ServiceLine service={service()} />
-				<If when={updateMessage()}>
-					<Text role="alert" class="text-sm text-needs-ink">
-						{updateMessage()}
-					</Text>
-				</If>
-				<Each of={run() ? [run() as UpdateRun] : []} key={() => "run"}>
-					{(r) => <Run update={props.update} run={r()} />}
-				</Each>
-				<If
-					when={service().pending}
-					else={
-						<If when={service().offer && settled()}>
-							<Offer update={props.update} />
+		<Scroll class="flex-1">
+			<Page>
+				<PageHead
+					title={words().words}
+					state={<Mark kind={words().mark} label={words().words} />}
+					text={`This app ${service().app} · Service ${service().service || "unknown"}`}
+					actions={
+						<If when={settled() && !service().pending}>
+							<Button
+								label="Check again"
+								icon="refresh"
+								testID="update-read"
+								disabled={updateBusy()}
+								onPress={() => void check(props.update)}
+							/>
 						</If>
 					}
 				>
-					<Confirm
-						update={props.update}
-						day={props.day}
-						plans={props.plans}
-						pending={service().pending as Confirmation}
-					/>
-				</If>
-				<If when={!service().offer && !run() && service().state === "registered"}>
-					<Text class="text-sm text-muted-foreground">{service().blocked || "Pilot is up to date."}</Text>
-				</If>
-				<If when={service().agents.length > 0}>
-					<Agents agents={service().agents} />
-				</If>
-				<If when={settled() && !service().pending}>
-					<View class="flex-row">
-						<Action
-							label="Check again"
-							icon="refresh"
-							testID="update-read"
-							disabled={updateBusy()}
-							onPress={() => void check(props.update)}
-						/>
-					</View>
-				</If>
+					<If when={service().reason}>
+						<Body tone="muted" measure>
+							{service().reason}
+						</Body>
+					</If>
+				</PageHead>
+				<Panel
+					notice={
+						<If when={updateMessage()}>
+							<Notice placement="panel" role="alert" text={updateMessage()} />
+						</If>
+					}
+				>
+					<Column>
+						<Each of={run() ? [run() as UpdateRun] : []} key={() => "run"}>
+							{(r) => <Run update={props.update} run={r()} />}
+						</Each>
+						<If
+							when={service().pending}
+							else={
+								<If when={service().offer && settled()}>
+									<Offer update={props.update} />
+								</If>
+							}
+						>
+							<Confirm
+								update={props.update}
+								day={props.day}
+								plans={props.plans}
+								pending={service().pending as Confirmation}
+							/>
+						</If>
+						<If when={!service().offer && !run() && service().state === "registered"}>
+							<Section title="Update">
+								<EmptyLine text={service().blocked || "Pilot is up to date."} />
+							</Section>
+						</If>
+						<If when={service().agents.length > 0}>
+							<Agents agents={service().agents} />
+						</If>
+					</Column>
+				</Panel>
 			</Page>
 		</Scroll>
 	);

@@ -7,13 +7,13 @@ import {
 	computed,
 	effect,
 	keymap,
+	type JSX,
 	type MouseEvent,
 	Overlay,
 	type PressEvent,
 	Scroll,
 	type ScrollRef,
 	signal,
-	Text,
 	View,
 	windowSize,
 } from "nsh";
@@ -31,21 +31,31 @@ import type { ScreenPicture } from "./screenAgentContract";
 import { screenAgentOpen } from "./screenAgentOpen";
 import type { SessionChat } from "./sessionChat";
 import {
-	Action,
 	type AgentFrame,
 	AgentScope,
+	Body,
+	Bubble,
+	Button,
+	Buttons,
+	Caption,
+	Composer,
 	type ControlFrame,
 	controlAt,
 	controlFrames,
+	Event,
 	frameOf,
 	type Glance,
 	glance,
+	Heading,
 	KeyCap,
+	Link,
 	Mark,
-	MarkLine,
-	QuietPanel,
+	Notice,
+	Reply,
+	Spacer,
 	smallestAt,
 	TextField,
+	WorkingLine,
 } from "./ui";
 
 /** The bar's width: the composer's line and an answer of a few lines. */
@@ -53,6 +63,8 @@ const BAR_WIDTH = 600;
 
 type Ring = { frame: AgentFrame; label: string };
 
+// LIBRARY GAP: no part marks a control on the window with its name (the ring around what the person pointed at,
+// or what the agent just used). This ring draws with theme tokens over the page until the library offers one.
 /** A ring around a control: the one the person pointed at, or the one the agent just used. */
 function RingMark(props: { ring: Ring }) {
 	return (
@@ -71,7 +83,7 @@ function RingMark(props: { ring: Ring }) {
 			<View
 				class={`absolute left-0 w-max rounded-md bg-primary px-1.5 py-0.5 ${props.ring.frame.y < 28 ? "-bottom-6" : "-top-6"}`}
 			>
-				<Text class="text-xs text-primary-foreground">{props.ring.label}</Text>
+				<Caption tone="onAccent">{props.ring.label}</Caption>
 			</View>
 		</View>
 	);
@@ -82,28 +94,47 @@ function Line(props: { row: SessionChat["rows"][number] }) {
 	return (
 		<View>
 			<If when={props.row.role === "you"}>
-				<View class="self-end rounded-xl bg-muted px-3 py-2">
-					<Text class="text-sm leading-relaxed text-foreground">{spokenWords(props.row.text)}</Text>
-				</View>
+				<Bubble text={spokenWords(props.row.text)} />
 			</If>
 			<If when={props.row.role === "pilot"}>
-				<View selectable>
-					<Text class="text-sm leading-relaxed text-foreground">{props.row.text}</Text>
-				</View>
+				<Reply>
+					<Body>{props.row.text}</Body>
+				</Reply>
 			</If>
 			<If when={props.row.role === "step" && props.row.text.includes("Needs a person")}>
-				<MarkLine kind="needs">
-					<Text class="text-sm text-foreground">{props.row.text}</Text>
-				</MarkLine>
+				<Notice kind="needs" text={props.row.text} />
 			</If>
 			<If when={props.row.role === "step" && !props.row.text.includes("Needs a person")}>
-				<View class="flex-row items-center gap-2">
-					<If when={props.row.running}>
-						<Mark kind="moving" />
-					</If>
-					<Text class="text-xs text-muted-foreground">{props.row.text}</Text>
-				</View>
+				<If when={props.row.running} else={<Event text={props.row.text} />}>
+					<WorkingLine text={props.row.text} />
+				</If>
 			</If>
+		</View>
+	);
+}
+
+// LIBRARY GAP: no part is a card that floats over the window (an opaque popover surface with the panel's radius,
+// a hairline and a shadow). The bar's answer, conversation and feedback draft, and its composer, need one: the
+// Panel sits in page flow and the Composer's soft fill shows the page through it. `small` is the pointing hint.
+// `bare` only lays the opaque surface under the Composer, which draws its own frame.
+function FloatingCard(props: {
+	testID?: string;
+	maxHeight?: number;
+	small?: boolean;
+	bare?: boolean;
+	children?: JSX.Element;
+}) {
+	return (
+		<View
+			testID={props.testID}
+			class={
+				props.bare
+					? "rounded-(--radius-panel) bg-popover shadow-lg"
+					: `rounded-(--radius-panel) border border-border bg-popover shadow-lg ${props.small ? "flex-row items-center gap-2 px-3 py-1.5" : "gap-3 px-4 py-3.5"}`
+			}
+			style={props.maxHeight ? { maxHeight: props.maxHeight } : undefined}
+		>
+			{props.children}
 		</View>
 	);
 }
@@ -267,10 +298,10 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 							onPress={(e: PressEvent) => void point(e)}
 						/>
 						<View class="absolute left-0 right-0 top-14 items-center" style={{ pointerEvents: "none" }}>
-							<View class="flex-row items-center gap-2 rounded-full bg-foreground px-3 py-1.5">
-								<Text class="text-xs text-background">Click what you mean</Text>
+							<FloatingCard small>
+								<Caption tone="default">Click what you mean</Caption>
 								<KeyCap label="esc" />
-							</View>
+							</FloatingCard>
 						</View>
 					</Overlay>
 				</If>
@@ -281,7 +312,7 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 					onCancel={() => screenAgentOpen.set(false)}
 				>
 					<If when={view() === "answer" && (latest(chat()).length > 0 || problem())}>
-						<QuietPanel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
+						<FloatingCard maxHeight={360}>
 							{/* A long answer scrolls inside the bar instead of running past it. */}
 							<Scroll testID="screen-agent-answer" class="min-h-0 shrink" contentClass="gap-3">
 								<Each of={latest(chat())} key={(r) => r.key}>
@@ -289,35 +320,33 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 								</Each>
 							</Scroll>
 							<If when={problem()}>
-								<MarkLine kind="unknown">
-									<Text class="text-sm text-foreground">{problem()}</Text>
-								</MarkLine>
+								<Notice kind="needs" text={problem()} />
 							</If>
 							<If when={chat()}>
-								<View class="flex-row items-center gap-2">
-									<View class="flex-1" />
-									<Action
+								<Buttons>
+									<Spacer />
+									<Link
 										label="Show conversation"
 										testID="screen-agent-conversation"
 										onPress={() => view.set("conversation")}
 									/>
-									<Action
+									<Button
 										label="Make feedback"
-										variant="outline"
 										testID="screen-agent-feedback"
 										onPress={() => void makeFeedback()}
 									/>
-								</View>
+								</Buttons>
 							</If>
-						</QuietPanel>
+						</FloatingCard>
 					</If>
 					<If when={view() === "conversation"}>
-						<QuietPanel tone="card" size="lg" class="max-h-[360px] gap-3 shadow-lg">
-							<View class="flex-row items-center gap-2">
-								<Text class="flex-1 text-sm font-semibold text-foreground">Screen agent</Text>
-								<Action label="Make feedback" variant="outline" onPress={() => void makeFeedback()} />
-								<Action label="Hide" testID="screen-agent-hide" onPress={() => view.set("answer")} />
-							</View>
+						<FloatingCard maxHeight={360}>
+							<Buttons>
+								<Heading>Screen agent</Heading>
+								<Spacer />
+								<Button label="Make feedback" onPress={() => void makeFeedback()} />
+								<Button label="Hide" testID="screen-agent-hide" onPress={() => view.set("answer")} />
+							</Buttons>
 							<Scroll
 								testID="screen-agent-rows"
 								ref={(node: ScrollRef) => (rowsScroll = node)}
@@ -328,20 +357,20 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 									{(r) => <Line row={r()} />}
 								</Each>
 							</Scroll>
-						</QuietPanel>
+						</FloatingCard>
 					</If>
 					<If when={view() === "feedback"}>
-						<QuietPanel tone="card" size="lg" class="gap-3 shadow-lg" testID="screen-agent-draft">
-							<Text class="text-sm font-semibold text-foreground">Feedback</Text>
+						<FloatingCard testID="screen-agent-draft">
+							<Heading>Feedback</Heading>
 							<If
 								when={draft() !== null}
 								else={
-									<Text class="text-sm text-muted-foreground">
+									<Body tone="muted">
 										{sent() ||
 											(working()
 												? "The screen agent is writing it…"
 												: "The screen agent did not write it. Ask again.")}
-									</Text>
+									</Body>
 								}
 							>
 								<TextField
@@ -352,55 +381,70 @@ export function ScreenAgentBar(props: { source: ScreenAgentSource }) {
 									value={draft() ?? ""}
 									onChange={({ value }) => draft.set(value)}
 								/>
-								<Text class="text-xs text-muted-foreground">
+								<Caption>
 									{(picture() ? "With the last picture of this window. " : "") +
 										"This conversation becomes its triage."}
-								</Text>
+								</Caption>
 							</If>
-							<View class="flex-row items-center gap-2">
-								<Text class="flex-1 text-xs text-faint">
+							<Buttons>
+								<Caption tone="faint" grow>
 									You send it. Nothing starts until you choose a fix.
-								</Text>
-								<Action label="Back" onPress={() => view.set("answer")} />
-								<Action
+								</Caption>
+								<Button label="Back" onPress={() => view.set("answer")} />
+								<Button
 									label="Send feedback"
-									variant="primary"
+									kind="primary"
 									testID="screen-agent-send-feedback"
 									disabled={draft() === null || !draft()?.trim() || sending()}
 									onPress={() => void sendFeedback()}
 								/>
-							</View>
-						</QuietPanel>
+							</Buttons>
+						</FloatingCard>
 					</If>
-					<View class="flex-row items-center gap-2 rounded-2xl border border-border-strong bg-background px-2 py-2 shadow-lg">
-						<Mark kind={working() ? "moving" : "still"} />
-						<Action
-							label={pointing() ? "Stop pointing" : "Point at something in this window"}
-							icon="pointer"
-							iconOnly
-							variant={pointing() ? "outline" : "plain"}
-							testID="screen-agent-point"
-							onPress={() => pointing.set(!pointing())}
+					<FloatingCard bare>
+						<Composer
+							field={
+								<TextField
+									variant="composer"
+									testID="screen-agent-words"
+									accessibilityLabel="Ask about this window"
+									placeholder="Ask about this window"
+									submitBehavior="submit"
+									value={words()}
+									onChange={({ value }) => words.set(value)}
+									onSubmit={() => void ask()}
+								/>
+							}
+							bar={
+								<>
+									<Button
+										label={pointing() ? "Stop pointing" : "Point at something in this window"}
+										icon="pointer"
+										iconOnly
+										kind={pointing() ? "secondary" : "quiet"}
+										testID="screen-agent-point"
+										onPress={() => pointing.set(!pointing())}
+									/>
+									<If when={pointed()}>
+										<Caption tone="default">{pointed()?.label ?? pointed()?.ref ?? ""}</Caption>
+										<Button
+											label="Stop pointing at it"
+											kind="quiet"
+											small
+											iconOnly
+											icon="back"
+											onPress={() => pointed.set(null)}
+										/>
+									</If>
+									<Spacer />
+									<If when={working()}>
+										<Mark kind="working" label="Working" />
+									</If>
+									<KeyCap label="⌘J" />
+								</>
+							}
 						/>
-						<If when={pointed()}>
-							<View class="flex-row items-center gap-1 rounded-md bg-selection px-2 py-1">
-								<Text class="text-xs text-foreground">{pointed()?.label ?? pointed()?.ref ?? ""}</Text>
-								<Action label="Stop pointing at it" iconOnly icon="back" onPress={() => pointed.set(null)} />
-							</View>
-						</If>
-						<TextField
-							compact
-							class="flex-1"
-							testID="screen-agent-words"
-							accessibilityLabel="Ask about this window"
-							placeholder="Ask about this window"
-							submitBehavior="submit"
-							value={words()}
-							onChange={({ value }) => words.set(value)}
-							onSubmit={() => void ask()}
-						/>
-						<KeyCap label="⌘J" />
-					</View>
+					</FloatingCard>
 				</Overlay>
 			</If>
 		</AgentScope.Provider>

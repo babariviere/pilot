@@ -11,7 +11,7 @@
 // read-only chat that makes mockups and asks the user to choose; its
 // question shows here with them. The choice comes back as a fix proposal
 // with the chosen mockup, and Start fix builds exactly that.
-import { type JSX, signal, Text, View } from "nsh";
+import { type JSX, signal, View } from "nsh";
 import { namedFeedbackPaths } from "../../packages/kernel/src/feedback-paths";
 import type { ArtifactSource } from "./artifactReads";
 import { openChat } from "./chatView";
@@ -51,7 +51,23 @@ import { draftLinkedMission } from "./linkedMission";
 import { OpenChatAction } from "./OpenChatAction";
 import { newBusy } from "./planView";
 import { QuestionArtifacts } from "./QuestionArtifacts";
-import { Action, Field, glide, type Mark, MarkLine, QuietPanel, Picker } from "./ui";
+import {
+	Body,
+	BodyStrong,
+	Button,
+	Buttons,
+	Caption,
+	Disclosure,
+	Fact,
+	Facts,
+	Field,
+	glide,
+	Mark,
+	type MarkKind,
+	Picker,
+	Row,
+	RowDetail,
+} from "./ui";
 import { openMission } from "./view";
 
 /**
@@ -66,7 +82,7 @@ function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 			when={props.day.chat}
 			else={
 				<View selectable>
-					<Text class="text-xs text-faint">{`${{ triage: "Triage", prototype: "Prototype", fix: "Fix" }[kind()]} chat: pilot://chat/${props.step.sessionId}`}</Text>
+					<Caption tone="faint">{`${{ triage: "Triage", prototype: "Prototype", fix: "Fix" }[kind()]} chat: pilot://chat/${props.step.sessionId}`}</Caption>
 				</View>
 			}
 		>
@@ -82,21 +98,19 @@ function ChatLink(props: { day: Day; item: FeedbackItem; step: ChatStep }) {
 	);
 }
 
-/** One quiet line with its mark. */
-function Line(props: {
-	testID: string;
-	mark: Parameters<typeof Mark>[0]["kind"];
-	text: string;
-	children?: JSX.Element;
-	action?: JSX.Element;
-}) {
+// LIBRARY GAP: MarkLine is deprecated and Row cannot sit inside a row's detail or a Block (it brings its own inset
+// and hairline). A step of this feedback needs a mark beside a sentence that may wrap, an action at the right and
+// lines under it. This line uses layout classes only until the library offers a marked line.
+/** One step's line: its mark, its words, an action at the right and what belongs under it. */
+function Line(props: { testID: string; mark: MarkKind; text: string; children?: JSX.Element; action?: JSX.Element }) {
 	return (
 		<View testID={props.testID} class="gap-1.5">
-			<View class="flex-row items-start gap-3">
+			<View class="flex-row items-start gap-2.5">
+				<View class="h-4.5 w-3.5 items-center justify-center">
+					<Mark kind={props.mark} />
+				</View>
 				<View class="min-w-0 flex-1">
-					<MarkLine kind={props.mark}>
-						<Text class="text-sm leading-relaxed text-foreground">{props.text}</Text>
-					</MarkLine>
+					<Body>{props.text}</Body>
 				</View>
 				{props.action}
 			</View>
@@ -127,6 +141,8 @@ function Proposal(props: {
 	value: UserFeedbackProposal;
 	digest: string;
 	busy: boolean;
+	/** Whether Start fix is the screen's one commit: on Today, where this feedback is the one thing asked. */
+	commit: boolean;
 	send: (intent: StepIntent) => void;
 }) {
 	const p = () => props.value;
@@ -176,20 +192,22 @@ function Proposal(props: {
 		draftLinkedMission(props.item, props.triage, { value: p(), digest: props.digest });
 	};
 	return (
-		<QuietPanel testID={`feedback-proposal-${props.item.id}`} class="gap-2.5">
-			<Text class="text-xs font-medium text-muted-foreground">{heading()}</Text>
-			<Text class="text-sm leading-relaxed text-foreground">{p().summary}</Text>
-			<View selectable>
-				<Text class="text-sm leading-relaxed text-muted-foreground">{p().detail}</Text>
+		<View testID={`feedback-proposal-${props.item.id}`} class="gap-2.5">
+			<View class="gap-1">
+				<BodyStrong>{heading()}</BodyStrong>
+				<Body>{p().summary}</Body>
+				<View selectable>
+					<Body tone="muted">{p().detail}</Body>
+				</View>
 			</View>
 			<If when={p().next === "new-mission" && p().goal}>
-				<Text class="text-sm text-foreground">{`Suggested goal: ${p().goal ?? ""}`}</Text>
+				<Body>{`Suggested goal: ${p().goal ?? ""}`}</Body>
 			</If>
 			<If when={prototype() && p().directions?.length}>
 				<View class="gap-1" testID={`feedback-directions-${props.item.id}`}>
-					<Text class="text-xs text-faint">Directions to mock up</Text>
+					<Caption tone="faint">Directions to mock up</Caption>
 					<Each of={(p().directions ?? []).map((text, n) => ({ n, text }))} key={(d) => String(d.n)}>
-						{(d) => <Text class="text-sm text-foreground">{`${d().n + 1}. ${d().text}`}</Text>}
+						{(d) => <Body>{`${d().n + 1}. ${d().text}`}</Body>}
 					</Each>
 				</View>
 			</If>
@@ -201,32 +219,21 @@ function Proposal(props: {
 				/>
 			</If>
 			<Each of={duplicates()} key={(d) => d.id}>
-				{(d) => <Text class="text-xs text-faint">{`Same as: “${clip(d().text)}”`}</Text>}
+				{(d) => <Caption tone="faint">{`Same as: “${clip(d().text)}”`}</Caption>}
 			</Each>
 			<If when={!fixed() && project()}>
-				<If when={setup()} else={<Text class="text-xs text-muted-foreground">The fix setup is unavailable.</Text>}>
-					<View class="flex-row flex-wrap gap-x-6 gap-y-2">
-						<View class="gap-0.5">
-							<Text class="text-xs text-muted-foreground">Project</Text>
-							<Text class="text-sm text-foreground">{project()?.name ?? ""}</Text>
-						</View>
-						<View class="gap-0.5">
-							<Text class="text-xs text-muted-foreground">Model</Text>
-							<Text class="text-sm text-foreground">
-								{[setup()?.model, setup()?.thinking].filter(Boolean).join(" · ")}
-							</Text>
-						</View>
+				<If when={setup()} else={<Caption>The fix setup is unavailable.</Caption>}>
+					<Facts>
+						<Fact label="Project">{project()?.name ?? ""}</Fact>
+						<Fact label="Model">{[setup()?.model, setup()?.thinking].filter(Boolean).join(" · ")}</Fact>
 						<If when={setup()?.allowanceMicros !== null}>
-							<View class="gap-0.5">
-								<Text class="text-xs text-muted-foreground">Fix allowance</Text>
-								<Text class="text-sm text-foreground">
-									{setup()?.allowanceMicros === undefined
-										? "Limits off"
-										: `$${((setup()?.allowanceMicros ?? 0) / 1_000_000).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`}
-								</Text>
-							</View>
+							<Fact label="Fix allowance">
+								{setup()?.allowanceMicros === undefined
+									? "Limits off"
+									: `$${((setup()?.allowanceMicros ?? 0) / 1_000_000).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 6 })}`}
+							</Fact>
 						</If>
-					</View>
+					</Facts>
 					<If when={setup()?.allowanceMicros === null}>
 						<Field
 							label="Fix allowance (USD)"
@@ -239,14 +246,14 @@ function Proposal(props: {
 						/>
 					</If>
 					<If when={setup()?.allowanceMicros === 0}>
-						<Text class="text-xs text-muted-foreground">Set a positive quick-fix default in Funding.</Text>
+						<Caption>Set a positive quick-fix default in Funding.</Caption>
 					</If>
 				</If>
 			</If>
-			<View class="flex-row flex-wrap items-center gap-2">
+			<Buttons>
 				<If when={!fixed()}>
-					<Action
-						variant={prototype() && !prototyped() ? "plain" : "primary"}
+					<Button
+						kind={props.commit && !(prototype() && !prototyped()) ? "primary" : "secondary"}
 						label="Start fix"
 						testID={`feedback-fix-${props.item.id}`}
 						disabled={props.busy || !project() || !fixReady() || running(steps().fix)}
@@ -268,8 +275,7 @@ function Proposal(props: {
 					/>
 				</If>
 				<If when={p().next === "existing-mission" && suggested()}>
-					<Action
-						variant="outline"
+					<Button
 						label="Link to this mission"
 						testID={`feedback-link-suggested-${props.item.id}`}
 						disabled={props.busy}
@@ -280,8 +286,7 @@ function Proposal(props: {
 					/>
 				</If>
 				<If when={["fix", "new-mission", "existing-mission"].includes(p().next)}>
-					<Action
-						variant="outline"
+					<Button
 						label="Draft a linked mission"
 						testID={`feedback-plan-${props.item.id}`}
 						disabled={newBusy() || props.busy}
@@ -290,8 +295,7 @@ function Proposal(props: {
 					/>
 				</If>
 				<If when={prototype() && !prototyped()}>
-					<Action
-						variant="outline"
+					<Button
 						label="Start prototype"
 						testID={`feedback-prototype-start-${props.item.id}`}
 						disabled={props.busy || !project() || running(steps().prototype)}
@@ -309,15 +313,15 @@ function Proposal(props: {
 					/>
 				</If>
 				<If when={!project()}>
-					<Text class="text-xs text-faint">Its project is not in your project list.</Text>
+					<Caption tone="faint">Its project is not in your project list.</Caption>
 				</If>
-			</View>
+			</Buttons>
 			<If when={prototype() && !prototyped()}>
-				<Text class="text-xs text-faint">A prototype makes mockups to choose from. It writes no code.</Text>
+				<Caption tone="faint">A prototype makes mockups to choose from. It writes no code.</Caption>
 			</If>
 			<If when={linkable().length > 0}>
-				<View class="flex-row items-center gap-2.5">
-					<Text class="text-xs text-faint">{suggested() ? "Or link another" : "Link a mission"}</Text>
+				<Buttons>
+					<Caption tone="faint">{suggested() ? "Or link another" : "Link a mission"}</Caption>
 					<Picker
 						testID={`feedback-link-${props.item.id}`}
 						label="Mission to link this feedback to"
@@ -328,21 +332,74 @@ function Proposal(props: {
 						searchable={linkable().length > 8}
 						onChange={(missionId) => props.send({ action: "link", feedbackId: props.item.id, missionId })}
 					/>
-				</View>
+				</Buttons>
 			</If>
-		</QuietPanel>
+		</View>
 	);
 }
 
-/** One saved piece of feedback with its steps. */
-export function FeedbackRow(props: {
+type FeedbackRowProps = {
 	day: Day;
 	mirror: FeedbackMirror;
 	item: FeedbackItem;
 	when: string;
 	keyboardActive?: boolean;
 	routeKey?: string;
-}) {
+};
+
+/** How many images came with the feedback, or "". */
+function imagesLine(item: FeedbackItem): string {
+	const images = item.attachments?.length ?? 0;
+	return images ? `${images} ${images === 1 ? "image" : "images"} attached · available to the agent` : "";
+}
+
+/**
+ * One saved piece of feedback with its steps, without a frame: Today puts it in its Needs you section, where it is
+ * the one thing asked, so its Start fix is the screen's commit.
+ */
+export function FeedbackRow(props: FeedbackRowProps) {
+	return (
+		<View testID={`feedback-item-${props.item.id}`} class="gap-3">
+			<View selectable class="gap-0.5">
+				<Body>{props.item.text}</Body>
+				<If when={imagesLine(props.item)}>
+					<Caption tone="faint">{imagesLine(props.item)}</Caption>
+				</If>
+				<Caption tone="faint">{props.when}</Caption>
+			</View>
+			<FeedbackSteps {...props} commit />
+		</View>
+	);
+}
+
+/**
+ * One saved piece of feedback as a row of the Feedback page's list: the words as its title, when it was saved as its
+ * meta, and its images and steps under it. The page's commit is Send, so Start fix is a Secondary button here.
+ */
+export function FeedbackListRow(props: FeedbackRowProps) {
+	return (
+		<Row
+			testID={`feedback-item-${props.item.id}`}
+			title={props.item.text}
+			meta={props.when}
+			wrap
+			selectable
+			detail={
+				<RowDetail>
+					<View class="gap-3">
+						<If when={imagesLine(props.item)}>
+							<Caption tone="faint">{imagesLine(props.item)}</Caption>
+						</If>
+						<FeedbackSteps {...props} commit={false} />
+					</View>
+				</RowDetail>
+			}
+		/>
+	);
+}
+
+/** A feedback item's steps: its triage, question, proposal, prototype, fix, mission and the user's commands. */
+function FeedbackSteps(props: FeedbackRowProps & { commit: boolean }) {
 	const v = (): FeedbackView => props.mirror.view();
 	const steps = () => stepsOf(props.item);
 	const unknown = () => v().unsettledSteps.find((o) => o.feedbackId === props.item.id) ?? null;
@@ -390,32 +447,22 @@ export function FeedbackRow(props: {
 	// Remove asks once more in place. Its chats and missions stay.
 	const confirming = signal(false);
 	return (
-		<View testID={`feedback-item-${props.item.id}`} class="gap-2.5 border-t border-border py-3">
-			<View selectable class="gap-1">
-				<Text class="text-sm leading-relaxed text-foreground">{props.item.text}</Text>
-				<If when={props.item.attachments?.length}>
-					<Text class="text-xs text-faint">{`${props.item.attachments?.length} ${props.item.attachments?.length === 1 ? "image" : "images"} attached · available to the agent`}</Text>
-				</If>
-				<Text class="text-xs text-faint">{props.when}</Text>
-			</View>
+		<>
 			<If when={steps().resolved}>
 				<Line testID={`feedback-resolved-${props.item.id}`} mark="done" text="You marked this resolved." />
 			</If>
 			<If when={triage()}>
-				<View class="gap-2">
-					<View class="flex-row">
-						<Action label="Read access" onPress={() => accessOpen.set(!accessOpen())} />
-					</View>
+				<Disclosure label="Read access" open={accessOpen()} onToggle={() => accessOpen.set(!accessOpen())}>
 					<If when={accessOpen()}>
-						<Text class="text-xs text-muted-foreground">{`Read-only investigation in ${readProject()?.name ?? triage()?.projectId ?? "the selected project"}. Source files in that project's copy${namedFeedbackPaths(props.item.text).length ? `, plus user-named paths: ${namedFeedbackPaths(props.item.text).join(", ")}` : ""}. Named folders include subfolders if available. Whole-home, filesystem root and repository metadata access are excluded. Other projects' context and unrelated files are not included.`}</Text>
+						<Caption>{`Read-only investigation in ${readProject()?.name ?? triage()?.projectId ?? "the selected project"}. Source files in that project's copy${namedFeedbackPaths(props.item.text).length ? `, plus user-named paths: ${namedFeedbackPaths(props.item.text).join(", ")}` : ""}. Named folders include subfolders if available. Whole-home, filesystem root and repository metadata access are excluded. Other projects' context and unrelated files are not included.`}</Caption>
 					</If>
-				</View>
+				</Disclosure>
 			</If>
 			<Each of={triage() && chatLine(triage()!) ? [triage()!] : []} key={(t) => t.operationId}>
 				{(t) => (
 					<Line
 						testID={`feedback-triage-${props.item.id}`}
-						mark={running(t()) ? (chatState(t()) === "question" ? "needs" : "moving") : "unknown"}
+						mark={running(t()) ? (chatState(t()) === "question" ? "needs" : "working") : "needs"}
 						text={chatLine(t())}
 						action={
 							<If when={props.day.chat}>
@@ -425,9 +472,9 @@ export function FeedbackRow(props: {
 					>
 						<If when={steps().answer && !question()}>
 							<View selectable>
-								<Text testID={`feedback-answered-${props.item.id}`} class="text-xs text-muted-foreground">
+								<Caption testID={`feedback-answered-${props.item.id}`}>
 									{`You answered: “${clip(steps().answer?.text ?? "", 120)}”`}
-								</Text>
+								</Caption>
 							</View>
 						</If>
 						<If when={!props.day.chat}>
@@ -458,20 +505,23 @@ export function FeedbackRow(props: {
 			<If when={!steps().resolved && correctionDigest()}>
 				<View class="gap-3">
 					<If when={unusable()}>
-						<View selectable class="gap-2" testID={`feedback-unusable-${props.item.id}`}>
-							<Text class="text-sm text-muted-foreground">Original explanation, kept with this feedback</Text>
-							<Text class="text-sm text-foreground">
+						<View selectable class="gap-1" testID={`feedback-unusable-${props.item.id}`}>
+							<Caption>Original explanation, kept with this feedback</Caption>
+							<Body>
 								{unusable()?.raw ??
 									"The full explanation stays in the triage chat's saved history. Open the triage chat to read it."}
-							</Text>
+							</Body>
 						</View>
 					</If>
 					<If when={correctionDigest()}>
-						<Action
-							label="Correct the investigation"
-							testID={`feedback-correct-${props.item.id}`}
-							onPress={() => correctionOpen.set(true)}
-						/>
+						<View class="flex-row">
+							<Button
+								small
+								label="Correct the investigation"
+								testID={`feedback-correct-${props.item.id}`}
+								onPress={() => correctionOpen.set(true)}
+							/>
+						</View>
 						<If when={correctionOpen() || unknown()?.step === "correct"}>
 							<Each of={[correctionDigest()]} key={(digest) => digest}>
 								{(digest) => (
@@ -510,6 +560,7 @@ export function FeedbackRow(props: {
 						value={x().value}
 						digest={x().digest}
 						busy={busy()}
+						commit={props.commit}
 						send={(i) => void send(i)}
 					/>
 				)}
@@ -523,10 +574,10 @@ export function FeedbackRow(props: {
 								running(p())
 									? chatState(p()) === "question"
 										? "needs"
-										: "moving"
+										: "working"
 									: chatState(p()) === "done"
-										? "ready"
-										: "unknown"
+										? "done"
+										: "needs"
 							}
 							text={chatLine(p())}
 						>
@@ -551,10 +602,9 @@ export function FeedbackRow(props: {
 						</Each>
 						<If when={!questionOf(p()) && answerTo(props.item, p().sessionId)}>
 							<View selectable>
-								<Text
-									testID={`feedback-chose-${props.item.id}`}
-									class="text-xs text-muted-foreground"
-								>{`You answered: “${clip(answerTo(props.item, p().sessionId)?.text ?? "", 120)}”`}</Text>
+								<Caption testID={`feedback-chose-${props.item.id}`}>
+									{`You answered: “${clip(answerTo(props.item, p().sessionId)?.text ?? "", 120)}”`}
+								</Caption>
 							</View>
 						</If>
 						<Each of={!steps().resolved && proposalOf(p()) ? [proposalOf(p())!] : []} key={(x) => x.digest}>
@@ -566,6 +616,7 @@ export function FeedbackRow(props: {
 									value={x().value}
 									digest={x().digest}
 									busy={busy()}
+									commit={props.commit}
 									send={(i) => void send(i)}
 								/>
 							)}
@@ -582,10 +633,10 @@ export function FeedbackRow(props: {
 								chatState(f()) === "question"
 									? "needs"
 									: running(f())
-										? "moving"
+										? "working"
 										: chatState(f()) === "done"
-											? "ready"
-											: "unknown"
+											? "done"
+											: "needs"
 							}
 							text={chatLine(f())}
 							action={
@@ -620,10 +671,11 @@ export function FeedbackRow(props: {
 			</Each>
 			<Each of={steps().mission ? [steps().mission!] : []} key={(m) => m.operationId}>
 				{(m) => (
-					<Line testID={`feedback-mission-${props.item.id}`} mark="still" text={missionLine(m())}>
+					<Line testID={`feedback-mission-${props.item.id}`} mark="new" text={missionLine(m())}>
 						<If when={m().mission && props.day.feed.mission(m().missionId)}>
 							<View class="flex-row">
-								<Action
+								<Button
+									small
 									label="Open the mission"
 									testID={`feedback-open-mission-${props.item.id}`}
 									onPress={() => {
@@ -640,11 +692,12 @@ export function FeedbackRow(props: {
 				{(o) => (
 					<Line
 						testID={`feedback-step-unknown-${props.item.id}`}
-						mark="unknown"
+						mark="needs"
 						text="Pilot does not know if your last step on this was done. It will not send it again."
 					>
 						<View class="flex-row">
-							<Action
+							<Button
+								small
 								label={o().state === "checking" ? "Checking…" : "Check"}
 								testID={`feedback-step-check-${props.item.id}`}
 								disabled={o().state === "checking"}
@@ -654,13 +707,15 @@ export function FeedbackRow(props: {
 					</Line>
 				)}
 			</Each>
-			<View class="flex-row flex-wrap items-center gap-2">
+			<If when={!triage() && props.item.investigation}>
+				<Caption>
+					The saved investigation has not started or is not confirmed. Its original project selection stays pinned.
+				</Caption>
+			</If>
+			<Buttons>
 				<If when={!triage() && props.item.investigation}>
-					<Text class="text-xs text-muted-foreground">
-						The saved investigation has not started or is not confirmed. Its original project selection stays
-						pinned.
-					</Text>
-					<Action
+					<Button
+						small
 						label="Check saved investigation"
 						disabled={busy()}
 						onPress={async () => {
@@ -669,13 +724,10 @@ export function FeedbackRow(props: {
 							void props.mirror.source.read();
 						}}
 					/>
-					<Text class="text-xs text-faint">
-						Checks the saved send and carries out its exact never-started investigation. Entered work is never
-						sent again.
-					</Text>
 				</If>
 				<If when={canTriage()}>
-					<Action
+					<Button
+						small
 						label="Triage"
 						testID={`feedback-triage-start-${props.item.id}`}
 						disabled={busy() || !chosen()}
@@ -691,7 +743,8 @@ export function FeedbackRow(props: {
 					/>
 				</If>
 				<If when={resolvable()}>
-					<Action
+					<Button
+						small
 						label="Mark resolved"
 						testID={`feedback-resolve-${props.item.id}`}
 						disabled={busy()}
@@ -700,7 +753,8 @@ export function FeedbackRow(props: {
 					/>
 				</If>
 				<If when={steps().resolved}>
-					<Action
+					<Button
+						small
 						label="Reopen"
 						testID={`feedback-reopen-${props.item.id}`}
 						disabled={busy()}
@@ -710,7 +764,8 @@ export function FeedbackRow(props: {
 				<If
 					when={confirming()}
 					else={
-						<Action
+						<Button
+							small
 							label="Remove"
 							testID={`feedback-remove-${props.item.id}`}
 							disabled={busy()}
@@ -719,9 +774,10 @@ export function FeedbackRow(props: {
 						/>
 					}
 				>
-					<Text class="text-xs text-muted-foreground">Remove this feedback? Its chats and missions stay.</Text>
-					<Action
-						variant="outline"
+					<Caption>Remove this feedback? Its chats and missions stay.</Caption>
+					<Button
+						small
+						kind="destructive"
 						label="Remove"
 						testID={`feedback-remove-confirm-${props.item.id}`}
 						disabled={busy()}
@@ -730,21 +786,26 @@ export function FeedbackRow(props: {
 							void send({ action: "remove", feedbackId: props.item.id });
 						}}
 					/>
-					<Action
+					<Button
+						small
 						label="Keep"
 						testID={`feedback-remove-cancel-${props.item.id}`}
 						onPress={() => confirming.set(false)}
 					/>
 				</If>
 				<If when={v().stepping === props.item.id}>
-					<Text class="text-xs text-muted-foreground">Sending…</Text>
+					<Caption>Sending…</Caption>
 				</If>
-				<If when={stepMessages()[props.item.id]}>
-					<Text testID={`feedback-step-message-${props.item.id}`} class="flex-1 text-xs text-muted-foreground">
-						{stepMessages()[props.item.id] ?? ""}
-					</Text>
-				</If>
-			</View>
-		</View>
+			</Buttons>
+			<If when={!triage() && props.item.investigation}>
+				<Caption tone="faint">
+					Checks the saved send and carries out its exact never-started investigation. Entered work is never sent
+					again.
+				</Caption>
+			</If>
+			<If when={stepMessages()[props.item.id]}>
+				<Caption testID={`feedback-step-message-${props.item.id}`}>{stepMessages()[props.item.id] ?? ""}</Caption>
+			</If>
+		</>
 	);
 }

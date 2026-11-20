@@ -1,9 +1,9 @@
 // Fixture data only. Real screen, no provider or Slack access.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import { SlackReportsScreen } from "./SlackReportsScreen";
 import type { SlackControls, SlackSnapshot, ReportDetails } from "./slackControls";
 import { restoreSlackReports, savedSlackReports } from "./slackView";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 import { mirrorIntake, type IntakeSource, type IntakeView } from "./intakeFeed";
 
 const snapshot = signal<SlackSnapshot | null>({
@@ -175,14 +175,26 @@ const source: IntakeSource = {
 };
 const day = { slack: controls, intake: mirrorIntake(source) };
 const shown = signal(true);
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 bg-background">
-		<View class="gap-2 p-3">
-			<Text class="text-xs text-faint">Fixture data · Slack reports</Text>
-			<Text class="text-xs text-faint">{`Sends: ${sends()}`}</Text>
-			<Text class="text-xs text-faint">{`Starts: ${starts()}`}</Text>
-			<View class="flex-row flex-wrap gap-2">
-				<Action
+	<FixtureWindow>
+		<Block gap={1}>
+			<Caption tone="faint">Fixture data · Slack reports</Caption>
+			<Caption tone="faint">{`Sends: ${sends()}`}</Caption>
+			<Caption tone="faint">{`Starts: ${starts()}`}</Caption>
+			<Buttons>
+				<Button
+					small
 					label="Save and reopen"
 					onPress={() => {
 						const saved = savedSlackReports();
@@ -191,17 +203,18 @@ mount(() => (
 						shown.set(true);
 					}}
 				/>
-				<Action
+				<Button
+					small
 					label="External edit"
 					onPress={() =>
 						snapshot.set({ ...snapshot()!, reports: { ...snapshot()!.reports!, digest: "c".repeat(64) } })
 					}
 				/>
-				<Action label="Lose reply" onPress={() => unknown.set([{ operationId: "pending" }])} />
-			</View>
-		</View>
+				<Button small label="Lose reply" onPress={() => unknown.set([{ operationId: "pending" }])} />
+			</Buttons>
+		</Block>
 		<If when={shown()}>
 			<SlackReportsScreen day={day} />
 		</If>
-	</View>
+	</FixtureWindow>
 ));

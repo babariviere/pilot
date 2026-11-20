@@ -11,7 +11,7 @@
 // "Triage prototype" proposes a prototype; "Prototype asks" leaves the
 // prototype waiting on a choice with two mockups; "Prototype chose" finishes
 // it with the chosen fix. Mockups read from a scripted artifact source.
-import { mount, signal, Text, View } from "nsh";
+import { mount, signal, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
 import type { ArtifactRow, ArtifactSource, ListResult, ReadResult } from "./artifactReads";
 import {
@@ -34,7 +34,7 @@ import { openFeedbackWith } from "./feedbackView";
 import { MockDayScreen, openDay } from "./mockFeeds";
 import { goalDraft } from "./planView";
 import { mirrorSessionChat, type SessionChat, type SessionChatSource } from "./sessionChat";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption } from "./ui";
 import { captureView, restoreView, startFresh } from "./windowState";
 
 type Next = "accept" | "unknown" | "reject";
@@ -497,58 +497,64 @@ const kept = signal("");
 
 mount(() => (
 	<View class="flex-1">
-		<View class="flex-row flex-wrap items-center gap-1 px-6 pt-2">
-			<Text testID="counts">{`Sends: ${feedback.sends()} · Checks: ${feedback.checks()}`}</Text>
-			<Each of={NEXT} key={(n) => n}>
-				{(n) => <Action label={`Next ${n()}`} onPress={() => feedback.next.set(n())} />}
-			</Each>
-			<Action label="Unreadable" onPress={() => feedback.unreadable.set(true)} />
-			<Action label="Many saved" onPress={() => feedback.manySaved()} />
-			<Action label="Check rejects" onPress={() => feedback.rejectCheck.set(true)} />
-			<Action
-				label="Suggested feedback"
-				onPress={() => openFeedbackWith({ kind: "mission", missionId: "search" }, "Suggested report")}
-			/>
-			<Text testID="steps">{`Steps: [${feedback.steps().join(",")}]`}</Text>
-			<Each of={NEXT} key={(n) => n}>
-				{(n) => <Action label={`Next step ${n()}`} onPress={() => feedback.nextStep.set(n())} />}
-			</Each>
-			<Action label="Triage fix" onPress={() => feedback.finishTriage({})} />
-			<Action label="Triage asks" onPress={() => feedback.finishTriage("asks")} />
-			<Action label="Triage multiple" onPress={() => feedback.finishTriage("multiple")} />
-			<Action label="Triage unusable" onPress={() => feedback.finishTriage("unusable")} />
-			<Action
-				label="Triage new mission"
-				onPress={() => feedback.finishTriage({ next: "new-mission", goal: "Make plans show their people" })}
-			/>
-			<Action
-				label="Triage prototype"
-				onPress={() =>
-					feedback.finishTriage({
-						next: "prototype",
-						detail: "Where a plan row shows who works on the task.",
-						directions: ["Inline owner chips", "An owner column"],
-					})
-				}
-			/>
-			<Action label="Prototype asks" onPress={() => feedback.prototype("asks")} />
-			<Action label="Prototype chose" onPress={() => feedback.prototype("chose")} />
-			<Text testID="mockup-reads">{`Mockup reads: [${mockupReads().join(",")}]`}</Text>
-			<Action
-				label="Save and reopen"
-				onPress={() => {
-					const v = captureView(day.today());
-					kept.set(v.feedback ?? "");
-					startFresh();
-					restoreView(v, undefined, day.today());
-				}}
-			/>
-			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
-			<Text testID="goal-draft">{`New goal: [${goalDraft().split("\n")[0]}]`}</Text>
-			<Text testID="answer-sent">{`Answer: [${feedback.answer()}]`}</Text>
-			<Action label="Fix stops" onPress={() => scriptedChat.stopped.set(true)} />
-			<Text testID="continues">{`Continues: ${scriptedChat.continues()}`}</Text>
-		</View>
+		<Block gap={1}>
+			<Buttons>
+				<Caption testID="counts">{`Sends: ${feedback.sends()} · Checks: ${feedback.checks()}`}</Caption>
+				<Each of={NEXT} key={(n) => n}>
+					{(n) => <Button small label={`Next ${n()}`} onPress={() => feedback.next.set(n())} />}
+				</Each>
+				<Button small label="Unreadable" onPress={() => feedback.unreadable.set(true)} />
+				<Button small label="Many saved" onPress={() => feedback.manySaved()} />
+				<Button small label="Check rejects" onPress={() => feedback.rejectCheck.set(true)} />
+				<Button
+					small
+					label="Suggested feedback"
+					onPress={() => openFeedbackWith({ kind: "mission", missionId: "search" }, "Suggested report")}
+				/>
+				<Caption testID="steps">{`Steps: [${feedback.steps().join(",")}]`}</Caption>
+				<Each of={NEXT} key={(n) => n}>
+					{(n) => <Button small label={`Next step ${n()}`} onPress={() => feedback.nextStep.set(n())} />}
+				</Each>
+				<Button small label="Triage fix" onPress={() => feedback.finishTriage({})} />
+				<Button small label="Triage asks" onPress={() => feedback.finishTriage("asks")} />
+				<Button small label="Triage multiple" onPress={() => feedback.finishTriage("multiple")} />
+				<Button small label="Triage unusable" onPress={() => feedback.finishTriage("unusable")} />
+				<Button
+					small
+					label="Triage new mission"
+					onPress={() => feedback.finishTriage({ next: "new-mission", goal: "Make plans show their people" })}
+				/>
+				<Button
+					small
+					label="Triage prototype"
+					onPress={() =>
+						feedback.finishTriage({
+							next: "prototype",
+							detail: "Where a plan row shows who works on the task.",
+							directions: ["Inline owner chips", "An owner column"],
+						})
+					}
+				/>
+				<Button small label="Prototype asks" onPress={() => feedback.prototype("asks")} />
+				<Button small label="Prototype chose" onPress={() => feedback.prototype("chose")} />
+				<Caption testID="mockup-reads">{`Mockup reads: [${mockupReads().join(",")}]`}</Caption>
+				<Button
+					small
+					label="Save and reopen"
+					onPress={() => {
+						const v = captureView(day.today());
+						kept.set(v.feedback ?? "");
+						startFresh();
+						restoreView(v, undefined, day.today());
+					}}
+				/>
+				<Caption testID="kept">{`Kept: [${kept()}]`}</Caption>
+				<Caption testID="goal-draft">{`New goal: [${goalDraft().split("\n")[0]}]`}</Caption>
+				<Caption testID="answer-sent">{`Answer: [${feedback.answer()}]`}</Caption>
+				<Button small label="Fix stops" onPress={() => scriptedChat.stopped.set(true)} />
+				<Caption testID="continues">{`Continues: ${scriptedChat.continues()}`}</Caption>
+			</Buttons>
+		</Block>
 		<MockDayScreen day={day} />
 	</View>
 ));

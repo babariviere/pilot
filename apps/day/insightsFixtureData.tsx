@@ -1,4 +1,4 @@
-import { signal, Text, View } from "nsh";
+import { type JSX, signal, View } from "nsh";
 import { InsightsScreen } from "./InsightsScreen";
 import {
 	type InsightsControls,
@@ -7,7 +7,7 @@ import {
 	type InsightsSnapshot,
 	insightsSelection,
 } from "./insightsView";
-import { Action } from "./ui";
+import { Block, Button, Buttons, Caption, GridBackdrop } from "./ui";
 
 const report: InsightsDetail = {
 	key: "november",
@@ -97,23 +97,40 @@ const controls: InsightsControls = {
 	},
 };
 insightsSelection.set({ kind: "reports", key: report.key });
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 export function Fixture(props: { debug?: boolean }) {
 	return (
-		<View class="flex-1">
+		<FixtureWindow>
 			<If when={props.debug}>
-				<Text>{`Writes: ${count()}`}</Text>
-				<Text>{work()}</Text>
-				<Action
-					label="Refresh fixture"
-					onPress={() => snapshot.set({ ...snapshot(), binding: "fixture-refresh" })}
-				/>
-				<Action
-					label="Simulate uncertain change"
-					onPress={() => {
-						pending.set([{ id: "saved-action", checking: false }]);
-						snapshot.set({ ...snapshot(), state: "blocked", canPause: true, canRun: false });
-					}}
-				/>
+				<Block gap={1}>
+					<Caption>{`Writes: ${count()}`}</Caption>
+					<Caption>{work()}</Caption>
+					<Buttons>
+						<Button
+							small
+							label="Refresh fixture"
+							onPress={() => snapshot.set({ ...snapshot(), binding: "fixture-refresh" })}
+						/>
+						<Button
+							small
+							label="Simulate uncertain change"
+							onPress={() => {
+								pending.set([{ id: "saved-action", checking: false }]);
+								snapshot.set({ ...snapshot(), state: "blocked", canPause: true, canRun: false });
+							}}
+						/>
+					</Buttons>
+				</Block>
 			</If>
 			<InsightsScreen
 				controls={controls}
@@ -124,6 +141,6 @@ export function Fixture(props: { debug?: boolean }) {
 						work.set(kind === "fix" ? "Fix draft, no work started" : "Mission draft, no work started"),
 				}}
 			/>
-		</View>
+		</FixtureWindow>
 	);
 }

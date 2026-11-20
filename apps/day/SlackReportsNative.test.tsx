@@ -20,3 +20,21 @@ test("Slack reports native fields and corrections captured", async () => {
 	await app.press("Show tackled");
 	await app.waitFor("Tackled by you");
 });
+
+const LOOKS = [
+	["light", 1100],
+	["dark", 1100],
+	["light", 480],
+	["dark", 480],
+] as const;
+
+test("Slack reports on the parts in light and dark, wide and narrow", async () => {
+	for (const [colorScheme, width] of LOOKS) {
+		// Dark captures fit the screen: a taller window leaves its lower part unpainted.
+		const app = await open("./SlackReportsFixture.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.press("id:slack-report-report");
+		await app.waitFor("Original reporter");
+		await app.wait(500);
+		await app.screenshot(`output/feeds-slack-${colorScheme}-${width}.png`);
+	}
+});

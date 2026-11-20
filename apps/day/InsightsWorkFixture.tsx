@@ -1,7 +1,7 @@
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import { findingGoal, openFindingDraft, restoreOtherDraft } from "./insightsWork";
 import { goalDraft } from "./planView";
-import { Action, Field } from "./ui";
+import { Block, Body, Button, Buttons, Field, GridBackdrop } from "./ui";
 
 const sent = signal("");
 goalDraft.set("Keep my unrelated draft");
@@ -14,12 +14,27 @@ const finding = {
 	projectId: "fixture",
 	evidence: [{ sessionId: "source-fixture", label: "Release evidence", excerpt: "Private fixture excerpt" }],
 };
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="gap-3 p-6">
-		<Field label="Goal" testID="insights-work-goal" value={goalDraft()} onChange={(v) => goalDraft.set(v)} />
-		<Action label="Open finding draft" onPress={() => openFindingDraft("plan", finding, true)} />
-		<Action label="Prepare work request" onPress={() => sent.set(findingGoal(goalDraft(), "plan"))} />
-		<Action label="Discard finding draft" onPress={() => restoreOtherDraft()} />
-		<Text testID="finding-work-request">{sent()}</Text>
-	</View>
+	<FixtureWindow>
+		<Block gap={3}>
+			<Field label="Goal" testID="insights-work-goal" value={goalDraft()} onChange={(v) => goalDraft.set(v)} />
+			<Buttons>
+				<Button label="Open finding draft" onPress={() => openFindingDraft("plan", finding, true)} />
+				<Button label="Prepare work request" onPress={() => sent.set(findingGoal(goalDraft(), "plan"))} />
+				<Button label="Discard finding draft" onPress={() => restoreOtherDraft()} />
+			</Buttons>
+			<Body testID="finding-work-request">{sent()}</Body>
+		</Block>
+	</FixtureWindow>
 ));

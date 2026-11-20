@@ -1,11 +1,11 @@
 // Test-only: the screen agent's bar over a few controls, with a scripted conversation. Every word is invented.
-import { mount, signal, Text, View } from "nsh";
+import { type JSX, mount, signal, View } from "nsh";
 import type { ChatRow } from "pilot-day/native";
 import { ScreenAgentBar } from "./ScreenAgentBar";
 import type { ScreenAgentSource } from "./screenAgent";
 import type { ScreenPicture } from "./screenAgentContract";
 import type { SessionChat } from "./sessionChat";
-import { Action, Notice } from "./ui";
+import { Block, Button, Caption, GridBackdrop, Notice } from "./ui";
 
 /** What the scripted agent heard, for the test to read. */
 export const heard = signal<string[]>([]);
@@ -79,12 +79,27 @@ class ScriptedScreenAgent implements ScreenAgentSource {
 // One source for the window: JSX props are read again on each access.
 const source = new ScriptedScreenAgent();
 
+// LIBRARY GAP: no part paints a window's canvas (the background colour and GridBackdrop) for a fixture that mounts
+// a screen or a control without DayScreen. This local root does what DayScreen's root does.
+function FixtureWindow(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-1 bg-background">
+			<GridBackdrop />
+			{props.children}
+		</View>
+	);
+}
+
 mount(() => (
-	<View class="flex-1 gap-2 bg-background p-4">
-		<Action label="Save" onPress={() => {}} />
-		<Text testID="heard">{`heard ${heard().length}`}</Text>
-		<Text testID="last-heard">{heard().at(-1) ?? ""}</Text>
-		<Notice text="New 4" />
+	<FixtureWindow>
+		<Block>
+			<View class="flex-row">
+				<Button label="Save" onPress={() => {}} />
+			</View>
+			<Caption testID="heard">{`heard ${heard().length}`}</Caption>
+			<Caption testID="last-heard">{heard().at(-1) ?? ""}</Caption>
+			<Notice text="New 4" />
+		</Block>
 		<ScreenAgentBar source={source} />
-	</View>
+	</FixtureWindow>
 ));
