@@ -1,4 +1,4 @@
-# Technical documentation
+# Legacy technical documentation
 
 Implementation contracts, development instructions, proposals, measurements, and historical
 references. A document being retained here does not mean its feature is shipped.
@@ -8,8 +8,7 @@ Read its status and platform limitations. For usage, start with the [user guides
 
 - `README.md`: a short introduction, setup entry point, and links.
 - `docs/`: concise feature guides explaining what users can do and important limits.
-- `docs/technical/`: APIs, storage, architecture, security details, plans, and evidence.
-- Component-local docs hold implementation contracts. See the historical desktop references below for retired Pilot Next.
+- `docs/technical/`: existing references awaiting review. When you update one, extract lasting decisions to `docs/adr/`, move live contracts and runbooks beside the code, and update incoming links. Keep plans and verification evidence with their Pilot missions.
 
 Update the relevant guide when behavior changes. Keep implementation journals and test inventories
 out of user guides. Link to an existing contract rather than duplicating it.
