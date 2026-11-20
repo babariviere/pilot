@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -229,27 +229,31 @@ async function dayRuntimeFixture(
 		weekly: null,
 		allowance: { perReportMicros: 1000000, monthlyMicros: 10000000, basis: "catalog_estimate" },
 	};
-	const day = new DayInsights({
-		home: f.home,
-		host,
-		projects: f.projects,
-		models: f.models,
-		store: f.missions.dayInsights,
-		owners: f.missions.insightsOwner,
-		workspace: f.missions.insightsWorkspace,
-		sessions: f.sessions,
-		allowance: f.missions.dayInsightsAllowance,
-		admissionEpoch: f.sessions.insightsAdmissionEpoch,
-		runtime: new DayInsightsExecution({
-			sessions: f.sessions,
-			owners: f.missions.insightsOwner,
-			store: f.missions.dayInsights,
-			schedules: f.schedules,
-			journal: f.journal,
+	const attachDay = (sessions = f.sessions) => {
+		const day = new DayInsights({
+			home: f.home,
+			host,
+			projects: f.projects,
 			models: f.models,
-		}),
-	});
-	f.sessions.dayInsights = day;
+			store: f.missions.dayInsights,
+			owners: f.missions.insightsOwner,
+			workspace: f.missions.insightsWorkspace,
+			sessions,
+			allowance: f.missions.dayInsightsAllowance,
+			admissionEpoch: sessions.insightsAdmissionEpoch,
+			runtime: new DayInsightsExecution({
+				sessions,
+				owners: f.missions.insightsOwner,
+				store: f.missions.dayInsights,
+				schedules: f.schedules,
+				journal: f.journal,
+				models: f.models,
+			}),
+		});
+		sessions.dayInsights = day;
+		return day;
+	};
+	const day = attachDay();
 	const intent = async (
 		action: import("@pilot/protocol").DayInsightsAction,
 		config: typeof settings | null = null,
@@ -265,7 +269,7 @@ async function dayRuntimeFixture(
 	};
 	const run = (op: DurableOperation) => f.journal.execute(op, (op, entry) => day.admit(op, entry.firstEntry));
 	assert.equal((await run(await intent("apply", settings))).state, "accepted");
-	return { ...f, day, settings, intent, runDay: run };
+	return { ...f, day, settings, intent, runDay: run, attachDay };
 }
 
 async function seedGoneInsights(f: Awaited<ReturnType<typeof fixture>>, report: string, revision?: number) {
@@ -537,6 +541,67 @@ test("Day unavailable input placement stays uncertain until native Pause", async
 		"blocked",
 	);
 	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day Pause cancels a cold report without reopening its worker", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const run = await f.intent("run");
+	assert.equal((await f.runDay(run)).state, "accepted");
+	const worker = f.workers[0]!;
+	worker.state = "failed";
+	worker["onExit"](worker, 1);
+	await f.missions.durable();
+	const receipt = await f.runDay(await f.intent("pause"));
+	assert.equal(receipt.state, "accepted", JSON.stringify(receipt));
+	assert.equal(f.workers.length, 1);
+	assert.equal((await f.runDay(await f.intent("resume"))).state, "accepted");
+	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
+	assert.equal(f.workers.length, 2);
+	assert.equal(worker.requests.filter((request) => request.type === "input").length, 1);
+	assert.notEqual(f.specs[1]?.dayInsightsRunId, run.operationId);
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+});
+
+test("Day startup clears a stranded Stop only for an already cancelled report", async (t) => {
+	const f = await dayRuntimeFixture(t);
+	const run = await f.intent("run");
+	assert.equal((await f.runDay(run)).state, "accepted");
+	assert.equal((await f.runDay(await f.intent("pause"))).state, "accepted");
+	assert.equal((await f.runDay(await f.intent("resume"))).state, "accepted");
+	const path = join(f.home, "sessions", f.owner.reportSessionId, "meta.json");
+	const saved = JSON.parse(await readFile(path, "utf8"));
+	// Reproduce metadata left by earlier versions when their cold Stop tried to open a cancelled run.
+	for (const [runId, state] of [
+		[randomUUID(), "blocked"],
+		[run.operationId, "ready"],
+	]) {
+		await writeFile(
+			path,
+			JSON.stringify({
+				...saved,
+				insightsReviewRun: runId,
+				pending: [{ type: "abort", requestId: randomUUID() }],
+				kernelRestartPending: true,
+				inputError: "Synthetic interrupted input",
+				failure: "Session startup: day_insights_run_not_active",
+			}),
+		);
+		const restarted = await f.manager();
+		restarted.setInsightsWorkspaceStore(f.missions.insightsWorkspace);
+		restarted.setInsightsOwnerStore(f.missions.insightsOwner);
+		const day = f.attachDay(restarted);
+		await day.recoverCancelledStop();
+		const review = await day.preflight({
+			action: "run",
+			expectedRevision: (await day.status()).revision,
+			projectId: f.project.id,
+			settings: null,
+		});
+		assert.equal(review.state, state, JSON.stringify(review));
+		await restarted.shutdown();
+	}
+	assert.equal(f.workers.length, 1, "Startup recovery and review must not open a report worker");
+	assert.equal(f.missions.dayInsights.run(run.operationId)?.state, "cancelled");
 });
 
 test("Day manual Apply starts no worker; explicit Run uses closed reader, allowances, Pause and distinct Resume", async (t) => {

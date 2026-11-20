@@ -238,6 +238,13 @@ export class DayInsightsStore {
 			workspace,
 		);
 	}
+	isCancelledRun(workspace: string, run: string): boolean {
+		return !!this.db.one(
+			"SELECT 1 FROM day_insights_runs d JOIN insights_owner_runs r USING (workspace_id,run_id) WHERE d.workspace_id=? AND d.run_id=? AND d.state='cancelled' AND r.state='cancelled'",
+			workspace,
+			run,
+		);
+	}
 	assertControl(workspace: string, generation: number, operationId?: string) {
 		const c = this.control(workspace);
 		if (!c || Number(c.generation) !== generation || (operationId !== undefined && c.operation_id !== operationId))

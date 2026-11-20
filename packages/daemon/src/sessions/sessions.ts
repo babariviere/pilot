@@ -1621,6 +1621,61 @@ export class SessionManager {
 		const binding = this.metas.get(id)?.insightsOwner?.binding;
 		return !!binding && !!this.insightsOwnerStore?.isDayExecution(binding);
 	}
+	async recoverCancelledDayStop(id: string, cancelled: (run: string) => boolean): Promise<void> {
+		const meta = this.metas.get(id);
+		if (
+			!meta?.insightsOwner ||
+			!this.isDayInsightsReport(id) ||
+			meta.failure !== "Session startup: day_insights_run_not_active" ||
+			!meta.insightsReviewRun ||
+			meta.pending?.length !== 1 ||
+			meta.pending[0]?.type !== "abort" ||
+			!cancelled(meta.insightsReviewRun)
+		)
+			return;
+		this.insightsOwnerLease(meta.insightsOwner.authority).revalidate();
+		await this.stopColdDayReport(meta);
+	}
+	private async stopColdDayReport(meta: SessionMeta): Promise<StopResponse> {
+		const id = meta.id;
+		if (
+			this.workers.has(id) ||
+			this.starting.has(id) ||
+			this.sending.has(id) ||
+			this.delivering.has(id) ||
+			this.parking.has(id) ||
+			this.changingModels.has(id) ||
+			meta.preparing ||
+			this.backgroundWorking(meta) ||
+			meta.pending?.some(
+				(command) =>
+					command.type !== "abort" &&
+					!(
+						command.type === "input" &&
+						!!meta.insightsReviewRun &&
+						insightsReviewRunId(command.requestId) === meta.insightsReviewRun
+					),
+			)
+		)
+			throw new Conflict("owner_execution_not_quiescent");
+		// Day never reopens an old run's storage. With no worker, there is nothing to send Abort to.
+		delete meta.pending;
+		delete meta.insightsReviewRun;
+		delete meta.failure;
+		delete meta.inputError;
+		delete meta.initializing;
+		delete meta.kernelRestartPending;
+		delete meta.inputsPaused;
+		delete meta.sleepPaused;
+		delete meta.recoveryStopped;
+		meta.working = false;
+		this.kernelErrors.delete(id);
+		this.kernelFailures.delete(id);
+		clearOutcome(meta);
+		await this.save(meta, undefined, undefined, true);
+		this.emit(meta);
+		return { ok: true };
+	}
 	async denyUnsupportedDayInsights(id: string) {
 		const saved = this.require(id).insightsOwner;
 		if (!saved || !this.isDayInsightsReport(id)) throw new Conflict("day_insights_identity_unavailable");
@@ -11468,6 +11523,7 @@ ${run.excerpt}`,
 		}
 		if (this.actionRunner?.isWorking(id)) await this.actionRunner.cancelSession(id);
 		await this.workspaceSetups.get(id)?.done;
+		if (this.isDayInsightsReport(id) && !this.workers.has(id)) return this.stopColdDayReport(meta);
 		const parkedForLifecycle =
 			!this.workers.has(id) && !!meta.lifecycleCheckpoint && (this.updateGate.frozen || this.missionWorkHeld(id));
 		if (!parkedForLifecycle && this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);

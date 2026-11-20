@@ -106,6 +106,20 @@ export class DayInsights {
 		if (!s?.owner || s.owner.reportSessionId !== id) throw new Conflict("day_insights_run_owner_changed");
 		return this.deps.store.assertRun(s.owner.workspaceId, run, this.deps.admissionEpoch);
 	}
+	async recoverCancelledStop(): Promise<void> {
+		const { store, sessions, owners, home } = this.deps;
+		if (!this.executionAvailable || !sessions || !owners) return;
+		const owner = store.current(home, this.guard)?.owner;
+		if (!owner) return;
+		await sessions.recoverCancelledDayStop(owner.reportSessionId, (run) => {
+			if (store.uncertain(home) || store.blockingRun(owner.workspaceId) || !store.isCancelledRun(owner.workspaceId, run))
+				return false;
+			const authority = this.authority(owner.projectId);
+			owners.assertNoEntered(authority);
+			owners.assertApplyIdle(authority);
+			return true;
+		});
+	}
 	async reserveRun(id: string, request: import("@pilot/protocol").InsightsReviewDispatch) {
 		const s = this.deps.store.current(this.deps.home, this.guard);
 		if (!s?.owner || s.owner.reportSessionId !== id || !request.settingsRevision)

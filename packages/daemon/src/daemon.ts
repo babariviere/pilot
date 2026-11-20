@@ -322,6 +322,10 @@ let stopping = false;
 const startupWork = new RuntimeBackground("daemon-recovery");
 async function resumeRuntime(): Promise<void> {
 	if (stopping || server.runtimeFrozen()) return;
+	if (!backgroundInitialized)
+		await daemonServices.dayInsights?.recoverCancelledStop().catch(() => {
+			console.warn("pilotd: cancelled Day Insights Stop recovery unavailable");
+		});
 	await sessions.resumeMaintenance();
 	if (!backgroundInitialized) {
 		mcpStatus.start();
