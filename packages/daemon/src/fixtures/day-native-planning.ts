@@ -1,7 +1,7 @@
 /** Isolated proxy drives real native Rust/daemon failure paths, never a live user home. */
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -10,6 +10,11 @@ import { WebSocket, WebSocketServer } from "ws";
 import { interviewHistoryFixture } from "../interview-history.fixture.ts";
 
 const { f, nextRound } = await interviewHistoryFixture();
+if (process.argv.includes("--preference-projects")) {
+	const path = join(f.home, "preferences-second-project");
+	await mkdir(path);
+	await f.projects.create({ path, workspace: "direct" });
+}
 // History persistence tests use explicit reads between rounds. Other journeys
 // retain the real invalidation stream, including stale-write refusal coverage.
 const quietEvents = process.argv.includes("--quiet-events");
@@ -111,6 +116,7 @@ console.log(
 );
 for await (const line of createInterface({ input: process.stdin })) {
 	const command = JSON.parse(line);
+	if (command.action === "quit") break;
 	if (command.action === "lost") lost = command.value;
 	if (command.action === "missing") missing = command.value;
 	if (command.action === "mismatch") mismatch = command.value;
@@ -137,6 +143,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 	}
 	console.log(JSON.stringify({ posts, lookups, held: !!hold, brief: f.store.brief(f.missionId) }));
 }
+// Native fixtures send "quit" before closing their side of the pipe.
+process.stdin.destroy();
 for (const socket of sockets) socket.close();
 for (const client of wss.clients) client.close();
 proxy.closeAllConnections();

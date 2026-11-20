@@ -8,7 +8,7 @@ import { ConnectedThreads } from "./threadFeed";
 import { Block, Body, Button } from "./ui";
 
 const threads = new ConnectedThreads("fixture");
-const preferences = new ConnectedPreferences("fixture");
+const preferences = new ConnectedPreferences("fixture", "p");
 const delivery = new ConnectedDelivery("fixture");
 const thread = signal("none");
 const preference = signal("none");

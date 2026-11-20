@@ -2000,6 +2000,12 @@ export class SessionManager {
 	/** Workers being closed for inactivity. A new worker for the session waits for the storage lease. */
 	private readonly parking = new Map<string, Promise<void>>();
 	private readonly parked = new WeakSet<SessionWorker>();
+	private readonly parkingCensus = new WeakMap<
+		SessionWorker,
+		{ operationId: string; requestId: string; children: KernelSubagent[]; clear: boolean }
+	>();
+	/** Same-daemon proof only. Saved child history does not prove a cold worker ever drained. */
+	private readonly parkedQuiescent = new WeakMap<SessionMeta, KernelSubagent[]>();
 	/** Invalidated whenever a new worker starts. Also supplements persisted reads after parking. */
 	private readonly coldSnapshots = new Map<
 		string,
@@ -4407,6 +4413,8 @@ ${run.excerpt}`,
 			!this.watchers.get(id)?.size &&
 			!this.starting.has(id) &&
 			!this.sending.has(id) &&
+			!this.lifecycleCheckpointAll &&
+			!this.lifecycleCheckpointSessions.has(id) &&
 			!this.changingModels.has(id) &&
 			!this.archiveTransitions.has(id) &&
 			!this.workspaceRefreshes.has(id) &&
@@ -4424,19 +4432,67 @@ ${run.excerpt}`,
 			if (this.closing) return;
 			const meta = this.metas.get(id);
 			if (!meta || !this.parkable(meta, worker)) continue;
+			const children = meta.subagents;
+			const checkCensus =
+				!!children?.length &&
+				children.length <= 256 &&
+				children.every((child) => child.state === "idle") &&
+				this.missionWorkMission(id) !== undefined;
 			// Background jobs and subagents run as kernel subprocesses and would die with it.
 			if ((await worker.hasChildren?.()) ?? true) continue;
+			// The stronger close can stop jobs. Do not ask for it if the job inventory is unavailable or nonempty.
+			if (checkCensus) {
+				const jobs = await worker.jobs?.().catch(() => undefined);
+				if (!jobs || jobs.length || meta.subagents !== children || worker.toolsRunning || worker.compacting)
+					continue;
+			}
 			if (this.closing || !this.parkable(meta, worker)) continue;
 			this.workers.delete(id);
 			this.lastUse.delete(id);
 			this.parked.add(worker);
 			this.nextWorkerLaunchReason.set(id, "parked_wake");
-			const closing: Promise<void> = worker.close().finally(() => {
+			const closing: Promise<void> = (
+				checkCensus ? this.closeParkedWorker(meta, worker, children) : worker.close()
+			).finally(() => {
 				if (this.parking.get(id) === closing) this.parking.delete(id);
 			});
 			this.parking.set(id, closing);
+			// A concurrent lifecycle operation still sees the rejection when it joins parking.
+			void closing.catch(() => {});
 			this.emit(meta);
 		}
+	}
+
+	private async closeParkedWorker(
+		meta: SessionMeta,
+		worker: SessionWorker,
+		children: KernelSubagent[],
+	): Promise<void> {
+		// Obtain the final census after kernel shutdown of its work, not the idle preflight observation.
+		const census = { operationId: randomUUID(), requestId: randomUUID(), children, clear: false };
+		this.parkingCensus.set(worker, census);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let acknowledged = false;
+		try {
+			await Promise.race([
+				worker.request({
+					type: "checkpointLifecycle",
+					operationId: census.operationId,
+					requestId: census.requestId,
+				}),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => reject(new Error("Idle worker checkpoint timed out")), 10_000);
+				}),
+			]);
+			acknowledged = true;
+		} catch {
+			// Still join the normal parking close. Never use a missing ACK as proof.
+		} finally {
+			clearTimeout(timer);
+			this.parkingCensus.delete(worker);
+		}
+		await worker.close();
+		if (acknowledged && census.clear && meta.subagents === children) this.parkedQuiescent.set(meta, children);
 	}
 
 	/** Wait for an inactivity close, so the next worker can take the session's storage lease. */
@@ -9650,12 +9706,22 @@ ${run.excerpt}`,
 		};
 		safe();
 		if (!meta.lifecycleCheckpoint || meta.lifecycleCheckpoint === prior) {
+			const children = meta.subagents;
+			const parkedWithProof =
+				children &&
+				this.parkedQuiescent.get(meta) === children &&
+				children.every((child) => child.state === "idle") &&
+				!meta.pending?.length &&
+				!meta.failure &&
+				!this.workers.has(id) &&
+				!this.starting.has(id) &&
+				!this.parking.has(id);
 			if (
 				meta.working ||
 				this.backgroundWorking(meta) ||
 				meta.kernelRestartPending ||
 				meta.inputError ||
-				meta.subagents?.length
+				(children?.length && !parkedWithProof)
 			)
 				throw new Conflict("Cold work has no acknowledged checkpoint");
 			if (!meta.pending?.length) {
@@ -14555,6 +14621,7 @@ ${run.excerpt}`,
 		this.validateMode(meta, true);
 		this.coldSnapshots.delete(id);
 		this.coldLoading.delete(id);
+		this.parkedQuiescent.delete(meta);
 		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
 		const createWorker =
 			this.factories.worker ??
@@ -14967,6 +15034,27 @@ ${run.excerpt}`,
 			return;
 		}
 		if (packet.type === "lifecycle.checkpointed") {
+			const parking = this.parkingCensus.get(worker);
+			if (parking) {
+				if (parking.requestId === packet.requestId && parking.operationId === packet.operationId) {
+					parking.clear =
+						!!packet.conversationId &&
+						packet.jobs === 0 &&
+						packet.hasChildren === false &&
+						packet.children.length === parking.children.length &&
+						packet.children.every((child, i) => {
+							const known = parking.children[i];
+							return (
+								known &&
+								child.state === "idle" &&
+								child.name === known.name &&
+								child.storage === known.storage &&
+								child.conversationId === known.conversationId
+							);
+						});
+				}
+				return;
+			}
 			const closing = this.lifecycleClosing.get(worker);
 			if (
 				closing &&

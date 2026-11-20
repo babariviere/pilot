@@ -404,7 +404,10 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 			.catch(() => ({ ok: false as const, refusal: "invalid" as Refusal }));
 		// A newer read was asked for: this answer means nothing now.
 		if (mine !== newest) return;
-		incomplete.set(!r.ok || epoch !== invalidated);
+		// An ordinary notice orders another read; it does not erase the last
+		// successful read. Only a failure makes a known scope incomplete.
+		if (!r.ok) incomplete.set(true);
+		else if (epoch === invalidated) incomplete.set(false);
 		if (!r.ok && PASSING.has(r.refusal)) {
 			// A passing failure: the service is down, slow or busy. Pilot tries
 			// again with backoff. Rows of this scope stay without a note until
@@ -547,7 +550,6 @@ export function mirrorScope(source: ScopeSource): ScopeMirror {
 		read,
 		invalidate: () => {
 			invalidated++;
-			incomplete.set(true);
 			if (activity() === "live") activity.set("stale");
 		},
 		close: () => {

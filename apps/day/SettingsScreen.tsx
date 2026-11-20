@@ -9,7 +9,18 @@
 // its result. Leaving, closing or updating keeps the draft (windowState.ts).
 // Settings is one form page: one panel with one tab per part (AI, Project, Local projects, Tool connections,
 // Allowances, Diagnostics & privacy). A tab shows only when this window has its controls.
-import { effect, keymap, Scroll, type ScrollRef, signal, untracked, View, type ViewRef } from "nsh";
+import {
+	cleanup,
+	effect,
+	keymap,
+	Scroll,
+	type ScrollRef,
+	type Signal,
+	signal,
+	untracked,
+	View,
+	type ViewRef,
+} from "nsh";
 import { ConnectionSettings } from "./ConnectionSettings";
 import { DiagnosisSettings } from "./DiagnosisSettings";
 import type { Day } from "./day";
@@ -24,9 +35,11 @@ import {
 	MAX_ENTRIES,
 	MAX_TEXT_BYTES,
 	type PreferencesMirror,
+	type PreferencesProjects,
 	type PreferencesView,
 	type ProjectPreference,
 	type ProjectPreferences,
+	type ProjectPreferencesMirror,
 	utf8Bytes,
 } from "./preferencesFeed";
 import {
@@ -38,7 +51,6 @@ import {
 	newKey,
 	type PreferencesDraft,
 	preferencesDraft,
-	preferencesMessage,
 	quoteOf,
 	revisionLine,
 	revisionQuote,
@@ -67,6 +79,7 @@ import {
 	PageFoot,
 	PageHead,
 	Panel,
+	Picker,
 	Quote,
 	Row,
 	RowDetail,
@@ -78,23 +91,31 @@ import {
 	TextField,
 } from "./ui";
 
-/** The new row that takes the keyboard focus once. */
-const focusRow = signal<string | null>(null);
-/** Whether the user asked to discard a draft kept for another project. */
-const discardAsk = signal(false);
-
 /** The project's preferences: the list, its sources and one explicit Save. */
-function Preferences(props: { mirror: PreferencesMirror }) {
+function Preferences(props: {
+	mirror: ProjectPreferencesMirror;
+	projects?: PreferencesProjects["projects"];
+	select?: (id: string) => void;
+	onReady?: () => void;
+}) {
 	const v = (): PreferencesView => props.mirror.view();
+	const focusRow = signal<string | null>(null);
+	const discardAsk = signal(false);
+	const preferencesMessage = signal("");
 	const read = (): ProjectPreferences | null => v().preferences;
+	effect(() => {
+		if (read() || v().reason) untracked(() => props.onReady?.());
+	});
 	// Pilot reads again on its own after a failed read, and when the window comes back.
 	const reads = keepRead(
 		() => props.mirror.source.read(),
 		() => !!v().reason,
 		() => !!read(),
 	);
-	const name = () => v().projectName || "this project";
-	/** A kept draft for another project than this window's: shown, never saved here. */
+	void props.mirror.source.read();
+	const name = () => v().projectName || props.projects?.find((p) => p.id === v().projectId)?.name || "this project";
+	const draftProject = () => props.projects?.find((p) => p.id === preferencesDraft()?.projectId);
+	/** A kept draft for another project: shown, never saved here. */
 	const elsewhere = () => {
 		const d = preferencesDraft();
 		return !!d && v().projectId !== "" && d.projectId !== v().projectId;
@@ -181,10 +202,10 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 	};
 	const check = async (operationId: string) => {
 		preferencesMessage.set("");
+		const d = preferencesDraft();
 		const r = await props.mirror.source.check(operationId);
-		if (r.status === "accepted" && r.saved) {
-			const d = preferencesDraft();
-			if (d && !differs(d, r.saved)) preferencesDraft.set(null);
+		if (r.status === "accepted" && r.saved && d && preferencesDraft() === d) {
+			if (d.baseRevision + 1 === r.saved.revision && !differs(d, r.saved)) preferencesDraft.set(null);
 		}
 		preferencesMessage.set(r.status === "accepted" ? "Your change was saved." : r.message);
 		void props.mirror.source.read();
@@ -228,11 +249,13 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 				<Body tone="muted" measure>
 					{`Small choices you made for ${name()}. Coordinators follow them when they plan and work in this project. They never give Pilot permission to do anything.`}
 				</Body>
-				<Facts>
-					<Fact label="Project" testID="preferences-project">
-						{v().projectName || (read() ? "This window's project" : "")}
-					</Fact>
-				</Facts>
+				<If when={!props.projects}>
+					<Facts>
+						<Fact label="Project" testID="preferences-project">
+							{v().projectName || (read() ? "This window's project" : "")}
+						</Fact>
+					</Facts>
+				</If>
 			</Block>
 			<If when={elsewhere()}>
 				<Notice
@@ -240,9 +263,26 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 					kind="needs"
 					placement="section"
 					text="You have unsaved preferences for another project."
-					detail={`This window saves only ${name()}'s preferences. They stay unsaved until you discard them.`}
+					detail={
+						draftProject()
+							? `Return to ${draftProject()?.name} to keep editing, or discard that draft before editing ${name()}.`
+							: "Keep the draft or discard it before editing this project."
+					}
 					otherAction={
-						<If when={discardAsk()}>
+						<If
+							when={discardAsk()}
+							else={
+								<If when={draftProject()}>
+									{(project) => (
+										<Button
+											small
+											label={`Return to ${project().name}`}
+											onPress={() => props.select?.(project().id)}
+										/>
+									)}
+								</If>
+							}
+						>
 							<Button
 								small
 								kind="destructive"
@@ -356,7 +396,7 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 					<Each of={rows()} key={(e) => e.key}>
 						{(e) => {
 							const field = keepField(
-								`preference-${e().key}`,
+								`preference-${v().projectId}-${e().key}`,
 								() => "settings",
 								() => e().text,
 							);
@@ -448,17 +488,18 @@ function Preferences(props: { mirror: PreferencesMirror }) {
 	);
 }
 
-/** Whether the history shows, the pages read and why a read failed. Reads only. */
-const historyOpen = signal(false);
-const historyPages = signal<HistoryPage[]>([]);
-const historyError = signal("");
-const historyReading = signal(false);
-const openRevision = signal<number | null>(null);
-
 /** The list's saved revisions, newest first, read only. Nothing here restores or saves. */
-function History(props: { mirror: PreferencesMirror }) {
+function History(props: { mirror: ProjectPreferencesMirror }) {
+	const historyOpen = signal(false);
+	const historyPages = signal<HistoryPage[]>([]);
+	const historyError = signal("");
+	const historyReading = signal(false);
+	const openRevision = signal<number | null>(null);
 	const current = () => props.mirror.view().preferences?.revision ?? null;
 	let asked = 0;
+	cleanup(() => {
+		asked++;
+	});
 	const load = async (before?: number) => {
 		const mine = ++asked;
 		historyReading.set(true);
@@ -585,21 +626,128 @@ const TABS: { id: SettingsTab; label: string }[] = [
 /** The tab the user chose, kept while the window is open. Null shows the first tab this window has. */
 const settingsTab = signal<SettingsTab | null>(null);
 
+/** The picker changes preferences and history only. Knowledge keeps the window project. */
+function ProjectSettings(props: { mirror: PreferencesMirror; chosen: Signal<string>; onReady: () => void }) {
+	const mirror = props.mirror;
+	if (!("scope" in mirror)) {
+		return (
+			<>
+				<Preferences mirror={mirror} onReady={props.onReady} />
+				<History mirror={mirror} />
+				<KnowledgeSection projectId={mirror.view().projectId} />
+			</>
+		);
+	}
+	const scope = mirror.scope;
+	const catalog = signal<PreferencesProjects | null>(null);
+	const failed = signal(false);
+	const read = async () => {
+		const next = await scope.read();
+		failed.set(!next);
+		if (!next) {
+			props.onReady();
+			return;
+		}
+		const available = (id: string | null | undefined) => next.projects.some((p) => p.id === id);
+		if (!props.chosen()) {
+			const draft = preferencesDraft()?.projectId;
+			const choice = available(draft)
+				? draft
+				: available(next.windowProject)
+					? next.windowProject
+					: next.projects.length === 1
+						? next.projects[0]?.id
+						: "";
+			if (choice) props.chosen.set(choice);
+		}
+		catalog.set(next);
+		if (!available(props.chosen())) props.onReady();
+	};
+	keepRead(read, failed, () => !!catalog());
+	void read();
+	const projects = () => catalog()?.projects ?? [];
+	const has = (id: string | null | undefined) => projects().some((p) => p.id === id);
+	const selected = () => (has(props.chosen()) ? props.chosen() : "");
+	const select = (id: string) => {
+		if (has(id)) props.chosen.set(id);
+	};
+	return (
+		<>
+			<Section title="Project settings">
+				<If
+					when={catalog()}
+					else={
+						<EmptyLine text={failed() ? "Could not read projects. Pilot will try again." : "Reading projects…"} />
+					}
+				>
+					<If when={projects().length > 0} else={<EmptyLine text="No local projects." />}>
+						<Block>
+							<Picker
+								field
+								searchable
+								testID="preferences-project-picker"
+								label="Project for preferences"
+								placeholder="Choose a project"
+								items={projects().map((p) => ({ value: p.id, title: p.name }))}
+								value={selected() || null}
+								onChange={select}
+							/>
+						</Block>
+					</If>
+				</If>
+			</Section>
+			<Each of={selected() ? [selected()] : []} key={(id) => id}>
+				{(id) => {
+					const mirror = scope.project(id());
+					return (
+						<>
+							<Preferences mirror={mirror} projects={projects()} select={select} onReady={props.onReady} />
+							<History mirror={mirror} />
+						</>
+					);
+				}}
+			</Each>
+			<If when={catalog()?.windowProject}>
+				{(project) => (
+					<>
+						<Block>
+							<Caption>{`Knowledge uses the window project: ${projects().find((p) => p.id === project())?.name ?? "This window's project"}.`}</Caption>
+						</Block>
+						<KnowledgeSection projectId={project()} />
+					</>
+				)}
+			</If>
+		</>
+	);
+}
+
 /** Settings over the window's preferences. Opening it only reads. */
 export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean }) {
 	const mirror = props.day.preferences as PreferencesMirror;
-	void mirror.source.read();
+	const chosenProject = signal("");
+	const projectReady = signal(false);
 	keymap.bind("escape", () => {
 		if (schedulesOpen()) schedulesOpen.set(false);
 		else if (!props.onBackFromJump?.()) closeSettings();
 	});
 	const scroll = keepScroll("settings");
+	const has = (tab: SettingsTab): boolean => {
+		if (tab === "ai" || tab === "allowances") return !!props.day.models;
+		if (tab === "connections") return !!props.day.connections || !!props.day.slack;
+		if (tab === "diagnosis") return !!props.day.diagnosis;
+		return true;
+	};
+	const tabs = () => TABS.filter((t) => has(t.id));
+	const tab = (): SettingsTab => {
+		const chosen = settingsTab();
+		return chosen && has(chosen) ? chosen : (tabs()[0]?.id ?? "project");
+	};
 	// A restored offset waits for the rows it scrolled through. A target (a task line's Change) wins over it.
 	let waiting = scroll.contentOffset.y > 0 && !untracked(settingsTarget) ? scroll.contentOffset.y : null;
 	const scroller = signal<ScrollRef | null>(null);
 	effect(() => {
 		const node = scroller();
-		if (waiting === null || !node || !mirror.view().preferences) return;
+		if (waiting === null || !node || (tab() === "project" && !projectReady())) return;
 		const y = waiting;
 		waiting = null;
 		node.scrollTo({ y, animated: false });
@@ -623,17 +771,6 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 				.catch(() => {});
 		});
 	});
-	const has = (tab: SettingsTab): boolean => {
-		if (tab === "ai" || tab === "allowances") return !!props.day.models;
-		if (tab === "connections") return !!props.day.connections || !!props.day.slack;
-		if (tab === "diagnosis") return !!props.day.diagnosis;
-		return true;
-	};
-	const tabs = () => TABS.filter((t) => has(t.id));
-	const tab = (): SettingsTab => {
-		const chosen = settingsTab();
-		return chosen && has(chosen) ? chosen : (tabs()[0]?.id ?? "project");
-	};
 	// A target (a task line's Change) names a work profile: the AI tab holds it.
 	effect(() => {
 		if (settingsTarget()?.section === "models" && has("ai")) untracked(() => settingsTab.set("ai"));
@@ -692,9 +829,11 @@ export function SettingsScreen(props: { day: Day; onBackFromJump?: () => boolean
 										{(controls) => <ModelSettingsSection controls={controls()} />}
 									</If>
 									<If when={tab() === "project"}>
-										<Preferences mirror={mirror} />
-										<History mirror={mirror} />
-										<KnowledgeSection projectId={mirror.view().projectId} />
+										<ProjectSettings
+											mirror={mirror}
+											chosen={chosenProject}
+											onReady={() => projectReady.set(true)}
+										/>
 									</If>
 									<If when={tab() === "projects"}>
 										<ProjectsSection />

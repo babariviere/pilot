@@ -40,6 +40,18 @@ test("a disconnected last empty read never claims nothing needs you", async () =
 	expect(app.shows("Pilot keeps going on its own.")).toBe(false);
 });
 
+test("an identical refresh keeps the empty Needs you state while the reply is pending", async () => {
+	const app = await open("./PlannerInterviewsFixture.tsx", desktop);
+	await app.waitFor(card("export"));
+	await app.keyboard.press("mod+shift+9");
+	await app.waitFor("Nothing needs you today.");
+	await app.keyboard.press("mod+shift+0");
+	expect(app.shows("Nothing needs you today.")).toBe(true);
+	expect(app.shows("What needs you is not fully known.")).toBe(false);
+	await app.keyboard.press("mod+shift+7");
+	expect(app.shows("Nothing needs you today.")).toBe(true);
+});
+
 test("Answer interview opens the exact mission; Back returns to the same scope with the draft kept", async () => {
 	const app = await open("./PlannerInterviewsFixture.tsx", desktop);
 	await app.waitFor(answer);

@@ -1,5 +1,5 @@
 // A project's preferences over the native root: `day.preferences.read` reads
-// the window's own project's small list of explicit choices, Save sends one
+// one named project's small list of explicit choices, Save sends one
 // full list once with the exact revision shown, and Check only looks up a
 // saved write's receipt. The native root picks the project; a Save that
 // names another project is refused there. Preferences are what the user
@@ -266,9 +266,10 @@ function outcomeOf(x: unknown, project: string, operationId: string | null): Sav
 	return { status: "unknown", message: UNKNOWN_SAVE, operationId, saved: null };
 }
 
-/** The connected window's preferences: its native root's own project. */
+/** One fixed project. A late reply cannot replace another project's view. */
 export class ConnectedPreferences implements PreferencesSource {
 	#window: string;
+	#project: string;
 	#snapshot: Snapshot | null = null;
 	#refusal: Refusal | null = null;
 	#ops: Summary[] = [];
@@ -288,8 +289,9 @@ export class ConnectedPreferences implements PreferencesSource {
 	#next = 0;
 	#closed = false;
 
-	constructor(window: string) {
+	constructor(window: string, project: string) {
 		this.#window = window;
+		this.#project = project;
 	}
 
 	view(): PreferencesView {
@@ -299,7 +301,7 @@ export class ConnectedPreferences implements PreferencesSource {
 		return {
 			availability: s ? "live" : this.#refusal ? "unavailable" : this.#asked ? "reading" : "idle",
 			reason,
-			projectId: s?.projectId ?? "",
+			projectId: this.#project,
 			projectName: s?.projectName ?? "",
 			preferences: s?.preferences ?? null,
 			unsettled: this.#ops
@@ -331,7 +333,9 @@ export class ConnectedPreferences implements PreferencesSource {
 	/** One exact call. Only the newest call's answer replaces what is shown. */
 	async #call(name: string, args: unknown): Promise<Reply<unknown>> {
 		const order = ++this.#sent;
-		const r = await call<unknown>(this.#window, name, args);
+		const reply = await call<unknown>(this.#window, name, args);
+		const r: Reply<unknown> =
+			reply.ok && reply.value.projectId !== this.#project ? { ok: false, refusal: "invalid" } : reply;
 		if (this.#closed) return r;
 		if (r.ok && order > this.#applied) {
 			// The first answer after the service could not be reached: look the lost saves up again.
@@ -339,7 +343,7 @@ export class ConnectedPreferences implements PreferencesSource {
 				this.#auto.restart();
 			const snapshot = snapshotOf(r.snapshot);
 			// A read for another project than the one shown never replaces it.
-			if (snapshot && (!this.#snapshot || snapshot.projectId === this.#snapshot.projectId)) {
+			if (snapshot?.projectId === this.#project) {
 				this.#snapshot = snapshot;
 				this.#refusal = null;
 			} else if (name === "day.preferences.read") {
@@ -369,7 +373,7 @@ export class ConnectedPreferences implements PreferencesSource {
 		this.#reading = (async () => {
 			do {
 				this.#again = false;
-				await this.#call("day.preferences.read", {});
+				await this.#call("day.preferences.read", { projectId: this.#project });
 				this.#publish();
 			} while (this.#again && !this.#closed);
 		})().finally(() => {
@@ -381,6 +385,7 @@ export class ConnectedPreferences implements PreferencesSource {
 	}
 
 	async save(intent: SaveIntent): Promise<SaveResult> {
+		if (intent.projectId !== this.#project) return refusedSave("stale");
 		if (this.#saving) return refusedSave("busy");
 		if (this.view().unsettled.length > 0) {
 			return {
@@ -417,18 +422,20 @@ export class ConnectedPreferences implements PreferencesSource {
 
 	/** One automatic Check: a receipt read only. It never sends the save again. */
 	async #lookUp(operationId: string): Promise<void> {
-		const r = await this.#call("day.preferences.check", { operationId });
-		if (r.ok) this.#publish();
+		const r = await this.#call("day.preferences.check", { projectId: this.#project, operationId });
+		if (r.ok) {
+			this.#publish();
+			if (outcomeOf(r.value.outcome, this.#project, operationId).status === "accepted") void this.read();
+		}
 	}
 
 	async check(operationId: string): Promise<SaveResult> {
 		if (this.#checking.has(operationId)) return refusedSave("busy");
-		const project = this.#snapshot?.projectId ?? "";
 		this.#checking.add(operationId);
 		this.#publish();
 		let r: Reply<unknown>;
 		try {
-			r = await this.#call("day.preferences.check", { operationId });
+			r = await this.#call("day.preferences.check", { projectId: this.#project, operationId });
 		} finally {
 			this.#checking.delete(operationId);
 		}
@@ -441,7 +448,7 @@ export class ConnectedPreferences implements PreferencesSource {
 				saved: null,
 			};
 		}
-		const result = outcomeOf(r.value.outcome, project, operationId);
+		const result = outcomeOf(r.value.outcome, this.#project, operationId);
 		if (result.status === "unknown") {
 			result.message = "Pilot's service has no result for it yet. Nothing was sent again.";
 		}
@@ -449,11 +456,10 @@ export class ConnectedPreferences implements PreferencesSource {
 	}
 
 	async history(before?: number): Promise<HistoryRead> {
-		const project = this.#snapshot?.projectId ?? "";
-		if (!project) return { ok: false, reason: "Pilot has not read this project's preferences yet." };
-		const r = await call<unknown>(this.#window, "day.preferences.history", before === undefined ? {} : { before });
+		const projectId = this.#project;
+		const r = await call<unknown>(this.#window, "day.preferences.history", { projectId, before });
 		if (!r.ok) return { ok: false, reason: historyReason(r.refusal) };
-		const page = historyOf(r.snapshot, project, before);
+		const page = historyOf(r.snapshot, projectId, before);
 		return page ? { ok: true, page } : { ok: false, reason: historyReason("invalid") };
 	}
 
@@ -465,14 +471,58 @@ export class ConnectedPreferences implements PreferencesSource {
 }
 
 /** The preferences' view, mirrored in one signal that only the source's listener sets. */
-export type PreferencesMirror = {
+export type ProjectPreferencesMirror = {
 	source: PreferencesSource;
 	view: Signal<PreferencesView>;
 	close: () => void;
 };
 
+type ScopedPreferences = {
+	scope: {
+		read: () => Promise<PreferencesProjects | null>;
+		project: (id: string) => ProjectPreferencesMirror;
+	};
+	close: () => void;
+};
+
+export type PreferencesMirror = ProjectPreferencesMirror | ScopedPreferences;
+
+export type PreferencesProjects = {
+	windowProject: string | null;
+	projects: { id: string; name: string }[];
+};
+
+/** Keep the last good reads of a few projects, and close them with the window. */
+export function connectedPreferences(window: string): ScopedPreferences {
+	const mirrors = new Map<string, ProjectPreferencesMirror>();
+	return {
+		scope: {
+			async read() {
+				const r = await call<PreferencesProjects>(window, "day.preferences.projects.read", {});
+				if (!r.ok || !r.snapshot || !Array.isArray(r.snapshot.projects)) return null;
+				return r.snapshot;
+			},
+			project(id) {
+				const mirror = mirrors.get(id) ?? mirrorPreferences(new ConnectedPreferences(window, id));
+				mirrors.delete(id);
+				mirrors.set(id, mirror);
+				if (mirrors.size > 4) {
+					const oldest = mirrors.keys().next().value!;
+					mirrors.get(oldest)?.close();
+					mirrors.delete(oldest);
+				}
+				return mirror;
+			},
+		},
+		close() {
+			for (const mirror of mirrors.values()) mirror.close();
+			mirrors.clear();
+		},
+	};
+}
+
 /** Mirrors `source`'s view. Rows that arrive or leave glide to their places. */
-export function mirrorPreferences(source: PreferencesSource): PreferencesMirror {
+export function mirrorPreferences(source: PreferencesSource): ProjectPreferencesMirror {
 	const view = signal(source.view());
 	const shape = (v: PreferencesView) => (v.preferences?.entries ?? []).map((e) => e.id).join(",");
 	const stop = source.onChange((next) => {

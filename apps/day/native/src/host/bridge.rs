@@ -477,12 +477,14 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::PreferencesRead
+        Command::PreferencesProjects
+            | Command::PreferencesRead(_)
             | Command::PreferencesSave(_)
-            | Command::PreferencesCheck(_)
+            | Command::PreferencesCheck { .. }
             | Command::PreferencesHistory(_)
     ) {
-        return super::preferences::handle(t, journal, shared, &call.command, &call.gate).await;
+        return super::preferences::handle(root, t, journal, shared, &call.command, &call.gate)
+            .await;
     }
     if matches!(call.command, Command::PowerResume) {
         call.command
@@ -778,9 +780,10 @@ async fn run(
         | Command::IntakeOpen(_) => {
             unreachable!("handled intake command")
         }
-        Command::PreferencesRead
+        Command::PreferencesProjects
+        | Command::PreferencesRead(_)
         | Command::PreferencesSave(_)
-        | Command::PreferencesCheck(_)
+        | Command::PreferencesCheck { .. }
         | Command::PreferencesHistory(_) => {
             unreachable!("handled preferences command")
         }

@@ -9,7 +9,9 @@ In Day, each page is one panel, with tabs on its top edge where the page has par
 opens a menu of places. **Search** (Command+K) sits at its right with Changes, Feedback, Artifacts, Settings
 and New. Today's tabs filter the page: Overview, Needs you, New, Working and Missions.
 Settings has tabs for AI, Project, Local projects, Tool connections, Allowances and Diagnostics & privacy;
-a tab this window cannot reach is hidden. A plan's page has Questions and Plan tabs, and Activity when
+a tab this window cannot reach is hidden. In **Project**, choose **Project for preferences** to read and edit
+that project's preferences without switching the window. A draft for another project stays until you return
+to it or discard it. A plan's page has Questions and Plan tabs, and Activity when
 Pilot can read the planning chat. A mission's **Rename** opens as a question at the top of its page:
 **Save** sends the new title once, **Cancel** keeps the old one. A result's page leads with **Your check**.
 A kept change in Changes has Diff and History tabs. The Artifacts page lists artifacts as rows; opening a

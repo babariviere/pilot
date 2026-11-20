@@ -118,6 +118,13 @@ bind(9, () => {
 	projects = scope([], false);
 	read();
 });
+bind(0, () => {
+	hold = (resume) => {
+		release = resume;
+	};
+	mirror.invalidate();
+	read();
+});
 keymap.bind(
 	"mod+shift+d",
 	() => {

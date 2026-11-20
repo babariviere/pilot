@@ -23,7 +23,7 @@ async function openLookups(script: Script) {
 		host: { params: { day: { version: 1, window: "fixture" } } },
 		modules: {
 			nsh: {
-				"host.call": (name: string) => {
+				"host.call": (name: string, request: { args: { projectId?: string; operationId?: string } }) => {
 					const ok = (value: Record<string, unknown>) => ({ version: 1, value: { snapshot: null, ...value } });
 					switch (name) {
 						case "day.threads.read":
@@ -34,11 +34,13 @@ async function openLookups(script: Script) {
 							checks.thread++;
 							return ok({ operations: [threadOp(state(checks.thread))] });
 						case "day.preferences.read":
+							expect(request.args).toEqual({ projectId: "p" });
 							if (script.failReads && reads === 2) return { version: 1, error: "offline" };
-							return ok({ operations: [preferenceOp(state(checks.preference))] });
+							return ok({ projectId: "p", operations: [preferenceOp(state(checks.preference))] });
 						case "day.preferences.check":
+							expect(request.args).toEqual({ projectId: "p", operationId: "p1" });
 							checks.preference++;
-							return ok({ operations: [preferenceOp(state(checks.preference))] });
+							return ok({ projectId: "p", operations: [preferenceOp(state(checks.preference))] });
 						case "day.delivery.saved":
 							if (script.failReads && reads === 2) return { version: 1, error: "offline" };
 							return ok({ operations: [resultOp(state(checks.result))] });

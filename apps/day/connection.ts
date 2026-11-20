@@ -25,7 +25,7 @@ import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { pendingAnswers } from "./planView";
 import { connectedPower } from "./power";
-import { ConnectedPreferences, mirrorPreferences } from "./preferencesFeed";
+import { connectedPreferences } from "./preferencesFeed";
 import { settingsOpen } from "./preferencesView";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import { connectedScheduleControls } from "./scheduleControls";
@@ -384,7 +384,7 @@ async function connect() {
 			delivery: mirrorDelivery(deliveryFeed),
 			linear: mirrorLinear(new ConnectedLinear(window)),
 			scope: mirrorScope(new ConnectedScope(window)),
-			preferences: mirrorPreferences(new ConnectedPreferences(window)),
+			preferences: connectedPreferences(window),
 			threads: mirrorThreads(new ConnectedThreads(window)),
 			feedback: mirrorFeedback(feedback),
 			artifacts: new ConnectedArtifacts(window),

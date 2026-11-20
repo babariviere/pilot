@@ -15,6 +15,7 @@ import {
 	EmptyLine,
 	ExpandableRow,
 	Field,
+	Icon,
 	Link,
 	Option,
 	Options,
@@ -180,6 +181,7 @@ function ProfileRow(props: {
 }) {
 	const p = () => props.profile;
 	const open = () => openProfile() === p().id;
+	const action = () => (open() ? "Hide models" : "Edit models");
 	const all = () => props.settings.profiles ?? [];
 	const change = (patch: Partial<WorkProfile>) =>
 		props.save(all().map((x) => (x.id === p().id ? { ...x, ...patch } : x)));
@@ -192,6 +194,7 @@ function ProfileRow(props: {
 	return (
 		<ExpandableRow
 			testID={`profile-${p().id}`}
+			accessibilityLabel={`${action()} for ${p().name}`}
 			anchor={(node) => summary.set(node)}
 			open={open()}
 			onToggle={() => openProfile.set(open() ? "" : p().id)}
@@ -241,6 +244,10 @@ function ProfileRow(props: {
 					{`${profileSummary(props.settings, p())}${p().optInOnly ? " · Off until a project allows it" : ""}`}
 				</Caption>
 			</View>
+			<Buttons>
+				<Caption>{action()}</Caption>
+				<Icon name="chevron" />
+			</Buttons>
 		</ExpandableRow>
 	);
 }

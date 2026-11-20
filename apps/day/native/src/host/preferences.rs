@@ -1,6 +1,5 @@
 //! The selected project's small preferences on the existing serialized host
-//! and fsynced ledger. The root chooses the project; TSX names it only so a
-//! draft for another project is refused, never retargeted. A Save is one
+//! and fsynced ledger. Resolve the Settings selection without changing window focus. A Save is one
 //! journaled operation sent once. A lost answer stays Unknown: Check looks
 //! up that exact envelope and never sends a replacement.
 use super::{Error, Journal, Shared, Transport, planning, valid_id};
@@ -116,11 +115,26 @@ fn is_preferences(r: &planning::PlanningRecord) -> bool {
     r.operation["kind"] == KIND
 }
 
-fn summaries(t: &Transport, journal: &Journal) -> Vec<Value> {
+fn within_root(root: &Transport, project: &str) -> bool {
+    root.source
+        .project
+        .as_ref()
+        .is_none_or(|p| p.project_id == project)
+}
+
+// A path or port change must not hide a pending operation for the same project.
+fn belongs(r: &planning::PlanningRecord, root: &Transport, project: &str) -> bool {
+    is_preferences(r)
+        && r.source.profile == root.source.profile
+        && r.source.home == root.source.home
+        && r.operation["targetId"] == project
+}
+
+fn summaries(root: &Transport, project: &str, journal: &Journal) -> Vec<Value> {
     journal
         .planning
         .values()
-        .filter(|r| r.source == t.source && is_preferences(r))
+        .filter(|r| belongs(r, root, project))
         .map(|r| {
             let p = payload(&r.operation).unwrap_or(Value::Null);
             json!({"operationId":r.id(),"expectedRevision":p["expectedRevision"],
@@ -149,8 +163,8 @@ fn valid_list(v: &Value, project: &str) -> bool {
         })
 }
 
-/// The root's project's list and its name. A list for another project is never shown.
-pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
+/// The scoped project's list. A list for another project is never shown.
+async fn read(t: &Transport, name: &str) -> Result<Value, Error> {
     t.gate(false).await?;
     let project = &t.source.project()?.project_id;
     let list = t
@@ -159,18 +173,6 @@ pub(super) async fn read(t: &Transport) -> Result<Value, Error> {
     if !valid_list(&list, project) {
         return Err(Error::Invalid);
     }
-    // The name only labels the page; without it the page says "this project".
-    let name = super::new_chat::inventory(t)
-        .await
-        .ok()
-        .and_then(|v| {
-            v["projects"].as_array().and_then(|rows| {
-                rows.iter()
-                    .find(|r| r["projectId"] == *project)
-                    .and_then(|r| r["name"].as_str().map(str::to_owned))
-            })
-        })
-        .unwrap_or_default();
     // A changed project/path or native identity during the read cannot publish it.
     t.gate(false).await?;
     Ok(json!({"version":1,"projectId":project,"projectName":name,"preferences":list}))
@@ -181,13 +183,14 @@ const HISTORY_PAGE: usize = 20;
 
 /// One older page of history, newest first. Read only.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct History {
+    project_id: String,
     before: Option<u64>,
 }
 impl History {
     pub(crate) fn validate(&self) -> Result<(), Error> {
-        if self.before.is_some_and(|n| n == 0 || n > MAX_REVISION) {
+        if !valid_id(&self.project_id) || self.before.is_some_and(|n| n == 0 || n > MAX_REVISION) {
             return Err(Error::Invalid);
         }
         Ok(())
@@ -245,7 +248,8 @@ async fn history(t: &Transport, request: &History) -> Result<Value, Error> {
 }
 
 pub(super) async fn handle(
-    t: &Transport,
+    root: &Transport,
+    focused: &Transport,
     journal: &mut Journal,
     shared: &Shared,
     command: &Command,
@@ -256,6 +260,67 @@ pub(super) async fn handle(
         shared.open()?;
         command.admit(&gate.lock().expect("bridge gate poisoned"))
     };
+    if matches!(command, Command::PreferencesProjects) {
+        let catalog = super::new_chat::inventory(root).await?;
+        let projects: Vec<_> = catalog["projects"]
+            .as_array()
+            .ok_or(Error::Invalid)?
+            .iter()
+            .filter(|row| {
+                row["projectId"]
+                    .as_str()
+                    .is_some_and(|id| within_root(root, id))
+            })
+            .map(|row| json!({"id":row["projectId"], "name":row["name"]}))
+            .collect();
+        check()?;
+        return Ok(json!({"snapshot":{"projects":projects,
+            "windowProject":focused.source.project.as_ref().map(|p| &p.project_id)}}));
+    }
+    let project = match command {
+        Command::PreferencesHistory(r) => &r.project_id,
+        Command::PreferencesRead(id) => id,
+        Command::PreferencesSave(intent) => &intent.project_id,
+        Command::PreferencesCheck { project, .. } => project,
+        _ => return Err(Error::Invalid),
+    };
+    if !within_root(root, project) {
+        return Err(Error::Identity);
+    }
+    if let Command::PreferencesCheck { operation, .. } = command {
+        let mut record = journal
+            .planning
+            .get(operation)
+            .filter(|r| belongs(r, root, project))
+            .cloned()
+            .ok_or(Error::Unknown)?;
+        // Check the immutable envelope, even if the project was moved or removed.
+        root.profile_gate().await?;
+        check()?;
+        if record.pending()
+            && let Ok(receipt) = root.planning_operation(&record.operation, true).await
+        {
+            record.receipt = Some(receipt);
+            journal.save_planning(record.clone())?;
+        }
+        let outcome = json!({"operationId":record.id(),"state":if record.not_sent {json!("not-sent")} else {record.receipt.as_ref().map(|r| r["state"].clone()).unwrap_or(json!("unknown"))},"receipt":record.receipt});
+        return Ok(
+            json!({"snapshot":null,"projectId":project,"operations":summaries(root, project, journal),"outcome":outcome}),
+        );
+    }
+
+    let catalog = super::new_chat::inventory(root).await?;
+    let row = catalog["projects"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|r| r["projectId"] == *project))
+        .ok_or(Error::Identity)?;
+    let scoped = root.for_project(row)?;
+    // A project-bound launch must not silently adopt a new path from the catalog.
+    if root.source.project.is_some() && root.source.project != scoped.source.project {
+        return Err(Error::Identity);
+    }
+    let t = &scoped;
+    let name = row["name"].as_str().ok_or(Error::Invalid)?;
     let mut outcome = Value::Null;
     match command {
         Command::PreferencesHistory(request) => {
@@ -263,21 +328,17 @@ pub(super) async fn handle(
             check()?;
             return Ok(json!({"snapshot":snapshot,"outcome":null}));
         }
-        Command::PreferencesRead => {}
+        Command::PreferencesRead(_) => {}
         Command::PreferencesSave(intent) => {
             intent.validate()?;
-            // A draft for another project is refused, never saved to this one.
-            if intent.project_id != t.source.project()?.project_id {
-                return Err(Error::Stale);
-            }
             if journal
                 .planning
                 .values()
-                .any(|r| r.source == t.source && is_preferences(r) && r.pending())
+                .any(|r| belongs(r, root, project) && r.pending())
             {
                 return Err(Error::Unknown);
             }
-            let current = read(t).await?;
+            let current = read(t, name).await?;
             check()?;
             if current["preferences"]["revision"] != intent.expected_revision {
                 return Err(Error::Stale);
@@ -319,35 +380,19 @@ pub(super) async fn handle(
             outcome = json!({"operationId":record.id(),"state":if saved {record.receipt.as_ref().map(|r| r["state"].clone()).unwrap_or(json!("unknown"))} else {json!("unknown")},
                 "receipt":if saved {record.receipt.clone()} else {None}});
         }
-        Command::PreferencesCheck(id) => {
-            let mut record = journal
-                .planning
-                .get(id)
-                .filter(|r| r.source == t.source && is_preferences(r))
-                .cloned()
-                .ok_or(Error::Unknown)?;
-            // Only the saved envelope. Never read or rebind the current list for this lookup.
-            t.gate(false).await?;
-            check()?;
-            if record.pending()
-                && let Ok(receipt) = t.planning_operation(&record.operation, true).await
-            {
-                record.receipt = Some(receipt);
-                journal.save_planning(record.clone())?;
-            }
-            outcome = json!({"operationId":record.id(),"state":if record.not_sent {json!("not-sent")} else {record.receipt.as_ref().map(|r| r["state"].clone()).unwrap_or(json!("unknown"))},"receipt":record.receipt});
-        }
         _ => return Err(Error::Invalid),
     }
-    let snapshot = read(t).await;
-    if matches!(command, Command::PreferencesRead) {
+    let snapshot = read(t, name).await;
+    if matches!(command, Command::PreferencesRead(_)) {
         let snapshot = snapshot?;
         check()?;
-        Ok(json!({"snapshot":snapshot,"operations":summaries(t,journal),"outcome":outcome}))
+        Ok(
+            json!({"snapshot":snapshot,"projectId":project,"operations":summaries(root,project,journal),"outcome":outcome}),
+        )
     } else {
         // A failed/raced refresh cannot erase the exact acknowledgement.
         Ok(
-            json!({"snapshot":snapshot.ok().filter(|_| check().is_ok()),"operations":summaries(t,journal),"outcome":outcome}),
+            json!({"snapshot":snapshot.ok().filter(|_| check().is_ok()),"projectId":project,"operations":summaries(root,project,journal),"outcome":outcome}),
         )
     }
 }
@@ -443,7 +488,14 @@ mod tests {
         let mut many = last.clone();
         many["revisions"] = json!((1..=21).rev().map(rev).collect::<Vec<_>>());
         assert!(!valid_history(&many, "p", None));
-        assert!(serde_json::from_value::<History>(json!({"before":3,"projectId":"p"})).is_err());
-        assert_eq!(History { before: Some(0) }.validate(), Err(Error::Invalid));
+        assert!(serde_json::from_value::<History>(json!({"before":3})).is_err());
+        assert_eq!(
+            History {
+                project_id: "p".into(),
+                before: Some(0)
+            }
+            .validate(),
+            Err(Error::Invalid)
+        );
     }
 }

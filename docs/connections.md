@@ -27,7 +27,7 @@ settings action stays Unknown. **Check receipt** reads its result without resend
 ## Work profiles
 
 A work profile names a kind of work and the models that do it. **Settings → AI → Work profiles** lists
-them, closed, with a summary such as "Large: Sol, Opus 5.5 · Small: Terra, Sonnet 5.5". Open one to
+them, closed, with a summary such as "Large: Sol, Opus 5.5 · Small: Terra, Sonnet 5.5". Choose **Edit models** to
 change its two lists: **Large** for risky, cross-cutting or design-heavy work, **Small** for contained work.
 Each entry has a model, any signed-in model, and its own thinking level. Move entries up or down, remove
 them or add one. **Opt-in only** keeps a profile off in every project until you allow it there.

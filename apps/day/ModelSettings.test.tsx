@@ -121,8 +121,10 @@ test("work profiles start collapsed with a summary; opening one edits its lists,
 	expect(app.shows("Large: Reasoner, Plain · Small: Plain")).toBe(true);
 	expect(app.shows("Large: fixture/unlisted · Small: fixture/unlisted · Off until a project allows it")).toBe(true);
 	expect(app.shows("id:profile-entry-backend-large-fixture/reasoner")).toBe(false);
-	await app.press("id:profile-backend");
+	expect(app.shows("id:profile-backend >> text:Edit models")).toBe(true);
+	await app.press("label:Edit models for Backend");
 	await app.waitFor("id:profile-entry-backend-large-fixture/reasoner");
+	expect(app.shows("Sends: 0, checks: 0")).toBe(true);
 	expect(app.shows("First is preferred when both are equally busy.")).toBe(true);
 	expect(app.shows("id:profile-up-backend-large-fixture/reasoner")).toBe(false);
 	await app.press("id:profile-down-backend-large-fixture/reasoner");

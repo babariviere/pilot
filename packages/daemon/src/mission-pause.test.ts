@@ -23,7 +23,14 @@ function deferred() {
 }
 async function fixture(
 	t: TestContext,
-	options: { lostAck?: boolean; remainingJobs?: number; failExit?: boolean; readyLost?: boolean } = {},
+	options: {
+		lostAck?: boolean;
+		remainingJobs?: number;
+		remainingChildren?: boolean;
+		missingChild?: boolean;
+		failExit?: boolean;
+		readyLost?: boolean;
+	} = {},
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-mission-pause-"));
 	const projects = new ProjectStore(home),
@@ -31,6 +38,17 @@ async function fixture(
 	const commands: { id: string; command: KernelCommand }[] = [];
 	const opened: string[] = [],
 		closed: string[] = [];
+	const idle = new Map<string, () => void>();
+	const child = {
+		name: "child",
+		task: "Synthetic subagent",
+		createdAt: 1,
+		cwd: home,
+		model: "synthetic",
+		storage: join(home, "child"),
+		conversationId: "child-conversation",
+		state: "idle" as const,
+	};
 	let closeGate: Promise<void> | undefined;
 	let closing: (() => void) | undefined;
 	const sessions = new SessionManager(
@@ -61,16 +79,9 @@ async function fixture(
 								requestId: command.requestId,
 								operationId: command.operationId,
 								conversationId: `conversation:${spec.sessionId}`,
-								children: [
-									{
-										name: "child",
-										storage: "/private/child",
-										conversationId: "child-conversation",
-										state: "idle",
-									},
-								],
+								children: options.missingChild ? [] : [child],
 								jobs: options.remainingJobs ?? 0,
-								hasChildren: false,
+								hasChildren: options.remainingChildren ?? false,
 							} as KernelPacket);
 						}
 					},
@@ -83,6 +94,11 @@ async function fixture(
 					jobs: async () => [],
 					hasChildren: async () => false,
 				};
+				idle.set(spec.sessionId, () => {
+					receive({ type: "subagents", subagents: [child] });
+					worker.state = "idle";
+					receive({ type: "working", working: false });
+				});
 				return worker;
 			},
 		},
@@ -127,6 +143,13 @@ async function fixture(
 		opened,
 		closed,
 		command,
+		parkIdleMember: async () => {
+			idle.get(a.id)!();
+			sessions["lastUse"].set(a.id, 0);
+			await sessions["parkIdleWorkers"]();
+			await sessions["parking"].get(a.id);
+			await sessions["saving"].get(a.id);
+		},
 		meta: async () => JSON.parse(await readFile(join(home, "sessions", a.id, "meta.json"), "utf8")),
 		gate: (promise: Promise<void>, onClosing: () => void) => {
 			closeGate = promise;
@@ -134,6 +157,68 @@ async function fixture(
 		},
 	};
 }
+
+test("mission Pause holds an idle member parked with child history, without reopening it on Resume", async (t) => {
+	const f = await fixture(t);
+	const exit = deferred();
+	const closing = deferred();
+	f.gate(exit.promise, closing.resolve);
+	const parking = f.parkIdleMember();
+	await closing.promise;
+	const command = f.command();
+	const pending = f.service.controls.execute(f.mission.id, command);
+	assert.equal(f.store.controls.current(f.mission.id).state, "pausing");
+	assert.deepEqual(f.closed, [], "parking ACK does not prove exit");
+	exit.resolve();
+	const [pause] = await Promise.all([pending, parking]);
+	assert.deepEqual(f.closed, [f.a.id]);
+	assert.equal(pause.control.state, "paused", JSON.stringify(pause.members));
+	assert.equal(pause.state, "acknowledged");
+	assert.deepEqual(pause.members, [{ sessionId: f.a.id, state: "held" }]);
+	const saved = await f.meta();
+	assert.equal(saved.subagents[0].state, "idle");
+	assert.equal(saved.lifecycleCheckpoint, undefined);
+	const resume = await f.service.controls.execute(f.mission.id, f.command("resume", command.operationId));
+	assert.equal(resume.control.state, "running");
+	assert.equal(f.opened.filter((id) => id === f.a.id).length, 1);
+});
+
+for (const options of [
+	{ lostAck: true },
+	{ remainingJobs: 1 },
+	{ remainingChildren: true },
+	{ missingChild: true },
+	{ failExit: true },
+]) {
+	test(`parked child history without full quiescence proof stays unknown: ${JSON.stringify(options)}`, async (t) => {
+		const f = await fixture(t, options);
+		if (options.failExit) await assert.rejects(f.parkIdleMember(), /exit uncertain/);
+		else await f.parkIdleMember();
+		const command = f.command();
+		const pause = await f.service.controls.execute(f.mission.id, command);
+		assert.equal(pause.control.state, "pausing");
+		assert.equal(pause.state, "unknown");
+		assert.equal(pause.members[0]?.state, "unknown");
+		await assert.rejects(
+			f.service.controls.execute(f.mission.id, f.command("resume", command.operationId)),
+			/acknowledged/,
+		);
+		assert.equal(f.opened.filter((id) => id === f.a.id).length, 1);
+	});
+}
+
+test("a reopened worker cannot reuse the earlier parked child's quiescence proof", async (t) => {
+	const options = { lostAck: false };
+	const f = await fixture(t, options);
+	await f.parkIdleMember();
+	await f.sessions.send(f.a.id, "Synthetic new input");
+	assert.equal(f.opened.filter((id) => id === f.a.id).length, 2);
+	options.lostAck = true;
+	await f.parkIdleMember();
+	const pause = await f.service.controls.execute(f.mission.id, f.command());
+	assert.equal(pause.control.state, "pausing");
+	assert.equal(pause.members[0]?.state, "unknown");
+});
 
 test("Linear reassignment checkpoints only the affected worker and does not clear mission Pause", async (t) => {
 	const f = await fixture(t);

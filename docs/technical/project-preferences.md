@@ -92,20 +92,24 @@ specialist profiles do not acquire a new broad project read or write capability.
 
 ## Day Settings
 
-Day's header opens Settings (⌘,). Its one section shows the window's own project's
-preferences: the project name, each preference with its source (added by you, or
-recorded by a mission coordinator from your note, with the quoted words) and the
-list's last change. Settings has no permission or provider controls.
+Day's header opens Settings (⌘,). In the Project tab, **Project for preferences**
+chooses which project's preferences and history to show. This choice does not
+change Today, New, navigation, or the window project used by Knowledge.
+Preferences show their source (added by you or recorded from your note) and the
+list's last change. A project-bound window can only choose its own project.
 
-- `day.preferences.read {}` reads the native root's project and its name. Reading
-  sends nothing. A failed read says so and is never shown as an empty list.
+- `day.preferences.projects.read {}` lists authorized projects from the native
+  catalog and reports the window project separately.
+- `day.preferences.read {projectId}` reads the named project and its name.
+  The root resolves it from the native catalog. A failure is never an empty list.
 - `day.preferences.save {projectId, expectedRevision, entries:[{id|null,text}]}`
-  sends the whole list once. The root refuses a project other than its own, rechecks
-  the revision, names new preferences, fixes the reason and journals the
+  sends the whole list once. The root verifies the project and path, rechecks the
+  revision, names new preferences, fixes the reason and journals the
   `project-preferences-update` envelope before the one POST.
-- `day.preferences.check {operationId}` only looks up that saved envelope's receipt.
-- `day.preferences.history {before?}` reads one page of saved revisions (at most 20,
-  newest first, strictly older than `before`) for the root's project. It is read only:
+- `day.preferences.check {projectId, operationId}` only looks up the saved envelope
+  for that project and profile lineage. A move or removal does not rebind the envelope.
+- `day.preferences.history {projectId, before?}` reads one page of saved revisions
+  for that project (at most 20, newest first, strictly older than `before`). It is read only:
   Settings shows who saved each revision, when, its reason, the quoted note and the
   list it saved, with no restore action. A failed read is not an empty history.
 
@@ -113,6 +117,7 @@ Edits form one draft that names its project and starting revision. Save and Reve
 show only once the words differ from the saved list. Leaving Settings, closing or
 updating keeps the draft in the window's saved view (`settings`, `preferences`).
 A newer saved list never replaces typed text: the user keeps their version (then
-saves) or uses the saved one. A draft for another project is kept, never saved
-here, and discarded only on request. A lost answer stays Unknown and blocks another
-Save until Check reads a receipt.
+saves) or uses the saved one. Switching projects keeps the draft with its original
+project. You can read another project, then return to the draft or explicitly
+discard it before editing elsewhere. A lost answer stays Unknown and blocks
+another Save for its project until a receipt is found.

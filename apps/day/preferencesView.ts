@@ -19,9 +19,6 @@ export type PreferencesDraft = { projectId: string; baseRevision: number; entrie
 /** The window's unsaved preferences, or null. Kept across pages, close and update. */
 export const preferencesDraft = signal<PreferencesDraft | null>(null);
 
-/** What the last Save or Check said, or "". */
-export const preferencesMessage = signal("");
-
 /** Where Settings opens: the Models section, at one work profile when named. */
 export type SettingsTarget = { section: "models"; profile?: string };
 
@@ -34,7 +31,6 @@ export const settingsReveal = signal<ViewRef | null>(null);
 /** Opens Settings, at `target` when given. Opening it only reads. */
 export function openSettings(target?: SettingsTarget) {
 	glide();
-	preferencesMessage.set("");
 	settingsReveal.set(null);
 	settingsTarget.set(target ?? null);
 	settingsOpen.set(true);
@@ -52,7 +48,6 @@ export function restoreSettingsPlace(saved: boolean | undefined, available: bool
 export function resetPreferencesView() {
 	settingsOpen.set(false);
 	preferencesDraft.set(null);
-	preferencesMessage.set("");
 }
 
 /** Back to Today. The draft stays. */
@@ -121,7 +116,6 @@ export function draftFrom(lines: readonly string[]): PreferencesDraft | null {
 /** Shows a kept draft again, as unsaved text. */
 export function restorePreferences(lines: readonly string[]) {
 	preferencesDraft.set(draftFrom(lines));
-	preferencesMessage.set("");
 }
 
 /** A local date such as "9 Nov", or "" when it cannot be read. */

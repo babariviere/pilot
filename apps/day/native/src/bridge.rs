@@ -52,6 +52,7 @@ pub const METHODS: &[&str] = &[
     "day.linearPublisher.setting",
     "day.linearPublisher.publish",
     "day.linearPublisher.reconcile",
+    "day.preferences.projects.read",
     "day.preferences.read",
     "day.knowledge.read",
     "day.knowledge.save",
@@ -345,7 +346,8 @@ pub(crate) enum Command {
     LinearRead,
     LinearManage(crate::host::intake::Management),
     LinearPublisher(crate::host::linear_publisher::Request),
-    PreferencesRead,
+    PreferencesProjects,
+    PreferencesRead(String),
     KnowledgeRead(crate::host::knowledge::Read),
     KnowledgeSave(crate::host::knowledge::Edit),
     KnowledgeCheck(String),
@@ -373,7 +375,10 @@ pub(crate) enum Command {
     ModelsCheck(String),
     ModelsSignIn(crate::host::model_controls::SignIn),
     PreferencesSave(crate::host::preferences::Intent),
-    PreferencesCheck(String),
+    PreferencesCheck {
+        project: String,
+        operation: String,
+    },
     PreferencesHistory(crate::host::preferences::History),
     FeedbackImage(crate::host::feedback::ImageUpload),
     FeedbackRead(crate::host::feedback::Read),
@@ -776,11 +781,21 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             r.validate(name)?;
             C::LinearPublisher(r)
         }
-        "day.preferences.read" => {
+        "day.preferences.projects.read" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
             }
-            C::PreferencesRead
+            C::PreferencesProjects
+        }
+        "day.preferences.read" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Request {
+                project_id: String,
+            }
+            let r: Request = exact(args)?;
+            mission(&r.project_id)?;
+            C::PreferencesRead(r.project_id)
         }
         "day.schedules.read" => {
             let r: crate::host::schedules::Read = exact(args)?;
@@ -935,11 +950,16 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields, rename_all = "camelCase")]
             struct Lookup {
+                project_id: String,
                 operation_id: String,
             }
             let r: Lookup = exact(args)?;
             mission(&r.operation_id)?;
-            C::PreferencesCheck(r.operation_id)
+            mission(&r.project_id)?;
+            C::PreferencesCheck {
+                project: r.project_id,
+                operation: r.operation_id,
+            }
         }
         "day.preferences.history" => {
             let r: crate::host::preferences::History = exact(args)?;
@@ -1591,7 +1611,8 @@ impl Command {
                     | Self::ChatClose(_)
                     | Self::IntakeRead
                     | Self::LinearRead
-                    | Self::PreferencesRead
+                    | Self::PreferencesProjects
+                    | Self::PreferencesRead(_)
                     | Self::KnowledgeRead(_)
                     | Self::SchedulesRead(_)
                     | Self::DiagnosisRead

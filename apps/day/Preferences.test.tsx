@@ -13,6 +13,89 @@ async function settings() {
 
 const counts = (app: { texts(): string[] }) => app.texts().find((t) => t.startsWith("Saves:"));
 
+test("a project switch keeps the draft, drops late history, and saves only the selected project", async () => {
+	const saves: { projectId: string; expectedRevision: number; entries: { text: string }[] }[] = [];
+	const revision = (projectId: string, number = 1, text = projectId === "a" ? "Atlas words" : "Harbor words") => ({
+		projectId,
+		revision: number,
+		entries: [{ id: "same", text, recordedAt: 1, source: { type: "user" }, author: { type: "user" } }],
+	});
+	const ok = (value: Record<string, unknown>) => ({ version: 1, value });
+	const app = await open("./PreferencesScopeFixture.tsx", {
+		...desktop,
+		host: { params: { day: { version: 1, window: "fixture" } } },
+		modules: {
+			nsh: {
+				"host.call": (name: string, request: { args: (typeof saves)[number] }) => {
+					const args = request.args;
+					const projectId = args.projectId;
+					switch (name) {
+						case "day.preferences.projects.read":
+							return ok({
+								snapshot: {
+									windowProject: "a",
+									projects: [
+										{ id: "a", name: "Atlas" },
+										{ id: "b", name: "Harbor" },
+									],
+								},
+							});
+						case "day.preferences.read":
+							return ok({
+								projectId,
+								snapshot: { version: 1, projectId, preferences: revision(projectId) },
+								operations: [],
+							});
+						case "day.preferences.history":
+							expect(projectId).toBe("a");
+							return ok({
+								snapshot: {
+									projectId,
+									revisions: [revision(projectId, 1, "Late Atlas history")],
+									more: false,
+									before: null,
+								},
+							});
+						case "day.preferences.save": {
+							saves.push(args);
+							const saved = revision(projectId, 2, args.entries[0]?.text);
+							return ok({
+								projectId,
+								snapshot: { version: 1, projectId, preferences: saved },
+								outcome: { state: "accepted", operationId: "saved-a", receipt: { result: saved } },
+								operations: [],
+							});
+						}
+						default:
+							return { version: 1, error: "invalid" };
+					}
+				},
+			},
+		},
+	});
+	await app.press("id:settings-open");
+	await app.waitFor("id:preference-same");
+	await app.type("id:preference-same", " kept");
+	await app.press("id:preferences-history-toggle");
+	await app.waitFor("id:release-atlas-history");
+	await app.press("label:Project for preferences");
+	await app.press("text:Harbor");
+	await app.waitFor("id:preferences-elsewhere");
+	await app.waitUntil(() => app.value("id:preference-same") === "Harbor words");
+	await app.press("id:release-atlas-history");
+	expect(app.shows("id:preferences-revision-1")).toBe(false);
+	expect(app.shows("id:preferences-save")).toBe(false);
+	expect(saves.length).toBe(0);
+	await app.press("Return to Atlas");
+	await app.waitFor("id:preferences-unsaved");
+	expect(app.value("id:preference-same")).toBe("Atlas words kept");
+	await app.press("id:preferences-save");
+	await app.waitFor("Saved.");
+	expect(saves).toEqual([
+		{ projectId: "a", expectedRevision: 1, entries: [{ id: "same", text: "Atlas words kept" }] },
+	]);
+});
+
 test("Settings names the project and shows each preference with its source; opening sends nothing", async () => {
 	const app = await settings();
 	expect(app.shows("id:preferences-project")).toBe(true);
