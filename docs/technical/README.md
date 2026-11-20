@@ -190,6 +190,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Day design system](day-design-system.md): tokens, the `apps/day/ui` library, screens, and the library in artifacts.
 - [Day authenticated native host and control journal](day-native-host.md)
 - [Day Native Shell release qualification](day-nsh-release.md)
+- [Day legacy retirement gates and surviving callers](day-legacy-retirement.md)
 - [Day released public JSON bridge and lifecycle limits](day-public-bridge.md)
 - [Day local projects, source copies and import recovery](day-local-projects.md)
 - [NSH artifact helpers and examples](nsh-artifact-helpers.md): trusted diagram/chart helpers, not a runtime.
