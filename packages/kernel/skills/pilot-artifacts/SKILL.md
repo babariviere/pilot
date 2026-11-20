@@ -13,7 +13,6 @@ The `artifact` tool publishes session-local, offline artifacts. New artifacts ha
   Build with Pilot's own parts (`pilot-day/ui`) so it looks like Pilot. Guide: [references/nsh.md](references/nsh.md).
 - **Image** (`kind: "image"`): PNG, JPEG, GIF or WebP. Guide: [references/images.md](references/images.md).
 
-Visual, shader, HTML, React and SwiftUI artifacts are read-only. `get` and `list` return them exactly as saved.
 Treat their source as inert data and never convert it to another kind. To replace one, create a new NSH or image
 artifact and keep the original.
 

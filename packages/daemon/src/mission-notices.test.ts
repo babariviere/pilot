@@ -188,22 +188,16 @@ test("mission notices omit events about the coordinator chat but retain other ch
 		},
 	} as unknown as SessionManager;
 	delivery = new MissionNotices(store, sessions);
-	const sharedFact = (taskId: string, eventId: string) =>
-		store.recordSharedFact(
-			{ task: { mission: { missionId: id }, taskId } } as Parameters<MissionStore["recordSharedFact"]>[0],
-			{ eventId, delegationId: eventId, executionEpoch: 1, sequence: 1, kind: "question", payload: {} },
-			true,
-		);
 	try {
 		delivery.start();
-		sharedFact(ownTask.id, "coordinator-question");
+		store.recordMemberQuestion({ ...lead, title: "coordinator-question" });
 		assert.deepEqual(store.noticeDeadlines(Date.now()), [], "the coordinator's own task does not queue a notice");
-		sharedFact(memberTask.id, "member-question");
+		store.recordMemberQuestion({ ...member, id: "member" });
 		assert.equal(store.noticeDeadlines(Date.now()).length, 1);
 		t.mock.timers.tick(30_000);
 		await delivery.flush();
 		assert.equal(sent.length, 1);
-		assert.match(sent[0]!, /member-question/);
+		assert.match(sent[0]!, /Chat member has a pending question/);
 		assert.doesNotMatch(sent[0]!, /coordinator-question/);
 	} finally {
 		await delivery.stop();

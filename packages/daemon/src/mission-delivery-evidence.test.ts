@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
-import type { DelegationGrant } from "@pilot/protocol";
 import {
 	type DeliveryJudgementWrite,
 	type DeliveryObservation,
@@ -599,34 +598,11 @@ test("worker and coordinator continuation preserve history without transferring 
 	);
 });
 
-test("progress projections retain definition identity, while explicit task edits invalidate it", async (t) => {
+test("explicit task edits invalidate delivery evidence definition identity", async (t) => {
 	const f = fixture(t),
 		saved = await f.submit();
 	await f.store.judgeDeliveryEvidence(f.id, f.task.id, "lead", f.judgement(saved.id));
-	const host = { hostId: "test", daemonId: "test", lineageId: "test" };
-	// Exercise the retained projection helper only. No allocation is installed or activated.
-	const grant: DelegationGrant = {
-		delegationId: "fixture",
-		task: { mission: { home: host, missionId: f.id }, taskId: f.task.id },
-		executionEpoch: 1,
-		bindingId: "fixture",
-		bindingGeneration: 1,
-		target: { host, projectId: "p" },
-		session: { host, sessionId: "worker" },
-		definitionRevision: saved.request.definitionRevision,
-		context: { mission: 1, memory: 1 },
-		manifestId: "fixture",
-		references: [],
-		request: { message: "fixture" },
-		state: "accepted",
-	};
-	f.store.projectSharedProgress(grant, "blocked");
-	assert.equal(f.store.sharedDefinitionRevision(f.task.id), saved.request.definitionRevision);
-	assert.equal(f.evaluate(saved.observations).freshness.assignment, "current");
-	assert.equal(f.evaluate(saved.observations).eligibility, "unavailable");
 	f.store.updateTask(f.id, f.task.id, { body: "Material definition change" });
 	assert.ok(f.store.sharedDefinitionRevision(f.task.id) > saved.request.definitionRevision);
 	assert.equal(f.evaluate(saved.observations).freshness.judgement, "stale");
-	f.store.projectSharedProgress(grant, "in_progress");
-	assert.equal(f.store.task(f.id, f.task.id).status, "blocked", "a stale projection cannot make a definition current");
 });

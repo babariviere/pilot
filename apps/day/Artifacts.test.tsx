@@ -5,13 +5,13 @@ import { expect, open, test } from "nsh/test";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
-const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
+const REPORT = "1b2c3d4e-0000-4000-8000-000000000002";
 const IMAGE = "1b2c3d4e-0000-4000-8000-000000000003";
 const SHOT_BEFORE = "1b2c3d4e-0000-4000-8000-000000000004";
 const SHOT_AFTER = "1b2c3d4e-0000-4000-8000-000000000005";
 const SHOT_NEW = "1b2c3d4e-0000-4000-8000-000000000006";
-const SAVED = "<p>Saved page</p>";
-const BEFORE = "<p>Before page</p>";
+const SAVED = "export default () => <Text>Saved page</Text>;";
+const BEFORE = "export default () => <Text>Before page</Text>;";
 
 function reads(app: { texts(): string[] }): string {
 	return app.texts().find((t) => t.startsWith("Reads:")) ?? "";
@@ -31,38 +31,38 @@ test("the project gallery shows cards and opens one exact revision per press", a
 	const app = await open("./ArtifactsFixture.tsx", desktop);
 	await app.waitFor("Timeline");
 	expect(app.texts().includes("NSH · revision 2")).toBe(true);
-	expect(app.texts().includes("HTML · revision 4")).toBe(true);
+	expect(app.texts().includes("NSH · revision 4")).toBe(true);
 	// Opening the page reads the list, not a source, and opens nothing.
 	expect(reads(app)).toBe("Reads: []");
 	expect(app.shows("id:artifact-viewer")).toBe(false);
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
-	await app.waitFor("<p>Saved page</p>");
-	expect(app.texts().includes("Source · HTML · revision 4")).toBe(true);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
+	await app.waitFor("export default () => <Text>Saved page</Text>;");
+	expect(app.texts().includes("Source · NSH · revision 4")).toBe(true);
 	// One artifact is open at a time: opening another closes the first.
 	await app.press(`id:artifact-card-/chat-a/${NSH}/2`);
 	await app.waitFor("export default () => <Text>Revision two</Text>;");
-	expect(app.texts().includes("<p>Saved page</p>")).toBe(false);
+	expect(app.texts().includes("export default () => <Text>Saved page</Text>;")).toBe(false);
 	// Without the native preview, NSH shows as text with no preview switch.
 	expect(app.shows("id:artifact-viewer-toggle")).toBe(false);
 	// Escape closes the open artifact first, then leaves.
 	await app.keyboard.press("escape");
 	await closed(app);
 	expect(app.texts().includes("Timeline")).toBe(true);
-	expect(reads(app)).toBe(`Reads: [${HTML}@4 ${NSH}@2]`);
+	expect(reads(app)).toBe(`Reads: [${REPORT}@4 ${NSH}@2]`);
 	// Pressing the open card closes it, and Close does too.
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
-	await app.waitFor("<p>Saved page</p>");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
+	await app.waitFor("export default () => <Text>Saved page</Text>;");
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await closed(app);
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
-	await app.waitFor("<p>Saved page</p>");
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
+	await app.waitFor("export default () => <Text>Saved page</Text>;");
 	await app.press("id:artifact-viewer-close");
 	await closed(app);
 	// A refused read shows no earlier text.
 	await app.press("Refuse reads");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor("This artifact changed or left this project while Pilot read it. Nothing is shown.");
-	expect(app.texts().includes("<p>Saved page</p>")).toBe(false);
+	expect(app.texts().includes("export default () => <Text>Saved page</Text>;")).toBe(false);
 });
 
 test("an open artifact shows in the full window, and Escape comes back to its viewer", async () => {
@@ -125,30 +125,30 @@ test("search is local and comparison switches one pane between exact versions", 
 	expect(app.shows("Timeline")).toBe(false);
 	expect(app.shows("Report page")).toBe(true);
 	expect(reads(app)).toBe("Reads: []");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	await app.press("id:artifact-compare");
 	// The older revision reads once; After stays the pane shown until Before is chosen.
 	await app.waitFor("id:artifact-tab-before");
-	await app.waitUntil(() => reads(app) === `Reads: [${HTML}@4 ${HTML}@3]`);
+	await app.waitUntil(() => reads(app) === `Reads: [${REPORT}@4 ${REPORT}@3]`);
 	expect(copies(app, SAVED)).toBe(1);
 	expect(app.shows(BEFORE)).toBe(false);
-	expect(app.texts().includes("Source · HTML · revision 4")).toBe(true);
+	expect(app.texts().includes("Source · NSH · revision 4")).toBe(true);
 	await app.press("id:artifact-tab-before");
 	await app.waitFor(BEFORE);
 	expect(app.shows(SAVED)).toBe(false);
-	expect(app.texts().includes("Source · HTML · revision 3")).toBe(true);
-	expect(app.texts().includes("Source · HTML · revision 4")).toBe(false);
+	expect(app.texts().includes("Source · NSH · revision 3")).toBe(true);
+	expect(app.texts().includes("Source · NSH · revision 4")).toBe(false);
 	await app.press("id:artifact-tab-after");
 	await app.waitFor(SAVED);
 	expect(app.shows(BEFORE)).toBe(false);
 	// Switching reads nothing again.
-	expect(reads(app)).toBe(`Reads: [${HTML}@4 ${HTML}@3]`);
+	expect(reads(app)).toBe(`Reads: [${REPORT}@4 ${REPORT}@3]`);
 	await app.press("id:artifact-compare");
 	expect(app.shows("id:artifact-tab-before")).toBe(false);
 	expect(copies(app, SAVED)).toBe(1);
 	await app.press("id:artifact-viewer-close");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	expect(app.shows(BEFORE)).toBe(false);
 	expect(app.shows("id:artifact-tab-before")).toBe(false);
@@ -194,7 +194,7 @@ test("switching cards in one row drops the previous comparison", async () => {
 	await app.press("id:artifact-compare");
 	await app.press("id:artifact-tab-before");
 	await app.waitFor("export default () => <Text>Revision one</Text>;");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	expect(app.shows("export default () => <Text>Revision one</Text>;")).toBe(false);
 	expect(app.shows("id:artifact-tab-before")).toBe(false);
@@ -203,7 +203,7 @@ test("switching cards in one row drops the previous comparison", async () => {
 test("the full window keeps the chosen side, its menu closes first on Escape, and the viewer comes back on that side", async () => {
 	const app = await open("./ArtifactsFixture.tsx", desktop);
 	await app.waitFor("Timeline");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	await app.press("id:artifact-compare");
 	await app.press("id:artifact-tab-before");
@@ -216,8 +216,8 @@ test("the full window keeps the chosen side, its menu closes first on Escape, an
 	await app.waitFor("id:artifact-full");
 	// The same pin and side as on screen, shown once, and nothing read again. Revision 3
 	// keeps the title saved with it, not the newer name of the artifact.
-	expect(app.texts().includes("Old report page · HTML · revision 3")).toBe(true);
-	expect(app.texts().includes("Before · Source · HTML · revision 3")).toBe(true);
+	expect(app.texts().includes("Old report page · NSH · revision 3")).toBe(true);
+	expect(app.texts().includes("Before · Source · NSH · revision 3")).toBe(true);
 	expect(copies(app, BEFORE)).toBe(1);
 	expect(app.shows(SAVED)).toBe(false);
 	// Share in the full window names the version shown, as saved. Escape closes its menu, not the window.
@@ -232,7 +232,7 @@ test("the full window keeps the chosen side, its menu closes first on Escape, an
 	expect(app.shows("id:artifact-full")).toBe(false);
 	expect(copies(app, BEFORE)).toBe(1);
 	expect(app.shows(SAVED)).toBe(false);
-	expect(app.texts().includes("Source · HTML · revision 3")).toBe(true);
+	expect(app.texts().includes("Source · NSH · revision 3")).toBe(true);
 	expect(app.count("id:artifact-pane")).toBe(1);
 	// After keeps the current title and the same pane.
 	await app.press("id:artifact-tab-after");
@@ -243,15 +243,15 @@ test("the full window keeps the chosen side, its menu closes first on Escape, an
 	expect(app.count("id:artifact-pane")).toBe(1);
 	await app.press("id:artifact-viewer-full");
 	await app.waitFor("id:artifact-full");
-	expect(app.texts().includes("Report page · HTML · revision 4")).toBe(true);
+	expect(app.texts().includes("Report page · NSH · revision 4")).toBe(true);
 	await app.keyboard.press("escape");
-	expect(reads(app)).toBe(`Reads: [${HTML}@4 ${HTML}@3]`);
+	expect(reads(app)).toBe(`Reads: [${REPORT}@4 ${REPORT}@3]`);
 });
 
 test("a full window closes with the page it came from and keeps no copy", async () => {
 	const app = await open("./ArtifactsFixture.tsx", desktop);
 	await app.waitFor("Timeline");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	await app.press("id:artifact-viewer-full");
 	await app.waitFor("id:artifact-full");
@@ -260,7 +260,7 @@ test("a full window closes with the page it came from and keeps no copy", async 
 	await app.waitFor("No chat in this project has saved an artifact yet.");
 	expect(app.shows("id:artifact-full")).toBe(false);
 	expect(app.shows(SAVED)).toBe(false);
-	expect(reads(app)).toBe(`Reads: [${HTML}@4]`);
+	expect(reads(app)).toBe(`Reads: [${REPORT}@4]`);
 });
 
 // Keeping Tab inside the dialog is checked on a real Mac (Native.test.tsx, "artifact fullscreen keeps keyboard
@@ -268,7 +268,7 @@ test("a full window closes with the page it came from and keeps no copy", async 
 test("the full window is a dialog: the keyboard starts on its exit and comes back to the opener", async () => {
 	const app = await open("./ArtifactsFixture.tsx", desktop);
 	await app.waitFor("Timeline");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	await app.press("id:artifact-viewer-full");
 	await app.waitFor("id:artifact-full");
@@ -282,13 +282,13 @@ test("the full window is a dialog: the keyboard starts on its exit and comes bac
 	expect(app.shows("id:artifact-viewer")).toBe(true);
 	expect(app.shows("id:artifact-tab-before")).toBe(false);
 	expect(copies(app, SAVED)).toBe(1);
-	expect(reads(app)).toBe(`Reads: [${HTML}@4]`);
+	expect(reads(app)).toBe(`Reads: [${REPORT}@4]`);
 });
 
 test("in a narrow window the comparison tabs keep their width and the commands wrap below them", async () => {
 	const app = await open("./ArtifactsFixture.tsx", { platform: "macos", width: 390, height: 900 });
 	await app.waitFor("Timeline");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
 	await app.waitFor(SAVED);
 	await app.press("id:artifact-compare");
 	// A press on a tab reaches the tab, not a command drawn under it.
@@ -300,7 +300,7 @@ test("in a narrow window the comparison tabs keep their width and the commands w
 	await app.waitFor(SAVED);
 	await app.press("id:artifact-compare");
 	expect(app.shows("id:artifact-tab-before")).toBe(false);
-	expect(reads(app)).toBe(`Reads: [${HTML}@4 ${HTML}@3]`);
+	expect(reads(app)).toBe(`Reads: [${REPORT}@4 ${REPORT}@3]`);
 });
 
 test("an image fills the full window instead of keeping its page height", async () => {

@@ -5,13 +5,14 @@
 // Nothing here opens, runs, saves, sends or records anything.
 import { signal } from "nsh";
 import { call, type Refusal } from "./bridge";
+import type { SavedArtifactKind } from "./deliveryArtifactContract";
 import { glide } from "./ui";
 
 /** One saved revision as inert text, or why it is not shown. */
 export type SavedArtifact = {
 	version: 1;
 	reference: { sourceSessionId: string; artifactId: string; revision: number };
-	metadata: { title: string; kind: string };
+	metadata: { title: string; kind: SavedArtifactKind };
 	rendering: "unsupported";
 	content:
 		| { state: "text"; source: string; containerSha256: string; containerBytes: number }
@@ -24,7 +25,7 @@ export type ArtifactRow = {
 	sessionId: string;
 	artifactId: string;
 	title: string;
-	kind: string;
+	kind: SavedArtifactKind;
 	revision: number | null;
 	/** Mission links only: whether the link names its revision, or the current one was read. */
 	pinned?: boolean;
@@ -66,7 +67,10 @@ export type Shown = {
 /** How many previews one page keeps open. Opening another closes the oldest. */
 export const MAX_PREVIEWS = 4;
 
-const KINDS = new Set(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
+/** The formats this client can inspect or preview. */
+export function isSavedArtifactKind(value: unknown): value is SavedArtifactKind {
+	return value === "image" || value === "nsh";
+}
 const REASONS = new Set(["missing", "oversize", "redacted", "unsupported", "invalid"]);
 
 function captureOf(x: unknown): ScreenCaptureRow | null {
@@ -98,7 +102,7 @@ function rowOf(x: unknown): ArtifactRow | null {
 	const r = x as ArtifactRow;
 	if (!r || typeof r !== "object") return null;
 	if (typeof r.sessionId !== "string" || typeof r.artifactId !== "string" || typeof r.title !== "string") return null;
-	if (!KINDS.has(r.kind) || (r.revision !== null && !Number.isSafeInteger(r.revision))) return null;
+	if (!isSavedArtifactKind(r.kind) || (r.revision !== null && !Number.isSafeInteger(r.revision))) return null;
 	const pair = pairOf(r.pair, r);
 	if (pair === undefined || (pair && r.kind !== "image")) return null;
 	return {
@@ -125,12 +129,13 @@ export function savedOf(x: unknown, row: ArtifactRow): SavedArtifact | null {
 		ref.sourceSessionId !== row.sessionId ||
 		ref.artifactId !== row.artifactId ||
 		ref.revision !== row.revision ||
-		a.metadata?.kind !== row.kind ||
+		!isSavedArtifactKind(a.metadata?.kind) ||
+		a.metadata.kind !== row.kind ||
 		typeof a.metadata.title !== "string"
 	)
 		return null;
 	const c = a.content;
-	if (c?.state === "text" && row.kind !== "image" && typeof c.source === "string") return a;
+	if (c?.state === "text" && row.kind === "nsh" && typeof c.source === "string") return a;
 	if (c?.state === "image" && row.kind === "image" && validImageSource(c.source)) return a;
 	if (c?.state === "unavailable" && REASONS.has(c.reason)) return a;
 	return null;

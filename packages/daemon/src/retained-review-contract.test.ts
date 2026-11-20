@@ -42,7 +42,7 @@ function fixture() {
 			version: 1,
 			revision: 2,
 			intent: "Compare requirements",
-			scope: "One retained visual",
+			scope: "Two saved artifacts",
 			criteria: ["Accuracy", "Limitations"],
 			classification: {
 				version: 1,
@@ -104,10 +104,13 @@ function fixture() {
 			complete: true,
 		},
 		content: entries.map((e, i) => ({
-			reference: i === 0 ? { kind: "brief", revision: 3 } : { kind: "artifact", artifactId: "visual", revision: 2 },
-			part: i === 0 ? "brief" : i === 1 ? "source" : "data",
-			artifactKind: i === 0 ? null : "visual",
-			referenceSha256: sha(i === 0 ? "reference brief metadata" : "reference visual metadata"),
+			reference:
+				i === 0
+					? { kind: "brief", revision: 3 }
+					: { kind: "artifact", artifactId: i === 1 ? "plan-view" : "plan-image", revision: 2 },
+			part: i === 0 ? "brief" : "source",
+			artifactKind: i === 0 ? null : i === 1 ? "nsh" : "image",
+			referenceSha256: sha(i === 0 ? "reference brief metadata" : "reference artifact metadata"),
 			sourceOwnerSessionId: i === 0 ? null : "custodian",
 			blobId: e.blobId,
 			originalSha256: e.sha256,
@@ -160,7 +163,7 @@ function parse(input: PreparedRetainedReviewInput, value = report(input)) {
 test("ordered domain/version hashes, actual vault digest and distinct reference/content identity", () => {
 	const f = fixture(),
 		p = f.prepare();
-	assert.equal(p.inputSha256, "8489081ef75769d635c456e13bfa15f8882f9f0f5273ef28b7371b88ce9f4bee");
+	assert.equal(p.inputSha256, "2606632a94f97efda85fb2b0d83b99e4bc887ee9f8eebb1542d0e7d1154e4946");
 	assert.equal(p.profileSha256, "e816bf347a210b072a61d5449618b92d6cf393928ffc7450267503403856cb0f");
 	assert.equal(p.contextSha256, "bfa60e1865f9ade4c976ceb86f8c2cf206ed46eb6a07c1446818237441df0976");
 	assert.equal(p.runtimeSha256, "ddefc2a62da9027dced2ad9f54050932856ed038a1c77a86355f6cb62e0ca588");
@@ -488,15 +491,7 @@ test("non-index decimal properties cannot mask holes or silently disappear from 
 	}
 });
 
-test("required brief/source/data parts, ref consistency and duplicate associations fail closed", () => {
-	for (const remove of [1, 2]) {
-		const f = fixture();
-		f.descriptor.content.splice(remove, 1);
-		f.descriptor.manifest.entries.splice(remove, 1);
-		f.blobs.splice(remove, 1);
-		seal(f);
-		assert.throws(f.prepare);
-	}
+test("valid content parts and unique associations are required", () => {
 	for (const mutate of [
 		(d: any) => {
 			delete d.content[2].part;
@@ -505,16 +500,16 @@ test("required brief/source/data parts, ref consistency and duplicate associatio
 			d.content[2].part = null;
 		},
 		(d: any) => {
-			d.content[2].referenceSha256 = sha("spoof");
+			d.content[2].reference = clone(d.content[1].reference);
 		},
 		(d: any) => {
-			d.content[2].sourceOwnerSessionId = "other";
+			d.content[2].sourceOwnerSessionId = "../wrong";
 		},
 		(d: any) => {
 			d.content[2].artifactKind = "html";
 		},
 		(d: any) => {
-			d.content[2].part = "source";
+			d.content[2].part = "data";
 		},
 		(d: any) => {
 			d.content[0].part = "source";
@@ -571,13 +566,12 @@ test("required brief/source/data parts, ref consistency and duplicate associatio
 	}
 	// Several entries legitimately share the same manifest sourceId; no inference about authorship.
 	assert.equal(fixture().prepare().descriptor.manifest.sourceIds.length, 1);
-	const html = fixture();
-	html.descriptor.content.splice(2, 1);
-	html.descriptor.manifest.entries.splice(2, 1);
-	html.blobs.splice(2, 1);
-	html.descriptor.content[1]!.artifactKind = "html";
-	seal(html);
-	assert.doesNotThrow(html.prepare);
+	const single = fixture();
+	single.descriptor.content.splice(2, 1);
+	single.descriptor.manifest.entries.splice(2, 1);
+	single.blobs.splice(2, 1);
+	seal(single);
+	assert.doesNotThrow(single.prepare);
 });
 
 test("all original bytes/counts bounded before copying/hash, no clipping and no unmapped blobs", () => {
@@ -650,7 +644,7 @@ test("all original bytes/counts bounded before copying/hash, no clipping and no 
 		large.descriptor.content.push({
 			reference: { kind: "artifact", artifactId: `artifact-${i}`, revision: 1 },
 			part: "source",
-			artifactKind: "html",
+			artifactKind: "nsh",
 			referenceSha256: sha(`ref-${i}`),
 			sourceOwnerSessionId: null,
 			blobId,
@@ -970,7 +964,7 @@ test("count ceilings accept valid exact boundaries and reject one more, never si
 		f.descriptor.content.push({
 			reference: { kind: "artifact", artifactId: `artifact-${i}`, revision: 1 },
 			part: "source",
-			artifactKind: "html",
+			artifactKind: "nsh",
 			referenceSha256: sha(`reference ${i}`),
 			sourceOwnerSessionId: null,
 			blobId,

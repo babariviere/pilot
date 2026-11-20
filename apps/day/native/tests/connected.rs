@@ -1051,12 +1051,12 @@ fn search_back_restores_the_previous_project_before_returning_to_the_draft() {
         json!({"projects":[{"id":"atlas","name":"Atlas"},{"id":"harbor","name":"Harbor"}],
             "hits":[{"kind":"output","key":"export","projectId":"harbor","projectName":"Harbor",
                 "title":"Export comparison","target":{"sessionId":"owner","artifactId":"report",
-                    "kind":"html","title":"Export comparison","revision":3,"updatedAt":1}}],
+                    "kind":"nsh","title":"Export comparison","revision":3,"updatedAt":1}}],
             "partial":false,"more":false}),
     );
     root.reply("day.search.output", json!({
         "version":1,"reference":{"sourceSessionId":"owner","artifactId":"report","revision":3},
-        "metadata":{"title":"Export comparison","kind":"html"},"rendering":"unsupported",
+        "metadata":{"title":"Export comparison","kind":"nsh"},"rendering":"unsupported",
         "content":{"state":"text","source":"This exact output","containerSha256":"sha","containerBytes":17}
     }));
     let entry = entry();

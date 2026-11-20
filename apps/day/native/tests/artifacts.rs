@@ -95,7 +95,7 @@ fn project_and_mission_rows_read_exact_revisions_as_inert_text() {
     let older = read(&f, &id, 1);
     assert_eq!(
         older["value"]["snapshot"]["content"]["source"],
-        "<script>throw Error('never execute')</script>"
+        "export default () => { throw Error('never execute'); };"
     );
     assert!(read(&f, &id, 3)["error"].is_string(), "no revision 3");
     assert!(read(&f, &uuid::Uuid::new_v4().to_string(), 1)["error"].is_string());

@@ -58,10 +58,8 @@ itself proves neither that they persist nor that they are fixed in a package.
   assets, notices, and packaging Day uses. A minimal connected candidate is not
   the full helper inventory.
 - **Remote-backed mode:** [Remote devbox execution is already retired](devboxes.md).
-  [The compatibility adapter](../../packages/daemon/src/retired-devboxes.ts) still
-  reads old ownership records and refuses delegated admission. Preserve cached history
-  with original host identity and unresolved ownership and operation records.
-  Do not turn remote drafts or runs into Local work.
+  The daemon refuses startup when the profile still contains legacy remote records. Archive them
+  offline with their original source identity. Old remote drafts and runs never become Local work.
 - **Old mission and flow execution:** [Finishing a re-plan](day-mission-migration.md)
   archives the source mission, preserving original tasks, chats, and unpublished
   work. It does not transfer execution or managed Linear resources.

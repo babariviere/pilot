@@ -467,7 +467,7 @@ test("artifact/context pin and custodian membership ABA invalidates even identic
 		artifactId: "guidance",
 		sessionId: "other",
 		title: "Guidance",
-		kind: "html" as const,
+		kind: "image" as const,
 		revision: 1,
 		taskId: f.task.id,
 	};
@@ -702,7 +702,7 @@ test("native UI evidence uses retained artifact citations, not fabricated code c
 		artifactId: "capture",
 		sessionId: "worker",
 		title: "Native capture fixture",
-		kind: "html",
+		kind: "image",
 		revision: 1,
 		taskId: f.task.id,
 	});

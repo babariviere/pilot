@@ -109,7 +109,6 @@ async function fixture(
 		models: new ModelCatalog(home),
 		terminals,
 		hello,
-		legacyAdmissionFrozen: false,
 		nativeAuthority: auth,
 		bootstrap: owner,
 		liveUpdate: { service, contributors: contributor ? [contributor] : [] },

@@ -1,64 +1,46 @@
-/** Publication accepts native visuals, images, shaders and inert captured NSH source.
- * Historical kinds remain read DTOs; nothing here compiles or executes their source. */
-import type { ArtifactLibrary, ArtifactNsh, ArtifactVisual, ArtifactWrite, ArtifactWriteKind } from "@pilot/protocol";
+/** Prepare image and NSH revisions. */
+import type { ArtifactKind, ArtifactNsh, ArtifactWrite } from "@pilot/protocol";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
-import { nshSource } from "./nsh-source.ts";
-import { assertShaderCompiles, shaderDocumentBody, validateShaderSource } from "./shader.ts";
-import { checkVisual, VISUAL_FALLBACK_BODY, validateVisualWrite } from "./visual/index.ts";
+import { NSH_SOURCE_BYTES, nshSource } from "./nsh-source.ts";
 
-export function assertArtifactWriteKind(kind: unknown): asserts kind is ArtifactWriteKind {
-	if (kind !== "image" && kind !== "visual" && kind !== "shader" && kind !== "nsh")
-		throw new Error(
-			"Unsupported artifact kind. Supported kinds: image, visual, shader, nsh. Legacy HTML, React and SwiftUI artifacts are read-only",
-		);
+export function isArtifactKind(kind: unknown): kind is ArtifactKind {
+	return kind === "image" || kind === "nsh";
 }
 
-export const MAX_SOURCE_BYTES = 512 * 1024;
+export function assertArtifactWriteKind(kind: unknown): asserts kind is ArtifactKind {
+	if (!isArtifactKind(kind)) throw new Error("Supported artifact kinds: image, nsh");
+}
 
-type ValidatedWrite = ArtifactWrite & { libraries: ArtifactLibrary[] };
-type PreparedArtifact = { html: string; libraries: ArtifactLibrary[]; visual?: ArtifactVisual; nsh?: ArtifactNsh };
+type PreparedArtifact = { html: string; nsh?: ArtifactNsh };
 
-export function validateArtifact(input: ArtifactWrite): ValidatedWrite {
+export function validateArtifact(input: ArtifactWrite): ArtifactWrite {
 	return validateWrite(input).write;
 }
 
-function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?: string; nsh?: ArtifactNsh } {
+function validateWrite(input: ArtifactWrite): { write: ArtifactWrite; nsh?: ArtifactNsh } {
 	if (!input || typeof input !== "object") throw new Error("Expected an artifact document");
 	const write = { ...input };
 	if (typeof write.title !== "string" || !write.title.trim() || write.title.length > 160)
 		throw new Error("Artifact title must contain 1-160 characters");
 	assertArtifactWriteKind(write.kind);
-	const maxBytes = write.kind === "image" ? MAX_IMAGE_SOURCE_BYTES : MAX_SOURCE_BYTES;
+	const maxBytes = write.kind === "image" ? MAX_IMAGE_SOURCE_BYTES : NSH_SOURCE_BYTES;
 	if (typeof write.source !== "string" || !write.source.trim() || Buffer.byteLength(write.source) > maxBytes)
 		throw new Error(
-			write.kind === "image"
-				? "Artifact image exceeds 16 MiB or is empty"
-				: "Artifact source must contain 1-512 KiB of visual source or GLSL",
+			write.kind === "image" ? "Artifact image exceeds 16 MiB or is empty" : "NSH source must contain 1-512 KiB",
 		);
 	if (write.kind === "image") validateImageSource(write.source);
-	if (write.kind === "shader") validateShaderSource(write.source);
 	const nsh = write.kind === "nsh" ? nshSource(write.source, write.entry ?? "") : undefined;
 	if (write.kind !== "nsh" && write.entry !== undefined) throw new Error("Only NSH artifacts take entry");
-	const dataJSON = write.kind === "visual" ? validateVisualWrite(write.source, write.data) : undefined;
-	if (write.kind !== "visual" && write.data !== undefined) throw new Error("Only visual artifacts take data");
-	if (write.libraries !== undefined && !Array.isArray(write.libraries))
-		throw new Error("Artifact libraries must be an array");
-	const libraries: ArtifactLibrary[] = [];
-	if (write.libraries?.length)
-		throw new Error(
-			`${write.kind === "image" ? "Image" : write.kind === "visual" ? "Visual" : "Shader"} artifacts do not use libraries`,
-		);
-	return { write: { ...write, title: write.title.trim(), libraries }, dataJSON, nsh };
+	const { kind, source, entry } = write;
+	return { write: { title: write.title.trim(), kind, source, ...(entry !== undefined ? { entry } : {}) }, nsh };
 }
 
-export const ARTIFACT_CSP =
-	"default-src 'none'; script-src 'unsafe-inline' pilot-artifact:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
-
-export const ARTIFACT_RUNTIME_GUARD = `for (const name of ['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection','WebTransport']) { try { Object.defineProperty(globalThis,name,{value:undefined,writable:false,configurable:false}); } catch (_) {} }`;
+const IMAGE_CSP =
+	"default-src 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'";
 
 export async function prepareArtifact(
 	input: ArtifactWrite,
-	options: { signal?: AbortSignal; id?: string } = {},
+	options: { signal?: AbortSignal } = {},
 ): Promise<PreparedArtifact> {
 	return (await prepareArtifactWrite(input, options)).prepared;
 }
@@ -66,26 +48,15 @@ export async function prepareArtifact(
 /** One publication path; the store uses the same normalized write that preparation checked. */
 export async function prepareArtifactWrite(
 	input: ArtifactWrite,
-	options: { signal?: AbortSignal; id?: string } = {},
-): Promise<{ write: ValidatedWrite; prepared: PreparedArtifact }> {
-	const { write, dataJSON, nsh } = validateWrite(input);
+	options: { signal?: AbortSignal } = {},
+): Promise<{ write: ArtifactWrite; prepared: PreparedArtifact }> {
+	const { write, nsh } = validateWrite(input);
 	options.signal?.throwIfAborted();
 	// Saving source is independent of compilation/execution. Never synthesize HTML from authored TSX.
-	if (write.kind === "nsh") return { write, prepared: { html: "", libraries: [], nsh } };
-	// Keep existing shader checks; this does not enable shader rendering in Next.
-	if (write.kind === "shader") await assertShaderCompiles(write.source, options.signal);
-	const visual =
-		dataJSON !== undefined
-			? await checkVisual({ source: write.source, data: dataJSON, id: options.id ?? "" }, { signal: options.signal })
-			: undefined;
-	const body =
-		write.kind === "shader"
-			? shaderDocumentBody(write.source)
-			: write.kind === "visual"
-				? VISUAL_FALLBACK_BODY
-				: `<style>body{margin:0;padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:100vw;max-height:100vh;object-fit:contain}</style><img alt="Artifact image" src="${write.source}">`;
+	if (nsh) return { write, prepared: { html: "", nsh } };
+	const body = `<style>body{margin:0;padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:100vw;max-height:100vh;object-fit:contain}</style><img alt="Artifact image" src="${write.source}">`;
 	// Retain the prepared-document read contract for existing clients, never raw source markup.
-	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${ARTIFACT_RUNTIME_GUARD}</script></head><body>${body}</body></html>`;
+	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${IMAGE_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${body}</body></html>`;
 	if (Buffer.byteLength(html) > 25 * 1024 * 1024) throw new Error("Prepared artifact exceeds 25 MiB");
-	return { write, prepared: visual ? { html, libraries: [], visual } : { html, libraries: [] } };
+	return { write, prepared: { html } };
 }

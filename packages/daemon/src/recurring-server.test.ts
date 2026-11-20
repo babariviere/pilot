@@ -56,7 +56,6 @@ test("recurring schedule writes require native authority, live setting and exact
 		terminals,
 		schedules,
 		hello,
-		legacyAdmissionFrozen: false,
 		githubSetup: native,
 		nativeAuthority: native.nativeAuthority,
 		chatSettings: settings,

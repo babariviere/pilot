@@ -4,19 +4,19 @@ import type { Dir, Dirent, Stats } from "node:fs";
 import { lstat, mkdir, open, opendir, readdir, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
-import { assertArtifactWriteKind, prepareArtifact, prepareArtifactWrite } from "./render.ts";
+import { assertArtifactWriteKind, isArtifactKind, prepareArtifact, prepareArtifactWrite } from "./render.ts";
 import {
+	ArtifactNotFound,
+	artifactSummary,
 	parseStoredArtifactRevision,
 	readStoredFile,
 	STORED_REVISION_LIMITS,
-	storedVisualRevision,
 } from "./stored-revision.ts";
 
-const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const KINDS = new Set<ArtifactSummary["kind"]>(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
-type SearchMetadata = Pick<ArtifactSummary, "id" | "sessionId" | "title" | "kind" | "revision" | "updatedAt">;
+export { ArtifactNotFound } from "./stored-revision.ts";
 
-export class ArtifactNotFound extends Error {}
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+type SearchMetadata = Pick<ArtifactSummary, "id" | "sessionId" | "title" | "kind" | "revision" | "updatedAt">;
 
 async function plainDirectory(path: string): Promise<Stats> {
 	const info = await lstat(path);
@@ -27,20 +27,6 @@ async function plainDirectory(path: string): Promise<Stats> {
 async function checkDirectory(path: string, before: Stats): Promise<void> {
 	const current = await plainDirectory(path);
 	if (current.dev !== before.dev || current.ino !== before.ino) throw new Error("Artifact directory changed");
-}
-
-function artifactSummary(value: ArtifactRevision): ArtifactSummary {
-	const {
-		source: _source,
-		html: _html,
-		libraries: _libraries,
-		libraryVersions: _versions,
-		data: _data,
-		visual: _visual,
-		nsh: _nsh,
-		...rest
-	} = value;
-	return rest;
 }
 
 /** Flush data before the rename and the directory entry after it, so a crash or power loss
@@ -93,7 +79,9 @@ export class ArtifactStore {
 						const item = JSON.parse(
 							await readFile(join(this.directory, id, "latest.json"), "utf8"),
 						) as ArtifactSummary;
-						return item.id === id && item.sessionId === this.identity.sessionId ? item : undefined;
+						return item.id === id && item.sessionId === this.identity.sessionId && isArtifactKind(item.kind)
+							? artifactSummary(item)
+							: undefined;
 					} catch (error) {
 						// An interrupted first publication has no latest pointer and is not visible. One damaged
 						// pointer must not hide every other artifact in the session or project.
@@ -158,13 +146,13 @@ export class ArtifactStore {
 						await checkDirectory(directory, before);
 						if (latest === undefined) continue;
 						const { id, sessionId, title, kind, revision, updatedAt, createdAt, projectId } = latest;
+						if (!isArtifactKind(kind)) continue;
 						if (
 							id !== current.name ||
 							sessionId !== this.identity.sessionId ||
 							// Older pointers did not name a project. Current exact session ownership is still required.
 							(projectId !== undefined && projectId !== this.identity.projectId) ||
 							typeof title !== "string" ||
-							!KINDS.has(kind) ||
 							!Number.isSafeInteger(revision) ||
 							revision < 1 ||
 							!Number.isSafeInteger(createdAt) ||
@@ -206,9 +194,9 @@ export class ArtifactStore {
 		if (!ID.test(id)) throw new ArtifactNotFound("Unknown artifact");
 		try {
 			const latest = JSON.parse(await readFile(join(this.directory, id, "latest.json"), "utf8")) as ArtifactSummary;
-			if (latest.sessionId !== this.identity.sessionId || latest.id !== id)
+			if (latest.sessionId !== this.identity.sessionId || latest.id !== id || !isArtifactKind(latest.kind))
 				throw new ArtifactNotFound("Unknown artifact");
-			return latest;
+			return artifactSummary(latest);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ArtifactNotFound("Unknown artifact");
 			throw error;
@@ -227,23 +215,20 @@ export class ArtifactStore {
 			const value = JSON.parse(
 				await readFile(join(this.directory, id, `${revision ?? latest.revision}.json`), "utf8"),
 			) as ArtifactRevision;
-			if (value.sessionId !== this.identity.sessionId || value.id !== id)
+			if (
+				value.sessionId !== this.identity.sessionId ||
+				value.id !== id ||
+				value.revision !== (revision ?? latest.revision) ||
+				value.kind !== "image"
+			)
 				throw new ArtifactNotFound("Unknown artifact");
-			if (value.kind === "image" && value.html === DERIVED_IMAGE_HTML)
-				value.html = (await prepareArtifact({ title: value.title, kind: "image", source: value.source })).html;
-			return value;
+			const { html } = await prepareArtifact({ title: value.title, kind: "image", source: value.source });
+			return { ...artifactSummary(value), source: value.source, html };
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT")
 				throw new ArtifactNotFound("Unknown artifact or revision");
 			throw error;
 		}
-	}
-
-	/** Host-only exact visual acquisition. An explicit revision must be below the committed ceiling.
-	 * No rendering, latest fallback, worker wake, or changes to the revision write path. */
-	async readStoredRevision(id: string, revision: number, signal?: AbortSignal) {
-		const stored = await this.readCapturedRevision(id, revision, signal);
-		return storedVisualRevision(stored);
 	}
 
 	/** Passive numbered container read for text inspection. Never prepares HTML, images or callbacks. */
@@ -257,6 +242,7 @@ export class ArtifactStore {
 				latest.id !== id ||
 				latest.sessionId !== this.identity.sessionId ||
 				latest.projectId !== this.identity.projectId ||
+				!isArtifactKind(latest.kind) ||
 				!Number.isSafeInteger(latest.revision) ||
 				revision > latest.revision
 			)
@@ -267,7 +253,9 @@ export class ArtifactStore {
 				signal,
 			);
 			signal?.throwIfAborted();
-			return parseStoredArtifactRevision(bytes, { ...this.identity, id, revision });
+			const stored = parseStoredArtifactRevision(bytes, { ...this.identity, id, revision });
+			if (stored.artifact.kind !== latest.kind) throw new ArtifactNotFound("Unknown artifact revision");
+			return stored;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT")
 				throw new ArtifactNotFound("Unknown artifact revision");
@@ -291,8 +279,6 @@ export class ArtifactStore {
 			if (write.kind === "nsh" && expectedRevision === undefined)
 				throw new Error("NSH updates require expectedRevision");
 			const previous = await this.get(id);
-			// Legacy identities stay read-only, even if an old caller changes the requested kind.
-			assertArtifactWriteKind(previous.kind);
 			if ((previous.kind === "nsh" || write.kind === "nsh") && previous.kind !== write.kind)
 				throw new Error("NSH artifact identity cannot change kind");
 			if (expectedRevision !== undefined && previous.revision !== expectedRevision)
@@ -313,8 +299,7 @@ export class ArtifactStore {
 		previous?: ArtifactRevision,
 		signal?: AbortSignal,
 	): Promise<ArtifactRevision> {
-		const { write, prepared: result } = await prepareArtifactWrite(input, { signal, id });
-		const { visual, ...prepared } = result;
+		const { write, prepared } = await prepareArtifactWrite(input, { signal });
 		signal?.throwIfAborted();
 		const now = Date.now();
 		const artifact: ArtifactRevision = {
@@ -327,8 +312,6 @@ export class ArtifactStore {
 			updatedAt: now,
 			source: write.source,
 			...prepared,
-			libraryVersions: {},
-			...(visual ? { data: write.data ?? null, visual } : {}),
 		};
 		const directory = join(this.directory, id);
 		if (

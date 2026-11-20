@@ -5,8 +5,6 @@ import { dirname } from "node:path";
 import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
 import type {
 	ArtifactKind,
-	CatalogSharedTask,
-	DelegationGrant,
 	GitHubAction,
 	Mission,
 	MissionArtifactLink,
@@ -38,13 +36,8 @@ import type {
 	MissionTaskStatus,
 	MissionTaskWrite,
 	MissionWorkerRole,
-	OperationHost,
 	SessionPullRequest,
 	SessionSummary,
-	SharedContextBinding,
-	SharedEntity,
-	SharedMissionChange,
-	SharedMissionSnapshot,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import type { MissionRevisionDelta, MissionRevisionProposal } from "../../protocol/src/mission-revision.ts";
@@ -62,7 +55,6 @@ import { INSIGHTS_OWNER_SCHEMA, InsightsOwnerStore } from "./insights-owner-stor
 import { INSIGHTS_TRANSITION_SCHEMA, InsightsTransitionStore } from "./insights-transition-store.ts";
 import { INSIGHTS_WORKSPACE_SCHEMA, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
 import { LINEAR_PUBLISHER_SCHEMA, LinearPublisherStore } from "./linear-publisher-store.ts";
-import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
 	type AllocationContextFence,
 	type AllocationWrite,
@@ -103,6 +95,7 @@ import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MISSION_PLAN_SCHEMA, MissionPlanStore, publishedDefinition } from "./mission-plan-store.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
+import { assertLocalMissionDb, dropEmptyRemoteTables } from "./profile-cutover.ts";
 import {
 	assertReviewOutput,
 	type MissionReviewProfile,
@@ -652,7 +645,6 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 
 export class MissionStore {
 	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
-	private readonly catalogReplicaCache = new Map<string, SharedMissionGroup[]>();
 	/**
 	 * The project's own GitHub repository ("host/owner/name"): the member chat's workspace upstream, else the project
 	 * folder's git remote read earlier. The mission service sets it; undefined means not known.
@@ -1015,7 +1007,13 @@ export class MissionStore {
 	constructor(file: string) {
 		if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		this.db = new DatabaseSync(file);
-		this.migrate();
+		try {
+			assertLocalMissionDb(this.db);
+			this.migrate();
+		} catch (error) {
+			this.db.close();
+			throw error;
+		}
 		if (file !== ":memory:") {
 			// SQLite is synchronous and pilotd has one event loop, so a disk-backed connection made every read and
 			// commit wait for a busy disk. The store now runs in memory; a worker thread saves each commit to disk,
@@ -1036,6 +1034,7 @@ export class MissionStore {
 	private migrate(): void {
 		// The previous store's replica thread may still be closing its connection.
 		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+		this.retireRemoteSchema();
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
@@ -1283,7 +1282,7 @@ export class MissionStore {
 			CREATE INDEX IF NOT EXISTS resources_by_contributing_task ON resources(task_id,linear_key,mission_id) WHERE linear_role='contribution';
 			CREATE INDEX IF NOT EXISTS linear_sync_attention_order ON resources(mission_id,created_at,id)
 				WHERE linear_role='managed' AND json_extract(linear_sync, '$.status.state') IN ('paused', 'error');
-			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_task AFTER UPDATE OF status ON tasks
+			CREATE TRIGGER IF NOT EXISTS linear_sync_task AFTER UPDATE OF status ON tasks
 			WHEN OLD.status <> NEW.status BEGIN
 				INSERT OR IGNORE INTO linear_sync_dirty(resource_id) SELECT m.id FROM resources c JOIN resources m
 				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
@@ -1292,19 +1291,19 @@ export class MissionStore {
 				AND NEW.status NOT IN ('done','dropped') AND resource_id IN (SELECT m.id FROM resources c JOIN resources m
 				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
 				WHERE c.task_id=NEW.id AND c.linear_role='contribution'); END;
-			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_task_delete BEFORE DELETE ON tasks BEGIN
+			CREATE TRIGGER IF NOT EXISTS linear_sync_task_delete BEFORE DELETE ON tasks BEGIN
 				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT m.id,1 FROM resources c JOIN resources m
 				ON m.mission_id=c.mission_id AND m.linear_key=c.linear_key AND m.linear_role='managed'
 				WHERE c.task_id=OLD.id AND c.linear_role='contribution'; END;
-			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_insert AFTER INSERT ON resources
+			CREATE TRIGGER IF NOT EXISTS linear_sync_insert AFTER INSERT ON resources
 			WHEN NEW.linear_role IN ('managed','contribution') BEGIN
 				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources
 				WHERE mission_id=NEW.mission_id AND linear_key=NEW.linear_key AND linear_role='managed'; END;
-			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_delete AFTER DELETE ON resources
+			CREATE TRIGGER IF NOT EXISTS linear_sync_delete AFTER DELETE ON resources
 			WHEN OLD.linear_role IN ('managed','contribution') BEGIN
 				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources
 				WHERE mission_id=OLD.mission_id AND linear_key=OLD.linear_key AND linear_role='managed'; END;
-			CREATE TRIGGER IF NOT EXISTS shared_linear_sync_role AFTER UPDATE OF linear_role,task_id,linear_key ON resources BEGIN
+			CREATE TRIGGER IF NOT EXISTS linear_sync_role AFTER UPDATE OF linear_role,task_id,linear_key ON resources BEGIN
 				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) VALUES(NEW.id,1);
 				INSERT OR REPLACE INTO linear_sync_dirty(resource_id,structural) SELECT id,1 FROM resources WHERE mission_id=NEW.mission_id
 				AND linear_key IN (OLD.linear_key,NEW.linear_key) AND linear_role='managed'; END;`);
@@ -1328,265 +1327,40 @@ export class MissionStore {
 		this.db.exec(`CREATE INDEX IF NOT EXISTS user_notes_by_mission ON events (mission_id, id)
 			WHERE is_user_note = 1`);
 		this.initializing = false;
-		this.migrateSharing();
+		this.installTaskDefinitionRevisions();
 		this.transaction(() => {
 			for (const row of this.all("SELECT DISTINCT mission_id FROM phases"))
 				this.phaseReconciliations.add(str(row.mission_id!));
 		});
 	}
 
-	/** Resolves once every committed change so far is on disk. Await before acknowledging a write. */
-	private migrateSharing(): void {
-		this.db.exec(`CREATE TABLE IF NOT EXISTS shared_records (
-			namespace TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(namespace,id)
-		);
-		CREATE TABLE IF NOT EXISTS shared_outbox (
-			operation_id TEXT PRIMARY KEY,binding_id TEXT NOT NULL,destination TEXT NOT NULL,sequence INTEGER NOT NULL,
-			acknowledged INTEGER NOT NULL,value TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS shared_outbox_active ON shared_outbox(binding_id,destination,sequence) WHERE acknowledged=0;
-		CREATE INDEX IF NOT EXISTS shared_execution_state ON shared_records(namespace,json_extract(value,'$.state')) WHERE namespace GLOB 'execution:*';
-		CREATE INDEX IF NOT EXISTS shared_execution_export ON shared_records(namespace,COALESCE(json_extract(value,'$.needsFactExport'),1)) WHERE namespace GLOB 'execution:*';
-		CREATE TABLE IF NOT EXISTS shared_storage_budget(id INTEGER PRIMARY KEY,bytes INTEGER NOT NULL);
-		INSERT OR IGNORE INTO shared_storage_budget SELECT 1,COALESCE(SUM(length(CAST(value AS BLOB))),0) FROM shared_records;
-		INSERT OR IGNORE INTO shared_storage_budget SELECT 2,COALESCE(SUM(length(CAST(value AS BLOB))),0) FROM shared_outbox;
-		CREATE TRIGGER IF NOT EXISTS shared_records_budget_insert AFTER INSERT ON shared_records BEGIN UPDATE shared_storage_budget SET bytes=bytes+length(CAST(NEW.value AS BLOB)) WHERE id=1; END;
-		CREATE TRIGGER IF NOT EXISTS shared_records_budget_update AFTER UPDATE OF value ON shared_records BEGIN UPDATE shared_storage_budget SET bytes=bytes+length(CAST(NEW.value AS BLOB))-length(CAST(OLD.value AS BLOB)) WHERE id=1; END;
-		CREATE TRIGGER IF NOT EXISTS shared_records_budget_delete AFTER DELETE ON shared_records BEGIN UPDATE shared_storage_budget SET bytes=bytes-length(CAST(OLD.value AS BLOB)) WHERE id=1; END;
-		CREATE TRIGGER IF NOT EXISTS shared_outbox_budget_insert AFTER INSERT ON shared_outbox BEGIN UPDATE shared_storage_budget SET bytes=bytes+length(CAST(NEW.value AS BLOB)) WHERE id=2; END;
-		CREATE TRIGGER IF NOT EXISTS shared_outbox_budget_update AFTER UPDATE OF value ON shared_outbox BEGIN UPDATE shared_storage_budget SET bytes=bytes+length(CAST(NEW.value AS BLOB))-length(CAST(OLD.value AS BLOB)) WHERE id=2; END;
-		CREATE TABLE IF NOT EXISTS shared_entities (
-			mission_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL,
-			deleted INTEGER NOT NULL, value TEXT, PRIMARY KEY(mission_id,kind,id)
-		);
-		CREATE TABLE IF NOT EXISTS shared_changes (
-			sequence INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL, kind TEXT NOT NULL,
-			id TEXT NOT NULL, revision INTEGER NOT NULL, deleted INTEGER NOT NULL, value TEXT
-		);
-		CREATE INDEX IF NOT EXISTS shared_changes_mission ON shared_changes(mission_id,sequence);
-		CREATE TABLE IF NOT EXISTS shared_task_definitions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
-		CREATE TABLE IF NOT EXISTS shared_authority_scopes (mission_id TEXT PRIMARY KEY);
-		CREATE TABLE IF NOT EXISTS shared_internal_projection (id INTEGER PRIMARY KEY);
-		CREATE TABLE IF NOT EXISTS shared_allocations (
-			task_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL, delegation_id TEXT NOT NULL,
-			epoch INTEGER NOT NULL, sealed INTEGER NOT NULL DEFAULT 0, value TEXT NOT NULL
-		);`);
-		this.db.exec(
-			"CREATE INDEX IF NOT EXISTS shared_allocations_binding ON shared_allocations(json_extract(value,'$.bindingId')); CREATE INDEX IF NOT EXISTS shared_allocations_mission ON shared_allocations(mission_id)",
-		);
-		const tables: [string, SharedEntity["kind"]][] = [
-			["missions", "mission"],
-			["brief_revisions", "brief"],
-			["tasks", "task"],
-			["decisions", "decision"],
-			["comments", "comment"],
-			["resources", "resource"],
-			["artifact_links", "artifact"],
-			["phases", "phase"],
-		];
-		for (const [table, kind] of tables) {
-			const columns = this.all(`PRAGMA table_info(${table})`).map((row) => String(row.name));
-			for (const [event, prefix, deleted] of [
-				["INSERT", "NEW", 0],
-				["UPDATE", "NEW", 0],
-				["DELETE", "OLD", 1],
-			] as const) {
-				const mission = `${prefix}.${table === "missions" ? "id" : "mission_id"}`;
-				const id = table === "brief_revisions" ? `${mission} || ':brief'` : `CAST(${prefix}.id AS TEXT)`;
-				const definition =
-					kind === "task" ? `(SELECT revision FROM shared_task_definitions WHERE id=${prefix}.id)` : undefined;
-				const value = `json_object(${columns.flatMap((column) => [`'${column}'`, `${prefix}.${column}`]).join(",")}${definition ? `, 'definition_revision', ${definition}` : ""})`;
-				this.db.exec(`DROP TRIGGER IF EXISTS shared_${table}_${event};
-				CREATE TRIGGER shared_${table}_${event} AFTER ${event} ON ${table}
-				WHEN EXISTS(SELECT 1 FROM shared_authority_scopes WHERE mission_id=${mission})
-				${
-					event === "UPDATE"
-						? `AND (${columns
-								.filter((column) => column !== "updated_at")
-								.map((column) => `OLD.${column} IS NOT NEW.${column}`)
-								.join(
-									" OR ",
-								)}${definition ? ` OR json_extract((SELECT value FROM shared_entities WHERE mission_id=${mission} AND kind='task' AND id=${id}),'$.definition_revision') IS NOT ${definition}` : ""})`
-						: ""
-				} BEGIN
-					SELECT CASE WHEN (SELECT COUNT(*) FROM shared_changes)>=16384 THEN RAISE(ABORT,'Shared change retention full; reconciliation required') END;
-					INSERT INTO shared_entities VALUES (${mission}, '${kind}', ${id}, 1, ${deleted}, ${value})
-					ON CONFLICT(mission_id,kind,id) DO UPDATE SET revision=revision+1,deleted=${deleted},value=${value};
-					INSERT INTO shared_changes(mission_id,kind,id,revision,deleted,value)
-					SELECT mission_id,kind,id,revision,deleted,value FROM shared_entities
-					WHERE mission_id=${mission} AND kind='${kind}' AND id=${id};
-				END;`);
-			}
+	/** Safe after the profile preflight: the legacy tables must have no records. */
+	private retireRemoteSchema(): void {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			assertLocalMissionDb(this.db);
+			for (const row of this.all("SELECT name FROM sqlite_master WHERE type='trigger' AND name GLOB 'shared_*'"))
+				this.db.exec(`DROP TRIGGER ${identifier(str(row.name!))}`);
+			dropEmptyRemoteTables(this.db);
+			if (this.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='shared_task_definitions'"))
+				this.db.exec("ALTER TABLE shared_task_definitions RENAME TO task_definition_revisions");
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
 		}
-		this.db.exec(`INSERT OR IGNORE INTO shared_task_definitions SELECT id,1 FROM tasks;
-			DROP TRIGGER IF EXISTS shared_task_definition_insert;
-			CREATE TRIGGER shared_task_definition_insert BEFORE INSERT ON tasks BEGIN
-				INSERT INTO shared_task_definitions VALUES(NEW.id,1); END;
-			DROP TRIGGER IF EXISTS shared_task_definition_update;
-			CREATE TRIGGER shared_task_definition_update BEFORE UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone,assignment ON tasks
-			WHEN NOT EXISTS(SELECT 1 FROM shared_internal_projection) AND (OLD.title IS NOT NEW.title OR OLD.body IS NOT NEW.body OR OLD.depends_on IS NOT NEW.depends_on
-			OR OLD.decision_ids IS NOT NEW.decision_ids OR OLD.preferred_model IS NOT NEW.preferred_model OR OLD.preferred_thinking IS NOT NEW.preferred_thinking
-			OR OLD.status IS NOT NEW.status OR OLD.phase_id IS NOT NEW.phase_id OR OLD.session_id IS NOT NEW.session_id OR OLD.milestone IS NOT NEW.milestone OR OLD.assignment IS NOT NEW.assignment)
-			BEGIN UPDATE shared_task_definitions SET revision=revision+1 WHERE id=NEW.id; END;
-			CREATE TRIGGER IF NOT EXISTS shared_assignment_fence BEFORE UPDATE OF session_id ON tasks
-			WHEN NEW.session_id IS NOT NULL AND EXISTS(SELECT 1 FROM shared_allocations WHERE task_id=NEW.id AND sealed=0)
-			BEGIN SELECT RAISE(ABORT,'Task has an occupied remote execution grant'); END;`);
-		// Only current entities can be upgraded honestly. Historical deltas without a captured
-		// definition revision remain unknown; clients must not infer one from activity or timestamps.
-		this.db.exec(
-			`UPDATE shared_entities SET value=json_set(value,'$.definition_revision',(SELECT revision FROM shared_task_definitions WHERE id=shared_entities.id)) WHERE kind='task' AND json_extract(value,'$.definition_revision') IS NULL`,
-		);
-	}
-	shareMission(id: string): void {
-		this.require(id);
-		this.transaction(() => {
-			if (this.one("SELECT 1 FROM shared_authority_scopes WHERE mission_id=?", id)) return;
-			this.run("INSERT INTO shared_authority_scopes VALUES(?)", id);
-			for (const [table, kind] of [
-				["missions", "mission"],
-				["brief_revisions", "brief"],
-				["tasks", "task"],
-				["decisions", "decision"],
-				["comments", "comment"],
-				["resources", "resource"],
-				["artifact_links", "artifact"],
-				["phases", "phase"],
-			]) {
-				const columns = this.all(`PRAGMA table_info(${table})`).map((row) => String(row.name));
-				const mission = table === "missions" ? "id" : "mission_id";
-				const entityId = table === "brief_revisions" ? "mission_id || ':brief'" : "CAST(id AS TEXT)";
-				const value = `json_object(${columns.flatMap((column) => [`'${column}'`, column]).join(",")}${kind === "task" ? `, 'definition_revision', (SELECT revision FROM shared_task_definitions WHERE id=tasks.id)` : ""})`;
-				this.run(
-					`INSERT OR IGNORE INTO shared_entities SELECT ${mission},'${kind}',${entityId},1,0,${value} FROM ${table} WHERE ${mission}=? ${table === "brief_revisions" ? "ORDER BY revision DESC" : ""}`,
-					id,
-				);
-			}
-		});
 	}
 
-	/** Sharing safety records deliberately have no cascading foreign keys. */
-	sharingGet<T>(namespace: string, id: string): T | undefined {
-		const row = this.one("SELECT value FROM shared_records WHERE namespace=? AND id=?", namespace, id);
-		return row ? (JSON.parse(String(row.value)) as T) : undefined;
-	}
-	sharingList<T>(namespace: string): T[] {
-		return this.all("SELECT value FROM shared_records WHERE namespace=? ORDER BY id", namespace).map(
-			(row) => JSON.parse(String(row.value)) as T,
-		);
-	}
-	sharingPage<T>(namespace: string, after: string, limit: number): T[] {
-		return this.all(
-			"SELECT value FROM shared_records WHERE namespace=? AND id>? ORDER BY id LIMIT ?",
-			namespace,
-			after,
-			Math.min(129, limit),
-		).map((row) => JSON.parse(String(row.value)) as T);
-	}
-	sharingExecutions<T>(namespace: string, mode: "active" | "export"): T[] {
-		return this.all(
-			`SELECT value FROM shared_records WHERE namespace=? AND namespace GLOB 'execution:*' AND ${mode === "active" ? "json_extract(value,'$.state') IN ('accepted','cancel_requested')" : "COALESCE(json_extract(value,'$.needsFactExport'),1)=1"}`,
-			namespace,
-		).map((row) => JSON.parse(String(row.value)) as T);
-	}
-	sharingDeleteStaging(namespace: string): void {
-		this.run("DELETE FROM shared_records WHERE namespace=?", namespace);
-	}
-	sharingOutbox<T>(bindingId: string, destination?: string, limit = 4096): T[] {
-		const rows =
-			destination === undefined
-				? this.all(
-						"SELECT value FROM shared_outbox WHERE binding_id=? AND acknowledged=0 ORDER BY sequence LIMIT ?",
-						bindingId,
-						limit,
-					)
-				: this.all(
-						"SELECT value FROM shared_outbox WHERE binding_id=? AND destination=? AND acknowledged=0 ORDER BY sequence LIMIT ?",
-						bindingId,
-						destination,
-						limit,
-					);
-		return rows.map((row) => JSON.parse(String(row.value)) as T);
-	}
-	sharingOutboxGet<T>(operationId: string): T | undefined {
-		const row = this.one("SELECT value FROM shared_outbox WHERE operation_id=?", operationId);
-		return row ? (JSON.parse(String(row.value)) as T) : undefined;
-	}
-	sharingOutboxCount(bindingId: string): number {
-		return Number(
-			this.one("SELECT COUNT(*) n FROM shared_outbox WHERE binding_id=? AND acknowledged=0", bindingId)?.n ?? 0,
-		);
-	}
-	sharingOutboxPut(
-		operation: import("@pilot/protocol").DurableOperation,
-		value: {
-			acknowledged: boolean;
-			operation: import("@pilot/protocol").DurableOperation;
-			transmitted: boolean;
-			advance?: { kind: string; cursor: number };
-		},
-	): void {
-		const serialized = JSON.stringify(value),
-			previousBytes = Number(
-				this.one(
-					"SELECT length(CAST(value AS BLOB)) n FROM shared_outbox WHERE operation_id=?",
-					operation.operationId,
-				)?.n ?? 0,
-			);
-		if (
-			Number(this.one("SELECT bytes FROM shared_storage_budget WHERE id=2")!.bytes) +
-				Buffer.byteLength(serialized) -
-				previousBytes >
-			64 * 1024 * 1024
-		)
-			throw new Conflict("Sharing outbox byte retention full");
-		if (
-			!this.one("SELECT 1 FROM shared_outbox WHERE operation_id=?", operation.operationId) &&
-			Number(this.one("SELECT COUNT(*) n FROM shared_outbox")!.n) >= 4096
-		)
-			throw new Conflict("Sharing outbox retention full");
-		this.run(
-			"INSERT INTO shared_outbox VALUES(?,?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET acknowledged=excluded.acknowledged,value=excluded.value",
-			operation.operationId,
-			operation.bindingId!,
-			JSON.stringify(["daemon", operation.destination.daemonId, operation.destination.lineageId]),
-			operation.sequence,
-			value.acknowledged ? 1 : 0,
-			serialized,
-		);
-	}
-	sharingPut(namespace: string, id: string, value: unknown): void {
-		const serialized = JSON.stringify(value),
-			previousBytes = Number(
-				this.one(
-					"SELECT length(CAST(value AS BLOB)) n FROM shared_records WHERE namespace=? AND id=?",
-					namespace,
-					id,
-				)?.n ?? 0,
-			);
-		if (
-			Number(this.one("SELECT bytes FROM shared_storage_budget WHERE id=1")!.bytes) +
-				Buffer.byteLength(serialized) -
-				previousBytes >
-			64 * 1024 * 1024
-		)
-			throw new Conflict("Sharing safety-record byte retention full");
-		if (
-			!this.one("SELECT 1 FROM shared_records WHERE namespace=? AND id=?", namespace, id) &&
-			Number(this.one("SELECT COUNT(*) n FROM shared_records")!.n) >= 32768
-		)
-			throw new Conflict("Sharing safety-record retention full");
-		if (Buffer.byteLength(serialized) > 2 * 1024 * 1024) throw new Conflict("Sharing record too large");
-		this.run(
-			"INSERT INTO shared_records VALUES(?,?,?) ON CONFLICT(namespace,id) DO UPDATE SET value=excluded.value",
-			namespace,
-			id,
-			serialized,
-		);
-		if (namespace === "binding" || namespace === "replica") this.catalogReplicaCache.delete(id);
-		else if (namespace.startsWith("proposal:")) this.catalogReplicaCache.delete(namespace.slice("proposal:".length));
-	}
-	sharingTransaction<T>(work: () => T): T {
-		return this.batchChanges(work);
+	private installTaskDefinitionRevisions(): void {
+		this.db.exec(`CREATE TABLE IF NOT EXISTS task_definition_revisions (id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+			INSERT OR IGNORE INTO task_definition_revisions SELECT id,1 FROM tasks;
+			CREATE TRIGGER IF NOT EXISTS task_definition_insert BEFORE INSERT ON tasks BEGIN
+				INSERT INTO task_definition_revisions VALUES(NEW.id,1); END;
+			CREATE TRIGGER IF NOT EXISTS task_definition_update BEFORE UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone,assignment ON tasks
+			WHEN (OLD.title IS NOT NEW.title OR OLD.body IS NOT NEW.body OR OLD.depends_on IS NOT NEW.depends_on
+			OR OLD.decision_ids IS NOT NEW.decision_ids OR OLD.preferred_model IS NOT NEW.preferred_model OR OLD.preferred_thinking IS NOT NEW.preferred_thinking
+			OR OLD.status IS NOT NEW.status OR OLD.phase_id IS NOT NEW.phase_id OR OLD.session_id IS NOT NEW.session_id OR OLD.milestone IS NOT NEW.milestone OR OLD.assignment IS NOT NEW.assignment)
+			BEGIN UPDATE task_definition_revisions SET revision=revision+1 WHERE id=NEW.id; END;`);
 	}
 
 	/** Commit related recovery writes together, then notify each affected mission/member once. */
@@ -1604,28 +1378,8 @@ export class MissionStore {
 			if (committed) for (const [missionId, sessions] of changed) this.changed(missionId, [...sessions]);
 		}
 	}
-	sharingAttempt<T>(work: () => T): T {
-		this.db.exec("SAVEPOINT shared_validation");
-		try {
-			const value = work();
-			this.db.exec("RELEASE shared_validation");
-			return value;
-		} catch (error) {
-			this.db.exec("ROLLBACK TO shared_validation; RELEASE shared_validation");
-			throw error;
-		}
-	}
-	sharedHead(): number {
-		return Number(this.one("SELECT COALESCE(MAX(sequence),0) n FROM shared_changes")!.n);
-	}
-	sharedRevision(missionId: string, kind: SharedEntity["kind"], id: string): number {
-		return Number(
-			this.one("SELECT revision FROM shared_entities WHERE mission_id=? AND kind=? AND id=?", missionId, kind, id)
-				?.revision ?? 0,
-		);
-	}
 	sharedDefinitionRevision(taskId: string): number {
-		return Number(this.one("SELECT revision FROM shared_task_definitions WHERE id=?", taskId)?.revision ?? 0);
+		return Number(this.one("SELECT revision FROM task_definition_revisions WHERE id=?", taskId)?.revision ?? 0);
 	}
 	/** Narrow Pause binding: full content can change intentionally, writer ownership cannot. */
 	pauseTaskOwnership(missionId: string, owners: string[]) {
@@ -1658,7 +1412,7 @@ export class MissionStore {
 			this.all(
 				`SELECT t.id,t.session_id,t.status,t.assignment,COALESCE(d.revision,0) definition_revision,
 			COALESCE((SELECT MAX(e.id) FROM events e WHERE e.mission_id=t.mission_id AND e.task_id=t.id AND e.kind='task'),0) task_event
-			FROM tasks t LEFT JOIN shared_task_definitions d ON d.id=t.id WHERE t.mission_id=?`,
+			FROM tasks t LEFT JOIN task_definition_revisions d ON d.id=t.id WHERE t.mission_id=?`,
 				missionId,
 			).map((row) => [
 				str(row.id!),
@@ -1672,178 +1426,6 @@ export class MissionStore {
 			]),
 		);
 	}
-	sharedVersions(missionId: string, after: number, limit: number): import("@pilot/protocol").SharedEntityVersion[] {
-		return this.all(
-			"SELECT e.id,e.kind,e.revision,e.deleted,d.revision AS definition_revision FROM shared_entities e LEFT JOIN shared_task_definitions d ON e.kind='task' AND e.id=d.id WHERE e.mission_id=? ORDER BY e.kind,e.id LIMIT ? OFFSET ?",
-			missionId,
-			limit,
-			after,
-		).map((row) => ({
-			id: String(row.id),
-			kind: String(row.kind) as SharedEntity["kind"],
-			revision: Number(row.revision),
-			deleted: Boolean(row.deleted),
-			...(row.definition_revision !== null ? { definitionRevision: Number(row.definition_revision) } : {}),
-		}));
-	}
-	sharedSnapshot(id: string): SharedMissionSnapshot {
-		if (!this.get(id)) {
-			const tombstone = this.one(
-				"SELECT value FROM shared_entities WHERE mission_id=? AND kind='mission' AND deleted=1",
-				id,
-			);
-			if (!tombstone) throw new NotFound("No authoritative mission or tombstone");
-			const mission = missionFrom({
-				...JSON.parse(String(tombstone.value)),
-				needs_you_count: 0,
-				tasks_done: 0,
-				tasks_total: 0,
-			});
-			mission.status = "archived";
-			return {
-				missionId: id,
-				sequence: this.sharedHead(),
-				detail: {
-					mission,
-					tasks: [],
-					decisions: [],
-					decisionProposals: [],
-					comments: [],
-					phases: [],
-					artifacts: [],
-					resources: [],
-					events: [],
-				},
-				entities: this.all("SELECT * FROM shared_entities WHERE mission_id=?", id).map(sharedEntityFrom),
-			};
-		}
-		return {
-			missionId: id,
-			sequence: this.sharedHead(),
-			detail: this.detail(id),
-			entities: this.all("SELECT * FROM shared_entities WHERE mission_id=?", id).map(sharedEntityFrom),
-		};
-	}
-	sharedChanges(after: number, limit = 64): SharedMissionChange[] {
-		return this.all(
-			"SELECT * FROM shared_changes WHERE sequence>? ORDER BY sequence LIMIT ?",
-			after,
-			Math.min(64, limit),
-		).map((row) => ({
-			sequence: Number(row.sequence),
-			missionId: String(row.mission_id),
-			entity: sharedEntityFrom(row),
-		}));
-	}
-	sharedAllocation(taskId: string): DelegationGrant | undefined {
-		const row = this.one("SELECT value FROM shared_allocations WHERE task_id=? AND sealed=0", taskId);
-		return row ? JSON.parse(String(row.value)) : undefined;
-	}
-	sharedGrants(bindingId?: string): DelegationGrant[] {
-		return (
-			bindingId === undefined
-				? this.all("SELECT value FROM shared_allocations")
-				: this.all("SELECT value FROM shared_allocations WHERE json_extract(value,'$.bindingId')=?", bindingId)
-		).map((row) => JSON.parse(String(row.value)));
-	}
-	sharedMissionGrants(missionId: string): DelegationGrant[] {
-		return this.all("SELECT value FROM shared_allocations WHERE mission_id=?", missionId).map((row) =>
-			JSON.parse(String(row.value)),
-		);
-	}
-	sharedGrantHistory(delegationId: string): DelegationGrant | undefined {
-		return this.sharingGet<DelegationGrant>("grant-history", delegationId);
-	}
-	sharedTaskGrant(taskId: string): DelegationGrant | undefined {
-		const row = this.one("SELECT value FROM shared_allocations WHERE task_id=?", taskId);
-		return row ? JSON.parse(String(row.value)) : undefined;
-	}
-	reserveSharedGrant(grant: DelegationGrant, expectedPreviousEpoch: number): void {
-		this.transaction(() => {
-			const previous = this.one("SELECT epoch,sealed FROM shared_allocations WHERE task_id=?", grant.task.taskId);
-			if (
-				!Number.isSafeInteger(expectedPreviousEpoch) ||
-				expectedPreviousEpoch < 0 ||
-				expectedPreviousEpoch >= Number.MAX_SAFE_INTEGER ||
-				expectedPreviousEpoch !== Number(previous?.epoch ?? 0) ||
-				grant.executionEpoch !== expectedPreviousEpoch + 1
-			)
-				throw new Conflict("Task execution epoch CAS conflict; refresh mission-home inventory");
-			if (this.require(grant.task.mission.missionId).status !== "active")
-				throw new Conflict("Reopen mission before granting execution");
-			if (grant.context.mission !== this.sharedHead())
-				throw new Conflict("Mission context changed during grant preparation; reconcile and retry");
-			this.prepareTaskStart(grant.task.mission.missionId, [grant.task.taskId]);
-			if (this.sharedDefinitionRevision(grant.task.taskId) !== grant.definitionRevision)
-				throw new Conflict("Task definition changed");
-			if (previous && !previous.sealed) throw new Conflict("Previous target has not sealed this task");
-			this.run(
-				"INSERT INTO shared_allocations VALUES(?,?,?,?,0,?) ON CONFLICT(task_id) DO UPDATE SET mission_id=excluded.mission_id,delegation_id=excluded.delegation_id,epoch=excluded.epoch,sealed=0,value=excluded.value",
-				grant.task.taskId,
-				grant.task.mission.missionId,
-				grant.delegationId,
-				grant.executionEpoch,
-				JSON.stringify(grant),
-			);
-			this.sharingPut("grant-history", grant.delegationId, grant);
-		});
-	}
-	updateSharedGrant(grant: DelegationGrant): void {
-		this.run(
-			"UPDATE shared_allocations SET value=?,sealed=? WHERE delegation_id=? AND epoch=?",
-			JSON.stringify(grant),
-			grant.state === "sealed" ? 1 : 0,
-			grant.delegationId,
-			grant.executionEpoch,
-		);
-		this.sharingPut("grant-history", grant.delegationId, grant);
-	}
-	projectSharedProgress(grant: DelegationGrant, status: "in_progress" | "blocked" | "in_review" | "done"): void {
-		this.insights.assertOrdinaryTask(grant.task.taskId);
-		if (this.sharedDefinitionRevision(grant.task.taskId) !== grant.definitionRevision) return;
-		this.transaction(() => {
-			this.run("INSERT INTO shared_internal_projection VALUES(1)");
-			try {
-				this.run(
-					"UPDATE tasks SET status=?,updated_at=?,completed_at=? WHERE id=? AND status<>? AND status NOT IN ('done','dropped')",
-					status,
-					Date.now(),
-					status === "done" ? Date.now() : null,
-					grant.task.taskId,
-					status,
-				);
-			} finally {
-				this.run("DELETE FROM shared_internal_projection");
-			}
-		});
-	}
-	recordSharedFact(grant: DelegationGrant, event: import("@pilot/protocol").DelegationEvent, eligible: boolean): void {
-		const missionId = grant.task.mission.missionId;
-		if (!this.get(missionId)) return;
-		const task = this.tasks(missionId).find((task) => task.id === grant.task.taskId);
-		const text = `Remote ${event.kind} ${event.eventId}${eligible ? "" : " (late factual evidence; not projected)"}`;
-		this.event(
-			missionId,
-			"update",
-			text,
-			{ sessionId: `shared:${grant.delegationId}` },
-			{
-				...(task ? { taskId: task.id } : {}),
-				wake: event.kind !== "progress",
-				urgent: event.kind === "question" || event.kind === "result",
-				noticeText: text,
-				noticeSummaries: [
-					{
-						key: `remote:${event.delegationId}`,
-						text,
-						state: event.kind === "result" ? String(event.payload.outcome ?? "unknown") : event.kind,
-					},
-				],
-			},
-		);
-		this.changed(missionId);
-	}
-
 	durable(): Promise<void> {
 		return this.replica?.durable() ?? Promise.resolve();
 	}
@@ -2947,136 +2529,6 @@ export class MissionStore {
 	get(id: string): Mission | undefined {
 		const row = this.one(`${MISSION_SELECT} WHERE id = ?`, id);
 		return row ? missionFrom(row) : undefined;
-	}
-
-	/** Thin, bounded per-scope projection for the change-driven mission catalog, never a tool-time read.
-	 * SQL extracts only display fields, not grant requests, replica bodies, events or proposal arguments.
-	 * Connectivity is deliberately absent: missing facts cannot fail a task or release a grant.
-	 */
-	catalogSharedContext(host: OperationHost): SharedMissionGroup[] {
-		const groups: SharedMissionGroup[] = [];
-		const parseTask = (row: Row): CatalogSharedTask => {
-			const value = JSON.parse(str(row.value!));
-			for (const key of Object.keys(value)) if (value[key] === null) delete value[key];
-			return value;
-		};
-		for (const mission of this.all(
-			`SELECT DISTINCT m.id, m.project_id FROM shared_allocations a JOIN missions m ON m.id=a.mission_id
-			WHERE json_extract(a.value,'$.task.mission.home.daemonId')=?
-			AND json_extract(a.value,'$.task.mission.home.lineageId')=? ORDER BY m.id`,
-			host.daemonId,
-			host.lineageId,
-		)) {
-			const rows = this.all(
-				`SELECT COUNT(*) OVER() AS total, json_object(
-				'id', 'grant:' || a.delegation_id, 'bindingId', json_extract(a.value,'$.bindingId'),
-				'projectId', ?, 'missionId', a.mission_id, 'missionHome', json_extract(a.value,'$.task.mission.home'),
-				'source', 'mission-home', 'consistency', 'committed', 'taskId', a.task_id,
-				'taskNumber', t.number, 'title', substr(t.title,1,160), 'status', t.status,
-				'delegationId', a.delegation_id, 'executionEpoch', a.epoch,
-				'executionHost', json_extract(a.value,'$.target.host'), 'grantState', json_extract(a.value,'$.state'),
-				'running', CASE WHEN a.sealed=1 THEN json('false')
-				WHEN json_extract(p.value,'$.eligible')=1
-				AND json_extract(p.value,'$.event.delegationId')=a.delegation_id
-				AND json_extract(p.value,'$.event.executionEpoch')=a.epoch
-				THEN json(CASE json_extract(p.value,'$.event.payload.working') WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END)
-				ELSE NULL END) AS value
-				FROM shared_allocations a LEFT JOIN tasks t ON t.id=a.task_id
-				LEFT JOIN shared_records p ON p.namespace='remote-projection' AND p.id=a.delegation_id
-				WHERE a.mission_id=? ORDER BY a.task_id LIMIT 100`,
-				mission.project_id!,
-				mission.id!,
-			);
-			groups.push({
-				projectId: str(mission.project_id!),
-				missionId: str(mission.id!),
-				tasks: rows.map(parseTask),
-				tasksTotal: Number(rows[0]?.total ?? 0),
-			});
-		}
-		for (const binding of this.sharingList<SharedContextBinding>("binding")) {
-			if (
-				binding.state !== "active" ||
-				(binding.missionHome.daemonId === host.daemonId && binding.missionHome.lineageId === host.lineageId) ||
-				binding.executionProject.host.daemonId !== host.daemonId ||
-				binding.executionProject.host.lineageId !== host.lineageId
-			)
-				continue;
-			const cached = this.catalogReplicaCache.get(binding.bindingId);
-			if (cached) {
-				groups.push(...cached);
-				continue;
-			}
-			const bindingGroups: SharedMissionGroup[] = [];
-			for (const missionId of binding.missionIds) {
-				// json_each avoids loading the full replica object in JavaScript, even for a large brief/history.
-				const snapshot = this.one(
-					`SELECT json_extract(r.value,'$.complete') AS complete, json_extract(r.value,'$.sequence') AS sequence,
-					json_extract(r.value,'$.syncedAt') AS synced_at, substr(json_extract(s.value,'$.detail.mission.title'),1,160) AS title,
-					json_extract(s.value,'$.detail.mission.status') AS status
-					FROM shared_records r LEFT JOIN json_each(r.value,'$.missions') s ON s.key=?
-					WHERE r.namespace='replica' AND r.id=?`,
-					missionId,
-					binding.bindingId,
-				);
-				const projectId = binding.executionProject.projectId;
-				const syncedAt = snapshot?.synced_at == null ? undefined : Number(snapshot.synced_at);
-				const complete = snapshot?.complete === 1 && snapshot?.title != null;
-				const base = {
-					bindingId: binding.bindingId,
-					projectId,
-					missionId,
-					missionHome: binding.missionHome,
-					source: "replica" as const,
-					replicaSyncedAt: syncedAt,
-					replicaAgeMs: null,
-				};
-				const rows = complete
-					? this.all(
-							`WITH display AS (
-					SELECT 0 AS kind, json_extract(t.value,'$.id') AS sort, json_object(
-					'id', 'replica:' || ? || ':' || ? || ':' || json_extract(t.value,'$.id'),
-					'consistency','committed','taskId',json_extract(t.value,'$.id'),'taskNumber',json_extract(t.value,'$.number'),
-					'title',substr(json_extract(t.value,'$.title'),1,160),'status',json_extract(t.value,'$.status')) AS value
-					FROM shared_records r, json_each(r.value,'$.missions') s, json_each(s.value,'$.detail.tasks') t
-					WHERE r.namespace='replica' AND r.id=? AND s.key=?
-					UNION ALL SELECT 1, p.id, json_object('id','proposal:' || ? || ':' || p.id,
-					'consistency','provisional','proposalId',p.id,'proposalState',json_extract(p.value,'$.state'),
-					'taskId',CASE WHEN json_extract(p.value,'$.args.id') IS NOT NULL THEN json_extract(p.value,'$.entityId') END,
-					'title',substr(json_extract(p.value,'$.args.title'),1,160),'status',json_extract(p.value,'$.args.status'))
-					FROM shared_records p WHERE p.namespace=? AND json_extract(p.value,'$.missionId')=?
-					AND json_extract(p.value,'$.action')='task' AND json_extract(p.value,'$.state')!='committed')
-					SELECT COUNT(*) OVER() AS total, value FROM display ORDER BY kind, sort LIMIT 100`,
-							binding.bindingId,
-							missionId,
-							binding.bindingId,
-							missionId,
-							binding.bindingId,
-							`proposal:${binding.bindingId}`,
-							missionId,
-						)
-					: [];
-				bindingGroups.push({
-					projectId,
-					missionId,
-					replica: {
-						id: `replica:${binding.bindingId}:${missionId}`,
-						...base,
-						consistency: "committed",
-						complete,
-						sequence: Number(snapshot?.sequence ?? 0),
-						...(complete
-							? { title: str(snapshot!.title!), status: str(snapshot!.status!) as MissionStatus }
-							: {}),
-					},
-					tasks: rows.map((row) => ({ ...base, ...parseTask(row) })),
-					tasksTotal: Number(rows[0]?.total ?? 0),
-				});
-			}
-			this.catalogReplicaCache.set(binding.bindingId, bindingGroups);
-			groups.push(...bindingGroups);
-		}
-		return groups;
 	}
 
 	/** Lifecycle listeners need no task counts or attention projection. */
@@ -5928,7 +5380,7 @@ export class MissionStore {
 				this.run("DELETE FROM retired_members WHERE session_id = ?", owner);
 			const phase = this.taskPhase(id, fields, actor);
 			if (fields.status !== undefined && fields.status === before.status)
-				this.run("UPDATE shared_task_definitions SET revision=revision+1 WHERE id=?", before.id);
+				this.run("UPDATE task_definition_revisions SET revision=revision+1 WHERE id=?", before.id);
 			if (fields.decisionIds !== undefined)
 				this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), before.id);
 			if (fields.preference) this.writePreference(id, { ...before, title }, fields.preference, actor, now);
@@ -6107,8 +5559,6 @@ export class MissionStore {
 				reasons.push(`Task #${task.number} is held by an exact revision Pause`);
 			if (this.linearReconciliationHeld(task.id))
 				reasons.push(`Task #${task.number} needs plan review after a Linear closure`);
-			if (this.sharedAllocation(task.id))
-				reasons.push(`Task #${task.number} has an occupied remote execution grant`);
 			if (starting?.has(`${id}:${task.id}`))
 				// Reservations remain authoritative even with a user gating override.
 				reasons.push(`Task #${task.number} is already starting in another chat`);
@@ -7941,36 +7391,6 @@ function decisionAudience(value: unknown): MissionDecision["audience"] {
 	if (value !== "all" && value !== "coordinator" && value !== "reference")
 		throw new Error("audience must be all, coordinator or reference");
 	return value;
-}
-
-function sharedEntityFrom(row: Row): SharedEntity {
-	const kind = String(row.kind) as SharedEntity["kind"];
-	const raw = row.value ? (JSON.parse(String(row.value)) as Row) : {};
-	if (kind === "mission") {
-		raw.needs_you_count = 0;
-		raw.tasks_done = 0;
-		raw.tasks_total = 0;
-	}
-	const map = {
-		mission: missionFrom,
-		brief: briefFrom,
-		task: taskFrom,
-		decision: decisionFrom,
-		comment: commentFrom,
-		resource: resourceFrom,
-		artifact: artifactFrom,
-		phase: phaseFrom,
-	};
-	return {
-		id: String(row.id),
-		kind,
-		revision: Number(row.revision),
-		...(kind === "task" && Number.isSafeInteger(raw.definition_revision) && Number(raw.definition_revision) > 0
-			? { definitionRevision: Number(raw.definition_revision) }
-			: {}),
-		deleted: Boolean(row.deleted),
-		...(!row.deleted ? { value: map[kind](raw) } : {}),
-	};
 }
 
 function decisionFrom(row: Row): MissionDecision {

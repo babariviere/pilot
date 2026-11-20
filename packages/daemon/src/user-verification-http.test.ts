@@ -77,7 +77,7 @@ test("native delivered-work read exposes canonical outputs, explicit verificatio
 		taskId: task.id,
 		artifactId: "fake-artifact",
 		title: "Fake output",
-		kind: "visual",
+		kind: "image",
 		revision: 1,
 	});
 	f.store.writeBrief(mission.id, "Non-code result", 0);

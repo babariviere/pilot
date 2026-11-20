@@ -1,6 +1,8 @@
 // Inert wire types only. No Node or SDK runtime graph in the NSH sandbox.
 import type { VerificationSubject } from "./deliveryContract";
 
+export type SavedArtifactKind = "image" | "nsh";
+
 export interface ArtifactSelection {
 	subject: VerificationSubject;
 	targetId: string;
@@ -13,7 +15,7 @@ export interface ArtifactSelection {
 export interface CapturedArtifact {
 	version: 1;
 	reference: ArtifactSelection;
-	metadata: { title: string; kind: "html" | "react" | "image" | "swiftui" | "shader" | "visual" | "nsh" };
+	metadata: { title: string; kind: SavedArtifactKind };
 	rendering: "unsupported";
 	content:
 		| { state: "text"; source: string; containerSha256: string; containerBytes: number }

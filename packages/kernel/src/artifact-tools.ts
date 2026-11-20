@@ -6,6 +6,7 @@ import {
 	type ArtifactStore,
 	captureNshSource,
 	imageSize,
+	isArtifactKind,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
 	type NshRendered,
@@ -23,16 +24,13 @@ import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { StringEnum } from "./schema.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
-const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
-/** Read kinds. Visual, shader, HTML, React and SwiftUI revisions stay readable as saved, never written. */
-const kind = StringEnum(["html", "react", "image", "swiftui", "shader", "visual", "nsh"] as const);
+const kind = StringEnum(["image", "nsh"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
 	source: Type.String({
 		maxLength: MAX_IMAGE_SOURCE_BYTES,
 		description: "Image only: a local file path or base64 image data URL (16 MiB decoded max).",
 	}),
-	libraries: Type.Optional(Type.Array(Type.String(), { maxItems: 0, description: "Deprecated; must be empty." })),
 };
 const summaryProperties = {
 	id: Type.String(),
@@ -73,9 +71,6 @@ export interface ArtifactToolOptions {
 		signal?: AbortSignal,
 	) => Promise<{ source: string; entry: string; rendered?: NshRendered }>;
 }
-
-/** Agents write these kinds. The store also writes visuals/shaders for compatibility and fixtures. */
-const WRITE_KINDS: readonly string[] = ["image", "nsh"];
 
 function checkSource(write: ArtifactWrite): void {
 	if (write.kind !== "image" && Buffer.byteLength(write.source, "utf8") > MAX_SOURCE_BYTES)
@@ -169,12 +164,12 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 - update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
-New artifacts use kind ${nsh ? "nsh or image" : "image"}. Visual, shader, HTML, React and SwiftUI artifacts are read-only: get and list still return them as saved.
+Publish kind ${nsh ? "nsh or image" : "image"}.
 ${nsh ? `NSH: ${options.ask ? `pass the complete TSX as source and a .tsx basename as sourcePath; the tool writes that one file in ${scratch}, then captures it. Ask writes nothing else.` : `kind nsh captures one sourcePath (.tsx basename or absolute path in ${scratch}). Do not pass inline source.`} The tool compiles it and runs it once headless like Day's preview: errors publish nothing (fix and retry), and the result says what it shows. Not a full TypeScript typecheck. Saved UTF-8 bytes are immutable and survive scratch cleanup. No local/remote imports or assets are loaded. Source: 512 KiB UTF-8 max.\n` : ""}Images: 16 MiB decoded max. ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Pass a local PNG, JPEG, GIF or WebP path or an inline data URL, never a remote URL."}
 Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: nsh
-				? "Publish NSH or image artifacts; inspect older artifact sources"
-				: "Publish image artifacts; inspect older artifact sources",
+				? "Publish NSH or image artifacts; inspect saved source"
+				: "Publish image artifacts; inspect saved source",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
@@ -205,7 +200,6 @@ Get the current source before updating, and pass its revision as expectedRevisio
 							})
 						: writeProperties.source,
 				),
-				libraries: writeProperties.libraries,
 				expectedRevision: Type.Optional(revisionNumber),
 				revision: Type.Optional(revisionNumber),
 			}),
@@ -215,10 +209,6 @@ Get the current source before updating, and pass its revision as expectedRevisio
 					artifact: Type.Object({
 						...summaryProperties,
 						source: Type.String(),
-						libraries: Type.Array(library),
-						libraryVersions: Type.Optional(Type.Record(Type.String(), Type.String())),
-						data: Type.Optional(Type.Unknown()),
-						visual: Type.Optional(Type.Object({ api: Type.Integer(), engine: Type.String() })),
 						nsh: Type.Optional(
 							Type.Object({
 								api: Type.Literal(1),
@@ -240,11 +230,9 @@ Get the current source before updating, and pass its revision as expectedRevisio
 				if (
 					["create", "update", "preview"].includes(action) &&
 					params.kind !== undefined &&
-					!WRITE_KINDS.includes(params.kind)
+					!isArtifactKind(params.kind)
 				)
-					throw new Error(
-						`Artifact kind ${JSON.stringify(params.kind)} is read-only. Publish kind nsh or image instead; get still reads older artifacts.`,
-					);
+					throw new Error(`Unsupported artifact kind. Publish kind ${nsh ? "nsh or image" : "image"}.`);
 				if ((action as string) === "preview")
 					throw new Error("There is no preview action: create and update run the preview and say what it shows");
 				if ((action === "get" || action === "update") && id === undefined)
@@ -259,34 +247,30 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						}
 						if (!value) value = await options.readReference?.(id!, params.revision);
 						signal?.throwIfAborted();
-						if (!value) throw new Error(`Artifact not found: ${id}`);
+						if (!value || !isArtifactKind(value.kind)) throw new Error(`Artifact not found: ${id}`);
 						return dataResult({
 							artifact: {
 								...summary(value),
 								source: value.source,
-								libraries: value.libraries,
-								...(value.libraryVersions ? { libraryVersions: { ...value.libraryVersions } } : {}),
-								...(value.data !== undefined ? { data: value.data } : {}),
-								...(value.visual ? { visual: { api: value.visual.api, engine: value.visual.engine } } : {}),
 								...(value.nsh ? { nsh: { ...value.nsh } } : {}),
 							},
 						});
 					}
 					case "list":
-						return dataResult({ artifacts: (await store.list()).map(summary) });
+						return dataResult({
+							artifacts: (await store.list()).filter((item) => isArtifactKind(item.kind)).map(summary),
+						});
 					case "create":
 					case "update": {
-						const { title, kind, source, libraries } = params;
+						const { title, kind, source } = params;
 						if (kind === "nsh" && !nsh) throw new Error("NSH file capture is unavailable in this session");
 						if (kind !== "nsh" && "sourcePath" in params) throw new Error("Only NSH artifacts take sourcePath");
 						if (title === undefined || kind === undefined || (source === undefined && kind !== "nsh"))
 							throw new Error(`Artifact ${action} requires title, kind and source`);
-						if (libraries?.length) throw new Error("New artifacts do not use libraries");
 						const write: ArtifactWrite = {
 							title,
 							kind,
 							source: source ?? "",
-							...(libraries === undefined ? {} : { libraries: [] }),
 						};
 						let report: ReturnType<typeof previewReport> | undefined;
 						if (kind === "nsh") {
@@ -316,7 +300,6 @@ Get the current source before updating, and pass its revision as expectedRevisio
 							// Check before any filesystem image loader, including forged direct/nested calls.
 							if (options.ask && !write.source.startsWith("data:image/"))
 								throw new Error("Ask image artifacts require inline data URLs, not file paths");
-							if (write.libraries?.length) throw new Error("Image artifacts do not use libraries");
 							write.source = await loadArtifactImage(write.source, ctx.cwd);
 							signal?.throwIfAborted();
 						}

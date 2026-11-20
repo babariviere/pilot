@@ -1,15 +1,13 @@
-/** Bounded read protocol, sanitization and ephemeral native courier. No addresses or filesystem selectors. */
-import { randomUUID } from "node:crypto";
+/** Bounded read protocol, sanitization. No addresses or filesystem selectors. */
 import type {
 	DiagnosticContextRequest,
 	DiagnosticContextResponse,
 	DiagnosticContextValue,
-	DiagnosticReadDispatch,
 	OperationHost,
 } from "@pilot/protocol";
 import { FEATURE_NAMES } from "@pilot/protocol";
 import { isCredentialField, redactDiagnosticText } from "./diagnostic-redaction.ts";
-import { Conflict, ServiceUnavailable } from "./errors.ts";
+import { Conflict } from "./errors.ts";
 
 export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest {
 	const invalid = (): never => {
@@ -212,54 +210,4 @@ export function awaitDiagnosticRead<T>(read: Promise<T>, signal?: AbortSignal): 
 			},
 		);
 	});
-}
-
-export class DiagnosticReadBroker {
-	private listeners = new Set<(dispatch: DiagnosticReadDispatch) => void>();
-	private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; dispose(): void }>();
-	onRead(listener: (dispatch: DiagnosticReadDispatch) => void): () => void {
-		this.listeners.add(listener);
-		return () => this.listeners.delete(listener);
-	}
-	read(request: DiagnosticContextRequest, signal?: AbortSignal): Promise<unknown> {
-		if (!this.listeners.size)
-			return Promise.reject(new ServiceUnavailable("Native diagnostic routing is unavailable"));
-		if (this.pending.size >= 8) return Promise.reject(new ServiceUnavailable("Diagnostic reads are busy"));
-		if (signal?.aborted) return Promise.reject(new Error("Diagnostic read cancelled"));
-		return new Promise((resolve, reject) => {
-			const id = randomUUID();
-			const cancel = () => {
-				this.pending.delete(id);
-				dispose();
-				reject(new Error("Diagnostic read cancelled"));
-			};
-			const timer = setTimeout(() => {
-				this.pending.delete(id);
-				dispose();
-				reject(new ServiceUnavailable("Native diagnostic routing did not answer"));
-			}, 10_000);
-			const dispose = () => {
-				clearTimeout(timer);
-				signal?.removeEventListener("abort", cancel);
-			};
-			this.pending.set(id, { resolve, reject, dispose });
-			signal?.addEventListener("abort", cancel, { once: true });
-			for (const listener of this.listeners) listener({ id, request });
-		});
-	}
-	respond(id: string, value: unknown): void {
-		const pending = this.pending.get(id);
-		if (!pending) throw new Conflict("Diagnostic read expired");
-		this.pending.delete(id);
-		pending.dispose();
-		pending.resolve(value);
-	}
-	close(): void {
-		for (const p of this.pending.values()) {
-			p.dispose();
-			p.reject(new Error("Diagnostic routing closed"));
-		}
-		this.pending.clear();
-		this.listeners.clear();
-	}
 }

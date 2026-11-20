@@ -18,6 +18,33 @@ use crate::{
 /// One minute, in epoch milliseconds.
 pub const MINUTE: u64 = 60_000;
 
+/// Time remaining until the saved occurrence, rounded to the next minute or hour.
+pub(crate) fn schedule_time(at: u64, now: u64) -> String {
+    if at <= now {
+        return "Overdue".into();
+    }
+    let minutes = (at - now).div_ceil(MINUTE);
+    if minutes < 60 {
+        return format!("in {minutes} min");
+    }
+    if minutes < 24 * 60 {
+        let (hours, rest) = (minutes / 60, minutes % 60);
+        return if rest == 0 {
+            format!("in {hours} h")
+        } else {
+            format!("in {hours} h {rest} min")
+        };
+    }
+    let hours = minutes.div_ceil(60);
+    let (days, rest) = (hours / 24, hours % 24);
+    let unit = if days == 1 { "day" } else { "days" };
+    if rest == 0 {
+        format!("in {days} {unit}")
+    } else {
+        format!("in {days} {unit} {rest} h")
+    }
+}
+
 /// A quiet preview only. Hold labels are host facts, never permission to resume.
 pub fn scheduled(overview: &c::DayOverview, now: u64) -> Vec<crate::model::Scheduled> {
     let Some(section) = &overview.dashboard.scheduled else {
@@ -36,16 +63,9 @@ pub fn scheduled(overview: &c::DayOverview, now: u64) -> Vec<crate::model::Sched
             id: r.id.clone(),
             text: r.title.clone(),
             at: r.at,
-            when: r.at.map_or_else(
-                || "Time unavailable".into(),
-                |at| {
-                    if at <= now {
-                        "Overdue".into()
-                    } else {
-                        format!("in {} min", (at - now).div_ceil(MINUTE))
-                    }
-                },
-            ),
+            when: r
+                .at
+                .map_or_else(|| "Time unavailable".into(), |at| schedule_time(at, now)),
             note: if r.paused == Some(true) {
                 Some("Paused by you".into())
             } else if r.held == Some(true) {
@@ -1659,6 +1679,23 @@ mod tests {
     }
 
     #[test]
+    fn schedule_time_uses_minutes_hours_and_days() {
+        let now = 60_000;
+        for (wait, expected) in [
+            (0, "Overdue"),
+            (1, "in 1 min"),
+            (59 * MINUTE, "in 59 min"),
+            (60 * MINUTE, "in 1 h"),
+            (85 * MINUTE, "in 1 h 25 min"),
+            (24 * 60 * MINUTE, "in 1 day"),
+            (25 * 60 * MINUTE, "in 1 day 1 h"),
+            (51 * 60 * MINUTE, "in 2 days 3 h"),
+        ] {
+            assert_eq!(schedule_time(now + wait, now), expected);
+        }
+    }
+
+    #[test]
     fn scheduled_preview_uses_host_holds_orders_due_work_and_discloses_partial_reads() {
         let mut overview = crate::fixture::world(crate::model::Scenario::Decisions)
             .overview
@@ -1669,7 +1706,7 @@ mod tests {
                 c::ScheduleSummary {
                     id: "future".into(),
                     title: "Check launch".into(),
-                    at: Some(180_000),
+                    at: Some(60_000 + 85 * MINUTE),
                     state: "pending".into(),
                     held: Some(true),
                     ..Default::default()
@@ -1695,6 +1732,7 @@ mod tests {
         assert_eq!(rows[0].id, "overdue");
         assert_eq!(rows[0].when, "Overdue");
         assert_eq!(rows[0].note.as_deref(), Some("Paused by you"));
+        assert_eq!(rows[1].when, "in 1 h 25 min");
         assert_eq!(rows[1].note.as_deref(), Some("Held"));
         assert_eq!(rows[2].id, "schedule-coverage");
         let mut desk = crate::desk::Desk::native();

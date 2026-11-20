@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
 	awaitDiagnosticRead,
-	DiagnosticReadBroker,
 	diagnosticContextResponse,
 	parseDiagnosticContext,
 	sanitizeDiagnosticContext,
@@ -63,25 +62,6 @@ test("metadata preserves exact chat citations without exempting arbitrary URLs",
 		JSON.stringify(sanitizeDiagnosticContext({ chatUrl: "https://example.com?token=secret-canary" })),
 		/secret-canary/,
 	);
-});
-
-test("native courier is bounded, correlated, cancellable and rejects stale responses", async () => {
-	const broker = new DiagnosticReadBroker();
-	const dispatches: string[] = [];
-	broker.onRead((d) => dispatches.push(d.id));
-	const controller = new AbortController();
-	const read = broker.read({ action: "hosts" }, controller.signal);
-	broker.respond(dispatches[0]!, { hosts: [] });
-	assert.deepEqual(await read, { hosts: [] });
-	assert.throws(() => broker.respond(dispatches[0]!, {}), /expired/);
-	const cancelled = broker.read({ action: "hosts" }, controller.signal);
-	controller.abort();
-	await assert.rejects(cancelled, /cancelled/);
-	const waiting = Array.from({ length: 8 }, () => broker.read({ action: "hosts" }).catch((e) => e));
-	await assert.rejects(broker.read({ action: "hosts" }), /busy/);
-	broker.close();
-	assert.ok((await Promise.all(waiting)).every((v) => v instanceof Error));
-	await assert.rejects(broker.read({ action: "hosts" }), /unavailable/);
 });
 
 test("diagnostic cancellation releases the caller even if a bounded cold reader is still settling", async () => {

@@ -107,10 +107,11 @@ try {
 	const { prepareArtifact } = await import("@pilot/artifacts");
 	const artifact = await prepareArtifact({
 		title: "Linux production smoke",
-		kind: "visual",
-		source: 'function visual({ ui }) { return () => ui.text("runtime-ok"); }',
+		kind: "nsh",
+		source: "export default () => null;",
+		entry: "smoke.tsx",
 	});
-	assert.equal(artifact.visual.check.nodes, 1);
+	assert.equal(artifact.nsh.entry, "smoke.tsx");
 	const pty = createRequire(import.meta.url)("node-pty");
 	const terminal = pty.spawn("/bin/sh", ["-c", "printf production-pty-ok"], {
 		cwd: isolated,

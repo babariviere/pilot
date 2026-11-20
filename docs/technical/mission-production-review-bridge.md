@@ -281,9 +281,8 @@ partial stages and unsupported environment. `assertShaderCompiles` cannot be tha
 Brief/other artifact validation requires separately named validators; no blanket validity from kind.
 Validator-only implementation leaves B incomplete without authority and required independent review.
 
-The [host-only adapter](retained-visual-precheck.md) now implements this limited validator against
-the retained stored-container acquisition API. It is not installed in a production dispatcher and
-does not activate checks, reviewers or acceptance. Its initial worker timer is not a total deadline.
+The old host-only adapter was removed with legacy visual compilation. The stored-container
+acquisition API remains passive and does not activate checks, reviewers or acceptance.
 
 ## Approval, consent and human origin: separate trace
 

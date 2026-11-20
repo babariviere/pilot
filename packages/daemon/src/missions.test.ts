@@ -38,7 +38,7 @@ test("recovery batches publish nested changes and membership once, only after co
 	store.onMembershipChange((sessionId) => members.push(sessionId));
 	const result = store.batchChanges(() => {
 		store.join("member", id);
-		store.sharingTransaction(() => {
+		store.batchChanges(() => {
 			store.update(id, { title: "After" });
 			store.addComment(id, { text: "Recovered" });
 		});
@@ -382,7 +382,7 @@ test("artifact references preserve mission and multiple task scopes across resta
 	try {
 		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
 		missions.join("author", id);
-		const link = { sessionId: "author", artifactId: "a", title: "Design", kind: "html" as const };
+		const link = { sessionId: "author", artifactId: "a", title: "Design", kind: "nsh" as const };
 		missions.linkArtifact(id, link);
 		missions.linkArtifact(id, { ...link, taskId: "1", revision: 1 });
 		missions.linkArtifact(id, { ...link, taskId: "2", revision: 2 });
@@ -431,7 +431,7 @@ test("legacy artifact links migrate without losing metadata or pinning", () => {
 			sessionId: "author",
 			artifactId: "a",
 			title: "Design",
-			kind: "html",
+			kind: "nsh",
 			revision: 2,
 		});
 		missions.close();
@@ -477,7 +477,7 @@ test("reference batches commit atomically and broadcast once with a large task l
 				missions.attachTaskReferences(
 					id,
 					task.id,
-					[{ artifactId: "a", sessionId: "author", title: "Design", kind: "html" }],
+					[{ artifactId: "a", sessionId: "author", title: "Design", kind: "nsh" }],
 					[{ url: "bad" }],
 				),
 			/absolute http/,
@@ -1351,12 +1351,12 @@ test("resources are parsed and deduplicated; artifacts link only from members", 
 	assert.equal(missions.addResource(id, { url: "https://linear.app/acme/issue/eng-12/fix-it" }).id, issue.id);
 	assert.throws(() => missions.addResource(id, { url: "file:///etc/passwd" }), /http/);
 	assert.throws(
-		() => missions.linkArtifact(id, { sessionId: "s1", artifactId: "a", title: "A", kind: "html" }),
+		() => missions.linkArtifact(id, { sessionId: "s1", artifactId: "a", title: "A", kind: "nsh" }),
 		/not in this mission/,
 	);
 	missions.join("s1", id);
-	missions.linkArtifact(id, { sessionId: "s1", artifactId: "a", title: "A", kind: "html", revision: 2 });
-	missions.linkArtifact(id, { sessionId: "s1", artifactId: "a", title: "A2", kind: "html" });
+	missions.linkArtifact(id, { sessionId: "s1", artifactId: "a", title: "A", kind: "nsh", revision: 2 });
+	missions.linkArtifact(id, { sessionId: "s1", artifactId: "a", title: "A2", kind: "nsh" });
 	assert.deepEqual(
 		missions.detail(id).artifacts.map((a) => [a.title, a.revision]),
 		[["A2", undefined]],

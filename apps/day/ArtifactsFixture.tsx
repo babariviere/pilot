@@ -9,7 +9,7 @@ import { type ArtifactRow, type ArtifactSource, type ListResult, type ReadResult
 import { Block, Button, Buttons, Caption, Column, Page, Panel, WindowCanvas } from "./ui";
 
 const NSH = "1b2c3d4e-0000-4000-8000-000000000001";
-const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
+const REPORT = "1b2c3d4e-0000-4000-8000-000000000002";
 const IMAGE = "1b2c3d4e-0000-4000-8000-000000000003";
 const SHOT_BEFORE = "1b2c3d4e-0000-4000-8000-000000000004";
 const SHOT_AFTER = "1b2c3d4e-0000-4000-8000-000000000005";
@@ -19,18 +19,18 @@ const PIXEL =
 const SOURCES: Record<string, string> = {
 	[`${NSH}@2`]: "export default () => <Text>Revision two</Text>;",
 	[`${NSH}@1`]: "export default () => <Text>Revision one</Text>;",
-	[`${HTML}@4`]: "<p>Saved page</p>",
-	[`${HTML}@3`]: "<p>Before page</p>",
+	[`${REPORT}@4`]: "export default () => <Text>Saved page</Text>;",
+	[`${REPORT}@3`]: "export default () => <Text>Before page</Text>;",
 	[`${IMAGE}@1`]: PIXEL,
 	[`${SHOT_BEFORE}@1`]: PIXEL,
 	[`${SHOT_AFTER}@2`]: PIXEL,
 	[`${SHOT_NEW}@1`]: PIXEL,
 };
 /** A title saved with an older revision, since renamed: each revision shows its own. */
-const TITLES: Record<string, string> = { [`${HTML}@3`]: "Old report page" };
+const TITLES: Record<string, string> = { [`${REPORT}@3`]: "Old report page" };
 const project: ArtifactRow[] = [
 	{ sessionId: "chat-a", artifactId: NSH, title: "Timeline", kind: "nsh", revision: 2, updatedAt: 3 },
-	{ sessionId: "chat-b", artifactId: HTML, title: "Report page", kind: "html", revision: 4, updatedAt: 2 },
+	{ sessionId: "chat-b", artifactId: REPORT, title: "Report page", kind: "nsh", revision: 4, updatedAt: 2 },
 	{ sessionId: "chat-b", artifactId: IMAGE, title: "Screenshot", kind: "image", revision: 1, updatedAt: 1 },
 ];
 const mission: ArtifactRow[] = [

@@ -59,7 +59,6 @@ const server = createDaemonServer({
 	models: new ModelCatalog(home),
 	terminals,
 	hello,
-	legacyAdmissionFrozen: false,
 	bootstrap: owner,
 });
 await server.runtimeReady;

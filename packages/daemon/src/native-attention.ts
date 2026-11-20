@@ -175,7 +175,7 @@ export class NativeAttention {
 	}
 	private async artifact(projectId: string, ref: ImmutableArtifactReference) {
 		const pin = this.authority(projectId, ref.sessionId);
-		const stored = await this.deps.sessions.readStoredArtifactRevision(ref.sessionId, ref.artifactId, ref.revision);
+		const stored = await this.deps.sessions.readCapturedArtifactRevision(ref.sessionId, ref.artifactId, ref.revision);
 		return (
 			this.authority(projectId, ref.sessionId) === pin &&
 			createHash("sha256").update(stored.bytes).digest("hex") === ref.sha256

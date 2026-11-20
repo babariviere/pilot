@@ -728,7 +728,7 @@ fn base_coming_up() -> Vec<Scheduled> {
         scheduled(
             "s3",
             "Weekly Insights report for pilot",
-            "Tomorrow 09:00",
+            &crate::project::schedule_time(NOW + 51 * 60 * MINUTE, NOW),
             None,
         ),
     ]

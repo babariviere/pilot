@@ -87,8 +87,3 @@ export interface DiagnosticContextResponse {
 		truncated: boolean;
 	};
 }
-/** Ephemeral native courier read. Neither publication nor a response can mutate or wake a target. */
-export interface DiagnosticReadDispatch {
-	id: string;
-	request: DiagnosticContextRequest;
-}

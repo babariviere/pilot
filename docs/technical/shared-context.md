@@ -155,7 +155,7 @@ the source occupied. Ordinary Stop responses do not authorize reassignment.
 
 ## API and courier
 
-Types: `packages/protocol/src/shared-context.ts` and `PilotCore/SharedContext.swift`.
+The TypeScript and Swift sharing contracts described here have been removed.
 
 | Endpoint | Contract |
 | --- | --- |

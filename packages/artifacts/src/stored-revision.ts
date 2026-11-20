@@ -1,18 +1,32 @@
 /** Passive host reads. Original numbered JSON bytes are not decoded source or a rendered document. */
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import type { ArtifactRevision } from "@pilot/protocol";
+import type { ArtifactRevision, ArtifactSummary } from "@pilot/protocol";
 import { nshSource } from "./nsh-source.ts";
+import { isArtifactKind } from "./render.ts";
 
 export const STORED_REVISION_LIMITS = Object.freeze({ containerBytes: 1024 * 1024, pointerBytes: 4096 });
-export interface StoredVisualRevision {
-	bytes: Uint8Array;
-	artifact: ArtifactRevision & { kind: "visual" };
-}
 export interface StoredArtifactRevision {
 	bytes: Uint8Array;
 	artifact: ArtifactRevision;
 }
+export class ArtifactNotFound extends Error {}
+
+/** Only active metadata is exposed. Old files may contain retired fields. */
+export function artifactSummary(value: ArtifactSummary): ArtifactSummary {
+	const { id, sessionId, projectId, title, kind, revision, createdAt, updatedAt } = value;
+	return {
+		id,
+		sessionId,
+		...(projectId === undefined ? {} : { projectId }),
+		title,
+		kind,
+		revision,
+		createdAt,
+		updatedAt,
+	};
+}
+
 export class StoredArtifactTooLarge extends Error {
 	constructor() {
 		super("Unsupported stored artifact size");
@@ -75,16 +89,14 @@ export function parseStoredArtifactRevision(
 		artifact.projectId !== expected.projectId
 	)
 		throw new Error("Stored artifact identity or revision mismatch");
-	if (!["html", "react", "image", "swiftui", "shader", "visual", "nsh"].includes(artifact.kind))
-		throw new Error("Unsupported stored artifact kind");
+	if (!isArtifactKind(artifact.kind)) throw new ArtifactNotFound("Unknown artifact revision");
 	if (
 		typeof artifact.source !== "string" ||
 		typeof artifact.html !== "string" ||
 		typeof artifact.title !== "string" ||
 		artifact.title.length > 160 ||
 		!Number.isSafeInteger(artifact.createdAt) ||
-		!Number.isSafeInteger(artifact.updatedAt) ||
-		!Array.isArray(artifact.libraries)
+		!Number.isSafeInteger(artifact.updatedAt)
 	)
 		throw new Error("Unsupported stored artifact representation");
 	if (artifact.kind === "nsh") {
@@ -96,32 +108,17 @@ export function parseStoredArtifactRevision(
 			artifact.nsh.runtime.length > 256 ||
 			artifact.nsh.sourceSha256 !== actual.sourceSha256 ||
 			artifact.nsh.sourceBytes !== actual.sourceBytes ||
-			artifact.html !== "" ||
-			artifact.libraries.length
+			artifact.html !== ""
 		)
 			throw new Error("Unsupported stored NSH representation");
 	}
-	return { bytes, artifact };
-}
-
-/** Review validation accepts only the existing visual representation. Never render on acquisition. */
-export function parseStoredVisualRevision(
-	bytes: Uint8Array,
-	expected: { id: string; revision: number; sessionId: string; projectId?: string },
-): StoredVisualRevision {
-	return storedVisualRevision(parseStoredArtifactRevision(bytes, expected));
-}
-
-/** Narrow a validated container without decoding or hydrating its bytes again. */
-export function storedVisualRevision({ bytes, artifact }: StoredArtifactRevision): StoredVisualRevision {
-	if (artifact.kind !== "visual") throw new Error("Unsupported stored artifact kind");
-	if (
-		artifact.libraries.length ||
-		artifact.visual?.api !== 1 ||
-		typeof artifact.visual.engine !== "string" ||
-		!artifact.visual.engine ||
-		artifact.visual.engine.length > 256
-	)
-		throw new Error("Unsupported stored visual representation");
-	return { bytes, artifact: artifact as StoredVisualRevision["artifact"] };
+	return {
+		bytes,
+		artifact: {
+			...artifactSummary(artifact),
+			source: artifact.source,
+			html: artifact.html,
+			...(artifact.kind === "nsh" ? { nsh: artifact.nsh } : {}),
+		},
+	};
 }

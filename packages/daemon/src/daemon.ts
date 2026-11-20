@@ -24,7 +24,6 @@ import { fundingRequests } from "./funding-requests.ts";
 import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
-import { legacyRuntimeUpdateFrozen } from "./legacy-runtime-update.ts";
 import { linearPublishContext } from "./linear-publish-context.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
@@ -43,7 +42,6 @@ import { PowerService } from "./power.ts";
 import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
-import { RetiredDevboxes } from "./retired-devboxes.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
 import { runtimeOwner } from "./runtime-bootstrap.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
@@ -74,7 +72,7 @@ Object.assign(process.env, credentialEnvironment(credentials.grant(true)));
 await installCredentialBrokerHooks();
 const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
-if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
+if (!hello.lineageId) throw new Error("Storage lineage is required");
 const telemetry = await TelemetrySettingsService.open(config.home, hello);
 const chatSettings = await ChatSettingsService.open(config.home);
 configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
@@ -201,7 +199,6 @@ telemetry.onChange((settings) => {
 	sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget);
 	tracking.setDiagnosticsEnabled(settings.localDiagnostics);
 });
-const legacyUpdateFrozen = process.platform === "linux" && (await legacyRuntimeUpdateFrozen(config.home));
 sessions.setProjectMemory(memory);
 sessions.setMcpStatus(mcpStatus);
 sessions.setSlackStatus({
@@ -242,17 +239,13 @@ sessions.onChange((session) => {
 });
 tracking.managedLinearMissions = (projectId, issueIds) => missionStore.managedLinearMissions(projectId, issueIds);
 
-const missionService = new MissionService(missionStore, sessions, projects);
+const missionService = new MissionService(missionStore, sessions, projects, undefined, undefined, {
+	hostId: "daemon",
+	daemonId: hello.daemonId,
+	lineageId: hello.lineageId,
+});
 const knowledge = new KnowledgeService(missionStore, projects, sessions);
 sessions.setKnowledge(knowledge);
-// Keep legacy grants occupied and delegated sessions fenced, without loading any live
-// sharing service, observers, replica recovery or courier endpoints.
-const sharing = new RetiredDevboxes(
-	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
-	missionStore,
-);
-sessions.setSharedContext(sharing);
-missionService.setSharedContext(sharing);
 missionService.setLinearClosingGuard((missionId, resourceId) => linearSync.closingEligibility(missionId, resourceId));
 missionService.setLinearReader(sourceMcp);
 const linearPrChecks = new MissionLinearPrChecks(
@@ -428,7 +421,6 @@ const daemonServices = createDaemonServices({
 	mcp: mcpStatus,
 	hello,
 	setup,
-	legacyAdmissionFrozen: legacyUpdateFrozen,
 	telemetry,
 	githubSetup,
 	nativeAuthority: githubSetup.nativeAuthority,

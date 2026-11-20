@@ -630,7 +630,6 @@ test("passive failed model rechecks evidence, authority and config after catalog
 		{ archivedAt: 123 },
 		{ continuedTo: "next" },
 		{ continuationPending: true },
-		{ delegationFenced: true },
 		{ projectId: "replacement" },
 		{ nextAttemptModel: { model: second } },
 	]) {

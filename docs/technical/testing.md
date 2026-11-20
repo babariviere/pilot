@@ -25,7 +25,7 @@ New tests default to integration unless explicitly admitted to the fast list in 
 can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
 
 CI runs the portable lane and typechecking on Ubuntu x86-64. A smaller macOS arm64 lane retains
-the real coordinator sandbox, Ask native visual/image publication, wake sampling, PTYs, runtime
+the real coordinator sandbox, Ask NSH/image publication, wake sampling, PTYs, runtime
 environment and bundled-extension coverage, plus packaging and relocated production-runtime checks.
 These jobs live in `tests.yaml`, which `pr.yaml` and `main.yaml` share. PRs also build and validate the
 Linux production package. Tests are informational: `release.yaml` never waits for them.

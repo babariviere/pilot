@@ -1,6 +1,12 @@
 /** Native-user output inspection. Never consumes reviewer allocations or executes saved source. */
 import { createHash } from "node:crypto";
-import { ArtifactNotFound, imageSize, StoredArtifactTooLarge, validateImageSource } from "@pilot/artifacts";
+import {
+	ArtifactNotFound,
+	imageSize,
+	isArtifactKind,
+	StoredArtifactTooLarge,
+	validateImageSource,
+} from "@pilot/artifacts";
 import type {
 	ArtifactKind,
 	DeliveredArtifact,
@@ -53,8 +59,6 @@ function describe(
 	knownSecrets: readonly string[],
 ): { metadata: { title: string; kind: ArtifactKind }; content: SavedArtifactContent } {
 	const metadata = { title, kind: a.kind };
-	if (a.kind !== "image" && Buffer.byteLength(a.source) > 512 * 1024)
-		return { metadata, content: { state: "unavailable", reason: "oversize" } };
 	if (title !== a.title || knownSecrets.some((s) => s && (a.source.includes(s) || a.title.includes(s))))
 		return { metadata: { ...metadata, title: "Artifact" }, content: { state: "unavailable", reason: "redacted" } };
 	if (a.kind === "image") {
@@ -122,6 +126,7 @@ export class DeliveredArtifacts {
 			const link = links.find((a) => a.sessionId === r.sourceSessionId && a.revision === r.revision);
 			if (!link || links.some((a) => a.sessionId !== r.sourceSessionId))
 				throw new Conflict("Exact delivered artifact link unavailable");
+			if (!isArtifactKind(link.kind)) throw new NotFound("Unknown artifact revision");
 			for (const actor of new Set([r.sourceSessionId, ...(r.ownerSessionId ? [r.ownerSessionId] : [])])) {
 				if (
 					sessions.get(actor)?.projectId !== r.subject.projectId ||

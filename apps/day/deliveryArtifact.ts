@@ -1,6 +1,6 @@
 // Inert wire view only. Do not import the daemon's Node/provider type graph into NSH.
 
-import { validImageSource } from "./artifactReads";
+import { isSavedArtifactKind, validImageSource } from "./artifactReads";
 import { call, type Refusal } from "./bridge";
 import type { ArtifactSelection, CapturedArtifact } from "./deliveryArtifactContract";
 import type { DeliveredWork } from "./deliveryContract";
@@ -10,13 +10,12 @@ export type { ArtifactSelection, CapturedArtifact };
 /** One artifact linked to a delivered result, as the page shows it. */
 export type ArtifactLink = DeliveredWork["artifacts"][number];
 
-// "nsh" is agent-written NSH TSX: its saved source reads like any other text kind. Pilot does not run it here.
-const KINDS = new Set(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
 const REASONS = new Set(["missing", "oversize", "redacted", "unsupported", "invalid"]);
 
 /** The exact pin a press on `link` names, or null when the result cannot name one: a chat, no delivery, no revision. */
 export function artifactSelection(shown: DeliveredWork, link: ArtifactLink): ArtifactSelection | null {
-	if (!shown.deliveryId || !link.revision || shown.subject.kind !== "task") return null;
+	if (!isSavedArtifactKind(link.kind) || !shown.deliveryId || !link.revision || shown.subject.kind !== "task")
+		return null;
 	return {
 		subject: shown.subject,
 		targetId: shown.targetId,
@@ -33,7 +32,7 @@ export function samePin(a: ArtifactSelection, b: ArtifactSelection): boolean {
 	const s = a.subject;
 	const t = b.subject;
 	return (
-		s.kind === "task" &&
+		s?.kind === "task" &&
 		t.kind === "task" &&
 		s.projectId === t.projectId &&
 		s.missionId === t.missionId &&
@@ -57,11 +56,11 @@ export function capturedOf(x: unknown, asked: ArtifactSelection, kind: string): 
 	if (!a || typeof a !== "object" || a.version !== 1 || a.rendering !== "unsupported") return null;
 	if (!a.reference || typeof a.reference !== "object" || !samePin(a.reference, asked)) return null;
 	const m = a.metadata;
-	if (!m || typeof m.title !== "string" || !KINDS.has(m.kind) || m.kind !== kind) return null;
+	if (!m || typeof m.title !== "string" || !isSavedArtifactKind(m.kind) || m.kind !== kind) return null;
 	const c = a.content;
 	if (!c || typeof c !== "object") return null;
 	if (c.state === "text") {
-		if (m.kind === "image" || typeof c.source !== "string") return null;
+		if (m.kind !== "nsh" || typeof c.source !== "string") return null;
 		if (typeof c.containerSha256 !== "string" || typeof c.containerBytes !== "number") return null;
 		return {
 			version: 1,

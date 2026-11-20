@@ -14,7 +14,6 @@ test("Linear links default to references; upgrades, contributions and detach are
 	const { id } = store.create({ projectId: "p", title: "Work", tasks: [{ title: "A" }, { title: "B" }] });
 	const reference = store.addResource(id, { url });
 	const taskReference = store.addResource(id, { url, taskId: "1" });
-	store.shareMission(id);
 	assert.equal(reference.linearRole, "reference");
 	assert.equal(reference.linearKey, "acme/ENG-12");
 	assert.equal(taskReference.linearRole, "reference");
@@ -28,11 +27,7 @@ test("Linear links default to references; upgrades, contributions and detach are
 	);
 	store.updateResource(id, reference.id, { linearRole: "managed" });
 	store.updateResource(id, taskReference.id, { linearRole: "contribution" });
-	const snapshot = store.sharedSnapshot(id);
-	assert.equal(snapshot.detail.resources.find((r) => r.id === taskReference.id)?.linearRole, "contribution");
-	const shared = snapshot.entities.find((entity) => entity.kind === "resource" && entity.id === taskReference.id);
-	assert.ok(shared);
-	assert.equal((shared.value as typeof taskReference).linearRole, "contribution");
+	assert.equal(store.detail(id).resources.find((r) => r.id === taskReference.id)?.linearRole, "contribution");
 	assert.equal(
 		store.addResource(id, { url, linearRole: "managed" }).id,
 		reference.id,
@@ -61,8 +56,6 @@ test("Linear links default to references; upgrades, contributions and detach are
 		"dropped and done still contribute",
 	);
 	store.updateResource(id, taskReference.id, { linearRole: "reference" });
-	const changes = store.sharedChanges(snapshot.sequence);
-	assert.ok(changes.some((change) => change.entity.id === taskReference.id));
 	// An already in-flight assignment read is harmless after demotion.
 	store.observeLinearAssignee("p", taskReference.id, { id: "other", name: "Alex" }, "me");
 	assert.equal(store.resolveTask(id, "1").status, "done");
@@ -170,10 +163,12 @@ test("Linear identity fields are bounded and unsupported identity forms cannot b
 
 test("legacy links migrate as references without resetting delegated tasks or replaying observations", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-linear-migration-"));
-	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const file = join(dir, "missions.sqlite");
 	let store = new MissionStore(file);
-	t.after(() => store.close());
+	t.after(() => {
+		store.close();
+		rmSync(dir, { recursive: true, force: true });
+	});
 	const { id } = store.create({ projectId: "p", title: "Work", tasks: [{ title: "A" }, { title: "B" }] });
 	const mission = store.addResource(id, { url, linearRole: "managed" });
 	const link = store.addResource(id, { url, taskId: "1", linearRole: "contribution" });

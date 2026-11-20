@@ -140,12 +140,12 @@ test("proposals are inert; exact user confirmation appends history and never edi
 	assert.equal(history[0]?.replacement?.humanSource, "user:answer");
 	assert.equal(history[1]?.text, "New choice");
 	assert.equal(store.controls.current(id).revision, 0);
-	const head = store.sharedHead();
+	const beforeRetry = store.detail(id);
 	assert.deepEqual(
 		await store.revisions.confirm(id, p.id, { digest: p.digest, humanSource: "user:answer" }),
 		confirmed,
 	);
-	assert.equal(store.sharedHead(), head, "retry is a receipt, not another application");
+	assert.deepEqual(store.detail(id), beforeRetry, "retry is a receipt, not another application");
 	await assert.rejects(proposal(store, id, { tasks: [{ id: "2", title: "Rewrite history" }] }), /historical/);
 });
 
@@ -355,9 +355,9 @@ test("durable reopen keeps proposal identity, replacement chains, provenance and
 	store = new MissionStore(join(dir, "missions.sqlite"));
 	assert.equal(store.detail(id).decisions[0]?.replacement?.id, second.id);
 	assert.equal(store.detail(id).decisions[1]?.withdrawn?.humanSource, "user:two");
-	const head = store.sharedHead();
+	const beforeRetry = store.detail(id);
 	await store.revisions.confirm(id, p.id, { digest: p.digest, humanSource: "user:one" });
-	assert.equal(store.sharedHead(), head);
+	assert.deepEqual(store.detail(id), beforeRetry);
 });
 
 test("default context and decision reads exclude retired bodies; explicit history remains exact", async (t) => {

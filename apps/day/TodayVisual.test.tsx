@@ -3,6 +3,19 @@
 // nothing.
 import { open, test } from "nsh/test";
 
+test("Today Coming up shows the scheduled report", async () => {
+	for (const colorScheme of ["light", "dark"] as const) {
+		for (const width of [480, 1100]) {
+			const app = await open("./Quiet.tsx", { platform: "macos", colorScheme, width, height: 780 });
+			await app.waitFor("id:today-panel");
+			await app.scroll("id:today-page", 1200);
+			await app.waitFor("Weekly Insights report for pilot");
+			await app.wait(250);
+			await app.screenshot(`output/schedule-coming-up-${colorScheme}-${width}.png`);
+		}
+	}
+});
+
 test("Today in light and dark, wide and narrow", async () => {
 	for (const [colorScheme, width] of [
 		["light", 1100],

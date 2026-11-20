@@ -33,7 +33,6 @@ test("chat settings HTTP validates exact PATCH, reports conflicts and unavailabl
 		projects,
 		models: new ModelCatalog(home),
 		terminals,
-		legacyAdmissionFrozen: false,
 		githubSetup: native,
 		nativeAuthority: native.nativeAuthority,
 		chatSettings: settings,

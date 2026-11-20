@@ -5,10 +5,6 @@ import { NoticeDispatcher } from "./notice-dispatcher.ts";
 import type { SessionManager } from "./sessions.ts";
 
 export class MissionNotices {
-	private remoteOccupied: (missionId: string) => boolean = () => false;
-	setRemoteOccupied(read: (missionId: string) => boolean): void {
-		this.remoteOccupied = read;
-	}
 	private readonly dispatcher: NoticeDispatcher;
 	get runtime() {
 		return this.dispatcher.runtime;
@@ -132,7 +128,7 @@ export class MissionNotices {
 	private refreshActivity(missionId: string): void {
 		const mission = this.store.get(missionId);
 		if (!mission) return;
-		let busy = this.remoteOccupied(missionId);
+		let busy = false;
 		for (const id of this.store.members(missionId)) {
 			if (id === mission.coordinatorSessionId) continue;
 			const chat = this.sessions.get(id);

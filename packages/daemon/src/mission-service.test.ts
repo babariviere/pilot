@@ -9,24 +9,18 @@ import { backup, DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { ArtifactStore } from "@pilot/artifacts";
 import { type KernelCommand, type KernelPacket, type KernelSpec, PLANNING_PROFILE } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDecision, MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
+import { ArtifactStore } from "@pilot/artifacts";
 import { CriticalReviewStore } from "./critical-review-store.ts";
 import { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict } from "./errors.ts";
 import type { NonCodePolicyWrite } from "./mission-non-code-acceptance.ts";
 import type { ReviewProducer, ReviewResultWrite } from "./mission-review-contract.ts";
 import { optionalReviewSeeds } from "./mission-review-seeds.ts";
-import {
-	draftMessage,
-	MissionService,
-	type RetainedArtifactConfiguration,
-	type RetainedBriefConfiguration,
-} from "./mission-service.ts";
+import { draftMessage, MissionService, type RetainedBriefConfiguration } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeReviewReader } from "./native-review.ts";
@@ -44,11 +38,16 @@ import { legacyGitHub } from "./testing/legacy-github.ts";
 import { offlineSessionOptions } from "./testing/offline-session-options.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
-function legacyArtifacts(f: { home: string; project: { id: string } }, sessionId: string) {
-	return new LegacyArtifactFixture(join(f.home, "data", "sessions", sessionId), {
+function testArtifacts(f: { home: string; sessions: SessionManager }, sessionId: string) {
+	const store = new ArtifactStore(join(f.home, "data", "sessions", sessionId), {
 		sessionId,
-		projectId: f.project.id,
+		projectId: f.sessions.get(sessionId)?.projectId,
 	});
+	return {
+		create: (value: { kind: "nsh"; title: string; source: string }) => store.create({ ...value, entry: "test.tsx" }),
+		update: async (id: string, value: { kind: "nsh"; title: string; source: string }, revision?: number) =>
+			store.update(id, { ...value, entry: "test.tsx" }, revision ?? (await store.get(id)).revision),
+	};
 }
 
 test("ownership scope is creation-only trusted builder assignment metadata, never legacy adoption", async (t) => {
@@ -255,9 +254,9 @@ test("non-code delivery resolves pinned artifacts and cannot accept or retire wo
 	f.service.join(other.id, { missionId: mission.id });
 	const task = f.store.addTask(mission.id, { title: "Research", sessionId: member.id });
 	f.store.writeBrief(mission.id, "Research scope", 0, { sessionId: lead.id });
-	const artifact = await legacyArtifacts(f, member.id).create({
+	const artifact = await testArtifacts(f, member.id).create({
 		title: "Report",
-		kind: "html",
+		kind: "nsh",
 		source: "<p>Findings</p>",
 	});
 	const record = {
@@ -339,8 +338,8 @@ test("revision-bound service submissions resolve exact artifacts, not latest, se
 			criteria: ["Trace findings"],
 		},
 	});
-	const artifacts = legacyArtifacts(f, worker.id);
-	const artifact = await artifacts.create({ kind: "html", title: "Report", source: "<p>Original sources</p>" });
+	const artifacts = testArtifacts(f, worker.id);
+	const artifact = await artifacts.create({ kind: "nsh", title: "Report", source: "<p>Original sources</p>" });
 	const request = {
 		version: 1,
 		operationId: "report",
@@ -390,7 +389,7 @@ test("revision-bound service submissions resolve exact artifacts, not latest, se
 	await assert.rejects(f.service.judgeDeliveryEvidence(worker.id, task.id, judge), /Only the coordinator/);
 	const approval = await f.service.judgeDeliveryEvidence(lead.id, task.id, judge);
 	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "current");
-	await artifacts.update(artifact.id, { kind: "html", title: "Report", source: "<p>Revised sources</p>" }, 1);
+	await artifacts.update(artifact.id, { kind: "nsh", title: "Report", source: "<p>Revised sources</p>" }, 1);
 	// A mutable latest pointer does not substitute revision 2 for the exact pinned revision 1.
 	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "current");
 	const changed = {
@@ -571,8 +570,8 @@ test("review artifact/context reads recheck pin ABA and trusted actor project af
 		expectedRevision: 0,
 		definition: optionalReviewSeeds().correctness,
 	});
-	const artifact = await legacyArtifacts(f, worker.id).create({
-		kind: "html",
+	const artifact = await testArtifacts(f, worker.id).create({
+		kind: "nsh",
 		title: "Report",
 		source: "<p>Retained evidence</p>",
 	});
@@ -614,9 +613,9 @@ test("review artifact/context reads recheck pin ABA and trusted actor project af
 	request.expectedContextFence = f.store.reviewContextFence(mission.id);
 	const saved = await f.service.recordReviewResult(worker.id, task.id, request);
 	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current");
-	await legacyArtifacts(f, worker.id).update(
+	await testArtifacts(f, worker.id).update(
 		artifact.id,
-		{ kind: "html", title: "Report", source: "<p>New unpinned revision</p>" },
+		{ kind: "nsh", title: "Report", source: "<p>New unpinned revision</p>" },
 		1,
 	);
 	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current"); // Exact retained comparison only.
@@ -673,8 +672,8 @@ test("delivery evidence rechecks earlier artifact pins after later asynchronous 
 	});
 	const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
 	for (const title of ["Static capture fixture", "Interaction report fixture"]) {
-		const artifact = await legacyArtifacts(f, worker.id).create({
-			kind: "html",
+		const artifact = await testArtifacts(f, worker.id).create({
+			kind: "nsh",
 			title,
 			source: `<p>${title}. Not a native render or input test.</p>`,
 		});
@@ -1137,8 +1136,8 @@ test("dormant allocation uses exact pinned non-code revisions and current projec
 		sessionId: worker.id,
 		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Bounded", criteria: ["Sources"] },
 	});
-	const artifact = await legacyArtifacts(f, worker.id).create({
-		kind: "html",
+	const artifact = await testArtifacts(f, worker.id).create({
+		kind: "nsh",
 		title: "Report",
 		source: "<p>Exact report v1</p>",
 	});
@@ -1179,9 +1178,9 @@ test("dormant allocation uses exact pinned non-code revisions and current projec
 		/fields/,
 	);
 	const saved = await f.service.recordContributionAllocation(lead.id, task.id, request);
-	await legacyArtifacts(f, worker.id).update(
+	await testArtifacts(f, worker.id).update(
 		artifact.id,
-		{ kind: "html", title: "Report", source: "<p>Unselected v2</p>" },
+		{ kind: "nsh", title: "Report", source: "<p>Unselected v2</p>" },
 		1,
 	);
 	const result = await f.service.evaluateContributionAllocation(lead.id, saved.id);
@@ -1243,8 +1242,8 @@ for (const race of ["pin-aba", "actor-project", "custodian-project", "coordinato
 		});
 		const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
 		for (const title of ["Report", "Source"]) {
-			const artifact = await legacyArtifacts(f, worker.id).create({
-				kind: "html",
+			const artifact = await testArtifacts(f, worker.id).create({
+				kind: "nsh",
 				title,
 				source: `<p>${title}</p>`,
 			});
@@ -1372,9 +1371,9 @@ test("coordinator admits explorer research before a brief, preserving reports, p
 		targetSessionId: lead.id,
 	})) as { authorSessionId: string };
 	assert.equal(comment.authorSessionId, explorer.id);
-	const artifact = await legacyArtifacts(f, explorer.id).create({
+	const artifact = await testArtifacts(f, explorer.id).create({
 		title: "Findings proposal",
-		kind: "html",
+		kind: "nsh",
 		source: "<p>Sources and limitations</p>",
 	});
 	await f.service.call(explorer.id, "attach", { artifactId: artifact.id, taskId: task.id });
@@ -1485,9 +1484,9 @@ test("knowledge IPC derives identity from the supervised chat and keeps explorer
 			worker.sent.find((command) => command.type === "knowledge.result" && command.callId === callId),
 		)) as Extract<KernelCommand, { type: "knowledge.result" }>;
 	};
-	const report = await legacyArtifacts(f, explorer.id).create({
+	const report = await testArtifacts(f, explorer.id).create({
 		title: "Findings",
-		kind: "html",
+		kind: "nsh",
 		source: "<p>Sources and limitations</p>",
 	});
 	const entry = {
@@ -3057,7 +3056,7 @@ test("single-task get includes dependencies, chat, cached links, artifacts and b
 		artifactId: "mock-layout",
 		sessionId: worker.id,
 		title: "Layout",
-		kind: "html",
+		kind: "nsh",
 		revision: 2,
 		taskId: task.id,
 	});
@@ -3100,7 +3099,7 @@ test("single-task get includes dependencies, chat, cached links, artifacts and b
 	assert.ok(full.resources.some((ref) => ref.kind === "url"));
 	assert.equal(full.artifacts[0]?.artifactId, "mock-layout");
 	assert.equal(full.artifacts[0]?.revision, 2);
-	assert.equal(full.artifacts[0]?.kind, "html");
+	assert.equal(full.artifacts[0]?.kind, "nsh");
 	assert.equal(full.recentActivity.length, 15);
 	assert.ok(full.recentActivity.every((event) => event.taskId === task.id && event.by === worker.id));
 	assert.equal(full.activityCursor, full.recentActivity.at(-1)?.id);
@@ -3244,7 +3243,7 @@ test("compact get stays within estimated token budgets on a large fixture, with 
 			artifactId: `artifact-${i}`,
 			sessionId: worker.id,
 			title: `Workflow layout ${i}`,
-			kind: "html",
+			kind: "nsh",
 			taskId: tasks[i < 63 ? i % 49 : 49]!.id,
 		});
 	for (let i = 0; i < 30; i++)
@@ -5629,7 +5628,7 @@ test("conversion is a single atomic admission across concurrent requests and rol
 	assert.deepEqual(changes, [], "rolled-back changes never reach subscribers");
 });
 
-test("conversion rejects ineligible or delegated sources and validates explicit flags before creating", async (t) => {
+test("conversion rejects ineligible sources and validates explicit flags before creating", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();
 	const originalGet = f.sessions.get.bind(f.sessions);
@@ -5649,15 +5648,6 @@ test("conversion rejects ineligible or delegated sources and validates explicit 
 		get.mock.restore();
 		assert.equal(f.store.list().length, 0);
 	}
-	// Session summary also reads the retained grant's mission before admission.
-	f.service["sharing"] = {
-		membership: () => ({ state: "accepted", grant: { task: { mission: { missionId: "synthetic-delegated" } } } }),
-	} as unknown as NonNullable<(typeof f.service)["sharing"]>;
-	await assert.rejects(
-		f.service.create({ projectId: f.project.id, title: "Delegated", fromSessionId: chat.id, draft: false }),
-		/delegated execution/,
-	);
-	f.service["sharing"] = undefined;
 	for (const flags of [{ coordinator: "yes" }, { draft: "yes" }]) {
 		await assert.rejects(
 			f.service.create({ projectId: f.project.id, title: "Invalid", fromSessionId: chat.id, ...flags } as never),
@@ -5894,14 +5884,14 @@ test("start saves member and already-linked artifacts and parsed links before sp
 		tasks: [{ title: "Auth" }],
 	});
 	f.service.join(author.id, { missionId: mission.id });
-	const first = await legacyArtifacts(f, lead.id).create({
+	const first = await testArtifacts(f, lead.id).create({
 		title: "Design",
-		kind: "html",
+		kind: "nsh",
 		source: "<p>PRIVATE DESIGN CONTENT</p>",
 	});
-	const second = await legacyArtifacts(f, author.id).create({
+	const second = await testArtifacts(f, author.id).create({
 		title: "Diagram",
-		kind: "html",
+		kind: "nsh",
 		source: "<p>PRIVATE DIAGRAM CONTENT</p>",
 	});
 	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: second.id });
@@ -5929,8 +5919,8 @@ test("start saves member and already-linked artifacts and parsed links before sp
 	};
 	const message = await content(session.id);
 	assert.match(message, /Read them as needed/);
-	assert.ok(message.includes(`Design (html): ${first.id}, revision 1`));
-	assert.ok(message.includes(`Diagram (html): ${second.id}`));
+	assert.ok(message.includes(`Design (nsh): ${first.id}, revision 1`));
+	assert.ok(message.includes(`Diagram (nsh): ${second.id}`));
 	assert.match(message, /Issue \(github.issue\): https:\/\/github.com\/octo\/repo\/issues\/42/);
 	assert.match(message, /ENG-12 \(linear\.issue\): https:\/\/linear\.app\/acme\/issue\/ENG-12/);
 	assert.doesNotMatch(message, /PRIVATE.*CONTENT/);
@@ -5976,13 +5966,13 @@ test("artifact reference IPC reads pinned and latest sources for later members w
 		tasks: [{ title: "A" }, { title: "B" }],
 	});
 	f.service.join(reader.id, { missionId: mission.id });
-	const store = legacyArtifacts(f, author.id);
-	const first = await store.create({ title: "Pinned", kind: "html", source: "PINNED SOURCE" });
-	const latest = await store.create({ title: "Latest", kind: "html", source: "OLD SOURCE" });
+	const store = testArtifacts(f, author.id);
+	const first = await store.create({ title: "Pinned", kind: "nsh", source: "PINNED SOURCE" });
+	const latest = await store.create({ title: "Latest", kind: "nsh", source: "OLD SOURCE" });
 	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: first.id, revision: 1, taskId: "1" });
 	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: latest.id });
-	await store.update(first.id, { title: "Pinned", kind: "html", source: "NEW SOURCE" });
-	await store.update(latest.id, { title: "Latest", kind: "html", source: "LATEST SOURCE" });
+	await store.update(first.id, { title: "Pinned", kind: "nsh", source: "NEW SOURCE" });
+	await store.update(latest.id, { title: "Latest", kind: "nsh", source: "LATEST SOURCE" });
 	f.service.leave(author.id); // A persisted reference survives its author leaving the group.
 	const worker = f.workers.get(reader.id)!;
 	const sent = f.workers.get(author.id)!.sent.length;
@@ -6051,7 +6041,7 @@ test("artifact reference reads reject foreign sources, forged links and revoked 
 		fromSessionId: other.id,
 		draft: false,
 	});
-	const make = (id: string) => legacyArtifacts(f, id).create({ title: "Private", kind: "html", source: "PRIVATE" });
+	const make = (id: string) => testArtifacts(f, id).create({ title: "Private", kind: "nsh", source: "PRIVATE" });
 	const own = await make(member.id);
 	const foreign = await make(outsider.id);
 	const crossProject = await make(other.id);
@@ -6074,7 +6064,7 @@ test("artifact reference reads reject foreign sources, forged links and revoked 
 		artifactId: crossProject.id,
 		sessionId: other.id,
 		title: "Forged",
-		kind: "html",
+		kind: "nsh",
 	});
 	f.store.leave(other.id);
 	await assert.rejects(read(member.id, crossProject.id), /own project/);
@@ -6107,15 +6097,15 @@ test("start rejects foreign artifacts, invalid revisions and malformed links wit
 		draft: false,
 		tasks: [{ title: "A" }],
 	});
-	const valid = await legacyArtifacts(f, lead.id).create({ title: "Valid", kind: "html", source: "ok" });
-	const foreign = await legacyArtifacts(f, outsider.id).create({
+	const valid = await testArtifacts(f, lead.id).create({ title: "Valid", kind: "nsh", source: "ok" });
+	const foreign = await testArtifacts(f, outsider.id).create({
 		title: "Foreign",
-		kind: "html",
+		kind: "nsh",
 		source: "no",
 	});
-	const otherArtifact = await legacyArtifacts(f, other.id).create({
+	const otherArtifact = await testArtifacts(f, other.id).create({
 		title: "Other",
-		kind: "html",
+		kind: "nsh",
 		source: "no",
 	});
 	const cases = [
@@ -6492,7 +6482,7 @@ test("multi-start orders a single chat's tasks and attaches supplied references 
 	});
 	const [a, b, c] = f.store.tasks(mission.id);
 	f.store.updateTask(mission.id, b!.id, { dependsOn: [a!.id] });
-	const artifact = await legacyArtifacts(f, lead.id).create({ title: "Spec", kind: "html", source: "ok" });
+	const artifact = await testArtifacts(f, lead.id).create({ title: "Spec", kind: "nsh", source: "ok" });
 	const session = (await f.service.call(lead.id, "start", {
 		ids: [b!.id, "1-3", "#1"],
 		message: "Ship carefully",
@@ -8838,8 +8828,8 @@ async function nonCodePolicyFixture(t: TestContext) {
 			},
 		},
 	});
-	const artifacts = legacyArtifacts(f, worker.id);
-	const artifact = await artifacts.create({ kind: "html", title: "Report", source: "<p>PRIVATE RETAINED SOURCE</p>" });
+	const artifacts = testArtifacts(f, worker.id);
+	const artifact = await artifacts.create({ kind: "nsh", title: "Report", source: "<p>PRIVATE RETAINED SOURCE</p>" });
 	await f.service.linkArtifact(mission.id, {
 		sessionId: worker.id,
 		artifactId: artifact.id,
@@ -9064,11 +9054,7 @@ test("non-code exact recovery checks current actor project again after durabilit
 	});
 	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
 });
-async function retainedBriefFixture(
-	t: TestContext,
-	persisted = "Plan\r\né😀",
-	visual?: { source: string; data?: unknown },
-) {
+async function retainedBriefFixture(t: TestContext, persisted = "Plan\r\né😀") {
 	const f = await fixture(t);
 	const lead = await f.spawn(),
 		worker = await f.spawn(),
@@ -9126,30 +9112,7 @@ async function retainedBriefFixture(
 			outputInterpretation: { kind: "pass-fail", pass: "Pass", fail: "Fail" },
 		},
 	});
-	const artifactStore = new ArtifactStore(join(f.home, "data", "sessions", worker.id), {
-		sessionId: worker.id,
-		projectId: f.project.id,
-	});
-	const artifact = visual
-		? await artifactStore.create({
-				title: "Exact visual",
-				kind: "visual",
-				source: visual.source,
-				data: visual.data as never,
-			})
-		: undefined;
-	if (artifact)
-		f.store.linkArtifact(mission.id, {
-			artifactId: artifact.id,
-			sessionId: worker.id,
-			revision: artifact.revision,
-			kind: "visual",
-			title: artifact.title,
-			taskId: task.id,
-		});
-	const reference = artifact
-		? { kind: "artifact" as const, artifactId: artifact.id, revision: 1 }
-		: { kind: "brief" as const, revision: 1 };
+	const reference = { kind: "brief" as const, revision: 1 };
 	const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
 		version: 1,
 		operationId: "submission",
@@ -9233,8 +9196,6 @@ async function retainedBriefFixture(
 		mission,
 		task,
 		config,
-		artifact,
-		artifactStore,
 		capture,
 		captured,
 		evidence: () => evidence,
@@ -9344,7 +9305,7 @@ for (const change of [
 				artifactId: "unrelated-artifact",
 				revision: 1,
 				title: "Context",
-				kind: "visual" as const,
+				kind: "nsh" as const,
 			};
 			f.store.linkArtifact(f.mission.id, link);
 			f.store.unlinkArtifact(f.mission.id, link.artifactId);
@@ -9398,7 +9359,7 @@ test("retained brief requires current coordinator/project, not a supplied descri
 	const unsupported = retainedReviewDescriptor(input.descriptor);
 	unsupported.content[0]!.reference = { kind: "artifact", artifactId: "plan", revision: 1 };
 	unsupported.content[0]!.part = "source";
-	unsupported.content[0]!.artifactKind = "visual";
+	unsupported.content[0]!.artifactKind = "nsh";
 	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, unsupported, f.config));
 	// biome-ignore lint/complexity/useLiteralKeys: Host metadata movement negative control.
 	f.sessions["require"](f.lead.id).projectId = f.other.id;
@@ -9544,426 +9505,3 @@ test("retained brief reopens serialized input against restarted source store/ser
 	assert.equal(reopened.contextSha256, input.contextSha256);
 	assert.equal(reopened.profileSha256, input.profileSha256);
 });
-
-const retainedVisualSource = '\uFEFFfunction visual({ ui }) {\r\nreturn () => ui.text("é😀");\r\n}\r\n';
-async function retainedArtifactFixture(t: TestContext, data: unknown = { text: "\uFEFFé😀\r\n", empty: "" }) {
-	const f = await retainedBriefFixture(t, "Plan", { source: retainedVisualSource, data });
-	assert.ok(f.artifact);
-	const artifact = f.artifact;
-	const ref = { artifactId: artifact.id, revision: 1, kind: "visual" as const, sourceOwnerSessionId: f.worker.id };
-	const config: RetainedArtifactConfiguration = {
-		...f.config,
-		validator: {
-			buildSha256: "1".repeat(64),
-			runtimeSha256: "2".repeat(64),
-			configSha256: "3".repeat(64),
-			api: 1,
-			engine: "fixture-current-engine",
-			options: { now: 1234567, timeoutMs: 30000 },
-		},
-	};
-	const capture = (signal?: AbortSignal) =>
-		f.service.captureRetainedArtifact(f.lead.id, f.task.id, ref, config, signal);
-	const captured = async () => {
-		const result = await capture();
-		assert.equal(result.state, "captured");
-		if (result.state !== "captured") throw new Error("Expected captured artifact");
-		return result.input;
-	};
-	const directory = join(f.home, "data", "sessions", f.worker.id, "artifacts", artifact.id);
-	return {
-		...f,
-		artifact,
-		ref,
-		config,
-		directory,
-		capture,
-		captured,
-		reopen: (descriptor: unknown, signal?: AbortSignal) =>
-			f.service.reopenRetainedArtifact(f.lead.id, f.task.id, descriptor, config, signal),
-		restartArtifactVault: async () => {
-			await f.restartVault();
-			config.vault = f.config.vault;
-		},
-	};
-}
-
-for (const data of [null, "", { text: "\uFEFFé😀\r\n", empty: "" }]) {
-	test(`retained artifact captures real numbered bytes and derived validation arguments ${JSON.stringify(data)}`, async (t) => {
-		const f = await retainedArtifactFixture(t, data);
-		const bytes = await readFile(join(f.directory, "1.json"));
-		const before = f.store.detail(f.mission.id);
-		const workerRequests = [...f.workers.values()].map((w) => w.requests.length);
-		// Acquisition must never load prepared HTML or call the worker artifact reader.
-		t.mock.method(f.sessions, "artifact", async () => assert.fail("No parsed/rendered artifact fallback"));
-		const input = await f.captured();
-		assert.deepEqual(Buffer.from(input.containerBytes), bytes);
-		assert.equal(input.descriptor.container.sha256, createHash("sha256").update(bytes).digest("hex"));
-		assert.equal(input.descriptor.container.bytes, bytes.length);
-		assert.equal(input.validationInput.source, retainedVisualSource);
-		assert.equal(input.validationInput.dataJSON, JSON.stringify(data));
-		assert.equal(input.validationInput.id, f.artifact.id);
-		assert.equal(
-			input.descriptor.derived.source.sha256,
-			createHash("sha256").update(retainedVisualSource).digest("hex"),
-		);
-		assert.equal(input.descriptor.derived.source.bytes, Buffer.byteLength(retainedVisualSource));
-		assert.equal(
-			input.descriptor.derived.dataJSON.sha256,
-			createHash("sha256").update(JSON.stringify(data)).digest("hex"),
-		);
-		assert.equal(input.descriptor.derived.dataJSON.bytes, Buffer.byteLength(JSON.stringify(data)));
-		assert.deepEqual(input.descriptor.derived.storedVisual, {
-			api: f.artifact.visual!.api,
-			engine: f.artifact.visual!.engine,
-		});
-		assert.equal(input.descriptor.validator.options.now, 1234567);
-		assert.notEqual(input.descriptor.validator.options.now, f.artifact.updatedAt);
-		assert.ok(Object.isFrozen(input.descriptor.validator.options));
-		assert.ok(Object.isFrozen(input.validationInput));
-		assert.deepEqual(f.store.detail(f.mission.id), before);
-		assert.deepEqual(
-			[...f.workers.values()].map((w) => w.requests.length),
-			workerRequests,
-		);
-		assert.deepEqual(await readFile(join(f.directory, "1.json")), bytes);
-		// A newer revision does not replace the explicit historical pin.
-		await f.artifactStore.update(
-			f.artifact.id,
-			{ title: "Later", kind: "visual", source: 'function visual({ui}) {return () => ui.text("later")}' },
-			1,
-		);
-		const serialized = JSON.parse(JSON.stringify(input.descriptor));
-		await f.restartArtifactVault();
-		const reopened = await f.reopen(serialized);
-		assert.equal(reopened.descriptorSha256, input.descriptorSha256);
-		assert.deepEqual(Buffer.from(reopened.containerBytes), bytes);
-		assert.deepEqual(reopened.validationInput, input.validationInput);
-	});
-}
-
-test("retained artifact preserves container BOM/CRLF without reserializing it as original", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	const file = join(f.directory, "1.json");
-	const original = JSON.parse(await readFile(file, "utf8"));
-	const bytes = Buffer.from(`\uFEFF${JSON.stringify(original, null, 2).replaceAll("\n", "\r\n")}\r\n`);
-	// Historical disk fixture. These bytes were not emitted by the current JSON writer.
-	await writeFile(file, bytes);
-	const input = await f.captured();
-	assert.deepEqual(Buffer.from(input.containerBytes), bytes);
-	assert.notDeepEqual(Buffer.from(JSON.stringify(original)), bytes);
-	assert.equal(input.validationInput.source, original.source);
-	await f.restartArtifactVault();
-	assert.deepEqual(Buffer.from((await f.reopen(input.descriptor)).containerBytes), bytes);
-});
-
-for (const change of [
-	"link-aba",
-	"link-unpinned",
-	"member-aba",
-	"coordinator-aba",
-	"project",
-	"caller-project",
-	"missing",
-	"revision",
-	"kind",
-	"raw-bytes",
-	"oversize",
-	"profile",
-	"allocation",
-	"policy",
-	"config",
-	"validator",
-	"empty-source",
-	"source-encoding",
-] as const) {
-	test(`retained artifact reopen refuses ${change}`, async (t) => {
-		const f = await retainedArtifactFixture(t);
-		const input = await f.captured();
-		if (change === "link-aba" || change === "link-unpinned") {
-			f.store.unlinkArtifact(f.mission.id, f.artifact.id, {}, f.task.id);
-			f.store.linkArtifact(f.mission.id, {
-				sessionId: f.worker.id,
-				taskId: f.task.id,
-				artifactId: f.artifact.id,
-				title: "Exact",
-				kind: "visual",
-				...(change === "link-aba" ? { revision: 1 } : {}),
-			});
-		}
-		if (change === "member-aba") {
-			f.store.leave(f.worker.id);
-			f.store.join(f.worker.id, f.mission.id);
-		}
-		if (change === "coordinator-aba") {
-			f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
-			f.store.update(f.mission.id, { coordinatorSessionId: f.lead.id });
-		}
-		if (change === "project" || change === "caller-project") {
-			// biome-ignore lint/complexity/useLiteralKeys: Host metadata movement negative control.
-			f.sessions["require"](change === "project" ? f.worker.id : f.lead.id).projectId = f.other.id;
-		}
-		const file = join(f.directory, "1.json");
-		if (change === "missing") await rm(file);
-		if (change === "raw-bytes") await writeFile(file, `${await readFile(file, "utf8")}\r\n`);
-		if (change === "oversize") await writeFile(file, "x".repeat(1024 * 1024 + 1));
-		if (change === "revision" || change === "kind" || change === "empty-source" || change === "source-encoding") {
-			const raw = JSON.parse(await readFile(file, "utf8"));
-			if (change === "revision") raw.revision = 2;
-			if (change === "kind") raw.kind = "image";
-			if (change === "empty-source") raw.source = "";
-			if (change === "source-encoding") raw.source = "function visual() { /* \uD800 */ }";
-			await writeFile(file, JSON.stringify(raw));
-		}
-		if (change === "profile")
-			await f.service.saveReviewProfile(f.lead.id, {
-				...f.store.reviewProfile(f.mission.id, "plan")!.request,
-				operationId: "new-profile",
-				expectedRevision: 1,
-			});
-		if (change === "allocation")
-			await f.service.recordContributionAllocation(f.lead.id, f.task.id, {
-				version: 1,
-				operationId: "withdraw",
-				expectedAllocationId: f.store.latestContributionAllocation(f.mission.id, f.task.id)!.id,
-				action: "withdraw",
-				reason: "Withdraw",
-			});
-		if (change === "policy") {
-			const policy = f.store.latestNonCodeAcceptancePolicy(f.mission.id, f.task.id)!;
-			await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, {
-				...policy.request,
-				operationId: "new-policy",
-				expectedPolicyId: policy.id,
-			});
-		}
-		if (change === "config") f.config.runtime.configSha256 = "d".repeat(64);
-		if (change === "validator") f.config.validator.options.now++;
-		await assert.rejects(f.reopen(input.descriptor));
-	});
-}
-
-test("retained artifact rejects forged descriptor and unsupported explicit references", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	const input = await f.captured();
-	for (const patch of [
-		{ revision: 2 },
-		{ revision: undefined },
-		{ kind: "image" },
-		{ sourceOwnerSessionId: f.peer.id },
-		{ artifactId: randomUUID() },
-	])
-		await assert.rejects(
-			f.service.captureRetainedArtifact(f.lead.id, f.task.id, { ...f.ref, ...patch } as never, f.config),
-		);
-	await assert.rejects(f.service.captureRetainedArtifact(f.worker.id, f.task.id, f.ref, f.config), /coordinator/);
-	for (const key of ["source", "dataJSON"] as const) {
-		const forged = JSON.parse(JSON.stringify(input.descriptor));
-		forged.derived[key].sha256 = "0".repeat(64);
-		await assert.rejects(f.reopen(forged), /descriptor changed/);
-	}
-	const forged = JSON.parse(JSON.stringify(input.descriptor));
-	forged.container.blobId = "unsealed";
-	await assert.rejects(f.reopen(forged), /descriptor changed/);
-	forged.header.extra = "x".repeat(64 * 1024);
-	await assert.rejects(f.reopen(forged), /Invalid retained-review/);
-});
-
-test("retained artifact secret/quota omissions stay partial, never decoded empty replacements", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	f.config.knownSecrets = ["é😀"];
-	const secret = await f.capture();
-	assert.equal(secret.state, "partial");
-	if (secret.state !== "partial") throw new Error("Expected partial");
-	assert.deepEqual(
-		secret.manifest.omissions.map((o) => o.reason),
-		["secret"],
-	);
-	f.config.knownSecrets = [];
-	const capture = f.config.vault.capture.bind(f.config.vault);
-	// Drive the real vault's omission branch without allocating an oversized artifact before its read bound.
-	t.mock.method(
-		f.config.vault,
-		"capture",
-		async (request: Parameters<CriticalReviewVault["capture"]>[0], signal?: AbortSignal) =>
-			capture(
-				{
-					...request,
-					selections: request.selections.map((s) => ({ ...s, bytes: new Uint8Array(8 * 1024 * 1024 + 1) })),
-				},
-				signal,
-			),
-	);
-	const quota = await f.capture();
-	assert.equal(quota.state, "partial");
-	if (quota.state !== "partial") throw new Error("Expected partial");
-	assert.equal(quota.manifest.entries.length, 0);
-	assert.deepEqual(
-		quota.manifest.omissions.map((o) => o.reason),
-		["quota"],
-	);
-});
-
-for (const phase of ["source", "durable", "capture", "readExact"] as const) {
-	test(`retained artifact rejects in-flight access ABA at ${phase}`, async (t) => {
-		const f = await retainedArtifactFixture(t);
-		const input = await f.captured();
-		const change = () => {
-			f.store.leave(f.worker.id);
-			f.store.join(f.worker.id, f.mission.id);
-		};
-		if (phase === "source") {
-			const read = f.sessions.readStoredArtifactRevision.bind(f.sessions);
-			t.mock.method(
-				f.sessions,
-				"readStoredArtifactRevision",
-				async (...args: Parameters<SessionManager["readStoredArtifactRevision"]>) => {
-					const result = await read(...args);
-					change();
-					return result;
-				},
-			);
-		} else if (phase === "durable") {
-			const durable = f.store.durable.bind(f.store);
-			t.mock.method(f.store, "durable", async () => {
-				await durable();
-				change();
-			});
-		} else if (phase === "capture") {
-			const capture = f.config.vault.capture.bind(f.config.vault);
-			t.mock.method(f.config.vault, "capture", async (...args: Parameters<CriticalReviewVault["capture"]>) => {
-				const result = await capture(...args);
-				change();
-				return result;
-			});
-		} else {
-			const read = f.config.vault.readExact.bind(f.config.vault);
-			t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
-				const result = await read(...args);
-				change();
-				return result;
-			});
-		}
-		await assert.rejects(phase === "capture" ? f.capture() : f.reopen(input.descriptor));
-	});
-}
-
-test("retained artifact cancellation, erasure and serialized reopen never grant new access", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	const input = await f.captured();
-	await assert.rejects(f.capture(AbortSignal.abort()), { name: "AbortError" });
-	await assert.rejects(f.reopen(input.descriptor, AbortSignal.abort()), { name: "AbortError" });
-	const controller = new AbortController();
-	const capture = f.config.vault.capture.bind(f.config.vault);
-	const stub = t.mock.method(
-		f.config.vault,
-		"capture",
-		async (...args: Parameters<CriticalReviewVault["capture"]>) => {
-			const result = await capture(...args);
-			controller.abort();
-			return result;
-		},
-	);
-	await assert.rejects(f.capture(controller.signal), { name: "AbortError" });
-	stub.mock.restore();
-	const readController = new AbortController();
-	const read = f.config.vault.readExact.bind(f.config.vault);
-	const readStub = t.mock.method(
-		f.config.vault,
-		"readExact",
-		async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
-			const result = await read(...args);
-			readController.abort();
-			return result;
-		},
-	);
-	await assert.rejects(f.reopen(input.descriptor, readController.signal), { name: "AbortError" });
-	readStub.mock.restore();
-	const original = Buffer.from(input.containerBytes);
-	await f.config.vault.eraseSource(f.mission.id);
-	await assert.rejects(f.reopen(input.descriptor), /unavailable/);
-	assert.deepEqual(Buffer.from(input.containerBytes), original); // Already disclosed copies cannot be revoked.
-	await f.restartArtifactVault();
-	await assert.rejects(f.reopen(JSON.parse(JSON.stringify(input.descriptor))), /unavailable/);
-});
-
-test("retained artifact reopens against restarted mission service, source reader and vault", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	const input = await f.captured();
-	const root = await mkdtemp(join(tmpdir(), "artifact-source-reopen-"));
-	const path = join(root, "missions.sqlite");
-	// biome-ignore lint/complexity/useLiteralKeys: Persist the actual source database for restart coverage.
-	await backup(f.store["db"], path);
-	await f.restartArtifactVault();
-	const store = new MissionStore(path);
-	const service = new MissionService(store, f.sessions, f.projects);
-	t.after(async () => {
-		await service.notices.stop();
-		await store.durable();
-		store.close();
-		await rm(root, { recursive: true, force: true });
-	});
-	const reopened = await service.reopenRetainedArtifact(
-		f.lead.id,
-		f.task.id,
-		JSON.parse(JSON.stringify(input.descriptor)),
-		f.config,
-	);
-	assert.equal(reopened.descriptorSha256, input.descriptorSha256);
-	assert.deepEqual(Buffer.from(reopened.containerBytes), Buffer.from(input.containerBytes));
-	assert.deepEqual(reopened.validationInput, input.validationInput);
-});
-
-test("retained artifact snapshots descriptors and cancels in-flight source I/O", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	const input = await f.captured();
-	const descriptor = JSON.parse(JSON.stringify(input.descriptor));
-	const read = f.config.vault.readExact.bind(f.config.vault);
-	const stub = t.mock.method(
-		f.config.vault,
-		"readExact",
-		async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
-			const value = await read(...args);
-			descriptor.validator.options.now++;
-			return value;
-		},
-	);
-	assert.equal((await f.reopen(descriptor)).descriptorSha256, input.descriptorSha256);
-	stub.mock.restore();
-	const source = f.sessions.readStoredArtifactRevision.bind(f.sessions);
-	const controller = new AbortController();
-	t.mock.method(
-		f.sessions,
-		"readStoredArtifactRevision",
-		async (...args: Parameters<SessionManager["readStoredArtifactRevision"]>) => {
-			const value = await source(...args);
-			controller.abort();
-			return value;
-		},
-	);
-	await assert.rejects(f.capture(controller.signal), { name: "AbortError" });
-});
-
-test("retained artifact refuses a full project quota without evicting or returning input", async (t) => {
-	const f = await retainedArtifactFixture(t);
-	await f.evidence().rpc("vaultStage", { id: "occupied", projectId: f.project.id, bytes: 1024 ** 3 });
-	await assert.rejects(f.capture(), /quota full/);
-	assert.deepEqual(await f.evidence().list("evidence"), []);
-	assert.deepEqual(await f.evidence().rpc("stagedCaptures"), [{ id: "occupied" }]);
-	await f.evidence().rpc("abortStage", { id: "occupied" });
-});
-
-for (const source of ["owner", "artifact"] as const) {
-	test(`retained artifact inherits ${source} erasure without erasing original history`, async (t) => {
-		const f = await retainedArtifactFixture(t);
-		const input = await f.captured();
-		assert.deepEqual(input.descriptor.manifest.sourceIds, [f.mission.id, f.worker.id, f.artifact.id]);
-		assert.equal(input.descriptor.manifest.entries[0]!.sourceId, f.artifact.id);
-		await f.config.vault.eraseSource(source === "owner" ? f.worker.id : f.artifact.id);
-		await assert.rejects(f.reopen(input.descriptor), /unavailable/);
-		await f.restartArtifactVault();
-		await assert.rejects(f.reopen(input.descriptor), /unavailable/);
-		await assert.rejects(f.capture(), /erased/);
-		assert.deepEqual(await readFile(join(f.directory, "1.json")), Buffer.from(input.containerBytes));
-	});
-}

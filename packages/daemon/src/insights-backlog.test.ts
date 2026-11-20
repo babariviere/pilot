@@ -266,10 +266,6 @@ test("model operations cannot confirm lifecycle or execute finding tasks", async
 		/Finding tracking/,
 	);
 	assert.throws(
-		() => f.store.projectSharedProgress({ task: { taskId: result.taskId } } as never, "done"),
-		/Finding tracking/,
-	);
-	assert.throws(
 		() =>
 			f.store.applyPullRequestBinding({
 				id: randomUUID(),

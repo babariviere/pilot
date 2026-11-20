@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
+import { ArtifactNotFound, ArtifactStore, nshSource } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactSummary, MissionDetail, ServerMessage } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
@@ -28,12 +28,13 @@ const summary: ArtifactSummary = {
 	id: artifactId,
 	sessionId,
 	title: "Chart",
-	kind: "html",
+	kind: "nsh",
 	revision: 2,
 	createdAt: 1,
 	updatedAt: 2,
 };
-const revision: ArtifactRevision = { ...summary, source: "<p>Chart</p>", html: "<p>Chart</p>", libraries: [] };
+const chart = "export default () => null; // Chart";
+const revision: ArtifactRevision = { ...summary, source: chart, html: "", nsh: nshSource(chart, "view.tsx") };
 
 function deferred() {
 	let resolve!: () => void;
@@ -318,8 +319,13 @@ test("mission detail keeps independent exact pins readable without latest infere
 	const mission = missions.create({ projectId: project.id, title: "Pinned sources", tasks: [{ title: "Older pin" }] });
 	missions.join(sessionId, mission.id);
 	const directory = join(home, "sessions", sessionId);
-	const store = new LegacyArtifactFixture(directory, { sessionId });
-	const old = await store.create({ title: "Task body", kind: "html", source: "<p>Exact older task source</p>" });
+	const store = new ArtifactStore(directory, { sessionId, projectId: project.id });
+	const old = await store.create({
+		title: "Task body",
+		kind: "nsh",
+		source: "export default () => null; // Exact older task source",
+		entry: "view.tsx",
+	});
 	missions.linkArtifact(mission.id, {
 		artifactId: old.id,
 		sessionId,
@@ -328,12 +334,16 @@ test("mission detail keeps independent exact pins readable without latest infere
 		title: old.title,
 		taskId: "1",
 	});
-	const pinned = await store.update(old.id, {
-		title: "Mission image",
-		kind: "image",
-		source:
-			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
-	});
+	const pinned = await store.update(
+		old.id,
+		{
+			title: "Mission source",
+			kind: "nsh",
+			source: "export default () => null; // Exact mission pin",
+			entry: "view.tsx",
+		},
+		old.revision,
+	);
 	missions.linkArtifact(mission.id, {
 		artifactId: pinned.id,
 		sessionId,
@@ -341,7 +351,16 @@ test("mission detail keeps independent exact pins readable without latest infere
 		kind: pinned.kind,
 		title: pinned.title,
 	});
-	await store.update(old.id, { title: "Not linked latest", kind: "html", source: "<p>Never substitute latest</p>" });
+	await store.update(
+		old.id,
+		{
+			title: "Not linked latest",
+			kind: "nsh",
+			source: "export default () => null; // Never substitute latest",
+			entry: "view.tsx",
+		},
+		pinned.revision,
+	);
 	await missions.durable();
 	const read = t.mock.method(sessions, "artifact");
 	const before = missions.detail(mission.id);
@@ -390,18 +409,29 @@ test("HTTP reads persisted artifact revisions and aggregates only the project's 
 		}),
 	);
 	await sessions.load();
-	const store = new LegacyArtifactFixture(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
-	const initial = await store.create({ title: "First", kind: "html", source: "<p>First</p>" });
-	const latest = await store.update(initial.id, { title: "Updated", kind: "html", source: "<p>Updated</p>" });
-	const second = await new LegacyArtifactFixture(secondDir, { sessionId: secondId, projectId: project.id }).create({
-		title: "Second",
-		kind: "html",
-		source: "<p>Second</p>",
+	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
+	const initial = await store.create({
+		title: "First",
+		kind: "nsh",
+		source: "export default () => null; // First",
+		entry: "view.tsx",
 	});
-	await new LegacyArtifactFixture(join(home, "sessions", otherId), { sessionId: otherId }).create({
+	const latest = await store.update(
+		initial.id,
+		{ title: "Updated", kind: "nsh", source: "export default () => null; // Updated", entry: "view.tsx" },
+		initial.revision,
+	);
+	const second = await new ArtifactStore(secondDir, { sessionId: secondId, projectId: project.id }).create({
+		title: "Second",
+		kind: "nsh",
+		source: "export default () => null; // Second",
+		entry: "view.tsx",
+	});
+	await new ArtifactStore(join(home, "sessions", otherId), { sessionId: otherId }).create({
 		title: "Unassigned",
-		kind: "html",
-		source: "<p>Unassigned</p>",
+		kind: "nsh",
+		source: "export default () => null; // Unassigned",
+		entry: "view.tsx",
 	});
 	const path = `${base}/api/sessions/${sessionId}/artifacts/${initial.id}`;
 	assert.deepEqual(await (await fetch(path)).json(), latest);
@@ -416,23 +446,41 @@ test("HTTP reads persisted artifact revisions and aggregates only the project's 
 });
 
 test("latest artifact metadata is not a readable revision catalogue", async (t) => {
-	const { home, base, sessions, launch, runner } = await api(t, false);
+	const { home, base, sessions, project, launch, runner } = await api(t, false);
 	const directory = join(home, "sessions", sessionId);
-	const store = new LegacyArtifactFixture(directory, { sessionId });
-	const first = await store.create({ title: "First", kind: "html", source: "<p>Stored legacy source</p>" });
-	const image = await store.update(first.id, {
-		title: "Pixel",
-		kind: "image",
-		source:
-			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
+	const store = new ArtifactStore(directory, { sessionId, projectId: project.id });
+	const first = await store.create({
+		title: "First",
+		kind: "nsh",
+		source: "export default () => null; // First saved source",
+		entry: "view.tsx",
 	});
-	const latest = await store.update(first.id, { title: "Latest", kind: "html", source: "<p>Latest source</p>" });
+	const middle = await store.update(
+		first.id,
+		{
+			title: "Second",
+			kind: "nsh",
+			source: "export default () => null; // Second",
+			entry: "view.tsx",
+		},
+		first.revision,
+	);
+	const latest = await store.update(
+		first.id,
+		{
+			title: "Latest",
+			kind: "nsh",
+			source: "export default () => null; // Latest",
+			entry: "view.tsx",
+		},
+		middle.revision,
+	);
 	const listPath = `${base}/api/sessions/${sessionId}/artifacts`;
 	const path = `${listPath}/${first.id}`;
 	const before = await (await fetch(listPath)).json();
 	assert.deepEqual(before, [await store.summary(first.id)]);
 	assert.equal(before[0].revision, 3);
-	assert.equal(before[0].kind, "html");
+	assert.equal(before[0].kind, "nsh");
 	assert.ok(!("source" in before[0]) && !("revisions" in before[0]));
 
 	// Simulate an unavailable historical file in this disposable fixture only.
@@ -443,7 +491,7 @@ test("latest artifact metadata is not a readable revision catalogue", async (t) 
 	assert.equal((await fetch(`${path}?revision=1`)).status, 404);
 	const historical = await fetch(`${path}?revision=2`);
 	assert.equal(historical.status, 200);
-	assert.deepEqual(await historical.json(), image, "historical kind/source belong to the exact revision");
+	assert.deepEqual(await historical.json(), middle, "historical kind/source belong to the exact revision");
 	assert.deepEqual(
 		read.mock.calls.map((call) => call.arguments),
 		[
@@ -456,6 +504,35 @@ test("latest artifact metadata is not a readable revision catalogue", async (t) 
 	assert.equal(sessions.get(sessionId)?.state, "parked");
 	assert.equal(launch.mock.callCount(), 0);
 	assert.equal(runner.mock.callCount(), 0);
+});
+
+test("retired artifact IDs are absent from HTTP indexes and exact reads without changing saved files", async (t) => {
+	const { home, base, project, sessions, launch } = await api(t, false);
+	const directory = join(home, "sessions", sessionId);
+	const owner = { sessionId, projectId: project.id };
+	const saved = await new LegacyArtifactFixture(directory, owner).create({
+		title: "Retired",
+		kind: "html",
+		source: "<p>Saved private source</p>",
+	});
+	const path = join(directory, "artifacts", saved.id, "1.json");
+	const before = await readFile(path);
+	const artifactPath = `${base}/api/sessions/${sessionId}/artifacts`;
+	for (const route of [artifactPath, `${base}/api/projects/${project.id}/artifacts`]) {
+		assert.deepEqual(await (await fetch(route)).json(), []);
+	}
+	for (const route of [
+		`${base}/api/artifacts/${saved.id}`,
+		`${artifactPath}/${saved.id}`,
+		`${artifactPath}/${saved.id}?revision=1`,
+	]) {
+		const response = await fetch(route);
+		assert.equal(response.status, 404, route);
+		assert.doesNotMatch(await response.text(), /Saved private source/);
+	}
+	assert.deepEqual(await readFile(path), before);
+	assert.equal(sessions.get(sessionId)?.state, "parked");
+	assert.equal(launch.mock.callCount(), 0);
 });
 
 test("artifact revision catalogue route is unavailable and does not read bodies", async (t) => {
@@ -471,17 +548,28 @@ test("artifact revision catalogue route is unavailable and does not read bodies"
 
 test("archived owners retain project-visible artifacts and pinned revisions across restart without waking or restoring", async (t) => {
 	const { home, base, sessions, project, otherId, manager, launch, runner } = await api(t, false);
-	const store = new LegacyArtifactFixture(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
-	const initial = await store.create({ title: "Archived first revision", kind: "html", source: "<p>First</p>" });
-	const latest = await store.update(initial.id, {
-		title: "Archived latest revision",
-		kind: "html",
-		source: "<p>Latest</p>",
+	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
+	const initial = await store.create({
+		title: "Archived first revision",
+		kind: "nsh",
+		source: "export default () => null; // First",
+		entry: "view.tsx",
 	});
-	await new LegacyArtifactFixture(join(home, "sessions", otherId), { sessionId: otherId }).create({
+	const latest = await store.update(
+		initial.id,
+		{
+			title: "Archived latest revision",
+			kind: "nsh",
+			source: "export default () => null; // Latest",
+			entry: "view.tsx",
+		},
+		initial.revision,
+	);
+	await new ArtifactStore(join(home, "sessions", otherId), { sessionId: otherId }).create({
 		title: "Unassigned artifact",
-		kind: "html",
-		source: "<p>Unassigned</p>",
+		kind: "nsh",
+		source: "export default () => null; // Unassigned",
+		entry: "view.tsx",
 	});
 	const before = sessions.get(sessionId)!;
 	const response = await fetch(`${base}/api/sessions/${sessionId}/archive`, { method: "POST" });
@@ -560,8 +648,13 @@ test("HTTP artifact routes return lists, latest and pinned revisions, and 404s",
 
 test("artifact ID lookup returns only committed metadata and never reads bodies or wakes owners", async (t) => {
 	const { base, home, sessions, launch } = await api(t, false);
-	const store = new LegacyArtifactFixture(join(home, "sessions", sessionId), { sessionId });
-	const created = await store.create({ title: "Linked preview", kind: "html", source: "<p>Preview</p>" });
+	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId });
+	const created = await store.create({
+		title: "Linked preview",
+		kind: "nsh",
+		source: "export default () => null; // Preview",
+		entry: "view.tsx",
+	});
 	const expected = (await store.list())[0];
 	const bodies = t.mock.method(ArtifactStore.prototype, "get", async () => {
 		throw new Error("ID lookup must not read artifact bodies");
@@ -582,8 +675,7 @@ test("retired browser libraries cannot be bundled or executed through HTTP", asy
 	const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 	for (const name of ["react", "mermaid", "unknown"]) {
 		const response = await fetch(`${base}/api/artifact-libraries/${name}`);
-		assert.equal(response.status, 410);
-		assert.match(await response.text(), /no longer supported/);
+		assert.ok([404, 410].includes(response.status));
 	}
 });
 

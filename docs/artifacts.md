@@ -38,15 +38,14 @@ saving the displayed bytes through the system Save dialog; there is no picture o
 an NSH preview. Suggested filenames include the saved title and version. The full
 window shows the same pin and side without reading again, and closes when that
 pin stops being current. Escape closes an open menu first, then the full window.
-Legacy code exports as text, not executable HTML. Captured previews cannot use
+Captured previews cannot use
 the app's exporter or service access. Images above the saved-reader's 1 MiB
 container limit stay unavailable, never shortened; unusually large raster dimensions
 are also refused before decoding.
 Other clients can still show source without running it.
 
-Agents can no longer create or update native visual, shader, HTML, React or SwiftUI
-artifacts. Their existing sources, revisions and provenance remain in history for
-read-only inspection and copying. Day does not execute older native visuals.
+Older HTML, React, SwiftUI, shader and visual artifacts are unavailable. Their
+saved files and chat references are left in place.
 
 Artifacts are outputs to review, not proof that code was applied, tests passed,
 or an external action succeeded.

@@ -12,7 +12,6 @@ test("NSH saved revisions keep runtime provenance across app upgrades without gr
 		title: "Saved",
 		source,
 		html: "",
-		libraries: [],
 		createdAt: 1,
 		updatedAt: 1,
 		nsh: { ...nshSource(source, "view.tsx"), runtime: "nsh older-release", rendering: "unsupported" },

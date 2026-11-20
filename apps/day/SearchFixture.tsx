@@ -16,7 +16,7 @@ const hits: SearchHit[] = [
 		projectId: "harbor",
 		projectName: "Harbor",
 		key: "output:harbor:comparison",
-		target: { sessionId: "agent", artifactId: "comparison", title, kind: "html", revision: 3, updatedAt: 1 },
+		target: { sessionId: "agent", artifactId: "comparison", title, kind: "nsh", revision: 3, updatedAt: 1 },
 	},
 	{
 		kind: "chat",

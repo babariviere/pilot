@@ -79,7 +79,7 @@ Idle chats with no executor or pending work are held, not claimed by this Pause.
 checkpoint records `admissionOnly`, not a fabricated kernel census. Cold running work, uncertain input,
 known cold children, interrupted shell effects, remaining jobs, failed inspection/exit, or a lost ACK keep
 the aggregate Pausing/Unknown. Known local workers still checkpoint if another participant is uncertain.
-Legacy remote execution has no pause adapter and is reported as an issue, never silently treated as drained.
+The daemon refuses profiles with [legacy remote execution records](devboxes.md) before Mission Pause can run.
 
 Resume requires the exact acknowledged Pause and current membership/coordinator event fences (including
 ABA), project and control revision. It only opens operation-owned checkpoints. A later Stop remains held;

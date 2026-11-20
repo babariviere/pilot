@@ -216,7 +216,6 @@ test("HTTP native capability and pre-journal endpoint validation keep secrets ou
 		models,
 		terminals: new TerminalManager(),
 		hello: f.hello,
-		legacyAdmissionFrozen: false,
 		telemetry,
 		githubSetup: native,
 		nativeAuthority: native.nativeAuthority,

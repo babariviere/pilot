@@ -40,7 +40,15 @@ import { CHAT_CONTINUE, CHAT_DISMISS, CHAT_REPLY, NativeChat } from "./native-ch
 import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
 import { isNativePlanningOperation, NativeMissionPlanning } from "./native-mission-planning.ts";
 import { NativeProjects, PROJECT_ACTION } from "./native-projects.ts";
-import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
+import {
+	canonicalJSON,
+	durableJSON,
+	isChatOperation,
+	isLocalOperation,
+	OperationJournal,
+	OperationRejected,
+	payloadHash,
+} from "./operation-journal.ts";
 import { PathCompletionReader } from "./path-completion.ts";
 import { PlanningWorkers } from "./planning-workers.ts";
 import type { PowerService } from "./power.ts";
@@ -49,7 +57,6 @@ import type { KnowledgeService } from "./project-knowledge.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
-import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { optionalReviewRequests, retainedFeedbackReader } from "./review-request-access.ts";
 import { ReviewStore } from "./reviews.ts";
 import type { RuntimeContributor } from "./runtime-admission.ts";
@@ -96,7 +103,6 @@ export interface DaemonServiceDependencies {
 	mcp?: McpStatusService;
 	hello?: DaemonHello;
 	setup?: SetupService;
-	legacyAdmissionFrozen?: boolean;
 	telemetry?: TelemetrySettingsService;
 	githubSetup?: GitHubSetupService;
 	githubImport?: GitHubImportService;
@@ -127,7 +133,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		mcp,
 		hello,
 		setup,
-		legacyAdmissionFrozen = false,
 		telemetry,
 		githubSetup,
 		githubImport,
@@ -285,7 +290,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			: undefined;
 	const runtimeReady = Promise.all([liveUpdate?.service.load(), globalUpdate?.load()]).then(() => undefined);
 	// Startup restore is allowed under maintenance, but work and recovery are not.
-	const runtimeFrozen = () => legacyAdmissionFrozen || !!liveUpdate?.service.frozen || !!globalUpdate?.frozen;
+	const runtimeFrozen = () => !!liveUpdate?.service.frozen || !!globalUpdate?.frozen;
 	let lifecycleInterrupted = false;
 	const reservations = new UpdateReservation(
 		new RuntimeResources(
@@ -448,7 +453,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		const verified = reservations.verify(receipt);
 		return coordinated ? { ...verified, liveUpdate: structuredClone(coordinated) } : verified;
 	});
-	if (legacyAdmissionFrozen) runtimeResources.freezeAdmissions();
 	const journal = hello?.lineageId
 		? new OperationJournal(join(_config.home, "operations"), {
 				hostId: "daemon",
@@ -743,7 +747,13 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 					},
 				)
 			: undefined;
+	// A chat draft is bound to this daemon and storage lineage, even during retry.
+	const chatOperationIsLocal = (op: Readonly<DurableOperation>): boolean =>
+		typeof op?.kind !== "string" ||
+		!isChatOperation(op.kind) ||
+		(!!journal && isLocalOperation(op, journal.destination));
 	const admitOperation = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (!chatOperationIsLocal(op)) throw new Error("Chat operation belongs to another profile");
 		const end = mutations.begin({ kind: "operation", id: op.operationId });
 		try {
 			return await admitOperationHeld(op, trace);
@@ -921,7 +931,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	const recoverOperations = () => {
 		if (journal && !operationRecovery && !runtimeFrozen())
 			operationRecovery = journal
-				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
+				.recover(admitOperation, chatOperationIsLocal)
 				.catch((error) => console.warn("pilotd: operation recovery", error))
 				.finally(() => {
 					operationRecovery = undefined;
@@ -938,6 +948,7 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 	return {
 		dependencies: options,
 		admitOperation,
+		chatOperationIsLocal,
 		recoverOperations,
 		machine,
 		reviews,

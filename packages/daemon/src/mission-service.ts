@@ -66,19 +66,12 @@ import { ProjectRepositories } from "./project-repositories.ts";
 import type { ProjectStore } from "./projects.ts";
 import { replacedMissionView } from "./replaced-mission.ts";
 import {
-	captureRetainedArtifact,
-	type RetainedArtifactHost,
-	type RetainedArtifactReference,
-	type RetainedVisualValidator,
-	reopenRetainedArtifact,
-} from "./retained-artifact.ts";
-import {
 	captureRetainedBrief,
 	type RetainedBriefHeader,
 	type RetainedBriefHost,
 	reopenRetainedBrief,
 } from "./retained-brief.ts";
-import { RETAINED_REVIEW_LIMITS, retainedReviewSnapshot } from "./retained-review-contract.ts";
+import { RETAINED_REVIEW_LIMITS } from "./retained-review-contract.ts";
 import { optionalReviewRequests } from "./review-request-access.ts";
 import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -162,8 +155,6 @@ export type RetainedBriefConfiguration = Pick<
 	"hostId" | "daemonLineageId" | "runId" | "contextPackageSha256" | "runtime"
 > & { vault: CriticalReviewVault; knownSecrets: string[]; profileId: string };
 
-export type RetainedArtifactConfiguration = RetainedBriefConfiguration & { validator: RetainedVisualValidator };
-
 /**
  * An explicit start choice wins, else the tasks' preferred model (a user-set one first), else the project's
  * default. The coordinator cannot pick a model or thinking level that differs from a user-set preference.
@@ -222,15 +213,6 @@ export class MissionService {
 	setLinearReader(mcp: SourceMcpClient): void {
 		this.ticketReader = new MissionTicketReader(mcp);
 	}
-	private sharing?: import("./retired-devboxes.ts").LegacyMissionOwnership;
-	setSharedContext(sharing: import("./retired-devboxes.ts").LegacyMissionOwnership): void {
-		this.sharing = sharing;
-		this.controls.setExternalDrain(async (missionId) => {
-			if (sharing.remoteOccupied(missionId))
-				throw new Conflict("Remote mission work has no acknowledged pause adapter");
-		});
-		this.notices.setRemoteOccupied((missionId) => sharing.remoteOccupied(missionId));
-	}
 	readonly notices: MissionNotices;
 	readonly controls: MissionControls;
 	readonly continuations: MissionContinuations;
@@ -260,6 +242,7 @@ export class MissionService {
 		projects: ProjectStore,
 		deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
 		reviewProducerObserver?: (recorderSessionId: string, request: ReviewResultWrite) => Promise<ReviewProducer>,
+		localHome?: import("@pilot/protocol").OperationHost,
 	) {
 		this.deliverySnapshots = deliverySnapshots;
 		this.reviewProducerObserver = reviewProducerObserver;
@@ -319,10 +302,7 @@ export class MissionService {
 		this.reports = new MissionReports(store);
 		sessions.setMissionBridge({
 			continuationInputAllowed: (sessionId, operationId) => this.continuations.inputAllowed(sessionId, operationId),
-			upgradeResumeFence: (sessionId) => {
-				if (this.sharing?.membership(sessionId)) throw new Conflict("Remote mission controls are unavailable");
-				return this.controls.fence(sessionId);
-			},
+			upgradeResumeFence: (sessionId) => this.controls.fence(sessionId),
 			missionStopped: (sessionId) => {
 				const id = store.missionOf(sessions.missionWorkOwner(sessionId));
 				if (id) store.controls.stop(id);
@@ -457,23 +437,14 @@ export class MissionService {
 				}
 				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
-			membership: (sessionId) => {
-				const shared = this.sharing?.membership(sessionId);
-				return shared
-					? {
-							missionId: shared.grant.task.mission.missionId,
-							active: shared.state === "accepted",
-							coordinator: false,
-						}
-					: store.membership(sessionId);
-			},
+			membership: (sessionId) => store.membership(sessionId),
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
 			usageAttribution: (sessionId) => {
-				const shared = this.sharing?.membership(sessionId)?.grant.task.mission;
-				const missionId = shared?.missionId ?? store.missionOf(sessionId);
-				const home = shared?.home ?? this.sharing?.host;
-				return missionId && home ? { homeId: home.daemonId, lineageId: home.lineageId, missionId } : undefined;
+				const missionId = store.missionOf(sessionId);
+				return missionId && localHome
+					? { homeId: localHome.daemonId, lineageId: localHome.lineageId, missionId }
+					: undefined;
 			},
 			missionArchivedAt: (missionId) => {
 				const mission = store.get(missionId);
@@ -1134,83 +1105,7 @@ export class MissionService {
 	) {
 		return reopenRetainedBrief(this.store, this.retainedBriefHost(sessionId, taskRef, host), descriptor, signal);
 	}
-	/** Acquisition only. No REST/tool route, validator invocation or reviewer dispatch. */
-	async captureRetainedArtifact(
-		sessionId: string,
-		taskRef: string,
-		reference: RetainedArtifactReference,
-		host: RetainedArtifactConfiguration,
-		signal?: AbortSignal,
-	) {
-		const pinned = structuredClone(reference);
-		return captureRetainedArtifact(
-			this.store,
-			this.retainedArtifactHost(sessionId, taskRef, pinned, host),
-			pinned,
-			signal,
-		);
-	}
-	async reopenRetainedArtifact(
-		sessionId: string,
-		taskRef: string,
-		descriptor: unknown,
-		host: RetainedArtifactConfiguration,
-		signal?: AbortSignal,
-	) {
-		const pinned = retainedReviewSnapshot(descriptor, RETAINED_REVIEW_LIMITS.descriptorBytes) as {
-			reference: RetainedArtifactReference;
-		};
-		return reopenRetainedArtifact(
-			this.store,
-			this.retainedArtifactHost(sessionId, taskRef, pinned.reference, host),
-			pinned,
-			signal,
-		);
-	}
-	private retainedArtifactHost(
-		sessionId: string,
-		taskRef: string,
-		ref: RetainedArtifactReference,
-		host: RetainedArtifactConfiguration,
-	): RetainedArtifactHost {
-		const missionId = this.allocationAccess(sessionId);
-		const taskId = this.store.resolveTask(missionId, taskRef).id;
-		const observation = () => {
-			this.allocationAccess(sessionId, missionId);
-			const allocation = this.store.latestContributionAllocation(missionId, taskId);
-			const sources = allocation?.request.action === "allocate" ? allocation.request.sources : [];
-			const source = sources[0];
-			const refs = this.store.artifactReferences(missionId, ref.artifactId);
-			if (
-				sources.length !== 1 ||
-				!source ||
-				source.reference.kind !== "artifact" ||
-				source.reference.artifactId !== ref.artifactId ||
-				source.reference.revision !== ref.revision ||
-				source.sourceOwnerSessionId !== ref.sourceOwnerSessionId ||
-				source.availability !== "retained" ||
-				refs.some((link) => link.sessionId !== ref.sourceOwnerSessionId) ||
-				!refs.some((link) => link.taskId === taskId && link.revision === ref.revision && link.kind === ref.kind)
-			)
-				throw new Conflict("Exact artifact task link or allocation is unavailable");
-			this.assertAllocationSourceActors(missionId, taskId, [source]);
-			return source;
-		};
-		const base = this.retainedBriefHost(sessionId, taskRef, host, observation);
-		return {
-			vault: host.vault,
-			knownSecrets: host.knownSecrets,
-			observe: () => ({ header: base.observe(), observation: observation(), validator: host.validator }),
-			read: (signal) =>
-				this.sessions.readStoredArtifactRevision(ref.sourceOwnerSessionId, ref.artifactId, ref.revision, signal),
-		};
-	}
-	private retainedBriefHost(
-		sessionId: string,
-		taskRef: string,
-		host: RetainedBriefConfiguration,
-		sourceObservation?: () => DeliveryObservation,
-	): RetainedBriefHost {
+	private retainedBriefHost(sessionId: string, taskRef: string, host: RetainedBriefConfiguration): RetainedBriefHost {
 		const missionId = this.allocationAccess(sessionId);
 		const taskId = this.store.resolveTask(missionId, taskRef).id;
 		return {
@@ -1248,7 +1143,7 @@ export class MissionService {
 						availability: "retained",
 					};
 				};
-				const observation = sourceObservation ? sourceObservation() : briefObservation();
+				const observation = briefObservation();
 				if (
 					!allocation ||
 					!submission ||
@@ -1539,7 +1434,6 @@ export class MissionService {
 	}
 
 	context(sessionId: string): MissionContext | undefined {
-		if (this.sharing?.membership(sessionId)) return this.sharing.context(sessionId);
 		const detail = this.store.memberContext(sessionId);
 		if (!detail) return undefined;
 		const { mission } = detail;
@@ -1685,8 +1579,6 @@ export class MissionService {
 	}
 
 	private assertSameProject(sessionId: string, missionId: string): void {
-		if (this.sharing?.membership(sessionId))
-			throw new Conflict("Seal/release the delegated execution before changing its mission membership");
 		const mission = this.store.require(missionId);
 		const session = this.session(sessionId);
 		if (session.projectId !== mission.projectId)
@@ -1725,8 +1617,6 @@ export class MissionService {
 							(session.mode !== undefined && session.mode !== "ask" && session.mode !== "build")
 						)
 							throw new Conflict("Only an ordinary Local chat can become a mission");
-						if (this.sharing?.membership(from))
-							throw new Conflict("Release the delegated execution before making a mission");
 						if (this.store.missionOf(from) !== undefined || session.missionId !== undefined)
 							throw new Conflict("The chat already belongs to a mission; conversion cannot move it");
 						const mission = this.store.create(request);
@@ -2137,23 +2027,21 @@ export class MissionService {
 		// A builder idle until its task prototype comes back holds no slot.
 		const awaitingPrototype = (id: string) =>
 			prototypes.some((p) => p.builderSessionId === id && p.state !== "reported" && p.state !== "failed");
-		return (
-			[...new Set([...this.store.members(missionId), ...this.sessions.missionWorkSessions(missionId)])].filter(
-				(id) => {
-					if (id === coordinator || id === excludeId) return false;
-					const chat = this.sessions.get(id);
-					if (!chat || chat.archivedAt !== undefined) return false;
-					// Only chats that can change code take a slot. Ask chats are read-only.
-					if (chat.mode === "ask") return false;
-					if (chat.working || chat.state === "working" || chat.state === "starting" || chat.runningJobs?.length)
-						return true;
-					return (
-						!awaitingPrototype(id) &&
-						tasks.some((task) => task.sessionId === id && isOpen(task) && !this.store.retiredMember(id))
-					);
-				},
-			).length + (this.sharing?.remoteOccupied(missionId) ? 2 : 0)
-		);
+		return [...new Set([...this.store.members(missionId), ...this.sessions.missionWorkSessions(missionId)])].filter(
+			(id) => {
+				if (id === coordinator || id === excludeId) return false;
+				const chat = this.sessions.get(id);
+				if (!chat || chat.archivedAt !== undefined) return false;
+				// Only chats that can change code take a slot. Ask chats are read-only.
+				if (chat.mode === "ask") return false;
+				if (chat.working || chat.state === "working" || chat.state === "starting" || chat.runningJobs?.length)
+					return true;
+				return (
+					!awaitingPrototype(id) &&
+					tasks.some((task) => task.sessionId === id && isOpen(task) && !this.store.retiredMember(id))
+				);
+			},
+		).length;
 	}
 
 	async linkArtifact(missionId: string, write: MissionArtifactLinkWrite, actor: MissionActor = {}) {
@@ -2260,7 +2148,6 @@ export class MissionService {
 		};
 	}
 	async call(sessionId: string, action: MissionAction, args: Record<string, unknown>): Promise<unknown> {
-		if (this.sharing?.membership(sessionId)) return this.sharing.missionCall(sessionId, action, args);
 		const missionId = this.store.missionOf(sessionId);
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
@@ -2382,8 +2269,7 @@ export class MissionService {
 						owner.archivedAt ||
 						owner.mode === "ask" ||
 						owner.role ||
-						owner.control ||
-						this.sharing?.membership(sessionId)
+						owner.control
 					)
 						throw new Conflict("Current same-project mission member and planning owner required");
 					return canonicalJSON({ member, project, context: this.store.allocationContextFence(missionId) });
@@ -2489,8 +2375,7 @@ export class MissionService {
 						this.session(target).projectId !== project.id ||
 						this.store.missionOf(target) !== missionId ||
 						target === sessionId ||
-						this.store.membership(target)?.coordinator ||
-						this.sharing?.membership(target)
+						this.store.membership(target)?.coordinator
 					)
 						throw new Conflict("Only a current worker in the coordinator's mission/project can be organized");
 					const detail = this.store.detail(missionId, false);
@@ -2786,7 +2671,6 @@ export class MissionService {
 					mission: { title: mission.title, goal: mission.goal, status: mission.status },
 					...(role ? { role } : {}),
 					...(mission.planningVersion !== undefined ? { planningVersion: mission.planningVersion } : {}),
-					...(this.sharing ? { remoteAllocations: this.sharing.missionAllocations(missionId) } : {}),
 					phaseGating: mission.phaseGating ?? false,
 					phases: [
 						...detail.phases.map(({ missionId: _, ...phase }) => phase),

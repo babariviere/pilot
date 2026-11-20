@@ -279,7 +279,6 @@ test("Slack replies require the exact live idle worker and preserve Stop and inp
 		"inputsPaused",
 		"updatePaused",
 		"sleepPaused",
-		"delegationFenced",
 	] as const) {
 		meta[hold] = true;
 		assert.equal(await f.sessions.resumeSlackReply(f.id, "Reply", `slack-reply:item:${hold}`, () => {}), false, hold);

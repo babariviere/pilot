@@ -63,10 +63,6 @@ export class MissionControls {
 	private drainSchedules: (missionId: string) => Promise<void> = async () => {
 		throw new Error("Mission schedule fence is unavailable");
 	};
-	private drainExternal: (missionId: string) => Promise<void> = async () => {};
-	setExternalDrain(drain: (missionId: string) => Promise<void>): void {
-		this.drainExternal = drain;
-	}
 	setScheduleDrain(drain: (missionId: string) => Promise<void>): void {
 		this.drainSchedules = drain;
 	}
@@ -260,13 +256,11 @@ export class MissionControls {
 			await this.store.durable();
 		};
 		try {
-			for (const drain of [this.drainSchedules, this.drainExternal]) {
-				try {
-					await drain(missionId);
-				} catch (error) {
-					record.issues ??= [];
-					record.issues.push(String(error).slice(0, 500));
-				}
+			try {
+				await this.drainSchedules(missionId);
+			} catch (error) {
+				record.issues ??= [];
+				record.issues.push(String(error).slice(0, 500));
 			}
 			owner();
 			for (const member of record.members) {

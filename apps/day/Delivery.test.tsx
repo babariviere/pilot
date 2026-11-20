@@ -539,8 +539,8 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	await openCsv(app);
 	// Your check now leads the result page, so the outputs sit lower: a press below the fixture's toolbar
 	// scrolls first, as the user would. Each press still happens once.
-	expect(app.texts().includes("HTML, revision 3")).toBe(true);
-	expect(app.texts().includes("Visual, latest revision")).toBe(true);
+	expect(app.texts().includes("NSH, revision 3")).toBe(true);
+	expect(app.texts().includes("NSH, latest revision")).toBe(true);
 	// Opening the page reads no source; a link without a pin has no Inspect source.
 	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1]`);
 	expect(app.shows(`id:output-source-${UNPINNED}`)).toBe(false);
@@ -548,7 +548,7 @@ test("Inspect source reads one exact pin once, as plain text that never runs, an
 	await pressCheck(app, `id:output-source-${HTML}`);
 	await app.waitFor("id:artifact-source-text");
 	expect(showsSource(app, HTML_SOURCE)).toBe(true);
-	expect(app.texts().includes("Source · HTML · revision 3")).toBe(true);
+	expect(app.texts().includes("Source · NSH · revision 3")).toBe(true);
 	expect(app.texts().includes("Scroll check page")).toBe(true);
 	expect(app.texts().includes("Saved copy, 208 bytes.")).toBe(true);
 	expect(app.shows("Preview")).toBe(true);
@@ -703,23 +703,26 @@ test("only the exact inert answer for the pin asked is shown", () => {
 	const reply = {
 		version: 1,
 		reference: asked,
-		metadata: { title: "T", kind: "html" },
+		metadata: { title: "T", kind: "nsh" },
 		rendering: "unsupported",
 		content: { state: "text", source: "<p>x</p>", containerSha256: "c".repeat(64), containerBytes: 9 },
 		html: "<p>prepared</p>",
 	};
-	const shown = capturedOf(reply, asked, "html");
+	for (const kind of ["html", "react", "swiftui", "shader", "visual"]) {
+		expect(capturedOf({ ...reply, metadata: { ...reply.metadata, kind } }, asked, kind)).toBe(null);
+	}
+	const shown = capturedOf(reply, asked, "nsh");
 	expect(shown?.content).toEqual(reply.content);
 	// Unlisted fields never pass through.
 	expect(JSON.stringify(shown).includes("prepared")).toBe(false);
-	expect(capturedOf({ ...reply, reference: { ...asked, revision: 2 } }, asked, "html")).toBe(null);
-	expect(capturedOf({ ...reply, reference: { ...asked, ownerSessionId: "o" } }, asked, "html")).toBe(null);
-	expect(capturedOf({ ...reply, rendering: "html" }, asked, "html")).toBe(null);
+	expect(capturedOf({ ...reply, reference: { ...asked, revision: 2 } }, asked, "nsh")).toBe(null);
+	expect(capturedOf({ ...reply, reference: { ...asked, ownerSessionId: "o" } }, asked, "nsh")).toBe(null);
+	expect(capturedOf({ ...reply, rendering: "html" }, asked, "nsh")).toBe(null);
 	expect(capturedOf(reply, asked, "visual")).toBe(null);
 	expect(capturedOf({ ...reply, metadata: { title: "T", kind: "image" } }, asked, "image")).toBe(null);
-	expect(capturedOf({ ...reply, content: { state: "unavailable", reason: "latest" } }, asked, "html")).toBe(null);
+	expect(capturedOf({ ...reply, content: { state: "unavailable", reason: "latest" } }, asked, "nsh")).toBe(null);
 	expect(
-		capturedOf({ ...reply, content: { state: "unavailable", reason: "oversize" } }, asked, "html")?.content,
+		capturedOf({ ...reply, content: { state: "unavailable", reason: "oversize" } }, asked, "nsh")?.content,
 	).toEqual({ state: "unavailable", reason: "oversize" });
 });
 
@@ -733,7 +736,7 @@ test("comparison switches one pane between both saved pins, sends nothing and cl
 	expect(app.count("id:artifact-pane")).toBe(0);
 	await pressCheck(app, "label:After output");
 	await app.press("Load timing · revision 2");
-	await app.waitFor("Source · Visual · revision 2");
+	await app.waitFor("Source · NSH · revision 2");
 	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
 	// The pane's header names the chosen output by its saved title.
 	expect(app.shows("id:outputs-title")).toBe(true);
@@ -744,13 +747,13 @@ test("comparison switches one pane between both saved pins, sends nothing and cl
 	expect(app.texts().includes("Choose which saved output is Before.")).toBe(true);
 	await pressCheck(app, "label:Before output");
 	await app.press("Scroll check page · revision 3");
-	await app.waitFor("Source · HTML · revision 3");
+	await app.waitFor("Source · NSH · revision 3");
 	expect(showsSource(app, HTML_SOURCE)).toBe(true);
 	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
 	expect(app.count("id:artifact-pane")).toBe(1);
 	// Switching back shows the After pin read before, without reading it again.
 	await pressCheck(app, "id:outputs-tab-after");
-	await app.waitFor("Source · Visual · revision 2");
+	await app.waitFor("Source · NSH · revision 2");
 	expect(showsSource(app, HTML_SOURCE)).toBe(false);
 	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${VISUAL}@2 ${HTML}@3]`);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
@@ -773,7 +776,7 @@ test("an output's header shares its source and opens the full window, which a ne
 	await app.waitUntil(() => !app.shows("Export source…"));
 	await pressCheck(app, `id:output-${HTML}-full`);
 	await app.waitFor("id:artifact-full");
-	expect(app.texts().includes("Scroll check page · HTML · revision 3")).toBe(true);
+	expect(app.texts().includes("Scroll check page · NSH · revision 3")).toBe(true);
 	// One copy: the row gives its pane to the full window, and nothing is read again.
 	expect(app.texts().filter((t) => t === HTML_SOURCE).length).toBe(1);
 	expect(reads(app)).toBe(`Source reads: [${IMAGE}@1 ${HTML}@3]`);
@@ -796,11 +799,11 @@ test("a comparison's full window shows the chosen side and closes when the resul
 	await pressCheck(app, "id:outputs-compare");
 	await pressCheck(app, "label:After output");
 	await app.press("Load timing · revision 2");
-	await app.waitFor("Source · Visual · revision 2");
+	await app.waitFor("Source · NSH · revision 2");
 	await pressCheck(app, "id:outputs-full");
 	await app.waitFor("id:artifact-full");
-	expect(app.texts().includes("Load timing · Visual · revision 2")).toBe(true);
-	expect(app.texts().includes("After · Source · Visual · revision 2")).toBe(true);
+	expect(app.texts().includes("Load timing · NSH · revision 2")).toBe(true);
+	expect(app.texts().includes("After · Source · NSH · revision 2")).toBe(true);
 	expect(app.texts().filter((t) => t === VISUAL_SOURCE).length).toBe(1);
 	// The full window owns Escape first; the comparison stays open on After.
 	await app.keyboard.press("escape");

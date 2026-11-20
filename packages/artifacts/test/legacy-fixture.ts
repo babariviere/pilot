@@ -1,34 +1,41 @@
 /** Test-only historical disk fixture, excluded from runtime bundles. Never publishes. */
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ArtifactKind, ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
-import { ArtifactStore } from "../src/store.ts";
+import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 
-type HistoricalWrite = Omit<ArtifactWrite, "kind"> & { kind: ArtifactKind };
+type HistoricalWrite = Omit<ArtifactWrite, "kind"> & {
+	kind: "html" | "react" | "swiftui" | "shader" | "visual";
+	data?: unknown;
+	visual?: unknown;
+	libraries?: string[];
+};
+type HistoricalRevision = Omit<ArtifactRevision, "kind"> &
+	HistoricalWrite & { libraryVersions: Record<string, string> };
 
-export class LegacyArtifactFixture extends ArtifactStore {
+export class LegacyArtifactFixture {
 	private readonly root: string;
 	private readonly owner: { sessionId: string; projectId?: string };
 	constructor(root: string, owner: { sessionId: string; projectId?: string }) {
-		super(root, owner);
 		this.root = root;
 		this.owner = owner;
 	}
 
-	override async create(write: HistoricalWrite): Promise<ArtifactRevision> {
+	async create(write: HistoricalWrite): Promise<HistoricalRevision> {
 		return this.seed(randomUUID(), write);
 	}
 
-	override async update(id: string, write: HistoricalWrite, expectedRevision?: number): Promise<ArtifactRevision> {
-		const previous = await this.get(id);
+	async update(id: string, write: HistoricalWrite, expectedRevision?: number): Promise<HistoricalRevision> {
+		const directory = join(this.root, "artifacts", id);
+		const { revision } = JSON.parse(await readFile(join(directory, "latest.json"), "utf8"));
+		const previous: HistoricalRevision = JSON.parse(await readFile(join(directory, `${revision}.json`), "utf8"));
 		if (expectedRevision !== undefined && previous.revision !== expectedRevision) throw new Error("Fixture conflict");
 		return this.seed(id, write, previous);
 	}
 
-	private async seed(id: string, write: HistoricalWrite, previous?: ArtifactRevision): Promise<ArtifactRevision> {
+	private async seed(id: string, write: HistoricalWrite, previous?: HistoricalRevision): Promise<HistoricalRevision> {
 		const now = Date.now();
-		const value: ArtifactRevision = {
+		const value: HistoricalRevision = {
 			...this.owner,
 			...write,
 			id,
@@ -47,6 +54,7 @@ export class LegacyArtifactFixture extends ArtifactStore {
 			libraries: _libraries,
 			libraryVersions: _versions,
 			data: _data,
+			visual: _visual,
 			...summary
 		} = value;
 		await writeFile(join(directory, `${value.revision}.json`), JSON.stringify(value));

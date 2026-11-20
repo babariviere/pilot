@@ -56,8 +56,8 @@ is limited to 64 KiB and binds:
 - The frozen validator configuration and explicit options.
 
 The result returns the exact container bytes and separate `validationInput: { source, dataJSON, id }`.
-The source is decoded from the stored JSON string. `dataJSON` is derived by the existing
-`validateVisualWrite` serialization, the same path used by `prepareArtifact` before `checkVisual`.
+The source is decoded from the stored JSON string. `dataJSON` serializes the saved data or uses
+`null` when it is absent. This does not compile or run the visual.
 Neither is called the original stored container or original submission bytes. The descriptor is
 not `InputDescriptor.source/data` and the result is not `PreparedRetainedReviewInput`.
 
@@ -68,8 +68,8 @@ after restart, but cannot revoke copies already returned to a host.
 
 ## Execution remains separate
 
-The [retained visual precheck](retained-visual-precheck.md) now provides a host-only isolated adapter.
-It is not installed in a production dispatcher or used for live validation or acceptance.
+The former visual precheck was removed. Saved visual evidence remains readable, but Pilot
+does not run it or issue a new validation result.
 
 Acquisition binds intended validator pins, not an observation that the validator ran or that the
 claimed runtime is installed. A validation producer must verify its actual executable,

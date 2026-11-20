@@ -2899,7 +2899,7 @@ test("live update proposals do not reuse eligibility after a project change", as
 	assert.equal(f.workers[0]!.spec.liveUpdateProposals, undefined);
 });
 
-for (const changed of ["project", "worker", "shared", "mission-role", "mission-coordinator"] as const) {
+for (const changed of ["project", "worker", "mission-role", "mission-coordinator"] as const) {
 	test(`live update proposals reject delayed authorization after ${changed} changes`, async (t) => {
 		const f = await fixture(t);
 		let entered!: () => void;
@@ -2939,12 +2939,9 @@ for (const changed of ["project", "worker", "shared", "mission-role", "mission-c
 			args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
 		});
 		await checked;
-		const sharing = sessions["sharing"];
 		const missions = sessions["missions"];
 		if (changed === "project") meta.projectId = "another-project";
 		if (changed === "worker") sessions["workers"].delete(created.id);
-		if (changed === "shared")
-			sessions["sharing"] = { membership: () => ({}) } as unknown as NonNullable<typeof sharing>;
 		if (changed === "mission-role")
 			sessions["missions"] = { membership: () => ({ role: "reviewer" }) } as unknown as NonNullable<typeof missions>;
 		if (changed === "mission-coordinator")
@@ -2965,7 +2962,6 @@ for (const changed of ["project", "worker", "shared", "mission-role", "mission-c
 			await until(() => worker.sent.some((packet) => packet.type === "liveUpdate.result"));
 			assert.ok(worker.sent.find((packet) => packet.type === "liveUpdate.result")?.error);
 		}
-		sessions["sharing"] = sharing;
 		sessions["missions"] = missions;
 	});
 }
@@ -3042,7 +3038,6 @@ test("live update proposals use supervised scope and recheck delayed authorizati
 		["executionPermission", { level: "investigate" }],
 		["control", true],
 		["coordinatorView", {}],
-		["delegationFenced", true],
 		["continuedTo", "other-chat"],
 		["archivedAt", 1],
 	] as const) {
@@ -3855,9 +3850,6 @@ test("diagnostic performance reads existing sanitized local snapshot only with p
 	t.after(() => watchdog.stop());
 	const end = operations.begin("synthetic password=performance-canary");
 	t.after(end);
-	let courierReads = 0;
-	const stop = sessions.diagnosticReadBroker.onRead(() => courierReads++);
-	t.after(stop);
 	const workers = f.workers.length;
 	const before = sessions.get(peer.id);
 	const result = await sessions.diagnosticContext(specialist.id, { action: "performance", host: diagnosticHost });
@@ -3878,7 +3870,6 @@ test("diagnostic performance reads existing sanitized local snapshot only with p
 	});
 	assert.equal(remote.status, "unavailable");
 	assert.equal(remote.reason, "unsupported");
-	assert.equal(courierReads, 0);
 	assert.equal(f.workers.length, workers);
 	assert.deepEqual(sessions.get(peer.id), before);
 	const cancelled = new AbortController();
@@ -3934,19 +3925,10 @@ test("app-wide diagnostic capability reads unselected archived chats and budgets
 	assert.equal(f.workers.length, workers);
 	assert.deepEqual(sessions.get(peer.id), before, "reads never mutate the archived subject");
 	const remote = { hostId: "other", daemonId: "other-daemon", lineageId: "other-lineage" };
-	const stop = sessions.diagnosticReadBroker.onRead((d) =>
-		sessions.diagnosticReadBroker.respond(d.id, {
-			schemaVersion: 1,
-			host: { ...remote, lineageId: "forged" },
-			status: "available",
-			data: { secret: "bad" },
-			page: { more: false, scanned: 0, maxScan: 200, maxBytes: 65536, truncated: false },
-		}),
-	);
 	const wrongHost = await sessions.diagnosticContext(specialist.id, { action: "chats", host: remote });
 	assert.equal(wrongHost.status, "unavailable");
-	assert.doesNotMatch(JSON.stringify(wrongHost), /bad/);
-	stop();
+	assert.equal(wrongHost.reason, "unsupported");
+	assert.equal(wrongHost.data, null);
 });
 
 test("spawning target-scoped diagnostics does not wake or change a parked target", async (t) => {
@@ -5589,10 +5571,6 @@ test("Stop cancels failed child recovery without credentials and stays stopped a
 		reason: "stopped",
 		error: "Chat recovery is stopped. Send a new message to continue.",
 	});
-	await assert.rejects(
-		reopened.sharedContextNotice(created.id, "shared-context:stopped", "Shared context changed"),
-		/recovery is stopped/,
-	);
 	assert.equal(f.workers.length, 1, "automatic and agent follow-ups cannot release the user's Stop fence");
 	await until(() => reopened.prepareUpdate().ready);
 	reopened["resumeAfterUpdate"]();

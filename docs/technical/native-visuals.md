@@ -2,8 +2,8 @@
 
 Status: retired for new artifacts. Agents now create NSH and image artifacts only; the artifact tool refuses
 `visual` and `shader` writes. Stored visuals stay readable as source. Day does not run the
-retired native visual worker. The [Node retained-visual precheck](retained-visual-precheck.md)
-is a separate host-only adapter. The rest of this page records the original design and its decisions.
+retired native visual worker. The old Node visual and shader compiler is also removed.
+The rest of this page records the original design and its decisions.
 
 ## Goal
 

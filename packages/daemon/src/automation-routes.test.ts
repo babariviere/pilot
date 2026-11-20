@@ -43,7 +43,6 @@ test("hook writes require enabled feature and native authority, reject stale and
 		models: new ModelCatalog(home),
 		terminals,
 		hello,
-		legacyAdmissionFrozen: false,
 		githubSetup: native,
 		nativeAuthority: native.nativeAuthority,
 		chatSettings: settings,

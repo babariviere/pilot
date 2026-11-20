@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { imageSize, loadArtifactImage, MAX_IMAGE_BYTES, validateImageSource } from "./image.ts";
-import { prepareArtifact, validateArtifact } from "./render.ts";
+import { prepareArtifact } from "./render.ts";
 import { ArtifactStore } from "./store.ts";
 
 const png = Buffer.from(
@@ -15,17 +15,13 @@ const source = `data:image/png;base64,${png.toString("base64")}`;
 
 test("image preparation fits the viewport, embeds bytes and preserves the sandbox", async () => {
 	const prepared = await prepareArtifact({ title: "Image", kind: "image", source });
-	assert.deepEqual(prepared.libraries, []);
 	assert.ok(prepared.html.includes(`src="${source}"`));
 	assert.match(prepared.html, /object-fit:contain/);
 	assert.match(prepared.html, /width:auto;height:auto;max-width:100vw;max-height:100vh/);
 	assert.doesNotMatch(prepared.html, /width:100%;height:100vh/);
 	assert.match(prepared.html, /connect-src 'none'/);
+	assert.doesNotMatch(prepared.html, /<script\b/i);
 	assert.doesNotMatch(prepared.html, /pilot-artifact:\/\/library\//);
-	assert.throws(
-		() => validateArtifact({ title: "Image", kind: "image", source, libraries: ["react"] }),
-		/do not use libraries/,
-	);
 });
 
 test("image revisions survive removal of the original file and can be updated and reopened", async () => {

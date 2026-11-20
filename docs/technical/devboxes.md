@@ -9,8 +9,8 @@ only target Local. The local app/daemon separation is unchanged.
 
 - Cached remote chat summaries and locally cached conversation history retain their original host
   identities and remain read-only. An uncached conversation cannot be fetched by this app.
-- Private offline-host metadata, checkout associations, remote model-sync decisions, update journals,
-  drafts, images, pending operation intents and daemon sharing tables are not deleted or migrated.
+- Archive old host metadata, update journals, remote drafts and attachments, chat history, pending
+  operation records and sharing records offline. Keep their original host and storage lineage.
 - A saved remote draft cannot be submitted to a devbox. **New Local chat** parks the original draft
   separately and opens a distinct Local draft. It never silently redirects the old request or files.
 - Pending remote operations remain unknown. Retirement does not acknowledge delivery, replay requests,
@@ -26,16 +26,24 @@ old remote model decisions are inert persisted data, not synchronization partici
 
 SSH tunnels/bootstrap, remote update delivery, cross-host couriers, sharing/replication engines,
 remote Control executors/contracts, native remote RPCs and their executable fixtures have been removed.
-The daemon has no sharing, delegation, remote Control or runtime-update routes. A small read-only `RetiredDevboxes` adapter retains
-legacy ownership records and rejects delegated admission, preventing old work from being recovered
-or reinterpreted as ordinary Local work. Canonical Local missions and memory continue normally.
+The daemon has no remote sharing, delegation, Control or updater routes. The Local app's coordinated
+update route is separate.
 
-Old pending sharing/Control operations are excluded from startup recovery. An explicit attempt to
-resubmit one is rejected before changing its receipt. Retired updater records are read only to
-preserve safety fences; unresolved ownership is never automatically cleared. Control is retired
-independently on main; no Control runtime or policy service is recreated here.
+The daemon checks for legacy records before activating the profile. It refuses to start if it finds
+populated sharing tables, old updater records, saved delegation fences or old remote operation
+records. Sealed grants and dangling execution indexes still require archive. Nothing is released,
+reassigned or replayed. A Local chat operation must match the daemon and storage lineage.
 
-Host-qualified cache formats, provenance, offline readers and preservation tests are retained.
+If startup says **Legacy remote profile data found**, stop the old runtime and resolve any
+unconfirmed work on its original host. Archive the complete remote records and their dependent
+chats, drafts and attachments offline. Use a verified Local-only profile, not one made by clearing
+an execution marker. Pilot does not export or import this archive. Old records are no longer served
+from the live daemon.
+
+On a verified Local-only profile, startup drops empty sharing tables and removes their triggers.
+It preserves Local task definition revisions and keeps canonical mission and artifact source identity.
+
+Host-qualified offline cache formats and provenance remain separate from daemon startup.
 The Linux headless daemon and packaging remain development capabilities, not a supported macOS remote
 execution workflow. Earlier transport/setup design documents describe historical behavior only.
 

@@ -28,9 +28,9 @@ fn captured_revision_is_inert_text_and_reopen_has_no_effect() {
     assert_eq!(snapshot["rendering"], "unsupported");
     assert_eq!(
         snapshot["content"]["source"],
-        "<script>throw Error('never execute')</script>"
+        "export default () => { throw Error('never execute'); };"
     );
-    assert_eq!(snapshot["metadata"]["kind"], "html");
+    assert_eq!(snapshot["metadata"]["kind"], "nsh");
     assert!(snapshot.get("html").is_none());
     assert!(snapshot.get("data").is_none());
     let page = f.call(&b, "day.delivery.read", f.info["task"].clone());

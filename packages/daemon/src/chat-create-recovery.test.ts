@@ -18,7 +18,7 @@ import { CommandRejected, SessionManager, type SessionMissionBridge } from "./se
 import { TerminalManager } from "./terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "./testing/daemon-server.ts";
 
-const host = { hostId: "box", daemonId: "remote", lineageId: "remote-lineage" };
+const host = { hostId: "daemon", daemonId: "mac", lineageId: "mac-lineage" };
 const barrier = () => {
 	let resolve!: () => void;
 	const promise = new Promise<void>((yes) => {

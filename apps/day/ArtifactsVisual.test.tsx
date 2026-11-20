@@ -3,7 +3,7 @@
 // `nsh test ArtifactsVisual.test.tsx --target macos`; headless runs draw nothing.
 import { open, test } from "nsh/test";
 
-const HTML = "1b2c3d4e-0000-4000-8000-000000000002";
+const REPORT = "1b2c3d4e-0000-4000-8000-000000000002";
 
 // Dark captures fit the screen: a taller window leaves its lower part unpainted.
 const SIZES = [
@@ -19,8 +19,8 @@ test("Artifacts: the shelf and one open artifact, in light and dark, wide and na
 		await app.waitFor("Timeline");
 		await app.wait(500);
 		await app.screenshot(`output/artifacts-parts-${colorScheme}-${width}.png`);
-		await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
-		await app.waitFor("<p>Saved page</p>");
+		await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
+		await app.waitFor("export default () => <Text>Saved page</Text>;");
 		await app.press("id:artifact-compare");
 		await app.waitFor("id:artifact-tab-before");
 		await app.wait(500);
@@ -36,8 +36,8 @@ test("Artifacts: the full window and a mission's artifacts", async () => {
 		colorScheme: "light",
 	});
 	await app.waitFor("Timeline");
-	await app.press(`id:artifact-card-/chat-b/${HTML}/4`);
-	await app.waitFor("<p>Saved page</p>");
+	await app.press(`id:artifact-card-/chat-b/${REPORT}/4`);
+	await app.waitFor("export default () => <Text>Saved page</Text>;");
 	await app.press("id:artifact-viewer-full");
 	await app.waitFor("id:artifact-full");
 	await app.wait(500);

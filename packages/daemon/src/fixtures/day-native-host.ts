@@ -114,7 +114,6 @@ const server = createDaemonServer({
 	terminals: { isRunning: () => false } as unknown as TerminalManager,
 	missions: { store, service: { reports, controls } as MissionService },
 	hello,
-	legacyAdmissionFrozen: false,
 	githubSetup: native,
 	nativeAuthority: native.nativeAuthority,
 });

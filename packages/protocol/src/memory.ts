@@ -10,7 +10,7 @@ export interface MemoryEntry {
 	at: number;
 	sessionId: string;
 	/** Preserved across canonical commits, checkpoints and deltas. Not inferred from reusable local IDs. */
-	sharedOrigin?: import("./shared-context.ts").SharedSessionRef;
+	sharedOrigin?: { host: import("./operations.ts").OperationHost; sessionId: string };
 	text: string;
 	/** Stable ids of earlier notes this one corrects. */
 	replaces?: string[];

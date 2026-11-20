@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
 	parseStoredArtifactRevision,
-	parseStoredVisualRevision,
+	ArtifactNotFound,
 	readStoredFile,
 	StoredArtifactTooLarge,
 } from "./stored-revision.ts";
@@ -14,24 +14,33 @@ const expected = { id: "11111111-1111-1111-1111-111111111111", sessionId: "owner
 const value = {
 	...expected,
 	title: "Saved",
-	kind: "html",
+	kind: "image",
 	createdAt: 1,
 	updatedAt: 2,
 	libraries: [],
-	source: "<script>throw Error('never execute')</script>\r\né😀",
+	source:
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==",
 	html: "not a source",
 	visual: { api: 1, engine: "saved" },
 };
 
-for (const kind of ["html", "react", "swiftui", "shader", "visual", "image"]) {
-	test(`passive captured ${kind} keeps exact bytes without preparing a preview`, () => {
-		const bytes = Buffer.from(`\uFEFF${JSON.stringify({ ...value, kind }, null, 2).replaceAll("\n", "\r\n")}\r\n`);
-		const result = parseStoredArtifactRevision(bytes, expected);
-		assert.equal(result.bytes, bytes);
-		assert.equal(result.artifact.source, value.source);
-		assert.equal(result.artifact.html, value.html);
-		assert.equal(result.artifact.kind, kind);
-		if (kind !== "visual") assert.throws(() => parseStoredVisualRevision(bytes, expected), /Unsupported/);
+test("passive captured image keeps exact bytes without preparing a preview", () => {
+	const bytes = Buffer.from(`\uFEFF${JSON.stringify(value, null, 2).replaceAll("\n", "\r\n")}\r\n`);
+	const result = parseStoredArtifactRevision(bytes, expected);
+	assert.equal(result.bytes, bytes);
+	assert.equal(result.artifact.source, value.source);
+	assert.equal(result.artifact.html, value.html);
+	assert.equal(result.artifact.kind, "image");
+	assert.ok(!("libraries" in result.artifact));
+	assert.ok(!("visual" in result.artifact));
+});
+
+for (const kind of ["html", "react", "swiftui", "shader", "visual", "unknown"]) {
+	test(`captured parser excludes ${kind}`, () => {
+		assert.throws(
+			() => parseStoredArtifactRevision(Buffer.from(JSON.stringify({ ...value, kind })), expected),
+			ArtifactNotFound,
+		);
 	});
 }
 
@@ -41,10 +50,8 @@ test("captured parser refuses mismatched identities and corrupt input without so
 		{ sessionId: "other" },
 		{ projectId: "other" },
 		{ revision: 2 },
-		{ kind: "unknown" },
 		{ source: null },
 		{ title: null },
-		{ libraries: null },
 	]) {
 		assert.throws(
 			() => parseStoredArtifactRevision(Buffer.from(JSON.stringify({ ...value, ...patch })), expected),

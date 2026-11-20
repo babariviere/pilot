@@ -96,12 +96,7 @@ import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
-import {
-	awaitDiagnosticRead,
-	DiagnosticReadBroker,
-	diagnosticContextResponse,
-	parseDiagnosticContext,
-} from "./diagnostic-context.ts";
+import { awaitDiagnosticRead, diagnosticContextResponse, parseDiagnosticContext } from "./diagnostic-context.ts";
 import { DiagnosticLogReader, type DiagnosticLogReaderOptions } from "./diagnostic-logs.ts";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
@@ -531,7 +526,6 @@ interface SessionMeta extends OutcomeMeta {
 	diagnosticRepairStart?: { proposalId: string; operationId: string; targetId: string; digest: string };
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
-	delegationFenced?: boolean;
 	/** Mission tasks this chat was started for. Kept after a claim is released, so a restarted task can resume here. */
 	taskIds?: string[];
 	/** Stable create reservation. Never reuse this session ID for another operation. */
@@ -1406,7 +1400,6 @@ export class SessionManager {
 			archivedAt: m.archivedAt ?? null,
 			cancelled: m.cancelled ?? false,
 			recoveryStopped: m.recoveryStopped ?? false,
-			delegationFenced: m.delegationFenced ?? false,
 			continuedTo: m.continuedTo ?? null,
 		};
 	}
@@ -1423,8 +1416,7 @@ export class SessionManager {
 			meta.archivedAt ||
 			meta.failure ||
 			this.changingModels.has(id) ||
-			lifecycleHeld(meta) ||
-			meta.delegationFenced
+			lifecycleHeld(meta)
 		)
 			throw new Conflict("Planning worker is stopped, held or unavailable");
 	}
@@ -2224,7 +2216,6 @@ export class SessionManager {
 		const key = id.toLowerCase();
 		if (this.durableCreateAdmissions.has(key) || this.metas.has(id))
 			throw new Conflict("owner_creation_already_entered");
-		this.sharing?.assertCreate(id, operationId);
 		const end = this.updateGate.begin();
 		const result = this.spawnAdmitted(
 			{
@@ -2679,7 +2670,7 @@ export class SessionManager {
 		return meta.control === true;
 	}
 	private assertHistoryWritable(meta: SessionMeta): void {
-		if (meta.control) throw new Conflict("Retained conversation is read-only");
+		if (this.isRetainedHistory(meta)) throw new Conflict("Retained conversation is read-only");
 	}
 	/** The role service joins synchronously after this guard, so input cannot interleave. */
 	private readonly agentDir?: string;
@@ -2895,7 +2886,6 @@ export class SessionManager {
 		const definition = validateFlowItems(config.flows ?? []).find((f) => f.id === request.flowId && f.enabled);
 		if (!definition) throw new Conflict("Flow is missing or disabled");
 		const inputId = `automation:flow:${request.requestId}:1:0`;
-		this.sharing?.assertCreate(request.requestId, inputId);
 		const flow: FlowState = {
 			definition,
 			definitionRevision: config.revision,
@@ -4089,92 +4079,12 @@ ${run.excerpt}`,
 			!this.changingModels.has(meta.id) &&
 			missionRole !== "explorer" &&
 			missionRole !== "reviewer" &&
-			!this.sharing?.membership(meta.id)
+			!this.isRetainedHistory(meta)
 		);
 	}
 	setKnowledge(knowledge: import("./project-knowledge.ts").KnowledgeService): void {
 		this.knowledge = knowledge;
 	}
-	private sharing?: import("./retired-devboxes.ts").LegacySessionOwnership;
-	setSharedContext(sharing: import("./retired-devboxes.ts").LegacySessionOwnership): void {
-		this.sharing = sharing;
-	}
-	async fenceDelegatedSession(id: string): Promise<void> {
-		const meta = this.require(id);
-		meta.delegationFenced = true;
-		await this.save(meta);
-	}
-	async pauseDelegatedJournalFault(id: string): Promise<void> {
-		await this.fenceDelegatedSession(id);
-		const worker = this.workers.get(id);
-		if (worker) await worker.request({ type: "continuation.pause", requestId: randomUUID() });
-	}
-	async sharedContextNotice(id: string, requestId: string, text: string): Promise<void> {
-		const meta = this.require(id);
-		if (meta.delegationFenced) return;
-		if (meta.recoveryStopped) throw new Conflict("Chat recovery is stopped. Send a new message to continue.");
-		// Passive durable input identity, admitted through the same kernel dedupe as other notices.
-		await this.sendDurable(id, text, "steer", requestId);
-	}
-	async sealDelegatedSession(id: string): Promise<boolean> {
-		const meta = this.require(id);
-		await this.fenceDelegatedSession(id);
-		if (
-			this.starting.has(id) ||
-			this.sending.has(id) ||
-			this.delivering.has(id) ||
-			this.parking.has(id) ||
-			this.artifactNotifications.has(id) ||
-			this.changingModels.has(id) ||
-			this.roleTransitions.has(id) ||
-			this.workspaceRefreshes.has(id) ||
-			this.workspaceMaintenance.has(id) ||
-			this.rebasingWorkspaces.has(id) ||
-			this.archiveTransitions.has(id) ||
-			meta.preparing ||
-			meta.initializing ||
-			meta.pending?.length ||
-			this.backgroundWorking(meta) ||
-			meta.working ||
-			this.hasWorkspaceProcess?.(id)
-		)
-			return false;
-		const worker = this.workers.get(id);
-		if (worker) {
-			if (!worker.jobs || !worker.hasChildren || worker.busy !== false || worker.state !== "idle") return false;
-			await worker.request({ type: "continuation.pause", requestId: randomUUID() });
-			const [jobs, children] = await Promise.all([worker.jobs(), worker.hasChildren()]);
-			if (
-				this.workers.get(id) !== worker ||
-				jobs.length ||
-				children ||
-				worker.busy ||
-				meta.pending?.length ||
-				this.backgroundWorking(meta)
-			)
-				return false;
-			await worker.close();
-			if (this.workers.get(id) === worker) this.workers.delete(id);
-		}
-		return (
-			!this.starting.has(id) &&
-			!this.parking.has(id) &&
-			!this.artifactNotifications.has(id) &&
-			!this.saving.has(id) &&
-			!this.sending.has(id) &&
-			!this.delivering.has(id) &&
-			!this.changingModels.has(id) &&
-			!this.roleTransitions.has(id) &&
-			!this.workspaceRefreshes.has(id) &&
-			!this.workspaceMaintenance.has(id) &&
-			!this.rebasingWorkspaces.has(id) &&
-			!this.archiveTransitions.has(id) &&
-			!meta.pending?.length &&
-			!this.workers.has(id) &&
-			!this.hasWorkspaceProcess?.(id)
-		);
-	}
-
 	/** Chats that reach for an MCP server needing sign-in (or failing) show under Needs you until it works. */
 	setMcpStatus(mcp: McpStatusSource): void {
 		this.mcpAttention?.close();
@@ -5215,7 +5125,6 @@ ${run.excerpt}`,
 		};
 	}
 
-	readonly diagnosticReadBroker = new DiagnosticReadBroker();
 	/** Saved native feedback-work admission only. Missing means no feedback authority. */
 	feedbackMetricsScope?: (
 		operationId: string,
@@ -5251,7 +5160,6 @@ ${run.excerpt}`,
 		this.insightsTransitionStore?.assertScope(setup.projectId, setup.missionId);
 		this.insightsBacklog?.replacements.assertCreate(setup.projectId, setup.missionId, targetId, operationId);
 		if (this.insightsWorkspaceStore?.hasOwner(resolve(this.home))) throw new Conflict("app_owned_workspace_reserved");
-		this.sharing?.assertCreate(targetId, operationId);
 		if (
 			!ID_PATTERN.test(targetId) ||
 			!operationId ||
@@ -5793,7 +5701,7 @@ ${run.excerpt}`,
 			signal?.aborted ||
 			this.closing ||
 			caller.archivedAt !== undefined ||
-			caller.delegationFenced ||
+			this.isRetainedHistory(caller) ||
 			caller.continuedTo
 		)
 			throw new Conflict("Scoped metrics admission is unavailable");
@@ -5888,78 +5796,8 @@ ${run.excerpt}`,
 		if (!appWide(caller.role)) throw new Conflict("Only diagnostics may read app-wide evidence");
 		const host = request.host ?? this.diagnosticHost;
 		if (!host || !this.diagnosticHost) throw new ServiceUnavailable("Diagnostic host identity is unavailable");
-		if (
-			request.action === "hosts" ||
-			host.daemonId !== this.diagnosticHost.daemonId ||
-			host.lineageId !== this.diagnosticHost.lineageId
-		) {
-			// This selector admits only the existing local snapshot, never a new linked-host capability.
-			if (request.action === "performance")
-				return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
-			try {
-				const result = await this.diagnosticReadBroker.read(request, signal);
-				if (signal?.aborted || !appWide(this.require(callerId).role))
-					throw new Conflict("Diagnostic read cancelled");
-				if (request.action === "hosts")
-					return { ...diagnosticContextResponse(this.diagnosticHost, result), status: "partial" };
-				const remote = result as DiagnosticContextResponse;
-				if (remote?.status === "unavailable")
-					return {
-						...diagnosticContextResponse(host, null),
-						status: "unavailable",
-						reason:
-							remote.reason === "offline"
-								? "offline"
-								: remote.reason === "unsupported"
-									? "unsupported"
-									: "read_failed",
-					};
-				if (
-					remote?.schemaVersion !== 1 ||
-					remote.host?.hostId !== host.hostId ||
-					remote.host.daemonId !== host.daemonId ||
-					remote.host.lineageId !== host.lineageId ||
-					!["available", "partial", "missing"].includes(remote.status) ||
-					!remote.page
-				)
-					throw new Conflict("Diagnostic remote provenance changed");
-				const page = remote.page;
-				if (
-					typeof page.more !== "boolean" ||
-					!Number.isSafeInteger(page.scanned) ||
-					page.scanned < 0 ||
-					page.scanned > 200 ||
-					typeof page.truncated !== "boolean" ||
-					page.maxBytes !== 65536 ||
-					(page.after !== undefined && !/^[0-9a-f-]{36}$/i.test(page.after)) ||
-					(page.before !== undefined && (!Number.isSafeInteger(page.before) || page.before < 0))
-				)
-					throw new Conflict("Diagnostic remote page is invalid");
-				const response = diagnosticContextResponse(host, remote.data, page);
-				return {
-					...response,
-					collectedAt:
-						typeof remote.collectedAt === "string" && Number.isFinite(Date.parse(remote.collectedAt))
-							? remote.collectedAt
-							: response.collectedAt,
-					status: remote.status === "missing" ? "missing" : "partial",
-					...(remote.status === "missing" ? { reason: "deleted" as const } : {}),
-				};
-			} catch {
-				const data =
-					request.action === "hosts"
-						? {
-								hosts: [{ host: this.diagnosticHost, availability: "available" }],
-								linkedCoverage: "native_unavailable",
-							}
-						: null;
-				return {
-					...diagnosticContextResponse(host, data),
-					status: "unavailable",
-					reason: signal?.aborted ? "cancelled" : "native_unavailable",
-				};
-			}
-		}
+		if (host.daemonId !== this.diagnosticHost.daemonId || host.lineageId !== this.diagnosticHost.lineageId)
+			return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
 		return awaitDiagnosticRead(this.readDiagnosticContext(request, signal), signal);
 	}
 
@@ -7001,12 +6839,7 @@ ${run.excerpt}`,
 		}
 	}
 
-	/** Passive host-only exact acquisition; never creates a worker or executes visual source. */
-	async readStoredArtifactRevision(id: string, artifactId: string, revision: number, signal?: AbortSignal) {
-		return this.artifactStore(id).readStoredRevision(artifactId, revision, signal);
-	}
-
-	/** Bounded captured bytes only, including legacy code. No preview preparation or execution. */
+	/** Bounded captured bytes only. No preview preparation or execution. */
 	async readCapturedArtifactRevision(id: string, artifactId: string, revision: number) {
 		return this.artifactStore(id).readCapturedRevision(artifactId, revision);
 	}
@@ -8038,7 +7871,7 @@ ${run.excerpt}`,
 			meta.archivedAt !== undefined ||
 			meta.continuedTo ||
 			meta.continuationPending ||
-			this.sharing?.membership(meta.id) ||
+			this.isRetainedHistory(meta) ||
 			(meta.outcome !== "failed" && meta.outcome !== "stopped")
 		)
 			throw new Conflict("Only a stalled standalone fix can hand over its work");
@@ -8175,7 +8008,7 @@ ${run.excerpt}`,
 			if (meta.planning) throw new Conflict("Planning profile cannot transfer to an ordinary chat");
 			if (meta.role === "insights" || meta.insightsGrant)
 				throw new Conflict("Insights cannot transfer its restricted profile through continuation");
-			if (this.sharing?.membership(id)) this.assertNotContinued(meta);
+			this.assertHistoryWritable(meta);
 			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
 			if (meta.continuedTo) {
 				await this.recoverContinuations();
@@ -8223,10 +8056,6 @@ ${run.excerpt}`,
 			const worker = this.workers.get(id);
 			const configuredProvider = modelProvider(meta.model);
 			const provider = worker?.usage?.provider ?? configuredProvider;
-			if (this.sharing?.membership(id) && (configuredProvider !== option.provider || provider !== option.provider))
-				throw new Conflict(
-					"Cross-provider execution handoff requires a sealed home-authorized grant; the current allocation remains occupied",
-				);
 			let continuationView: PersistedSessionView | undefined;
 			if (worker) {
 				await worker.ready;
@@ -8504,11 +8333,8 @@ ${run.excerpt}`,
 		this.emit(target);
 	}
 
-	private assertNotContinued(meta: SessionMeta, allowFenced = false): void {
+	private assertNotContinued(meta: SessionMeta): void {
 		this.assertHistoryWritable(meta);
-		if (!allowFenced) this.sharing?.assertAdmission(meta.id);
-		if (meta.delegationFenced && !allowFenced)
-			throw new Conflict("Delegated execution is fenced; reassignment requires a target seal receipt");
 		if (meta.continuedTo) throw new Conflict(`This chat is read-only. Continued in ${meta.continuedTo}`);
 		if (meta.continuationPending) throw new Conflict("Chat ownership transfer is not complete");
 	}
@@ -8526,8 +8352,6 @@ ${run.excerpt}`,
 			meta.role ||
 			meta.coordinatorView ||
 			this.isMissionCoordinator(id) ||
-			meta.delegationFenced ||
-			this.sharing?.membership(id) ||
 			this.isRetainedHistory(meta) ||
 			meta.workspaceRecovery ||
 			meta.preparing ||
@@ -9385,7 +9209,6 @@ ${run.excerpt}`,
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
 		if (request.role === "insights") throw new Conflict("Insights requires trusted native admission");
-		this.sharing?.assertCreate(targetId, operationId);
 		if (!ID_PATTERN.test(targetId)) throw new Conflict("Invalid reserved session ID");
 		const key = targetId.toLowerCase();
 		const active = this.durableCreateAdmissions.get(key);
@@ -9522,7 +9345,7 @@ ${run.excerpt}`,
 			this.sleepPause ||
 			meta.archivedAt !== undefined ||
 			meta.continuedTo ||
-			meta.delegationFenced ||
+			this.isRetainedHistory(meta) ||
 			meta.missionUserStopGeneration !== undefined ||
 			meta.cancelled ||
 			meta.recoveryStopped ||
@@ -12072,7 +11895,7 @@ ${run.excerpt}`,
 
 	async stop(id: string): Promise<StopResponse> {
 		const meta = this.require(id);
-		this.assertNotContinued(meta, true);
+		this.assertNotContinued(meta);
 		if (this.changingModels.has(id) && !meta.insightsOwner)
 			throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
@@ -12171,7 +11994,7 @@ ${run.excerpt}`,
 				: [],
 		);
 		const requestId = randomUUID();
-		const automatic = (meta.delegationFenced ? [] : (meta.pending ?? []))
+		const automatic = (meta.pending ?? [])
 			.filter(
 				(command) =>
 					command.type === "input" &&
@@ -12997,7 +12820,7 @@ ${run.excerpt}`,
 			!target ||
 			caller.role ||
 			caller.archivedAt !== undefined ||
-			caller.delegationFenced ||
+			this.isRetainedHistory(caller) ||
 			caller.continuedTo ||
 			this.closing ||
 			target.archivedAt !== undefined ||
@@ -14073,7 +13896,6 @@ ${run.excerpt}`,
 		this.clearAppEvidence();
 		for (const controller of this.diagnosticContextReads.values()) controller.abort();
 		this.diagnosticContextReads.clear();
-		this.diagnosticReadBroker.close();
 		this.closing = true;
 		const drainPlanning = this.planningBridge?.close();
 		this.insightsReviewClosing ??= Promise.all([
@@ -14197,8 +14019,6 @@ ${run.excerpt}`,
 			return Promise.resolve(new Map());
 		if (meta.nextAttemptModel && !meta.recoveryModel) return Promise.resolve(new Map());
 		if (meta.control || this.passiveNoticeOnly(meta)) return Promise.resolve(new Map());
-		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
-			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
 			return Promise.resolve(new Map());
 		if (this.closing || this.sleepPause || meta.failure || this.heldUpdateRecovery(meta) || meta.recoveryStopped)
@@ -14596,10 +14416,7 @@ ${run.excerpt}`,
 
 	private async ensureWorker(id: string, configurationOnly = false): Promise<SessionWorker> {
 		if (this.require(id).pending?.[0]?.type !== "abort") this.assertMissionWorkOpen(id);
-		this.assertNotContinued(
-			this.require(id),
-			this.require(id).delegationFenced && this.require(id).pending?.some((command) => command.type === "abort"),
-		);
+		this.assertNotContinued(this.require(id));
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
@@ -14637,7 +14454,6 @@ ${run.excerpt}`,
 		const launchReason: AIWorkerLaunchReason | undefined = meta.kernelRestartPending
 			? "crash_recovery"
 			: this.nextWorkerLaunchReason.get(id);
-		if (!meta.delegationFenced) await this.sharing?.assertRunnable(id);
 		this.assertNotContinued(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
 		if (meta.failure) throw new Conflict("Retry startup before starting its worker");
@@ -15355,8 +15171,6 @@ ${run.excerpt}`,
 					worker.send({ type: "artifact.reference.result", callId: packet.callId, ...result });
 			};
 			const call = Promise.resolve().then(() => {
-				if (this.sharing?.membership(meta.id))
-					return this.sharing.readArtifact(meta.id, packet.id, packet.revision);
 				if (!this.missions?.readArtifactReference) throw new Error("Artifact reference is not authorized");
 				return this.missions.readArtifactReference(meta.id, packet.id, packet.revision);
 			});
@@ -15754,7 +15568,7 @@ ${run.excerpt}`,
 					meta.projectId !== projectId ||
 					this.closing ||
 					meta.archivedAt !== undefined ||
-					meta.delegationFenced ||
+					this.isRetainedHistory(meta) ||
 					meta.continuedTo
 				)
 					throw new Conflict("Live update proposals are unavailable in this chat");
@@ -15791,7 +15605,6 @@ ${run.excerpt}`,
 			};
 			const call = Promise.resolve().then(() => {
 				// Identity, project and write capability come from this supervised session, never tool arguments.
-				if (this.sharing?.membership(meta.id)) throw new Error("Project knowledge is unavailable in shared chats");
 				if (!this.knowledge || !meta.projectId) throw new Error("Project knowledge is unavailable");
 				return this.knowledge.call(
 					{
@@ -15833,7 +15646,6 @@ ${run.excerpt}`,
 			const call = Promise.resolve().then(async () => {
 				if (packet.args.projectId !== undefined)
 					throw new Error("Ordinary chats use their implicit project memory");
-				if (this.sharing?.membership(meta.id)) return this.sharing.memoryCall(meta.id, packet.action, packet.args);
 				if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
 				const args = packet.args;
 				switch (packet.action) {
@@ -16409,7 +16221,6 @@ ${run.excerpt}`,
 		if (meta.missionUserStopGeneration !== undefined) workHolds.push("User Stop hold");
 		if (meta.inputsPaused) workHolds.push("Input paused");
 		if (meta.recoveryStopped) workHolds.push("Recovery stopped");
-		if (meta.delegationFenced) workHolds.push("Execution ownership transferred");
 		if (meta.updatePaused || this.updateGate.paused || this.updateGate.frozen || this.heldUpdateRecovery(meta))
 			workHolds.push("Update hold");
 		if (meta.kernelRestartPending) workHolds.push("Kernel recovery pending");
@@ -16450,7 +16261,6 @@ ${run.excerpt}`,
 			!meta.failure &&
 			!meta.continuedTo &&
 			!meta.continuationPending &&
-			!meta.delegationFenced &&
 			!meta.inputsPaused &&
 			meta.archivedAt === undefined &&
 			(meta.outcome === "stopped" ||

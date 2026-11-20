@@ -923,9 +923,7 @@ export interface RemoteBranchList {
 	defaultBranch?: string;
 }
 
-/** Historical browser-library provenance. Not available for new publications. */
-export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
-export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader" | "visual" | "nsh";
+export type ArtifactKind = "image" | "nsh";
 
 /** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {
@@ -943,13 +941,6 @@ export interface ArtifactSummary {
 export interface ArtifactRevision extends ArtifactSummary {
 	source: string;
 	html: string;
-	libraries: ArtifactLibrary[];
-	/** Library versions the revision was prepared with. Absent on revisions saved before versions were recorded. */
-	libraryVersions?: Partial<Record<ArtifactLibrary, string>>;
-	/** Visuals only: the JSON value the visual function receives as `data`. */
-	data?: ArtifactData;
-	/** Visuals only: the engine and API the revision was checked with, and the pre-check report. */
-	visual?: ArtifactVisual;
 	/** Captured single-file NSH source. This metadata grants no execution capability. */
 	nsh?: ArtifactNsh;
 }
@@ -965,60 +956,13 @@ export interface ArtifactNsh {
 	rendering?: "unsupported";
 }
 
-/** A visual revision's runtime versions and publish-time check (docs/technical/native-visuals.md). */
-export interface ArtifactVisual {
-	/** Node tree API version the visual was checked against. Apps show an update hint for unknown versions. */
-	api: number;
-	/** For example "quickjs-ng 0.17.0". */
-	engine: string;
-	check: {
-		/** Nodes in the first view. */
-		nodes: number;
-		/** Distinct controls seen across the exercised views. */
-		controls: number;
-		/** Control events the check sent. */
-		interactions: number;
-		/** Canvas draws the check ran. Absent in revisions published before canvases. */
-		draws?: number;
-		/** Distinct shaders the check translated to Metal. */
-		shaders?: number;
-		/** Distinct Mermaid diagrams the exercised views show. */
-		mermaid?: number;
-		/** Bounded console output of the visual during the check. */
-		logs: string[];
-	};
-	/** Metal for the visual's shader nodes, found by GLSL text and input names. */
-	shaders?: ArtifactVisualShader[];
-}
-
-/** One shader node's Metal translation, made by the kernel at publish (naga). */
-export interface ArtifactVisualShader {
-	glsl: string;
-	/** Input names in name order. Their float uniforms follow the built-in ones. */
-	inputs: string[];
-	/** Metal Shading Language with the uniforms at buffer index 0. */
-	msl: string;
-	/** The fragment function's name in msl. */
-	entry: string;
-}
-
-/** Authoring deliberately excludes legacy kinds retained by ArtifactKind for reads. */
-export type ArtifactWriteKind = "image" | "shader" | "visual" | "nsh";
-
 export interface ArtifactWrite {
 	title: string;
-	kind: ArtifactWriteKind;
+	kind: ArtifactKind;
 	source: string;
-	/** Deprecated compatibility field. New publications accept only an empty array. */
-	libraries?: ArtifactLibrary[];
-	/** Visuals only: any JSON value up to 1 MiB, passed to the function as `data`. */
-	data?: ArtifactData;
 	/** Host-captured basename for NSH provenance. Source bytes remain in source. */
 	entry?: string;
 }
-
-/** A JSON value. */
-export type ArtifactData = null | boolean | number | string | ArtifactData[] | { [key: string]: ArtifactData };
 
 /** Saved in a tool result, pinning the chat preview to its original revision. */
 export interface ArtifactReference {
@@ -2190,7 +2134,6 @@ export type ClientMessage =
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
 	| { type: "diagnostics.next-control"; control: import("./telemetry.ts").NextDiagnosticsControl }
-	| { type: "diagnostics.read"; dispatch: import("./diagnostic-context.ts").DiagnosticReadDispatch }
 	| { type: "mission-catalog.changed" }
 	/** Notice only: a screen agent request waits for this Day window. Read it with GET /api/screen/requests. */
 	| { type: "screen.requested"; windowId: string }
@@ -2198,7 +2141,6 @@ export type ServerMessage =
 	| { type: "planning.activity"; missionId: string }
 	/** Invalidation only. Read the current checkpoint through authenticated GET /api/runtime-update. */
 	| { type: "runtime-update.changed" }
-	| { type: "shared-contexts.changed" }
 	| { type: "power"; power: import("./power.ts").PowerStatus }
 	| { type: "mcp"; mcp: import("./mcp.ts").McpStatus }
 	| { type: "pi.reload"; reload: import("./pi-reload.ts").PiReloadStatus }
@@ -2293,7 +2235,6 @@ export type * from "./repositories.ts";
 export type * from "./schedules.ts";
 export type * from "./screen-agent.ts";
 export type * from "./setup.ts";
-export type * from "./shared-context.ts";
 export type * from "./subscription-refresh.ts";
 export type * from "./telemetry.ts";
 export type * from "./tracking.ts";

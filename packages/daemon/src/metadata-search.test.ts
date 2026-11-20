@@ -51,7 +51,7 @@ test("metadata search returns minimal, exact-project title hits and pinned outpu
 	const link = {
 		sessionId: chat.id,
 		artifactId: randomUUID(),
-		kind: "html" as const,
+		kind: "image" as const,
 		title: "Final checklist for release",
 		revision: 2,
 	};
@@ -70,7 +70,7 @@ test("metadata search returns minimal, exact-project title hits and pinned outpu
 	const pointer = {
 		projectId: f.project.id,
 		sessionId: chat.id,
-		kind: "html",
+		kind: "image",
 		title: "Renamed checklist for release",
 		revision: 3,
 		createdAt: 1,
@@ -100,7 +100,7 @@ test("metadata search returns minimal, exact-project title hits and pinned outpu
 			{ kind: "chat", id: chat.id, title: "Release checklist chat" },
 			{
 				kind: "output",
-				artifactKind: "html",
+				artifactKind: "image",
 				artifactId: unpinned.artifactId,
 				sessionId: chat.id,
 				title: "Release checklist unpinned",
@@ -109,7 +109,7 @@ test("metadata search returns minimal, exact-project title hits and pinned outpu
 			},
 			{
 				kind: "output",
-				artifactKind: "html",
+				artifactKind: "image",
 				artifactId: pinned.artifactId,
 				sessionId: chat.id,
 				title: "Final checklist for release",
@@ -165,7 +165,7 @@ test("metadata search caps catalog scans and returned title hits", async (t) => 
 		f.store.linkArtifact(last.id, {
 			sessionId: chat.id,
 			artifactId: randomUUID(),
-			kind: "html",
+			kind: "image",
 			title: `Output ${i}`,
 			revision: 1,
 		});
@@ -225,7 +225,7 @@ test("metadata search finds a standalone output by its saved title but not its s
 	t.after(() => f.close());
 	const chat = await seedChat(f, "Archived standalone chat", f.project.id, 2, 3);
 	const store = new ArtifactStore(chat.directory, { sessionId: chat.id, projectId: f.project.id });
-	const write = { kind: "visual" as const, source: '({ ui }) => () => ui.text("source only")' };
+	const write = { kind: "nsh" as const, source: 'export default () => "source only";', entry: "view.tsx" };
 	const first = await store.create({ ...write, title: "Old title" });
 	const saved = await store.update(first.id, { ...write, title: "Saved output" }, first.revision);
 	await f.sessions.load();
@@ -240,7 +240,7 @@ test("metadata search finds a standalone output by its saved title but not its s
 		items: [
 			{
 				kind: "output",
-				artifactKind: "visual",
+				artifactKind: "nsh",
 				artifactId: saved.id,
 				sessionId: chat.id,
 				title: "Saved output",
@@ -263,15 +263,15 @@ test("metadata search finds a standalone output by its saved title but not its s
 	}
 });
 
-test("metadata search keeps legacy output metadata and skips damaged or unsafe inventory", async (t) => {
+test("metadata search skips retired kinds and damaged or unsafe inventory", async (t) => {
 	const f = await nativePlanningFixture();
 	t.after(() => f.close());
 	const chat = await seedChat(f, "Chat", f.project.id, 2);
 	const linkedRoot = await seedChat(f, "Redirected chat", f.project.id, 3);
 	const plain = {
 		sessionId: chat.id,
-		kind: "html",
-		title: "Checklist legacy",
+		kind: "image",
+		title: "Checklist image",
 		revision: 2,
 		createdAt: 1,
 		updatedAt: 2,
@@ -283,6 +283,7 @@ test("metadata search keeps legacy output metadata and skips damaged or unsafe i
 		{ revision: 0 },
 		{ updatedAt: -1 },
 		{ title: { name: "Checklist" } },
+		{ kind: "html", title: "Checklist retired format" },
 		{ kind: "unknown" },
 	]) {
 		await seedPointer(chat.directory, { ...plain, ...patch });
@@ -312,10 +313,10 @@ test("metadata search keeps legacy output metadata and skips damaged or unsafe i
 		items: [
 			{
 				kind: "output",
-				artifactKind: "html",
+				artifactKind: "image",
 				artifactId: valid.id,
 				sessionId: chat.id,
-				title: "Checklist legacy",
+				title: "Checklist image",
 				revision: 2,
 				updatedAt: 2,
 			},
@@ -360,7 +361,7 @@ test("metadata search reaches every owner and entry beyond the original scan lim
 		for (let i = 0; i < count; i++) {
 			const saved = await seedPointer(owner.directory, {
 				sessionId: owner.id,
-				kind: "html",
+				kind: "image",
 				title: "Hidden needle",
 				revision: 5,
 				createdAt: 1,
@@ -406,7 +407,7 @@ test("metadata search resumes all catalogs and keeps canonical pins across scan 
 	const chat = await seedChat(f, "Catalog needle chat", f.project.id, 1);
 	const pinned = await seedPointer(chat.directory, {
 		sessionId: chat.id,
-		kind: "html",
+		kind: "image",
 		title: "Catalog needle latest",
 		revision: 8,
 		createdAt: 1,
@@ -414,7 +415,7 @@ test("metadata search resumes all catalogs and keeps canonical pins across scan 
 	});
 	const early = f.store.create({ projectId: f.project.id, title: "Catalog needle mission" });
 	f.store.join(chat.id, early.id);
-	const same = { sessionId: chat.id, artifactId: pinned.id, kind: "html" as const };
+	const same = { sessionId: chat.id, artifactId: pinned.id, kind: "image" as const };
 	f.store.linkArtifact(early.id, { ...same, revision: 5, title: "Catalog needle winner" });
 	for (let i = 0; i < 4; i++) {
 		const task = f.store.addTask(early.id, { title: `Other task ${i}` });
@@ -473,7 +474,7 @@ test("metadata search scopes cursors and rejects replay; replaced inventory is n
 	await mkdir(outside);
 	await seedPointer(outside, {
 		sessionId: chat.id,
-		kind: "html",
+		kind: "image",
 		title: "Needle from a replaced directory",
 		revision: 1,
 		createdAt: 1,

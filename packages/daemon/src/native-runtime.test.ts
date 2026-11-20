@@ -8,16 +8,18 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 import { prepareArtifact } from "@pilot/artifacts";
 
-test("native artifact runtime checks a visual without a browser or JSX compiler", async () => {
+test("native artifact runtime captures NSH source without execution", async () => {
 	const artifact = await prepareArtifact({
-		title: "Native compiler smoke",
-		kind: "visual",
-		source: 'function visual({ ui }) { return () => ui.text("runtime-ok"); }',
+		title: "NSH source smoke",
+		kind: "nsh",
+		source: "export default () => null;",
+		entry: "smoke.tsx",
 	});
-	assert.equal(artifact.visual?.check.nodes, 1);
+	assert.equal(artifact.nsh?.entry, "smoke.tsx");
+	assert.equal(artifact.html, "");
 });
 
-test("Linux x64 runtime loads SQLite, PTY and native visuals with compatible native ABIs", {
+test("Linux x64 runtime loads SQLite and PTY with compatible native ABIs", {
 	skip: process.platform !== "linux",
 	timeout: 30_000,
 }, async (t) => {
@@ -60,7 +62,7 @@ test("Linux x64 runtime loads SQLite, PTY and native visuals with compatible nat
 			kind: "swiftui" as never,
 			source: 'struct ArtifactView: View { var body: some View { Text("No Linux renderer") } }',
 		}),
-		/Supported kinds: image, visual, shader/,
+		/Supported kinds: image, nsh/,
 	);
 	const report = process.report.getReport() as { sharedObjects: string[]; header: { glibcVersionRuntime?: string } };
 	t.diagnostic(JSON.stringify({ glibc: report.header.glibcVersionRuntime ?? "not reported" }));

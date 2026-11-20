@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { ArtifactStore } from "@pilot/artifacts";
+import { ArtifactStore, nshSource as capturedNsh } from "@pilot/artifacts";
 import { nativeIntakeFixture } from "../native-intake.fixture.ts";
 
 const f = await nativeIntakeFixture();
@@ -18,44 +18,65 @@ const task = f.store.addTask(mission.id, { title: "Saved output", sessionId: wor
 const artifactId = randomUUID();
 const directory = join(f.home, "sessions", worker.id, "artifacts", artifactId);
 await mkdir(directory, { recursive: true });
+const source = "export default () => { throw Error('never execute'); };";
 const artifact = {
 	id: artifactId,
 	sessionId: worker.id,
 	projectId: f.project.id,
 	revision: 1,
 	title: "Saved output",
-	kind: "html",
-	source: "<script>throw Error('never execute')</script>",
-	html: "historical prepared document must stay private",
+	kind: "nsh",
+	source,
+	html: "",
 	createdAt: 1,
 	updatedAt: 2,
-	libraries: [],
+	nsh: capturedNsh(source, "view.tsx"),
 };
 await writeFile(join(directory, "1.json"), JSON.stringify(artifact));
-await writeFile(join(directory, "2.json"), JSON.stringify({ ...artifact, revision: 2, source: "newer" }));
-await writeFile(join(directory, "latest.json"), JSON.stringify({ ...artifact, revision: 2 }));
+const { source: _source, html: _html, nsh: _nsh, ...summary } = artifact;
+const newer = "export default () => null; // newer";
+await writeFile(
+	join(directory, "2.json"),
+	JSON.stringify({
+		...artifact,
+		revision: 2,
+		title: "Revision two",
+		source: newer,
+		nsh: capturedNsh(newer, "view.tsx"),
+	}),
+);
+await writeFile(join(directory, "latest.json"), JSON.stringify({ ...summary, revision: 2, title: "Revision two" }));
 f.store.linkArtifact(mission.id, {
 	taskId: task.id,
 	sessionId: worker.id,
 	artifactId,
 	title: artifact.title,
-	kind: "html",
+	kind: "nsh",
 	revision: 1,
 });
 // A second saved source crosses the reader's display limit, not its byte limit.
 const longId = randomUUID();
 const longDirectory = join(f.home, "sessions", worker.id, "artifacts", longId);
 const longSource = `${"// saved line 👩🏽‍💻\n".repeat(401)}throw Error('never evaluate saved source');  \n`;
-const longBytes = JSON.stringify({ ...artifact, id: longId, title: "Long saved source", source: longSource });
+const longBytes = JSON.stringify({
+	...artifact,
+	id: longId,
+	title: "Long saved source",
+	source: longSource,
+	nsh: capturedNsh(longSource, "view.tsx"),
+});
 await mkdir(longDirectory, { recursive: true });
 await writeFile(join(longDirectory, "1.json"), longBytes);
-await writeFile(join(longDirectory, "latest.json"), JSON.stringify({ ...artifact, id: longId, source: "", html: "" }));
+await writeFile(
+	join(longDirectory, "latest.json"),
+	JSON.stringify({ ...summary, id: longId, title: "Long saved source" }),
+);
 f.store.linkArtifact(mission.id, {
 	taskId: task.id,
 	sessionId: worker.id,
 	artifactId: longId,
 	title: "Long saved source",
-	kind: "html",
+	kind: "nsh",
 	revision: 1,
 });
 const second = f.store.addTask(mission.id, { title: "Another saved output", sessionId: worker.id });
@@ -64,7 +85,7 @@ f.store.linkArtifact(mission.id, {
 	sessionId: worker.id,
 	artifactId,
 	title: "Revision two",
-	kind: "html",
+	kind: "nsh",
 	revision: 2,
 });
 f.store.join("completion-lead", mission.id);
@@ -167,8 +188,17 @@ for await (const line of createInterface({ input: process.stdin })) {
 	}
 	if (action === "missing") await rename(join(directory, "1.json"), join(directory, "saved.json"));
 	if (action === "oversize") await writeFile(join(directory, "1.json"), " ".repeat(1024 * 1024 + 1));
-	if (action === "redacted")
-		await writeFile(join(directory, "1.json"), JSON.stringify({ ...artifact, source: `show(${f.capability})` }));
+	if (action === "redacted") {
+		const privateSource = `show(${f.capability})`;
+		await writeFile(
+			join(directory, "1.json"),
+			JSON.stringify({
+				...artifact,
+				source: privateSource,
+				nsh: capturedNsh(privateSource, "view.tsx"),
+			}),
+		);
+	}
 	if (action === "stale") f.store.updateTask(mission.id, task.id, { body: "new definition" });
 	if (action === "leave") f.store.leave(worker.id);
 	await f.store.durable();

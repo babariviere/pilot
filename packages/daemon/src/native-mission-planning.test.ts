@@ -85,7 +85,8 @@ test("native capability, exact project/home/owner and purpose are required for r
 		assert.equal((await f.post(denied)).status, 400, purpose);
 	}
 	const unavailable = f.operation(f.missionId, { purpose: "prototype-execute" }, read.contextDigest);
-	assert.equal((await (await f.post(unavailable)).json()).state, "rejected");
+	assert.equal((await f.post(unavailable)).status, 400);
+	assert.deepEqual(await (await f.post(unavailable, true)).json(), { state: "unknown" });
 	assert.equal(f.store.tasks(f.missionId).length, 0);
 	f.coordinator = { ...f.coordinator!, mode: "ask" };
 	assert.equal((await f.read()).status, 409);
@@ -131,7 +132,7 @@ test("native and agent reads share prototype records without enabling preview ex
 		artifactId: "preview",
 		revision: 3,
 		title: "Historical native preview",
-		kind: "visual",
+		kind: "nsh",
 	});
 	const result = {
 		planRevision: read.view.plan.revision,

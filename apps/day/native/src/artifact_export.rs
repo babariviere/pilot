@@ -77,11 +77,7 @@ fn prepared(snapshot: &str) -> Result<(String, Vec<u8>), String> {
         };
         (extension, bytes)
     } else {
-        // Legacy code is exported as text, never as an executable HTML file.
-        (
-            if kind == "nsh" { "tsx" } else { "txt" },
-            source.as_bytes().to_vec(),
-        )
+        ("tsx", source.as_bytes().to_vec())
     };
     let stem: String = title
         .chars()
@@ -170,13 +166,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn export_keeps_exact_source_and_version_without_executable_legacy_extension() {
-        let v = json!({"version":1,"reference":{"revision":3},"metadata":{"title":"Before / after","kind":"html"},
-            "rendering":"unsupported","content":{"state":"text","source":"<script>never run</script>\r\né",
+    fn export_keeps_exact_nsh_source_and_version_and_refuses_retired_formats() {
+        let source = "export default () => null; // é\r\n";
+        let mut v = json!({"version":1,"reference":{"revision":3},"metadata":{"title":"Before / after","kind":"nsh"},
+            "rendering":"unsupported","content":{"state":"text","source":source,
             "containerSha256":"a".repeat(64),"containerBytes":100}});
         let (name, bytes) = prepared(&v.to_string()).unwrap();
-        assert_eq!(name, "Before___after-v3.txt");
-        assert_eq!(bytes, "<script>never run</script>\r\né".as_bytes());
+        assert_eq!(name, "Before___after-v3.tsx");
+        assert_eq!(bytes, source.as_bytes());
+        for kind in ["html", "react", "swiftui", "shader", "visual"] {
+            v["metadata"]["kind"] = json!(kind);
+            assert!(prepared(&v.to_string()).is_err(), "{kind}");
+        }
     }
 
     #[test]

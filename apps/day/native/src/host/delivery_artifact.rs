@@ -44,6 +44,7 @@ impl Request {
             a["artifactId"] == self.artifact_id
                 && a["sessionId"] == self.source_session_id
                 && a["revision"] == self.revision
+                && a["kind"].as_str().is_some_and(kind_ok)
         }) || links.iter().any(|a| {
             a["artifactId"] == self.artifact_id && a["sessionId"] != self.source_session_id
         }) {
@@ -107,17 +108,14 @@ pub(super) async fn read(t: &Transport, request: &Request) -> Result<Value, Erro
 
 /// The artifact kinds Pilot names. Others are refused, not shown as text.
 pub(crate) fn kind_ok(kind: &str) -> bool {
-    matches!(
-        kind,
-        "html" | "react" | "swiftui" | "shader" | "visual" | "image" | "nsh"
-    )
+    matches!(kind, "image" | "nsh")
 }
 
 /// The inert content of one saved revision: exact text, or a known reason.
 /// Only these fields reach the VM. Raster bytes are validated before disclosure.
 pub(crate) fn content(content: &Value, kind: &str) -> Result<Value, Error> {
     Ok(match content["state"].as_str() {
-        Some("text") if kind != "image" => {
+        Some("text") if kind == "nsh" => {
             let source = content["source"]
                 .as_str()
                 .filter(|s| s.len() <= 512 * 1024)

@@ -19,6 +19,13 @@ export function canonicalJSON(value: unknown): string {
 const streamKey = (op: DurableOperation): string => payloadHash(canonicalJSON([op.origin, op.producerId]));
 export const sameHost = (a: OperationHost, b: OperationHost): boolean =>
 	a.daemonId === b.daemonId && a.lineageId === b.lineageId;
+export const isChatOperation = (kind: string): boolean =>
+	/^(chat-(create|send)(-attached)?|diagnostics-create|repair-create)$/.test(kind);
+export function isLocalOperation(op: Readonly<DurableOperation>, home: OperationHost): boolean {
+	return [op.origin, op.destination].every(
+		(host) => !!host && (host.hostId === "local" || host.hostId === "daemon") && sameHost(host, home),
+	);
+}
 export class OperationConflict extends Error {}
 export class OperationExpired extends Error {}
 export class OperationRejected extends Error {

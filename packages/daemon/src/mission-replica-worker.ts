@@ -12,11 +12,13 @@ function open(): DatabaseSync {
 	const db = new DatabaseSync(file);
 	try {
 		// Changesets already contain the primary's trigger effects. SQLite applyChangeset also runs
-		// destination triggers, so retaining these would double revisions/changefeed entries. Startup
+		// destination triggers, so retaining these would double revision and Linear bookkeeping updates. Startup
 		// migration reinstalls them before loading the next in-memory primary; only the disk mirror
 		// drops them. This worker is never a canonical writer.
 		for (const row of db
-			.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'shared_%'")
+			.prepare(
+				"SELECT name FROM sqlite_master WHERE type='trigger' AND (name GLOB 'task_definition_*' OR name GLOB 'linear_sync_*')",
+			)
 			.all()) {
 			db.exec(`DROP TRIGGER "${String(row.name).replaceAll('"', '""')}"`);
 		}

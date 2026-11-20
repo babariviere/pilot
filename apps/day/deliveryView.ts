@@ -381,18 +381,8 @@ export function hideInspection() {
 /** An artifact kind in a word or two. */
 export function kindName(kind: string): string {
 	switch (kind) {
-		case "html":
-			return "HTML";
-		case "react":
-			return "React";
-		case "swiftui":
-			return "SwiftUI";
 		case "image":
 			return "Image";
-		case "shader":
-			return "Shader";
-		case "visual":
-			return "Visual";
 		case "nsh":
 			return "NSH";
 		default:
@@ -400,7 +390,7 @@ export function kindName(kind: string): string {
 	}
 }
 
-/** An artifact output's kind and pinned revision: "HTML, revision 3". */
+/** An artifact output's kind and pinned revision: "NSH, revision 3". */
 export function artifactLine(link: ArtifactLink): string {
 	return link.revision
 		? `${kindName(link.kind)}, revision ${link.revision}`

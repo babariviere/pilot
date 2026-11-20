@@ -55,7 +55,7 @@ f.store.linkArtifact(mission.id, {
 	taskId: task.id,
 	artifactId: "fake-artifact",
 	title: "Output",
-	kind: "visual",
+	kind: "image",
 	revision: 1,
 });
 f.store.update(mission.id, { coordinatorSessionId: worker.id });

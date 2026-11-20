@@ -249,7 +249,7 @@ async function fixture(t: TestContext, disk = false) {
 			const plan = store.plans.get(missionId)!;
 			const artifact = { sessionId: plan.ownerSessionId, artifactId: "prototype-preview", revision: 1 };
 			if (link)
-				store.linkArtifact(missionId, { ...artifact, title: "Disposable native state preview", kind: "visual" });
+				store.linkArtifact(missionId, { ...artifact, title: "Disposable native state preview", kind: "nsh" });
 			return {
 				planRevision: plan.revision,
 				questionDigest: planQuestionDigest(plan.questions.find((q) => q.id === questionId)!),

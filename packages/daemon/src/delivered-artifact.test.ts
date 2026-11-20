@@ -3,8 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { nshSource } from "@pilot/artifacts";
 import type { DeliveredArtifact, DeliveredArtifactRequest, DeliveredWork, ProjectArtifact } from "@pilot/protocol";
 import { nativeIntakeFixture } from "./native-intake.fixture.ts";
+
+function withSource<T extends { source: string; nsh: ReturnType<typeof nshSource> }>(artifact: T, source: string): T {
+	return { ...artifact, source, nsh: nshSource(source, artifact.nsh.entry) };
+}
 
 async function fixture(t: TestContext) {
 	const f = await nativeIntakeFixture();
@@ -20,32 +25,40 @@ async function fixture(t: TestContext) {
 	const artifactId = randomUUID();
 	const directory = join(f.home, "sessions", worker.id, "artifacts", artifactId);
 	await mkdir(directory, { recursive: true });
-	const source = "() => { throw new Error('must never execute'); } // é😀\r\n";
+	const source = "export default () => { throw new Error('must never execute'); } // é😀\r\n";
 	const artifact = {
 		id: artifactId,
 		sessionId: worker.id,
 		projectId: f.project.id,
-		kind: "visual",
+		kind: "nsh" as const,
 		title: "Captured result",
 		revision: 1,
 		createdAt: 1,
 		updatedAt: 2,
 		source,
-		data: { privateCallback: "not disclosed" },
-		html: "never disclose this document",
-		libraries: [],
-		visual: { api: 1, engine: "saved" },
+		html: "",
+		nsh: nshSource(source, "view.tsx"),
 	};
 	const bytes = Buffer.from(`\uFEFF${JSON.stringify(artifact, null, 2).replaceAll("\n", "\r\n")}\r\n`);
 	await writeFile(join(directory, "1.json"), bytes);
-	await writeFile(join(directory, "2.json"), JSON.stringify({ ...artifact, revision: 2, source: "newer source" }));
-	await writeFile(join(directory, "latest.json"), JSON.stringify({ ...artifact, revision: 2 }));
+	const { nsh: _nsh, html: _html, source: _source, ...summary } = artifact;
+	const second = "export default () => null; // newer source";
+	await writeFile(
+		join(directory, "2.json"),
+		JSON.stringify({
+			...artifact,
+			revision: 2,
+			source: second,
+			nsh: nshSource(second, "view.tsx"),
+		}),
+	);
+	await writeFile(join(directory, "latest.json"), JSON.stringify({ ...summary, revision: 2 }));
 	f.store.linkArtifact(mission.id, {
 		taskId: task.id,
 		sessionId: worker.id,
 		artifactId,
 		title: artifact.title,
-		kind: "visual",
+		kind: "nsh" as const,
 		revision: 1,
 	});
 	f.store.join("completion-lead", mission.id);
@@ -173,13 +186,12 @@ test("missing, oversized, redacted and corrupt captured revisions never fall bac
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "missing" });
 	await writeFile(file, " ".repeat(1024 * 1024 + 1));
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "oversize" });
-	await writeFile(file, JSON.stringify({ ...f.artifact, source: "a".repeat(512 * 1024 + 1) }));
-	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "oversize" });
-	await writeFile(file, JSON.stringify({ ...f.artifact, source: `show(${f.capability})` }));
+
+	await writeFile(file, JSON.stringify(withSource(f.artifact, `show(${f.capability})`)));
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "redacted" });
 	// Ordinary code is shown as saved: field names such as key or token are not secrets.
 	const code = "<Each of={rows()} key={(r) => r.id}>{(r) => <Text>{r().token}</Text>}</Each>";
-	await writeFile(file, JSON.stringify({ ...f.artifact, source: code }));
+	await writeFile(file, JSON.stringify(withSource(f.artifact, code)));
 	assert.equal((await (await f.read()).json()).content.source, code);
 	await writeFile(file, "invalid JSON contains private text");
 	assert.deepEqual((await (await f.read()).json()).content, { state: "unavailable", reason: "invalid" });
@@ -202,7 +214,7 @@ test("project artifact reads one exact revision of a chat in that project, with 
 		artifactId: f.artifact.id,
 		revision: 1,
 	});
-	assert.deepEqual(value.metadata, { title: f.artifact.title, kind: "visual" });
+	assert.deepEqual(value.metadata, { title: f.artifact.title, kind: "nsh" });
 	assert.deepEqual(value.content, {
 		state: "text",
 		source: f.artifact.source,
@@ -230,52 +242,26 @@ test("project artifact reads one exact revision of a chat in that project, with 
 		route(f.other.id, f.worker.id, f.artifact.id, "revision=1"),
 	])
 		assert.notEqual((await get(url)).status, 200, url);
-	await writeFile(join(f.directory, "1.json"), JSON.stringify({ ...f.artifact, source: `show(${f.capability})` }));
+	await writeFile(join(f.directory, "1.json"), JSON.stringify(withSource(f.artifact, `show(${f.capability})`)));
 	assert.deepEqual((await (await get(exact)).json()).content, { state: "unavailable", reason: "redacted" });
 });
 
-for (const kind of ["html", "react", "swiftui", "shader", "visual", "image", "nsh"] as const) {
-	test(`saved ${kind} is inert text or honestly unavailable, never a rendered preview`, async (t) => {
-		const f = await fixture(t);
-		f.store.linkArtifact(f.mission.id, {
-			taskId: f.task.id,
-			sessionId: f.worker.id,
-			artifactId: f.artifact.id,
-			title: f.artifact.title,
-			kind,
-			revision: 1,
-		});
-		await writeFile(
-			join(f.directory, "1.json"),
-			JSON.stringify({
-				...f.artifact,
-				kind,
-				...(kind === "nsh"
-					? {
-							html: "",
-							nsh: {
-								api: 1,
-								runtime: "nsh 0.5.0",
-								entry: "Artifact.tsx",
-								sourceSha256: createHash("sha256").update(f.artifact.source).digest("hex"),
-								sourceBytes: Buffer.byteLength(f.artifact.source),
-								rendering: "unsupported",
-							},
-						}
-					: {}),
-			}),
-		);
-		const before = f.stats();
-		const value = await (await f.read()).json();
-		assert.equal(value.rendering, "unsupported");
-		assert.equal(value.metadata.kind, kind);
-		assert.equal(value.content.state, kind === "image" ? "unavailable" : "text");
-		if (kind === "nsh") {
-			assert.equal(value.content.source, f.artifact.source);
-			assert.deepEqual(f.stats(), before);
-		}
-	});
-}
+test("saved legacy containers are never returned as delivered or project source", async (t) => {
+	const f = await fixture(t);
+	const projectURL = `${f.root}/api/projects/${f.project.id}/artifacts/${f.worker.id}/${f.artifact.id}?revision=1`;
+	for (const kind of ["html", "react", "swiftui", "shader", "visual"]) {
+		const { nsh: _nsh, ...artifact } = f.artifact;
+		const source = "private retired source";
+		const bytes = JSON.stringify({ ...artifact, kind, source });
+		const file = join(f.directory, "1.json");
+		await writeFile(file, bytes);
+		const delivered = await f.read();
+		assert.deepEqual((await delivered.json()).content, { state: "unavailable", reason: "missing" });
+		const project = await fetch(projectURL, { headers: f.headers });
+		assert.deepEqual((await project.json()).content, { state: "unavailable", reason: "missing" });
+		assert.equal(await readFile(file, "utf8"), bytes);
+	}
+});
 
 test("image inspection returns only exact inline raster bytes, not HTML or URLs", async (t) => {
 	const f = await fixture(t);
@@ -290,7 +276,9 @@ test("image inspection returns only exact inline raster bytes, not HTML or URLs"
 		kind: "image",
 		revision: 1,
 	});
-	const bytes = JSON.stringify({ ...f.artifact, kind: "image", source, html: "not the image" });
+	const { source: _source, html: _html, nsh: _nsh, ...summary } = f.artifact;
+	const bytes = JSON.stringify({ ...summary, kind: "image", source, html: "not the image" });
+	await writeFile(join(f.directory, "latest.json"), JSON.stringify({ ...summary, kind: "image" }));
 	await writeFile(file, bytes);
 	const value = await (await f.read()).json();
 	assert.deepEqual(value.content, {

@@ -81,10 +81,11 @@ try {
 const { prepareArtifact } = await import('@pilot/artifacts');
 const artifact = await prepareArtifact({
   title: 'Runtime smoke test',
-  kind: 'visual',
-  source: 'function visual({ ui }) { return () => ui.text("runtime-ok"); }',
+  kind: 'nsh',
+  source: 'export default () => null;',
+  entry: 'smoke.tsx',
 });
-assert.equal(artifact.visual.check.nodes, 1);
+assert.equal(artifact.nsh.entry, "smoke.tsx");
 await import('ws');
 const pty = createRequire(import.meta.url)('node-pty');
 const terminal = pty.spawn('/bin/echo', ['pilot-runtime-ok'], { cwd: process.cwd(), env: process.env });

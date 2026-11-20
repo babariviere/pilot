@@ -8,7 +8,7 @@ import type { SessionManager } from "./sessions.ts";
 
 export const metadataSearchId = /^[A-Za-z0-9_-]{1,128}$/;
 const artifactIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
-const artifactKinds = new Set<ArtifactKind>(["html", "react", "image", "swiftui", "shader", "visual", "nsh"]);
+const artifactKinds = new Set<ArtifactKind>(["image", "nsh"]);
 export const metadataSearchLimits = {
 	// Bound synchronous row visits on the daemon request lane, even in profiles with years of history.
 	catalogRows: 4096,

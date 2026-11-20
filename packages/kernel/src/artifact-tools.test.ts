@@ -10,6 +10,7 @@ import { ArtifactNotFound, ArtifactStore, captureNshSource, ensureArtifactScratc
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 
@@ -27,7 +28,6 @@ const revision: ArtifactRevision = {
 	revision: 3,
 	createdAt: 100,
 	updatedAt: 200,
-	libraries: [],
 	html: "COMPILED_HTML_MUST_NOT_REACH_MODEL".repeat(1000),
 };
 
@@ -89,19 +89,11 @@ test("retired kinds are absent from write schemas and forged writes fail before 
 				() => validateToolArguments(tool, { type: "toolCall", id: "old", name: "artifact", arguments: args }),
 				/Validation failed/,
 			);
-			await assert.rejects(execute(tool, args), /is read-only\. Publish kind nsh or image instead/);
+			await assert.rejects(execute(tool, args), /Unsupported artifact kind/);
 		}
-		const stored = {
-			...revision,
-			kind: kind as ArtifactRevision["kind"],
-			source: `Exact ${kind} source`,
-			libraries: ["react" as const],
-			libraryVersions: { react: "old" },
-		};
+		const stored = { ...revision, kind: kind as ArtifactRevision["kind"] };
 		f.store.get = async () => stored;
-		const result = await f.call("get", { id: revision.id, revision: 1 });
-		const { html: _html, ...read } = stored;
-		assert.deepEqual(result.structuredContent, { artifact: read });
+		await assert.rejects(f.call("get", { id: revision.id, revision: 1 }), /Artifact not found/);
 	}
 	assert.deepEqual(f.calls, []);
 	assert.equal(f.notifications, 0);
@@ -203,41 +195,6 @@ test("Ask denies every image file path before store or renderer callbacks, inclu
 			);
 	}
 	assert.deepEqual(f.calls, []);
-	assert.equal(f.notifications, 0);
-});
-
-test("Ask inspects stored SwiftUI source without entering rendering or publication paths", async () => {
-	const stored: ArtifactRevision = {
-		...revision,
-		kind: "swiftui",
-		source: 'struct ArtifactView: View { var body: some View { Text("Stored") } }',
-		libraries: [],
-	};
-	const f = fixture({ ask: true });
-	f.store.get = async () => stored;
-	f.store.list = async () => [stored];
-	f.store.create = async () => assert.fail("SwiftUI inspection must not publish");
-	f.store.update = async () => assert.fail("SwiftUI inspection must not publish");
-	assert.deepEqual((await f.call("get", { id: stored.id })).structuredContent, {
-		artifact: {
-			id: stored.id,
-			sessionId: stored.sessionId,
-			projectId: stored.projectId,
-			title: stored.title,
-			kind: "swiftui",
-			revision: stored.revision,
-			createdAt: stored.createdAt,
-			updatedAt: stored.updatedAt,
-			source: stored.source,
-			libraries: [],
-		},
-	});
-	assert.ok(JSON.stringify((await f.call("list", {})).structuredContent).includes('"kind":"swiftui"'));
-	assert.ok(!JSON.stringify(await f.call("get", { id: stored.id })).includes("COMPILED_HTML"));
-	const output = f.tools[0]!.outputSchema as {
-		anyOf: Array<{ properties: { artifact?: { properties: { kind: { enum: string[] } } } } }>;
-	};
-	assert.ok(output.anyOf.some((entry) => entry.properties.artifact?.properties.kind?.enum.includes("swiftui")));
 	assert.equal(f.notifications, 0);
 });
 
@@ -350,7 +307,7 @@ test("get returns editable metadata and historical revision, list returns summar
 		{ method: "get", args: ["artifact-1", undefined] },
 	]);
 	const listed = await f.call("list", {});
-	const { source: _source, libraries: _libraries, ...summary } = editable;
+	const { source: _source, ...summary } = editable;
 	assert.deepEqual(listed.structuredContent, { artifacts: [summary] });
 	assert.ok(!JSON.stringify([result, listed]).includes("COMPILED_HTML"));
 	assert.equal(f.notifications, 0);
@@ -441,7 +398,6 @@ test("image actions forward embedded sources and do not expose image bytes in pu
 		{ method: "update", args: ["artifact-1", imageWrite, 3, undefined] },
 	]);
 	assert.equal(f.notifications, 2);
-	await assert.rejects(f.call("create", { ...imageWrite, libraries: ["react"] }), /do not use libraries/);
 	await assert.rejects(f.call("create", { ...imageWrite, source: "https://example.com/image.png" }), /local path/);
 	assert.equal(f.notifications, 2);
 });
@@ -508,7 +464,6 @@ test("image publications pass their header size for display only; the model resu
 		kind: "image" as const,
 		source:
 			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
-		libraries: [],
 	};
 	f.store.create = async () => image;
 	const result = await f.call("create", { title: "Image", kind: "image", source: image.source });
@@ -541,49 +496,21 @@ test("committed publication keeps its metadata fallback when display admission f
 	assert.equal(warnings.mock.callCount(), 1);
 });
 
-test("visual and shader writes are refused, while saved revisions stay readable as saved", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pilot-old-visual-artifact-"));
+test("artifact tools hide retired disk revisions and keep active ones", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-old-artifact-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const store = new ArtifactStore(root, { sessionId: "old-session" });
-	// The store still saves these kinds, as older Pilot versions did through the tool.
-	const source = "function visual({ ui, data }) {\n  return () => ui.column(data.map((row) => ui.text(row.name)));\n}";
-	const data = [{ name: "Builds" }];
-	const visual = await store.create({ title: "Stats", kind: "visual", source, data });
-	const shader = await store.create({
-		title: "Glow",
-		kind: "shader",
-		source: "void mainImage(out vec4 fragColor, in vec2 fragCoord) { fragColor = vec4(1.0); }",
-	});
-	const f = fixture({ store, nshSessionDirectory: root, captureNsh: async () => assert.fail("never captured") });
-	const [tool] = f.tools;
-	const schema = tool!.parameters as { properties: { kind: { enum: string[] } } };
-	assert.deepEqual(schema.properties.kind.enum, ["image", "nsh"]);
-	assert.match(tool!.description, /New artifacts use kind nsh or image/);
-	for (const old of [visual, shader])
-		for (const action of ["create", "update"])
-			await assert.rejects(
-				f.call(action, { id: old.id, expectedRevision: 1, title: "Again", kind: old.kind, source: old.source }),
-				new RegExp(`Artifact kind "${old.kind}" is read-only\\. Publish kind nsh or image instead`),
-			);
+	const legacy = new LegacyArtifactFixture(root, { sessionId: "old-session" });
+	const retired = await legacy.create({ title: "Stats", kind: "visual", source: "OLD SOURCE" });
+	const image = await store.create(write);
+	const f = fixture({ store, nshSessionDirectory: root });
+	await assert.rejects(f.call("get", { id: retired.id, revision: 1 }), /Artifact not found/);
+	const listed = (await f.call("list", {})).structuredContent as { artifacts: Array<{ id: string }> };
+	assert.deepEqual(
+		listed.artifacts.map((summary) => summary.id),
+		[image.id],
+	);
 	assert.equal(f.notifications, 0);
-	assert.deepEqual(await store.get(visual.id), visual);
-	assert.deepEqual(await store.get(shader.id), shader);
-	const read = await f.call("get", { id: visual.id });
-	assert.deepEqual((read.structuredContent as { artifact: unknown }).artifact, {
-		...(await store.list()).find((summary) => summary.id === visual.id),
-		source,
-		libraries: [],
-		libraryVersions: {},
-		data,
-		visual: { api: 1, engine: "quickjs-ng 0.17.0" },
-	});
-	const shaderRead = (await f.call("get", { id: shader.id })).structuredContent as {
-		artifact: { kind: string; source: string };
-	};
-	assert.equal(shaderRead.artifact.kind, "shader");
-	assert.equal(shaderRead.artifact.source, shader.source);
-	const listed = (await f.call("list", {})).structuredContent as { artifacts: Array<{ kind: string }> };
-	assert.deepEqual(listed.artifacts.map((summary) => summary.kind).sort(), ["shader", "visual"]);
 });
 
 test("updates without expectedRevision succeed with a warning", async () => {

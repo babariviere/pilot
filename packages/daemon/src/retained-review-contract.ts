@@ -23,7 +23,7 @@ export const RETAINED_REVIEW_LIMITS = Object.freeze({
 
 interface ContentPart {
 	reference: Exclude<DeliveryReference, { kind: "snapshot" }>;
-	part: "brief" | "source" | "data";
+	part: "brief" | "source";
 	artifactKind: ArtifactKind | null;
 	/** Retained-reference observation, NOT the digest of original bytes. */
 	referenceSha256: string;
@@ -391,15 +391,12 @@ export function retainedReviewDescriptor(descriptor: unknown): InputDescriptor {
 			]);
 			const reference = deliveryReference(c.reference);
 			if (reference.kind === "snapshot") invalid();
-			const part = choice(c.part, ["brief", "source", "data"] as const);
-			const artifactKind =
-				c.artifactKind === null
-					? null
-					: choice(c.artifactKind, ["html", "react", "image", "swiftui", "shader", "visual"] as const);
+			const part = choice(c.part, ["brief", "source"] as const);
+			const artifactKind = c.artifactKind === null ? null : choice(c.artifactKind, ["image", "nsh"] as const);
 			if (
 				reference.kind === "brief"
 					? part !== "brief" || artifactKind !== null || c.sourceOwnerSessionId !== null
-					: artifactKind === null || part === "brief" || (part === "data" && artifactKind !== "visual")
+					: artifactKind === null || part !== "source"
 			)
 				invalid();
 			return {
@@ -419,21 +416,6 @@ export function retainedReviewDescriptor(descriptor: unknown): InputDescriptor {
 	unique(content, (c) => deliveryDigest([c.reference, c.part]));
 	unique(content, (c) => c.blobId);
 	for (const c of content) {
-		const same = content.filter((other) => deliveryDigest(other.reference) === deliveryDigest(c.reference));
-		if (
-			same.some(
-				(o) =>
-					o.referenceSha256 !== c.referenceSha256 ||
-					o.artifactKind !== c.artifactKind ||
-					o.sourceOwnerSessionId !== c.sourceOwnerSessionId,
-			)
-		)
-			invalid();
-		if (
-			c.artifactKind === "visual" &&
-			(same.length !== 2 || !same.some((o) => o.part === "source") || !same.some((o) => o.part === "data"))
-		)
-			invalid();
 		const entry = m.entries.find((e) => e.blobId === c.blobId);
 		if (!entry || entry.sha256 !== c.originalSha256 || entry.bytes !== c.originalBytes) invalid();
 	}

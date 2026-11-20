@@ -4,16 +4,9 @@
 	"private": true,
 	"type": "module",
 	"exports": {
-		".": "./src/index.ts",
-		"./visual-check": "./src/visual/index.ts",
-		"./visual-check-policy": "./src/visual/check.ts"
+		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@earendil-works/pi-codemode": "1.5.2",
-		"@pilot/protocol": "workspace:*",
-		"glslang-wasm-validator": "0.1.0",
-		"naga-wasm": "30.2.0",
-		"quickjs-wasi": "3.6.4",
-		"typebox": "1.4.6"
+		"@pilot/protocol": "workspace:*"
 	}
 }

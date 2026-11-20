@@ -20,7 +20,6 @@ import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendi
 import type { SubmissionDraft } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { createArtifactTools } from "./artifact-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
@@ -125,7 +124,6 @@ for (const mode of ["on", "only"] as const) {
 			createdAt: 100,
 			updatedAt: 100,
 			source: `data:image/png;base64,${png}`,
-			libraries: [],
 			html: "COMPILED_HTML_HIDDEN",
 		};
 		const tools = createArtifactTools({
@@ -703,8 +701,13 @@ test("KernelSession codemode reads linked sources without publishing, copying or
 	timeout: 15_000,
 }, async (t) => {
 	const f = await fixture(t, "only");
-	const foreign = new LegacyArtifactFixture(join(f.root, "author"), { sessionId: "author", projectId: "project-1" });
-	const linked = await foreign.create({ title: "Reference", kind: "html", source: "LINKED SOURCE" });
+	const foreign = new ArtifactStore(join(f.root, "author"), { sessionId: "author", projectId: "project-1" });
+	const linked = await foreign.create({
+		title: "Reference",
+		kind: "nsh",
+		source: "export default () => null; // LINKED SOURCE",
+		entry: "view.tsx",
+	});
 	const open = NativeAdapter.open;
 	const refreshUsage = NativeAdapter.prototype.refreshUsage;
 	const usageRefreshes: Promise<void>[] = [];
@@ -775,7 +778,7 @@ text(await tools.artifact({action:"list"}));
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 	assert.deepEqual(reads, [[linked.id, undefined]]);
 	assert.equal(publications, 0);
-	assert.equal((await foreign.get(linked.id)).source, "LINKED SOURCE");
+	assert.equal((await foreign.get(linked.id)).source, linked.source);
 	assert.deepEqual(await new ArtifactStore(f.root, { sessionId: "reader" }).list(), []);
 	const view = await session.conversation.context(BACKGROUND_CONTEXT);
 	assert.ok(!view.entries.some((entry) => entry.kind === "pilot.artifact"));

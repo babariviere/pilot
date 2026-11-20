@@ -103,14 +103,13 @@ import {
 	PlanningInventoryRace,
 } from "./native-mission-planning.ts";
 import { PROJECT_ACTION } from "./native-projects.ts";
-import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
+import { canonicalJSON, isChatOperation, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PlanningActivityNotices } from "./planning-activity.ts";
 import { dayRecentDone } from "./project-dashboard.ts";
 import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { ResultReviews } from "./result-reviews.ts";
-import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { RuntimeResources } from "./runtime-admission.ts";
 import { SCHEDULE_CONTROLS, validateScheduleIntent } from "./schedule-controls.ts";
 import { projectScreenPairs } from "./screen-pairs.ts";
@@ -351,6 +350,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 	const {
 		dependencies: options,
 		admitOperation,
+		chatOperationIsLocal,
 		machine,
 		reviews,
 		mcpSetup,
@@ -414,7 +414,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		mcp,
 		hello,
 		setup,
-		legacyAdmissionFrozen = false,
 		telemetry,
 		githubSetup,
 		githubImport,
@@ -431,14 +430,12 @@ export function createDaemonServer(services: DaemonServices): Server & {
 	const catalogHost = hello?.lineageId
 		? { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId }
 		: undefined;
-	let catalogGroups = catalogHost && missions ? missions.store.catalogSharedContext(catalogHost) : [];
 	const catalogSources =
 		catalog ??
 		(hello?.lineageId
 			? {
 					host: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 					missions: () => [...catalogMissions.values()],
-					sharedContext: () => catalogGroups,
 				}
 			: undefined);
 	let checkpointPending: Promise<unknown> = Promise.resolve();
@@ -1023,12 +1020,14 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					operation: DurableOperation;
 					attachments: import("@pilot/protocol").StagedAttachmentRef[];
 				}>(req);
+				if (!chatOperationIsLocal(body.operation)) throw new Conflict("Chat operation belongs to another profile");
 				const receipt = await journal.lookup(body.operation);
 				if (receipt?.state !== "rejected") throw new Conflict("Only rejected receipts can release attachments");
 				await attachments.releaseRejected(body.operation, body.attachments);
 				return json(res, 200, { ok: true });
 			}
 			const operation = await readJson<DurableOperation>(req);
+			if (!chatOperationIsLocal(operation)) throw new Conflict("Chat operation belongs to another profile");
 			if (operation?.kind === "attention-answer") {
 				res.setHeader("cache-control", "no-store");
 				if (!nativeAuthority || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
@@ -1423,8 +1422,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 				await humanReviews.lookup(operation);
 			}
-			if (parts[2] !== "receipt" && typeof operation?.kind === "string" && isRetiredDevboxOperation(operation.kind))
-				throw new HttpError(410, "Remote devbox operations are retired; stored receipts are retained");
 			if (
 				(operation?.kind === "repair-create" ||
 					operation?.kind === "day-insights" ||
@@ -1439,7 +1436,21 @@ export function createDaemonServer(services: DaemonServices): Server & {
 				await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
 			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
-			if (parts[2] !== "receipt" && isInsightsOperation(operation?.kind)) insightsWorkspace?.assertLegacyAllowed();
+			if (parts[2] !== "receipt") {
+				const kind = operation?.kind;
+				// Unhandled requests must not leave a reservation that can be mistaken for saved work.
+				if (
+					typeof kind !== "string" ||
+					(!isChatOperation(kind) &&
+						!isInsightsOperation(kind) &&
+						!isInsightsWorkspaceOperation(kind) &&
+						!isInsightsOwnerOperation(kind) &&
+						!isWorkflowOperation(kind) &&
+						!["day-insights", "insights-workspace-transfer", "review-disposition"].includes(kind))
+				)
+					throw new HttpError(400, "Unsupported operation kind");
+				if (isInsightsOperation(kind)) insightsWorkspace?.assertLegacyAllowed();
+			}
 			const receipt =
 				parts[2] === "receipt"
 					? await journal.lookup(operation)
@@ -2869,34 +2880,23 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, sessions.appDiagnosticEvidence(requestedDiagnosticHost(url, hello)));
 		}
-		if (
-			parts[1] === "diagnostics" &&
-			(parts[2] === "read" || parts[2] === "read-response") &&
-			parts.length === 3 &&
-			req.method === "POST"
-		) {
+		if (parts[1] === "diagnostics" && parts[2] === "read" && parts.length === 3 && req.method === "POST") {
 			if (!nativeAuthority) throw new ServiceUnavailable("Protected native diagnostic reads are unavailable");
 			await nativeAuthority.authenticate(req.headers["x-pilot-github-capability"]);
-			if (parts[2] === "read") {
-				const controller = new AbortController();
-				const timer = setTimeout(() => controller.abort(), 10_000);
-				try {
-					return json(
-						res,
-						200,
-						await awaitDiagnosticRead(
-							sessions.readDiagnosticContext(await readJson(req, 8192), controller.signal),
-							controller.signal,
-						),
-					);
-				} finally {
-					clearTimeout(timer);
-				}
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 10_000);
+			try {
+				return json(
+					res,
+					200,
+					await awaitDiagnosticRead(
+						sessions.readDiagnosticContext(await readJson(req, 8192), controller.signal),
+						controller.signal,
+					),
+				);
+			} finally {
+				clearTimeout(timer);
 			}
-			const response = await readJson<{ id: string; result: unknown }>(req, 65536);
-			if (!response || typeof response.id !== "string") throw new HttpError(400, "Invalid diagnostic response");
-			sessions.diagnosticReadBroker.respond(response.id, response.result);
-			return json(res, 200, { accepted: true });
 		}
 		if (parts[1] === "diagnostics" && parts[2] === "feature-usage" && parts.length === 3 && req.method === "PUT") {
 			if (!telemetry || !nativeAuthority) throw new ServiceUnavailable("Native feature collection is unavailable");
@@ -3231,11 +3231,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			);
 		if (parts[1] === "mission-catalog" && parts.length === 2 && req.method === "GET") {
 			if (!catalogSources) throw new ServiceUnavailable("Mission catalog unavailable");
-			return json(
-				res,
-				200,
-				buildMissionCatalog(catalogSources.host, catalogSources.missions(), catalogSources.sharedContext()),
-			);
+			return json(res, 200, buildMissionCatalog(catalogSources.host, catalogSources.missions()));
 		}
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
@@ -3788,7 +3784,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			receiptLookup = req.method === "POST" && parts.length === 3 && parts.join("/") === "api/operations/receipt";
 			const update = parts[0] === "api" && parts[1] === "runtime-update";
 			const control =
-				/\/(stop|cancel|seal)$/.test(path) || (req.method === "DELETE" && path.startsWith("/api/setup/runs/"));
+				/\/(stop|cancel)$/.test(path) || (req.method === "DELETE" && path.startsWith("/api/setup/runs/"));
 			if (!update && req.method !== "GET" && req.method !== "HEAD" && !control)
 				release = mutations.begin({ kind: "request", id: path.slice(0, 180) });
 			else if (
@@ -3984,9 +3980,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		const message = nextControl();
 		if (message) broadcast(message);
 	});
-	const stopDiagnosticReads = sessions.diagnosticReadBroker?.onRead((dispatch) => {
-		broadcast({ type: "diagnostics.read", dispatch });
-	});
 	let missionCatalogTimer: NodeJS.Timeout | undefined;
 	const invalidateMissionCatalog = () => {
 		if (clients.size === 0 || missionCatalogTimer) return;
@@ -3996,15 +3989,11 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		}, DASHBOARD_DEBOUNCE_MS);
 		missionCatalogTimer.unref();
 	};
-	const refreshMissionCatalog = () => {
-		catalogGroups = catalogHost && missions ? missions.store.catalogSharedContext(catalogHost) : [];
-		invalidateMissionCatalog();
-	};
 	const stopMissionCatalog = missions?.store.onChange((id) => {
 		const mission = missions.store.get(id);
 		if (mission) catalogMissions.set(id, mission);
 		else catalogMissions.delete(id);
-		refreshMissionCatalog();
+		invalidateMissionCatalog();
 	});
 	// Small coalesced invalidation only. Never put action text/files or a receipt in WS frames.
 	const stopAttentionWatch = missions?.store.attention.onChange(invalidateMissionCatalog);
@@ -4012,7 +4001,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 	onClose(() => {
 		stopInterviewWatch?.();
 		stopAttentionWatch?.();
-		stopDiagnosticReads?.();
 		stopNextControl?.();
 		stopMissionCatalog?.();
 		clearTimeout(missionCatalogTimer);
