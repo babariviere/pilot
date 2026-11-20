@@ -17,7 +17,6 @@ const METHODS = [
 	"insights.backlog",
 	"source.scope",
 	"source.references",
-	"memory",
 	"knowledge",
 	"liveUpdate.propose",
 	"slack",
@@ -158,7 +157,7 @@ test("a parked worker gets no reply unless the handler checks parking itself", a
 	const calls = new HostCallDispatcher(table);
 	const reply = (command: Reply) => replies.push(command);
 	const caller = { sessionId: "chat", worker, context: undefined, profile: undefined, parked: true, reply };
-	calls.dispatch(caller, sample("memory"));
+	calls.dispatch(caller, sample("knowledge"));
 	calls.dispatch(caller, sample("planning.guard"));
 	await Promise.all(calls.running());
 	assert.deepEqual(

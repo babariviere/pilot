@@ -7,7 +7,6 @@ import type { CompletionRuntime } from "../../models/background/background-usage
 import { McpStatusService } from "../../setup/mcp/mcp-status.ts";
 import { ModelCatalog } from "../../models/models.ts";
 import { NoticeDispatcher } from "../../sessions/notice-dispatcher.ts";
-import { ProjectMemoryService } from "../../projects/memory/project-memory.ts";
 import { RuntimeResources } from "./runtime-admission.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
 import { PiSourceMcpClient } from "../../sources/auth/source-mcp.ts";
@@ -175,24 +174,6 @@ test("source MCP freeze rejects calls and sign-ins without constructing children
 	assert.deepEqual(client.runtime.blockers(), []);
 	release();
 	await client.close();
-});
-
-test("memory freeze joins admitted disk RPC and reversibly rejects new work", async () => {
-	const home = await mkdtemp(join(tmpdir(), "pilot-memory-maintenance-"));
-	const memory = new ProjectMemoryService(home);
-	try {
-		const admitted = memory.load("project");
-		const release = memory.runtime.freezeAdmissions();
-		assert.ok(memory.runtime.blockers().length > 0);
-		await assert.rejects(memory.note("project", "blocked", "session"), /maintenance/);
-		await admitted;
-		assert.deepEqual(memory.runtime.blockers(), []);
-		release();
-		await memory.note("project", "resumed", "session");
-	} finally {
-		await memory.stop();
-		await rm(home, { recursive: true, force: true });
-	}
 });
 
 test("title completion keeps provider lifetime visible after caller cancellation", async () => {

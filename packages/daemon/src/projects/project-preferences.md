@@ -12,8 +12,7 @@ provider call, app restart or activation is part of this change.
 
 Mission-specific agreement takes precedence for that mission. Surface conflicts,
 rather than infer consent. None of these records override runtime permissions,
-safety, Stop, pause or budget controls. Legacy memory and original session history
-remain untouched, with no copying, deletion, conversion or reset.
+safety, Stop, pause or budget controls. Saving preferences does not copy, delete or reset original session history.
 
 ## Existing contracts reused
 

@@ -59,12 +59,10 @@ test("restored drafts send nothing and never move to another project", async () 
 	expect(app.shows("id:knowledge-draft")).toBe(false);
 });
 
-test("historical memory stays readable without starting maintenance", async () => {
+test("the library does not show the retired memory archive", async () => {
 	const app = await library();
-	await app.press("id:knowledge-memory");
-	await app.waitFor("id:knowledge-old-memory");
-	expect(app.shows("#0-0: Old note (replaced, history only)")).toBe(true);
-	expect(app.shows("Saves: 0. Checks: 0.")).toBe(true);
+	await app.waitFor("id:knowledge-entry-k");
+	expect(app.shows("Historical memory")).toBe(false);
 });
 
 test("cold-restored unknown saves reconcile before another save is offered", async () => {
@@ -85,19 +83,15 @@ test("cold-restored unknown saves reconcile before another save is offered", asy
 	expect(app.shows("Saves: 1. Checks: 1.")).toBe(true);
 });
 
-test("project switches clear every cached record, including memory", async () => {
+test("project switches clear cached Knowledge", async () => {
 	const app = await library();
 	await app.press("id:knowledge-entry-k");
 	await app.waitFor("id:knowledge-detail");
-	await app.press("id:knowledge-memory");
-	await app.waitFor("id:knowledge-old-memory");
 	await app.press("Other project");
 	await app.waitUntil(() => !app.shows("id:knowledge-detail"));
-	expect(app.shows("id:knowledge-old-memory")).toBe(false);
 	await app.press("id:knowledge-search");
 	await app.waitFor("id:knowledge-entry-k");
 	expect(app.shows("id:knowledge-detail")).toBe(false);
-	expect(app.shows("id:knowledge-old-memory")).toBe(false);
 });
 
 test("typing during Save keeps newer words on the confirmed base revision", async () => {

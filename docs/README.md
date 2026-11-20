@@ -214,7 +214,7 @@ sent again. **Dismiss** takes a failed chat off Needs a look and sends nothing t
 | Slack triage                                    | [Slack](slack.md)                             |
 | Linear tickets                                  | [Linear](linear.md)                           |
 | Subscription limits, token history, and context | [Usage](usage.md)                             |
-| Project notes and research                      | [Memory and knowledge](knowledge.md)          |
+| Project understanding and research                      | [Knowledge](knowledge.md)          |
 | Sleep and offline work                          | [Energy and connectivity](energy.md)          |
 | Failures, diagnostics, and updates              | [Troubleshooting](troubleshooting.md)         |
 

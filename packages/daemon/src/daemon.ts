@@ -41,8 +41,8 @@ import { PilotServiceJournal } from "./runtime/lifecycle/pilot-service-journal.t
 import { detectPlatformCapabilities } from "./runtime/platform/platform.ts";
 import { PowerService } from "./runtime/power/power.ts";
 import { KnowledgeService } from "./projects/knowledge/project-knowledge.ts";
-import { ProjectMemoryService } from "./projects/memory/project-memory.ts";
 import { ProjectStore } from "./projects/projects.ts";
+import { removeRetiredProjectMemory } from "./projects/remove-retired-project-memory.ts";
 import { RuntimeBackground } from "./runtime/lifecycle/runtime-background.ts";
 import { runtimeOwner } from "./runtime-bootstrap.ts";
 import { ScheduleDetection } from "./schedules/schedule-detection.ts";
@@ -67,6 +67,10 @@ import { untrackedStats } from "./workspaces/untracked-stats.ts";
 import { UsageHistoryStore } from "./models/usage/usage-history.ts";
 
 const config = loadConfig();
+if (!runtimeOwner) throw new Error("Daemon profile owner is required");
+await removeRetiredProjectMemory(config.home).catch((error: unknown) =>
+	console.warn("pilotd: could not remove retired project memory; will retry at next start", error),
+);
 await mkdir(config.agentDir ?? getAgentDir(), { recursive: true, mode: 0o700 });
 const credentials = new CredentialBroker(await realpath(config.agentDir ?? getAgentDir()));
 await credentials.start();
@@ -108,13 +112,6 @@ const mcpStatus = new McpStatusService({
 const models = new ModelCatalog(config.agentDir);
 models.setBackgroundUsage(backgroundUsage);
 const slack = slackClassifier(models);
-const memory = new ProjectMemoryService(
-	config.home,
-	undefined, // Historical notes stay readable. New shared understanding belongs in Knowledge.
-	30_000,
-	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
-);
-let stopMemoryProjects = () => {};
 const serviceJournal = new PilotServiceJournal({
 	home: homedir(),
 	dataHome: config.home,
@@ -197,7 +194,6 @@ telemetry.onChange((settings) => {
 	sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget);
 	tracking.setDiagnosticsEnabled(settings.localDiagnostics);
 });
-sessions.setProjectMemory(memory);
 sessions.setMcpStatus(mcpStatus);
 sessions.setSlackStatus({
 	call: (sessionId, args) => {
@@ -321,54 +317,13 @@ const environment = hello.capabilities.environmentSetup
 			});
 		})()
 	: undefined;
-let backgroundStarted = false;
 let backgroundInitialized = false;
-let memoryObserverStarted = false;
 let stopping = false;
-const knownMemoryProjects = new Set<string>();
-let memorySync: Promise<void> | undefined;
-let memorySyncDirty = false;
-const startupWork = new RuntimeBackground("daemon-recovery", () => {
-	if (!backgroundStarted || stopping) return;
-	void syncMemoryProjects().catch((error) => console.warn(`pilotd: memory recovery: ${error}`));
-});
-function syncMemoryProjects(): Promise<void> {
-	if (stopping || !backgroundStarted || startupWork.frozen) return Promise.resolve();
-	if (memorySync) {
-		memorySyncDirty = true;
-		return memorySync;
-	}
-	memorySync = startupWork
-		.run("memory-projects", async () => {
-			do {
-				memorySyncDirty = false;
-				const current = new Set(projects.list().map((project) => project.id));
-				for (const id of knownMemoryProjects)
-					if (!current.has(id)) {
-						await memory.unload(id);
-						knownMemoryProjects.delete(id);
-					}
-				for (const project of projects.list()) {
-					if (knownMemoryProjects.has(project.id)) continue;
-					try {
-						await memory.load(project.id);
-						knownMemoryProjects.add(project.id);
-					} catch (error) {
-						console.warn(`pilotd: memory ${project.id}: ${error}`);
-					}
-				}
-			} while (memorySyncDirty && !startupWork.frozen && !stopping);
-		})
-		.finally(() => {
-			memorySync = undefined;
-		});
-	return memorySync;
-}
+const startupWork = new RuntimeBackground("daemon-recovery");
 async function resumeRuntime(): Promise<void> {
 	if (stopping || server.runtimeFrozen()) return;
 	await sessions.resumeMaintenance();
 	if (!backgroundInitialized) {
-		backgroundStarted = true;
 		mcpStatus.start();
 		triage.start();
 		tracking.startPolling("linear");
@@ -383,14 +338,6 @@ async function resumeRuntime(): Promise<void> {
 			daemonId: hello.daemonId,
 			lineageId: hello.lineageId!,
 		});
-		await syncMemoryProjects();
-		if (!memoryObserverStarted) {
-			stopMemoryProjects = projects.onChange(() => {
-				void syncMemoryProjects().catch((error) => console.warn(`pilotd: memory projects: ${error}`));
-			});
-			memoryObserverStarted = true;
-		}
-
 		await missionService.readProjectRepositories();
 		missionService.notices.start();
 		missionService.continuations.start();
@@ -399,7 +346,7 @@ async function resumeRuntime(): Promise<void> {
 	}
 	daemonServices.recoverOperations();
 }
-const identity = runtimeOwner?.identity();
+const identity = runtimeOwner.identity();
 const liveUpdate = new LiveUpdateService(config.home, projects, () => sessions.freezeAdmissions(), resumeRuntime, {
 	runtime:
 		identity?.build && identity.runtimeRoot
@@ -425,7 +372,6 @@ const daemonServices = createDaemonServices({
 		store: missionStore,
 		knowledge,
 	},
-	memory,
 	schedules,
 	tracking,
 	power,
@@ -447,7 +393,6 @@ const daemonServices = createDaemonServices({
 		contributors: [
 			startupWork,
 			models.maintenance,
-			memory.runtime,
 			sourceMcp.runtime,
 			tracking.runtime,
 			triage.runtime,
@@ -481,10 +426,8 @@ void trackedItems
 	.catch((error: unknown) => console.warn(`pilotd: could not mark job chats: ${error}`));
 power?.refresh();
 if (!server.runtimeFrozen()) await resumeRuntime();
-if (runtimeOwner) {
-	runtimeOwner.ready(hello);
-	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
-} else throw new Error("Daemon profile owner is required");
+runtimeOwner.ready(hello);
+console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
 
 async function stop(): Promise<void> {
 	if (stopping) return;
@@ -499,7 +442,6 @@ async function stop(): Promise<void> {
 	await shutdownSchedules(
 		{ schedules, connectivity, systemEvents: systemEventsDetection, store: scheduleStore },
 		async () => {
-			stopMemoryProjects();
 			await mcpStatus.close();
 			await missionLinear.stop();
 			await knowledge.maintenance.stop();
@@ -510,7 +452,6 @@ async function stop(): Promise<void> {
 			await tracking
 				.closeDiagnosticEvidence()
 				.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));
-			await memory.stop();
 			await missionService.notices.stop();
 			await missionService.continuations.stop();
 			await githubImport.close();

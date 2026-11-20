@@ -98,8 +98,6 @@ const source: LibraryCall = async (name, args) => {
 			more: false,
 			cursor: null,
 		};
-	if (r.kind === "memory")
-		data = { count: 2, nodes: [{ lo: 0, hi: 0, text: "Old note", replaced: true }], truncated: false };
 	return { projectId: project(), data };
 };
 

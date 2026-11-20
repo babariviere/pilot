@@ -211,7 +211,6 @@ export function runKernelWorker(): void {
 					clearTimeout(timer);
 					const nullable =
 						method === "mission" ||
-						method === "memory" ||
 						method === "knowledge" ||
 						method === "insights.backlog" ||
 						method === "liveUpdate.propose";

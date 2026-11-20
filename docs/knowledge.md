@@ -1,11 +1,12 @@
-# Project memory and knowledge
+# Project Knowledge
 
 ## Pilot Day
 
 Open Settings (⌘,), then **Knowledge → Open library** for the selected project.
-Search its saved entries, inspect sources and revision history, or read historical
-memory ranges. Old notes and summaries can be stale; new shared understanding
-belongs in Knowledge. The daemon no longer starts the shared-note AI summarizer.
+Search saved project understanding and inspect its sources and revision history.
+
+On upgrade, Pilot removes the retired project memory archive (old notes and
+summaries). It does not remove Knowledge, project preferences or chat history.
 
 **Edit this revision** prepares an unsaved correction. Give a reason and select
 **Save new revision** to append it. Earlier revisions and sources stay readable.
@@ -26,17 +27,8 @@ instead of replacing newer choices. In Pilot Day, open Settings (⌘,) → **Pro
 add or remove this project's preferences; nothing is saved until you press Save.
 
 Mission records hold current agreement and work. Knowledge holds sourced project
-understanding. Posthorse keeps working context. Existing memory and history are
-unchanged. See the [backend contract](../packages/daemon/src/projects/project-preferences.md) for limits.
-
-## Memory
-
-Open **Memory…** from a project's Overview to browse stored notes and summary ranges.
-The window is read-only: text is selectable, but editing and forgetting are not offered.
-
-Its case-sensitive literal filter searches only text already loaded in the current
-range. It does not search unopened notes or the entire project, and typing does not
-issue more reads.
+understanding. Posthorse keeps working context. See the
+[backend contract](../packages/daemon/src/projects/project-preferences.md) for limits.
 
 ## Knowledge
 

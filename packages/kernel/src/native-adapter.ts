@@ -89,7 +89,6 @@ import { createInterviewTool, createMissionInterviewPort } from "./missions/inte
 import { OwnedJobGroups } from "./tools/jobs/job-groups.ts";
 import { JobHistory } from "./tools/jobs/job-history.ts";
 import { drainLifecycleJobs, runningJobs } from "./tools/jobs/jobs.ts";
-import { MEMORY_TOOL_NAMES } from "./history/memory-tools.ts";
 import { assertBuildingSkills, BUILDING_SKILL_PATHS } from "./missions/mission-building-skills.ts";
 import {
 	assertInterviewSkills,
@@ -196,8 +195,6 @@ export interface NativeAdapterOptions {
 	/** Dependency injection for offline tests. */
 	settingsManager?: SettingsManager;
 	loaderOptions?: LoaderOptions;
-	/** One-time project wake context appended to top-level chat prompts. */
-	memoryPrompt?: string;
 	sessionOptions?: Pick<CreateAgentSessionOptions, "modelRuntime" | "model" | "customTools">;
 }
 
@@ -628,7 +625,6 @@ export class NativeAdapter {
 						...options.loaderOptions,
 						appendSystemPrompt: [
 							...(options.loaderOptions?.appendSystemPrompt ?? []),
-							...(options.memoryPrompt ? [options.memoryPrompt] : []),
 							...(missionInterview ? [INTERVIEW_SKILL_ADAPTATION] : []),
 							...(options.missionPlanning ? [PLANNING_SKILL_ADAPTATION] : []),
 							...(missionInterview || options.missionPlanning ? [QUESTION_STYLE] : []),
@@ -1314,9 +1310,8 @@ export class NativeAdapter {
 			for (const name of changes?.hiddenDeclarations ?? []) hidden.add(name);
 		}
 		const tools: ToolRegistration[] = this.session.agent.state.tools
-			// Codemode-only hides direct tools, then budgets its listing cheapest-first. Memory
-			// must stay declared even when that listing drops its schema (or all tools).
-			.filter((tool) => !hidden.has(tool.name) || MEMORY_TOOL_NAMES.includes(tool.name))
+			// Codemode-only hides direct tools while retaining nested calls.
+			.filter((tool) => !hidden.has(tool.name))
 			.filter((tool) => !this.#ask || this.#allowedTools.includes(tool.name))
 			.map((tool) => ({
 				name: tool.name,

@@ -57,7 +57,6 @@ export type * from "./runtime/live-update.ts";
 export type { MachineInformation } from "./runtime/machine.ts";
 export type * from "./sources/mcp.ts";
 export type * from "./sources/mcp-setup.ts";
-export type * from "./knowledge/memory.ts";
 export type * from "./missions/mission-catalog.ts";
 export type * from "./missions/mission-controls.ts";
 export type * from "./missions/mission-interview.ts";

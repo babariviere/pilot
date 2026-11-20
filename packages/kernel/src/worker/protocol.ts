@@ -144,10 +144,6 @@ export interface HostCalls {
 	"source.scope": { args: Record<string, never>; result: import("../missions/coordinator-sources.ts").CoordinatorSources };
 	/** pilotd resolves this session's project dependency and linked-project roots. */
 	"source.references": { args: Record<string, never>; result: import("../tools/sources/reference-sources.ts").ReferenceSource[] };
-	memory: {
-		args: { operationId?: string; action: "wake" | "note" | "recall" | "zoom"; args: Record<string, JsonValue> };
-		result: JsonValue;
-	};
 	/** pilotd derives project, author and write capability from this session. */
 	knowledge: {
 		args: {

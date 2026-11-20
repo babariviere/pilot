@@ -41,26 +41,6 @@ usually starts in one of these folders:
 Keep package exports, boot entry points and package manifests where their callers
 expect them. A source move does not change storage locations or wire names.
 
-### Debug project-memory compaction
-
-Each project's memory directory under `$PILOT_HOME/memory/<project-id>/` retains
-`compaction-latest.json` and, after a failure, `compaction-failure.json`. The default home is
-`~/.local/share/pilot` (or `$XDG_DATA_HOME/pilot`). Inspect locally, for example:
-
-```sh
-python3 -m json.tool "$HOME/.local/share/pilot/memory/PROJECT_ID/compaction-failure.json"
-```
-
-These owner-only files contain **private memory text**: the source prompt, up to three model requests
-and responses (text and tool submissions, not reasoning), validation errors and exact UTF-8 byte counts,
-model, timing, and outcome. Do not share them unredacted. Each file is capped at 128 KiB; clipped
-diagnostic fields explicitly report `truncated` and their original byte count. A subsequent success
-does not overwrite the last failed run. General daemon logs do not contain these payloads.
-Requests are recorded before contacting the model, so a failed or stalled call is inspectable even
-without a response. Each attempt records its start and, when available, finish time.
-An interrupted process may leave the latest record marked `running`; completed failures use the
-existing automatic retry/backoff. Deleting these diagnostic files does not delete project memory.
-
 ### Checks
 
 ```sh

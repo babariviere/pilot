@@ -35,7 +35,7 @@ test("project record context reloads canonical revisions and states the source b
 	assert.match(first!, /mission records hold live agreement/);
 	assert.match(first!, /Knowledge holds durable sourced understanding/);
 	assert.match(first!, /preferences never override/);
-	assert.match(first!, /Existing memory\/history is unchanged/);
+	assert.match(first!, /Chat history may be stale/);
 	revision = 2;
 	assert.match((await render())!, /"revision":2/);
 	unavailable = true;
@@ -320,7 +320,7 @@ test("every mission role separates specs, progress, decisions and actionable com
 		assert.match(prompt, /Routine directions, status and coordination belong in task\/context updates/);
 		assert.match(prompt, /Record small explicit project choices with project_preferences/);
 		assert.match(prompt, /sourced understanding in Knowledge/);
-		assert.match(prompt, /not duplicate mission state or a second wiki in legacy memory/);
+		assert.match(prompt, /rather than duplicating mission state/);
 		assert.match(prompt, /Discussion\/proposal is not agreement/);
 		assert.match(prompt, /Keep human-answer provenance and explicit authority changes/);
 		assert.match(prompt, /a decision record never grants tool\/runtime permission/);
@@ -508,19 +508,6 @@ test("Build agents leave remote CI monitoring to Pilot, not background jobs", ()
 	}
 	for (const prompt of [pilotPrompt({ ask: { source: "/source" } }), pilotPrompt({}, false, true)])
 		assert.doesNotMatch(prompt, /Pilot monitors tracked PRs|CI monitoring/);
-});
-
-test("memory guidance is short and limited to project chats with memory, never Ask", () => {
-	const prompt = pilotPrompt({ projectMemory: true });
-	assert.match(prompt, /Historical project memory is read-only. Save new sourced understanding with knowledge/);
-	assert.match(prompt, /explicit user choices with project_preferences, keeping sources\/history/);
-	assert.match(
-		prompt,
-		/Before finishing a turn that ends a task, consider whether you learned anything lasting worth saving/,
-	);
-	assert.equal(prompt.split("\n").length - pilotPrompt({}).split("\n").length, 2);
-	for (const context of [{}, { projectMemory: false }, { projectMemory: true, ask: { source: "/source" } }])
-		assert.doesNotMatch(pilotPrompt(context), /memory\(|anything lasting worth saving/);
 });
 
 test("Ask permits proactive NSH diagrams and session-local artifacts without repository mutation", () => {

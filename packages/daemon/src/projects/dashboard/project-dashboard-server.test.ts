@@ -13,7 +13,6 @@ import { MissionReports } from "../../missions/threads/mission-reports.ts";
 import type { MissionService } from "../../missions/mission-service.ts";
 import { MissionStore } from "../../missions/missions.ts";
 import type { ModelCatalog } from "../../models/models.ts";
-import { ProjectMemoryService } from "../memory/project-memory.ts";
 import { ProjectStore } from "../projects.ts";
 import type { SessionManager } from "../../sessions/sessions.ts";
 import type { TerminalManager } from "../../sessions/terminals/terminals.ts";
@@ -68,7 +67,6 @@ async function fixture(t: TestContext) {
 		return value;
 	};
 	const providerListeners = new Set<() => void>();
-	const memory = new ProjectMemoryService(join(home, "data"));
 	let pending = [] as Array<{ id: string; title: string; kind: "chat"; trigger: "at"; state: "pending" }>;
 	const server = createDaemonServer({
 		config: { home: join(home, "data"), host: "127.0.0.1", port: 0 },
@@ -84,7 +82,6 @@ async function fixture(t: TestContext) {
 				return () => providerListeners.delete(listener);
 			},
 		},
-		memory,
 		hello: {
 			daemonId: "synthetic-daemon",
 			lineageId: "synthetic-lineage",
@@ -111,7 +108,6 @@ async function fixture(t: TestContext) {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		store.close();
-		await memory.stop();
 		await rm(home, { recursive: true, force: true });
 	});
 	const api = (path: string, init?: RequestInit) =>
@@ -130,7 +126,6 @@ async function fixture(t: TestContext) {
 	return {
 		home,
 		project,
-		memory,
 		store,
 		put,
 		api,
@@ -450,37 +445,9 @@ test("WebSocket pushes counts on connect and dashboards on change, without dupli
 	await until(() => messages.some((m) => m.type === "error" && /Unknown project/.test(m.message)));
 });
 
-test("memory API validates project/origin and pushes its dashboard provider without polling", async (t) => {
+test("retired memory routes are not available for an existing project", async (t) => {
 	const f = await fixture(t);
-	f.put({ id: "origin" });
-	f.put({ id: "elsewhere", projectId: "other" });
 	const path = `/projects/${f.project.id}/memory`;
-	assert.equal((await f.api("/projects/unknown/memory/wake")).status, 404);
-	assert.equal(
-		(await f.api(`${path}/note`, { method: "POST", body: JSON.stringify({ text: "fact", sessionId: "elsewhere" }) }))
-			.status,
-		400,
-	);
-	const { ws, messages } = await f.connect();
-	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: f.project.id }));
-	await until(() => messages.some((m) => m.type === "dashboard"));
-	const response = await f.api(`${path}/note`, {
-		method: "POST",
-		body: JSON.stringify({ text: "lasting fact", sessionId: "origin" }),
-	});
-	assert.equal(response.status, 201);
-	await until(() => messages.some((m) => m.type === "dashboard" && m.dashboard.memory?.count === 1));
-	const summary = await (await f.api(path)).json();
-	assert.equal(summary.recent[0].text, "lasting fact");
-	const wake = await (await f.api(`${path}/wake`)).json();
-	assert.match(wake.text, /#0 .*lasting fact/);
-	assert.equal((await (await f.api(`${path}/recall?regex=lasting`)).json()).matches, 1);
-	for (const suffix of ["/wake?lines=0", "/zoom?lo=0&hi=2", "/zoom", "/recall?regex=%5B"])
-		assert.equal((await f.api(path + suffix)).status, 400);
-	await f.api(`${path}/note`, { method: "POST", body: JSON.stringify({ text: "second", sessionId: "origin" }) });
-	assert.equal((await (await f.api(`${path}/zoom?lo=0&hi=1`)).json())[1].entry.index, 1);
-	assert.equal(
-		(await f.api(`${path}/forget`, { method: "POST", body: JSON.stringify({ lo: 0, hi: 1 }) })).status,
-		400,
-	);
+	assert.equal((await f.api(path)).status, 404);
+	assert.equal((await f.api(`${path}/tree`)).status, 404);
 });

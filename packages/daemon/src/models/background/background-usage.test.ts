@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { Worker } from "node:worker_threads";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { UsageObservation } from "@pilot/protocol";
 import {
@@ -15,8 +15,6 @@ import {
 	backgroundEvidence,
 	type CompletionRuntime,
 } from "./background-usage.ts";
-import { compactMemory } from "../../projects/memory/memory-compaction.ts";
-import { MemoryDisk } from "../../projects/memory/memory-disk.ts";
 import { generateChatTitle, ModelCatalog } from "../models.ts";
 import { slackClassifier } from "../../sources/slack/slack-classifier.ts";
 import { requiredAuthRegistration } from "../../testing/required-auth.ts";
@@ -174,66 +172,6 @@ test("title and classifier capture survives malformed output and cancellation af
 		undefined,
 	);
 	assert.equal((await f.page()).length, 4);
-});
-
-test("memory retries count each invocation once, even when diagnostics fail", async (t) => {
-	const f = await fixture(t);
-	let calls = 0;
-	const runtime: CompletionRuntime = {
-		completeSimple: async () => ({
-			...response(),
-			content: [fauxToolCall("submit_summary", { text: ++calls < 3 ? "x".repeat(300) : "lasting fact" })],
-			stopReason: "toolUse",
-		}),
-	};
-	assert.equal(
-		await compactMemory(f.usage.runtime(runtime, "memory"), model, "private memories", new AbortController().signal),
-		"lasting fact",
-	);
-	assert.equal((await f.page()).length, 3);
-	await assert.rejects(
-		compactMemory(
-			f.usage.runtime(runtime, "memory"),
-			model,
-			"private memories",
-			new AbortController().signal,
-			async (attempt) => {
-				if (attempt.response) throw new Error("private diagnostic failure");
-			},
-		),
-	);
-	assert.equal((await f.page()).length, 4);
-});
-
-test("observed usage survives actual memory summary application rejecting a stale source epoch", async (t) => {
-	const f = await fixture(t);
-	const disk = new MemoryDisk(join(f.home, "memory-fixture"), "fixture-device");
-	t.after(() => disk.close());
-	for (let n = 0; n < 4; n++) disk.note(`fact ${n}`, "fixture-chat");
-	const prior = disk.next()!;
-	assert.equal(disk.put(prior.lo, prior.hi, prior.epoch, "existing summary"), true);
-	const job = disk.next()!;
-	assert.ok(job);
-	const text = await compactMemory(
-		f.usage.runtime(
-			{
-				completeSimple: async () => {
-					disk.forget(0, 1);
-					return {
-						...response(),
-						content: [fauxToolCall("submit_summary", { text: "summary" })],
-						stopReason: "toolUse",
-					};
-				},
-			},
-			"memory",
-		),
-		model,
-		"private memories",
-		new AbortController().signal,
-	);
-	assert.equal(disk.put(job.lo, job.hi, job.epoch, text), false);
-	assert.equal((await f.page())[0]?.tokens?.input, 10);
 });
 
 test("observed HTTP retries are bounded numeric evidence, not extra additive responses", async (t) => {

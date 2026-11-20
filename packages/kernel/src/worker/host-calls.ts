@@ -8,7 +8,6 @@ import type { DiagnosticsCall } from "../diagnostics/diagnostics-tool.ts";
 import type { InsightsBacklogCall } from "../insights/insights-backlog-tool.ts";
 import type { KnowledgeCall } from "../tools/knowledge/knowledge-tools.ts";
 import type { LiveUpdateProposalCall } from "../tools/updates/live-update-tool.ts";
-import type { MemoryCall } from "../history/memory-tools.ts";
 import type { MissionCall } from "../missions/mission-tools.ts";
 import type { PlanningWorkerReply, PlanningWorkerRequest } from "../missions/planning-worker.ts";
 import type { HostCall } from "./protocol.ts";
@@ -31,7 +30,6 @@ export function hostCallTools(call: HostCall) {
 		callMission: ((action, args) => call("mission", { action, args })) satisfies MissionCall,
 		readCoordinatorSources: (signal?: AbortSignal): Promise<CoordinatorSources> => call("source.scope", {}, signal),
 		readReferenceSources: (signal?: AbortSignal): Promise<ReferenceSource[]> => call("source.references", {}, signal),
-		callMemory: ((action, args, operationId?) => call("memory", { operationId, action, args })) satisfies MemoryCall,
 		callKnowledge: ((action, args, operationId?) =>
 			call("knowledge", { operationId, action, args })) satisfies KnowledgeCall,
 		callInsightsBacklog: ((request) => call("insights.backlog", { request })) satisfies InsightsBacklogCall,

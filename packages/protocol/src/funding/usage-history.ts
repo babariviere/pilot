@@ -19,7 +19,7 @@ export interface UsageObservation {
 		| "title"
 		| "triage"
 		| "classification"
-		| "memory"
+		| "memory" // Historical usage from the retired project memory summarizer.
 		| "compaction"
 		| "other"
 		| "unknown";

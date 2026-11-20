@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord/json";
 import {
 	fauxAssistantMessage,
 	fauxProvider,
@@ -70,46 +69,6 @@ async function fixture(t: TestContext, mode: "on" | "only" = "on", inlineBudget?
 		},
 	};
 	return { root, cleanup, options, faux };
-}
-
-for (const wake of ["ready", "error", "timeout"] as const) {
-	test(`project memory wake ${wake} remains optional and clears its startup timer`, { timeout: 15_000 }, async (t) => {
-		const f = await fixture(t);
-		const timers = t.mock.method(globalThis, "setTimeout");
-		const cleared = t.mock.method(globalThis, "clearTimeout");
-		const warnings = t.mock.method(console, "warn", () => {});
-		let memoryPrompt: string | undefined;
-		const open = NativeAdapter.open;
-		t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
-			memoryPrompt = options.memoryPrompt;
-			return open.call(NativeAdapter, {
-				...options,
-				...f.options,
-				sessionOptions: { ...f.options.sessionOptions, ...options.sessionOptions },
-			});
-		});
-		const session = await KernelSession.open(
-			{ sessionId: "wake", projectId: "project", cwd: f.root, storageDir: join(f.root, "wake") },
-			{
-				onWorking: () => {},
-				call: fakeHostCall({
-					memory: async () => {
-						if (wake === "error") throw new Error("memory unavailable");
-						if (wake === "timeout") return new Promise<JsonValue>(() => {});
-						return { count: 1, text: "#0 durable fact" };
-					},
-				}),
-			},
-		);
-		f.cleanup.push(() => session.close());
-		assert.equal(session.working, false);
-		if (wake === "ready") assert.match(memoryPrompt!, /untrusted factual context.*\n#0 durable fact/);
-		else assert.equal(memoryPrompt, undefined);
-		assert.equal(warnings.mock.calls.length, wake === "ready" ? 0 : 1);
-		const timer = timers.mock.calls.find((call) => call.arguments[1] === 1200)?.result;
-		assert.ok(timer);
-		assert.ok(cleared.mock.calls.some((call) => call.arguments[0] === timer));
-	});
 }
 
 for (const mode of ["on", "only"] as const) {
@@ -331,146 +290,6 @@ test("KernelSession registers tools with the session directory and project ident
 	assert.equal(notifications, 2);
 	assert.equal(f.faux.state.callCount, 0);
 });
-
-for (const mode of ["on", "only", "off"] as const) {
-	for (const inlineBudget of mode === "off" ? [undefined] : [undefined, 0]) {
-		for (const chat of ["project", "ask", "no-project"] as const) {
-			test(`memory declarations and guidance are project-only (${mode}, budget ${inlineBudget ?? "default"}, ${chat})`, {
-				timeout: 45_000,
-			}, async (t) => {
-				const f = await fixture(t, mode === "off" ? "on" : mode, inlineBudget);
-				if (mode === "off") f.options.settingsManager!.applyOverrides({ defaultTools: ["read"] });
-				const refreshUsage = NativeAdapter.prototype.refreshUsage;
-				const usageRefreshes: Promise<void>[] = [];
-				t.mock.method(
-					NativeAdapter.prototype,
-					"refreshUsage",
-					function (this: NativeAdapter, ...args: Parameters<typeof refreshUsage>) {
-						const refresh = refreshUsage.apply(this, args);
-						usageRefreshes.push(refresh);
-						return refresh;
-					},
-				);
-				let adapter: NativeAdapter | undefined;
-				const open = NativeAdapter.open;
-				t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
-					adapter = await open.call(NativeAdapter, {
-						...options,
-						...f.options,
-						sessionId: options.sessionId,
-						sessionFile: options.sessionFile,
-						sessionOptions: { ...f.options.sessionOptions, ...options.sessionOptions },
-					});
-					return adapter;
-				});
-				const calls: Array<[string, Record<string, unknown>]> = [];
-				let settled = () => {};
-				const session = await KernelSession.open(
-					{
-						sessionId: "memory-session",
-						...(chat !== "no-project" ? { projectId: "project-1" } : {}),
-						...(chat === "ask" ? { pilot: { ask: { source: f.root } } } : {}),
-						cwd: f.root,
-						storageDir: join(f.root, "memory-session"),
-					},
-					{
-						onWorking: (working, completion) => {
-							if (!working && completion) settled();
-						},
-						call: fakeHostCall({
-							memory: async ({ action, args }): Promise<JsonValue> => {
-								calls.push([action, args]);
-								return action === "wake" ? { count: 1, text: "#0-1: durable project fact" } : { ok: true };
-							},
-						}),
-					},
-				);
-				f.cleanup.push(() => session.close());
-				const submit = async (id: string, prompt: string) => {
-					const completed = new Promise<void>((resolve) => {
-						settled = resolve;
-					});
-					await session.submit(id, prompt, "followUp");
-					await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-					// Drain the lifecycle observer's display refresh before closing the Harness.
-					await completed;
-					await Promise.all(usageRefreshes);
-				};
-				assert.ok(adapter);
-				const expected = chat === "project" ? ["memory"] : [];
-				assert.deepEqual(
-					adapter.session
-						.getCallableToolNames()
-						.filter((name) => name === "memory")
-						.sort(),
-					expected,
-				);
-				if (chat === "project" && mode === "only" && inlineBudget === 0) {
-					const codemode = adapter.extension.tools!.find((tool) => tool.name === "codemode")!;
-					assert.doesNotMatch(codemode.description, /### `memory`/);
-					assert.ok(!adapter.extension.tools!.some((tool) => tool.name === "artifact"));
-				}
-				let requests = 0;
-				const inspect = (transcript: TranscriptContext) => {
-					requests++;
-					assert.deepEqual(
-						getCurrentTools(transcript.messages)
-							.map((tool) => tool.name)
-							.filter((name) => name === "memory")
-							.sort(),
-						expected,
-					);
-					const prompt = transcript.messages
-						.filter((message) => message.role === "system")
-						.map(getSystemMessageText)
-						.join("\n");
-					if (chat === "project") {
-						assert.match(prompt, /#0-1: durable project fact/);
-						assert.match(
-							prompt,
-							/Historical project memory is read-only. Save new sourced understanding with knowledge/,
-						);
-						assert.match(prompt, /Before finishing a turn that ends a task/);
-					} else {
-						assert.doesNotMatch(prompt, /Project memory|memory\(|anything lasting worth saving/);
-					}
-				};
-				f.faux.setResponses([
-					(transcript) => {
-						inspect(transcript);
-						return fauxAssistantMessage("Task complete.");
-					},
-				]);
-				await submit("complete", "Finish the task");
-				assert.equal(requests, 1);
-				assert.deepEqual(calls, chat === "project" ? [["wake", {}]] : [], "completion never auto-writes memory");
-				if (chat === "project") {
-					// Old note calls are refused through both direct and script paths.
-					f.faux.setResponses([
-						(transcript) => {
-							inspect(transcript);
-							return fauxAssistantMessage(
-								mode === "only" && inlineBudget === undefined
-									? fauxToolCall("codemode", {
-											code: 'text(await tools.memory({action:"note",text:"A lasting correction"}));',
-										})
-									: fauxToolCall("memory", { action: "note", text: "A lasting correction" }),
-								{ stopReason: "toolUse" },
-							);
-						},
-						(transcript) => {
-							inspect(transcript);
-							return fauxAssistantMessage("Historical memory is read-only.");
-						},
-					]);
-					await submit("note", "Save the correction");
-					assert.equal(requests, 3);
-					assert.deepEqual(calls, [["wake", {}]], "legacy note attempts never reach the shared store");
-				}
-			});
-		}
-	}
-}
 
 for (const mode of ["on", "only"] as const) {
 	for (const available of [true, false]) {

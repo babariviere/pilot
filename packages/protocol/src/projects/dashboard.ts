@@ -230,8 +230,6 @@ export interface ProjectDashboard {
 	scheduled: DashboardSection<DashboardScheduledItem>;
 	/** One group per configured source, in a stable order. */
 	tracked: DashboardTrackedSource[];
-	/** Memory provider extension point; absent when unavailable or not yet loaded. */
-	memory?: import("../knowledge/memory.ts").ProjectMemorySummary;
 	/** Finished chats that are no longer waiting on the user, latest first. */
 	recent: DashboardSection<DashboardRecentItem>;
 }

@@ -1112,7 +1112,7 @@ test("decision guidance routes substantive choices and routine utterances withou
 		[
 			"personal preference",
 			'"I prefer concise replies"',
-			"existing preference/memory mechanism only when lasting and appropriate, not decide",
+			"project_preferences only when lasting and appropriate, not decide",
 		],
 		[
 			"unagreed storage design",

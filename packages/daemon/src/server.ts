@@ -21,8 +21,6 @@ import type {
 	JoinMissionRequest,
 	McpCheckRequest,
 	McpSignInRequest,
-	MemoryNoteRequest,
-	MemoryRange,
 	MergePullRequestRequest,
 	MissionArtifactLinkWrite,
 	MissionBriefWrite,
@@ -402,7 +400,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		terminals,
 		missions,
 		dashboardProviders,
-		memory,
 		schedules,
 		tracking,
 		power,
@@ -2700,54 +2697,6 @@ export function createDaemonServer(services: DaemonServices): Server & {
 					}),
 				);
 			throw new HttpError(405, "Method not allowed");
-		}
-		if (parts[1] === "projects" && parts[3] === "memory" && parts.length <= 5) {
-			const id = parts[2]!;
-			projects.require(id);
-			if (!memory) throw new ServiceUnavailable("Project memory is unavailable");
-			const action = parts[4];
-			const lines = url.searchParams.has("lines") ? Number(url.searchParams.get("lines")) : 96;
-			if (!action && req.method === "GET") return json(res, 200, await memory.load(id));
-			if (action === "note" && req.method === "POST") {
-				const body = await readJson<MemoryNoteRequest>(req);
-				const session = typeof body?.sessionId === "string" ? sessions.get(body.sessionId) : undefined;
-				if (!session || session.projectId !== id)
-					throw new HttpError(400, "Origin chat must belong to this project");
-				return json(res, 201, await memory.note(id, body.text, body.sessionId, body.replaces));
-			}
-			if (action === "wake" && req.method === "GET") return json(res, 200, await memory.wake(id, lines));
-			if (action === "recall" && req.method === "GET")
-				return json(res, 200, await memory.recall(id, url.searchParams.get("regex") ?? "", lines));
-			if (action === "zoom" && req.method === "GET")
-				return json(
-					res,
-					200,
-					await memory.zoom(
-						id,
-						Number(url.searchParams.get("lo") ?? NaN),
-						Number(url.searchParams.get("hi") ?? NaN),
-					),
-				);
-			if (action === "tree" && req.method === "GET") {
-				const number = (name: string) =>
-					url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined;
-				const reveal = url.searchParams.get("reveal");
-				return json(
-					res,
-					200,
-					await memory.tree(id, {
-						lo: number("lo"),
-						hi: number("hi"),
-						depth: number("depth"),
-						reveal: reveal ? reveal.split(",").map(Number) : [],
-					}),
-				);
-			}
-			if (action === "forget" && req.method === "POST") {
-				const body = await readJson<MemoryRange>(req);
-				return json(res, 200, await memory.forget(id, body?.lo, body?.hi));
-			}
-			throw new HttpError(404, "Unknown memory operation");
 		}
 		if (parts[1] === "update" && parts[2] === "blockers" && parts.length === 3 && req.method === "GET") {
 			if (!hello?.lineageId) throw new ServiceUnavailable("Daemon identity unavailable");

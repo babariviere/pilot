@@ -75,7 +75,7 @@ export class ModelCatalog {
 	}
 	private background(
 		runtime: CompletionRuntime,
-		purpose: "title" | "classification" | "triage" | "memory" | "compaction",
+		purpose: "title" | "classification" | "triage" | "compaction",
 		attribution?: BackgroundAttribution,
 	): CompletionRuntime {
 		const captured = this.backgroundUsage?.runtime(runtime, purpose, attribution) ?? runtime;
@@ -166,7 +166,7 @@ export class ModelCatalog {
 
 	/** A tool-free completion runtime whose usage counts as background work for `purpose`. */
 	async backgroundCompletion(
-		purpose: "classification" | "memory",
+		purpose: "classification",
 		attribution?: BackgroundAttribution,
 	): Promise<CompletionRuntime> {
 		return this.background(await this.getRuntime(), purpose, attribution);

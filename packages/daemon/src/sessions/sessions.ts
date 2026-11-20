@@ -175,7 +175,6 @@ import {
 	type PostRunState,
 } from "./post-run.ts";
 import { PullRequestAutoRebase } from "../sources/github/pull-requests/pr-auto-rebase.ts";
-import type { ProjectMemoryService } from "../projects/memory/project-memory.ts";
 import { type ProjectStore, requireDirectory } from "../projects/projects.ts";
 import { mergeTarget, PullRequestMerger } from "../sources/github/pull-requests/pull-request-merge.ts";
 import { type HealthCheck, PullRequestSync } from "../sources/github/pull-requests/pull-request-sync.ts";
@@ -2210,7 +2209,6 @@ export class SessionManager {
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
 	private readonly rebasingWorkspaces = new Set<string>();
 	private readonly projects: ProjectStore;
-	private memory?: ProjectMemoryService;
 	/** Legacy metadata only. There is no Control runtime or role override. */
 	private isRetainedHistory(meta: SessionMeta): boolean {
 		return meta.control === true;
@@ -2310,10 +2308,6 @@ export class SessionManager {
 			},
 			pullRequests,
 		);
-	}
-
-	setProjectMemory(memory: ProjectMemoryService): void {
-		this.memory = memory;
 	}
 
 	/** Execution seam shared by setup participants and, later, post-run checks. */
@@ -14634,40 +14628,6 @@ ${run.excerpt}`,
 						args,
 						operationId,
 					);
-					return (result ?? null) as JsonValue;
-				},
-			},
-			memory: {
-				failure: (error) => formatFailure(error, "Tool memory"),
-				handle: async ({ meta }, { action, args }) => {
-					if (args.projectId !== undefined) throw new Error("Ordinary chats use their implicit project memory");
-					if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
-					let result: unknown;
-					switch (action) {
-						case "wake":
-							result = await this.memory.wake(meta.projectId, 96);
-							break;
-						case "note":
-							if (typeof args.text !== "string") throw new Error("Memory note requires text");
-							if (args.replaces !== undefined && !Array.isArray(args.replaces))
-								throw new Error("Memory note replaces must be a list of note indices");
-							result = await this.memory.note(
-								meta.projectId,
-								args.text,
-								meta.id,
-								args.replaces as number[] | undefined,
-							);
-							break;
-						case "recall":
-							if (typeof args.regex !== "string") throw new Error("Memory recall requires regex");
-							result = await this.memory.recall(meta.projectId, args.regex, 96);
-							break;
-						case "zoom":
-							if (typeof args.lo !== "number" || typeof args.hi !== "number")
-								throw new Error("Memory zoom requires an inclusive range");
-							result = await this.memory.zoom(meta.projectId, args.lo, args.hi);
-							break;
-					}
 					return (result ?? null) as JsonValue;
 				},
 			},

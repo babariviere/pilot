@@ -20,10 +20,6 @@ pub(crate) enum Read {
         id: String,
         cursor: Option<String>,
     },
-    Memory {
-        lo: Option<u32>,
-        hi: Option<u32>,
-    },
     Pending {
         id: Option<String>,
         #[serde(rename = "expectedRevision")]
@@ -74,13 +70,6 @@ impl Read {
                     encoded(cursor.as_deref().unwrap_or(""))
                 )
             }
-            Self::Memory { lo, hi } => match (lo, hi) {
-                (None, None) => format!("{base}/memory/tree?depth=1"),
-                (Some(lo), Some(hi)) if lo <= hi => {
-                    format!("{base}/memory/tree?lo={lo}&hi={hi}&depth=1")
-                }
-                _ => return Err(Error::Invalid),
-            },
             Self::Pending { .. } => return Err(Error::Invalid),
         })
     }

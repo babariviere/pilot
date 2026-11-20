@@ -54,7 +54,6 @@ import { PlanningWorkers } from "./missions/planning/workers/planning-workers.ts
 import type { PowerService } from "./runtime/power/power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./projects/dashboard/project-dashboard.ts";
 import type { KnowledgeService } from "./projects/knowledge/project-knowledge.ts";
-import type { ProjectMemoryService } from "./projects/memory/project-memory.ts";
 import type { ProjectStore } from "./projects/projects.ts";
 import { RepositoryBrowser } from "./projects/repository-browser.ts";
 import { optionalReviewRequests, retainedFeedbackReader } from "./reviews/requests/review-request-access.ts";
@@ -97,7 +96,6 @@ export interface DaemonServiceDependencies {
 	terminals: TerminalManager;
 	missions?: { service: MissionService; store: MissionStore; knowledge?: KnowledgeService };
 	dashboardProviders?: DashboardProviders;
-	memory?: ProjectMemoryService;
 	schedules?: ScheduleService;
 	tracking?: SourceRegistry;
 	power?: PowerService;
@@ -129,7 +127,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 		terminals,
 		missions,
 		dashboardProviders,
-		memory,
 		schedules,
 		tracking,
 		mcp,
@@ -233,7 +230,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			...dashboardProviders,
 			...(tracking ? { tracked: (id: string) => tracking.dashboard(id) } : {}),
 			...(tracking ? { inbox: (id: string) => tracking.inboxCount(id) } : {}),
-			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
 			...(schedules
 				? {
 						scheduled: (id: string) => schedules.dashboard(id),
@@ -243,7 +239,6 @@ export function createDaemonServices(options: DaemonServiceDependencies) {
 			onChange(listener) {
 				const stops = [
 					dashboardProviders?.onChange?.(listener),
-					memory?.onChange(listener),
 					schedules?.onChange(listener),
 					tracking?.onChange(listener),
 				];

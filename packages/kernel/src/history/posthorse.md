@@ -58,8 +58,7 @@ provider acceptance of arbitrary input, lower bills or fewer cache misses.
 - `get_context_remaining()` uses the current model window and effective settings.
   It is an estimate, not an exact provider-sized request budget.
 - `notes` uses the package's note store. Pilot keeps it under the session's private
-  `posthorse/<conversation-id>/.pi/notes/` directory, not the code checkout or shared
-  project memory. Ownership and note provenance survive worker restart. Each chat
+  `posthorse/<conversation-id>/.pi/notes/` directory, not the code checkout or a shared project store. Ownership and note provenance survive worker restart. Each chat
   attempt has a private store; a fresh fork does not adopt another attempt's notes.
   Earlier note content remains recoverable through that attempt's kept transcript.
   Note updates are limited to 64 KiB and reads to 1 MiB. Foreign scopes and links

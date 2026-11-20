@@ -82,7 +82,7 @@ Decision examples (routing guidance, not permission):
 - Explicit new policy "Allow checked task pushes, not releases": decide with human source and limits; existing permission controls still apply.
 - "Continue independent work while we discuss the prototype": task/context update, not decide (routine coordination, no new authority).
 - "The checks passed": task/report update, not decide (status, not acceptance).
-- "I prefer concise replies": existing preference/memory mechanism only when lasting and appropriate, not decide (cross-mission preference, not permission).
+- "I prefer concise replies": project_preferences only when lasting and appropriate, not decide (cross-mission preference, not permission).
 - "Could we add editable coordinator instructions?": discussion/proposal, not decide or implementation permission.
 - "Approve this one upload": existing approval flow, not a general mission decision or grant.
 Keep routine directions in existing task updates or log context, without duplicate bookkeeping. Do not automatically delete, withdraw or bulk reclassify historical decisions; historic cleanup requires user-approved proposals and preserved history.

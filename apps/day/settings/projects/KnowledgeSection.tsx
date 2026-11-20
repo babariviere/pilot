@@ -37,20 +37,12 @@ const nativeCall: LibraryCall = async (name, args) => {
 };
 type ReadResult<T> = { projectId: string; data: T };
 type Saved = { operationId: string; state: "saved" | "rejected" | "unknown"; receipt?: { detail?: KnowledgeDetail } };
-// Only the legacy tree's displayed fields. Importing the full memory wire type
-// pulls its session/Node-only types into the sandbox's generated type environment.
-type MemoryTree = {
-	nodes: { lo: number; hi: number; text?: string; entry?: { text: string }; replaced?: boolean }[];
-	truncated: boolean;
-};
-
 /** Sources, revisions and unsent edits for the selected project. */
 export function KnowledgeSection(props: { projectId: string; source?: LibraryCall }) {
 	const query = signal("");
 	const page = signal<KnowledgePage | null>(null);
 	const detail = signal<KnowledgeDetail | null>(null);
 	const revisions = signal<KnowledgeRevisionPage | null>(null);
-	const memory = signal<MemoryTree | null>(null);
 	const pending = signal<{ operationId: string; id: string }[]>([]);
 	const operationsKnown = signal(false);
 	const busy = signal(false);
@@ -66,7 +58,6 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 			page.set(null);
 			detail.set(null);
 			revisions.set(null);
-			memory.set(null);
 			pending.set([]);
 			operationsKnown.set(false);
 			busy.set(false);
@@ -132,10 +123,6 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 		run(async () => {
 			const d = shown();
 			if (d) revisions.set(await read({ kind: "revisions", id: d.entry.id, cursor }));
-		});
-	const oldMemory = (lo: number | null = null, hi: number | null = null) =>
-		run(async () => {
-			memory.set(await read({ kind: "memory", lo, hi }));
 		});
 	const settle = (r: Saved) => {
 		if (r.state === "saved") {
@@ -274,12 +261,6 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 							testID="knowledge-search"
 							disabled={busy() || !props.projectId}
 							onPress={() => void search()}
-						/>
-						<Button
-							label="Historical memory"
-							testID="knowledge-memory"
-							disabled={busy()}
-							onPress={() => void oldMemory()}
 						/>
 					</Buttons>
 					<If when={message()}>
@@ -479,35 +460,6 @@ export function KnowledgeSection(props: { projectId: string; source?: LibraryCal
 									/>
 								</If>
 							</Buttons>
-						</Block>
-					)}
-				</If>
-				<If when={memory()}>
-					{(m) => (
-						<Block testID="knowledge-old-memory" selectable gap={3}>
-							<BodyStrong>Historical memory</BodyStrong>
-							<Caption>
-								Old notes and summaries may be stale. New shared understanding uses Knowledge. No summarizer is
-								started.
-							</Caption>
-							<Link label="Memory overview" disabled={busy()} onPress={() => void oldMemory()} />
-							<Each of={m().nodes} key={(n) => `${n.lo}-${n.hi}`}>
-								{(n) => (
-									<View class="gap-1">
-										<Body tone="muted">{`#${n().lo}-${n().hi}: ${n().entry?.text ?? n().text ?? "No saved summary"}${n().replaced ? " (replaced, history only)" : ""}`}</Body>
-										<If when={n().lo !== n().hi}>
-											<Link
-												label={`Open notes #${n().lo}-${n().hi}`}
-												disabled={busy()}
-												onPress={() => void oldMemory(n().lo, n().hi)}
-											/>
-										</If>
-									</View>
-								)}
-							</Each>
-							<If when={m().truncated}>
-								<Caption>Partial tree. Open a range to read its notes.</Caption>
-							</If>
 						</Block>
 					)}
 				</If>

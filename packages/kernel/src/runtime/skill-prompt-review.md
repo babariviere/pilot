@@ -43,12 +43,12 @@ No blanket automated verification of all project-local skill copies was establis
 | Source | Role and assembly / focused checks |
 | --- | --- |
 | [policy.ts](policy.ts): `pilotPrompt`, `missionPrompt` | Code-generated Pilot and mission overlays vary with role, workspace, delivery policy and current mission data. The extension appends them to the SDK context. [Decision guidance and injection/permission seams](../../../daemon/src/missions/interviews/mission-decision-routing.md#canonical-injection-and-permission-seams) cover mission conversion, examples, stable selection, live deltas and limits. [policy.fast.test.ts](policy.fast.test.ts), [mission-tools.test.ts](../missions/mission-tools.test.ts). |
-| [native-adapter.ts](../native-adapter.ts): resource loader and `preparePrompt` | Selects restricted Ask/Insights bases or SDK resources, memory and conditional interview/planning adapters. SDK settings, extensions, tools, project instructions, skill selection, prompt templates and current context affect composition. [Ask](../tools/ask/ask.integration.test.ts), [Insights](../insights/insights-role.integration.test.ts) and skill tests exercise selected boundaries. |
+| [native-adapter.ts](../native-adapter.ts): resource loader and `preparePrompt` | Selects restricted Ask/Insights bases or SDK resources and conditional interview/planning adapters. SDK settings, extensions, tools, project instructions, skill selection, prompt templates and current context affect composition. [Ask](../tools/ask/ask.integration.test.ts), [Insights](../insights/insights-role.integration.test.ts) and skill tests exercise selected boundaries. |
 | [review-boundary.ts](../reviews/review-boundary.ts): `REVIEW_BASELINE` | Checked-in fixed restricted reviewer baseline; [review-boundary.test.ts](../reviews/review-boundary.test.ts). It is not the Build prompt. |
 | [history-recall.ts](../history/history-recall.ts), tool descriptions and schemas | Tool snippets/guidelines are additional instructions exposed with tools, not necessarily system-prompt prose. [history-recall.fast.test.ts](../history/history-recall.fast.test.ts); consult [tool access](tool-access-by-role.md) for role-specific surfaces. |
 
 The SDK can load user/project templates and instructions at runtime; their contents are not a
-checked-in Pilot template inventory. Mission state, task text and memory are dynamic data, not
+checked-in Pilot template inventory. Mission state, task text and Knowledge are dynamic data, not
 static prompt copies. The [role examples](system-prompts-by-role.md) are synthetic and may drift;
 compare them with current source before using them as evidence. Historical docs, fixtures and
 test canaries are not production instructions.
@@ -59,6 +59,6 @@ For a change, inspect the canonical skill or prompt, its adaptation and loader c
 the focused tests named above where relevant. Check local Markdown links and source symbols after
 renames; update this index and the provenance manifest when sources, pins or consumers change.
 For composition, use source and synthetic fixtures with placeholders, not a live provider or a real
-session dump. Never publish credentials, personal instructions, project memory or private session
+session dump. Never publish credentials, personal instructions, Knowledge or private session
 content. A source scan cannot prove the complete dynamic SDK prompt or enumerate external skills,
 extension-provided text, tool descriptions and user templates; those remain coverage gaps.

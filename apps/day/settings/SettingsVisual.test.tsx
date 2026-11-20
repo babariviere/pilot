@@ -44,19 +44,26 @@ for (const [fixture, ready, name] of [
 	["../SlackSettingsFixture.tsx", "id:slack-settings", "slack"],
 	["../DiagnosisFixture.tsx", "id:diagnosis-settings", "diagnosis"],
 	["../ProjectsFixture.tsx", "id:project-setup", "projects"],
-	["../KnowledgeFixture.tsx", "id:knowledge", "knowledge"],
 ] as const) {
 	test(`Settings' ${name} section in light and dark`, async () => {
 		for (const colorScheme of ["light", "dark"] as const) {
 			const app = await open(fixture, { platform: "macos", width: 1100, height: 900, colorScheme });
 			await app.waitFor(ready);
-			if (name === "knowledge") {
-				await app.press("id:knowledge-open");
-				await app.press("id:knowledge-entry-k");
-				await app.waitFor("id:knowledge-detail");
-			}
 			await app.wait(400);
 			await app.screenshot(`output/settings-parts-${name}-${colorScheme}-1100.png`);
 		}
 	});
 }
+
+test("Settings' Knowledge library in light and dark, wide and narrow", async () => {
+	for (const colorScheme of ["light", "dark"] as const) {
+		for (const width of [1100, 480]) {
+			const app = await open("../KnowledgeFixture.tsx", { platform: "macos", width, height: 900, colorScheme });
+			await app.press("id:knowledge-open");
+			await app.press("id:knowledge-entry-k");
+			await app.waitFor("id:knowledge-detail");
+			await app.wait(400);
+			await app.screenshot(`output/settings-parts-knowledge-${colorScheme}-${width}.png`);
+		}
+	}
+});

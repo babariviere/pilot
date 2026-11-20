@@ -96,7 +96,6 @@ export function toolCategory(name: string): ToolDiagnosticCategory {
 			"artifact",
 			"subagent",
 			"mission",
-			"memory",
 			"knowledge",
 			"question",
 			"todo",

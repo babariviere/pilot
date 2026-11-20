@@ -150,9 +150,6 @@ test("global Inbox retains notices for removed projects, without making their da
 			tracked: () => {
 				throw new Error("Orphan has no source configuration");
 			},
-			memory: () => {
-				throw new Error("Orphan has no memory configuration");
-			},
 		},
 	});
 	assert.equal(s.inbox(undefined, 50).needsYou.total, 1);

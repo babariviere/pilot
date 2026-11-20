@@ -11,7 +11,6 @@ fixtures. Searching only for titles or Slack would miss the isolated triage work
 | Path | Purpose | Trustworthy attribution | Existing behavior retained |
 | --- | --- | --- | --- |
 | `models.ts` → `generateChatTitle` | `title` | Session/project UUIDs from SessionManager; canonical mission tuple only through the optional trusted membership bridge | Cheapest authenticated scoped title model, no thinking, 128 output tokens, no provider retries |
-| `models.ts` → `compactMemory` | `memory` | Project UUID supplied by ProjectMemoryService | Explicit authenticated Codex Luna, three validated submission attempts, no provider retries |
 | `models.ts` → `compactControlNode` | `compaction` | Host background only. A node/job or current Control chat does not prove which chat owns its source | Same-provider scoped cheapest model, up to six correction calls, existing two provider retries and deadline |
 | `models.ts` Slack classifier (poller and manual add) | `classification` | Project UUID from the source context | Signed-in Codex Luna, whatever the chat model list (enabledModels) holds; no thinking/tools, 1536 output tokens, no provider retries |
 | `triage-model-worker.ts` → `models.ts.completeTriage` | `triage` | Project UUID explicitly passed by grooming and Linear sizing callers | Cheapest authenticated scoped model, 8192 output tokens, no provider retries, existing worker/deadline/cancellation policy |
@@ -49,7 +48,7 @@ or grounds to rerun inference. Source recovery never scans diagnostics or transc
 source writes and purges old-generation records before acknowledging; a late completion cannot transplant its
 evidence into the new generation. Retention/capture floors also fence source replay.
 
-The existing UsageDoc/`ai-usage.json` totals and memory diagnostic response copies are **not** additional requests.
+The existing UsageDoc/`ai-usage.json` totals are **not** additional requests. Older accounting records can still have the retired `memory` source.
 They are never reimported by this adapter. The host store's existing legacy import remains a separate checkpoint
 view. Consumers must not add checkpoints to request totals. No kernel request is counted again here.
 

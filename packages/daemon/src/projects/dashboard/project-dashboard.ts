@@ -17,7 +17,6 @@ import {
 	type Mission,
 	type ProjectDashboard,
 	type ProjectDashboardCounts,
-	type ProjectMemorySummary,
 	type SessionPullRequest,
 	type SessionSummary,
 } from "@pilot/protocol";
@@ -43,7 +42,6 @@ export interface DashboardProviders {
 	/** One group per configured tracking source of a project. */
 	tracked?: (projectId: string) => DashboardTrackedSource[];
 	/** Cached count, recent notes and background compaction health. No disk I/O while building a dashboard. */
-	memory?: (projectId: string) => ProjectMemorySummary;
 	/** Open tracked items the Inbox lists for a project, from cached counts. Added to the sidebar counts. */
 	inbox?: (projectId: string) => number;
 	/** Subscribe to provider changes so the dashboard updates without polling. */
@@ -61,7 +59,6 @@ export interface DashboardInput {
 	isUnread: (sessionId: string, outcomeAt: number) => boolean;
 	scheduled?: DashboardScheduledItem[];
 	tracked?: DashboardTrackedSource[];
-	memory?: ProjectMemorySummary;
 }
 
 const KIND_RANK = {
@@ -358,7 +355,6 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			...(source.done ? { done: { total: source.done.total, items: source.done.items.slice(0, limit) } } : {}),
 		})),
 		recent: section(recent, limit),
-		...(input.memory ? { memory: input.memory } : {}),
 	};
 }
 
@@ -523,7 +519,6 @@ export class ProjectDashboardService {
 				isUnread: (id, at) => reviews.isUnread(id, at),
 				scheduled: providers?.scheduled?.(projectId),
 				tracked: includeProjectProviders ? providers?.tracked?.(projectId) : undefined,
-				memory: includeProjectProviders ? providers?.memory?.(projectId) : undefined,
 			},
 			limit,
 		);
