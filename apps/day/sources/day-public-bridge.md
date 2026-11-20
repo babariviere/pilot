@@ -2,51 +2,17 @@
 
 ## Consumer seam
 
-`apps/day/native/src/window/root.rs` is the canonical DayRoot from the parked UI
-work, not a second owner. `Bridge` owns that root and a fresh channel for
-one engine/window. Root selection stays native. It is not a JSON parameter.
-Handlers validate and enqueue to the **existing** NativeHost queue (capacity
-16). That same worker executes the existing native host, planning and
-attention services, then replies. There is no new thread, process, transport,
-store, credential registry or global root. Coalesced `day.changed` events
-invalidate UI mirrors. They carry no data or authority. Read
-`day.today.read`, `day.plan.inventorySnapshot` and the selected
-`day.plan.snapshot` on invalidation, not a polling loop or a new network read
-for every event.
-
-`apps/day/sources/bridge.ts` is that asynchronous JSON mirror adapter, used by
-`apps/day/Connected.tsx` through `connection.ts`. `ConnectedToday` and
-`ConnectedPlans` fit the `DayFeed`/`PlanningFeed` shapes the screens use
-(`apps/day/sources/feeds.ts`), so no screen knows which feed it has. They first ask
-`day.attention.read`, then `day.today.read` and `day.plan.prepare`; a failed
-first read shows why, never mock data. Each intent is sent once with
-`timeout: 0`: a lost reply is Unknown and only the matching check method
-looks it up. Decision Later reorders this run only. Help, link opening,
-direct chat start, budget and dependent-work continuation say they are unavailable
-in those existing screen adapters. The separate project-pinned standalone host
-seam is documented in [day-new-chat.md](../sessions/day-new-chat.md); its UI hookup is separate.
-Published planning uses `day.plan.startWork` with the displayed revision/digest/task/context and a
-separate confirmation. `day.plan.checkWork` reads the retained exact operation only. Both use the
-same native worker, ledger, close fence and saved-form barrier as existing planning commands.
-Feedback work uses the same ledger. A displayed fix pins both the proposal and
-the effective setup digest. The daemon refuses a second start of that proposal
-and settles a lost reply only from the exact durable session record. A linked
-mission creation saves the feedback link with the mission, not as a second UI
-command. A result reads links through the scoped `day.feedback.read` projection;
-its explicit resolution uses the same operation as Feedback, not verification.
-For a stalled fix, `day.chat.handoff` uses the shown chat and the user's note.
-The native receipt lookup cannot start a second writer. The continuation
-journal keeps source history and transfers workspace custody and the logical
-funding owner before the linked chat starts.
-On `day.flush` the adapter saves every waiting answer and Today draft, and
-acknowledges only when each save was answered and none was refused.
-`native/tests/connected.rs` runs the entry on a real `Bridge`. The default
-mock entry and its deny-all capabilities are unchanged.
+[App.tsx](../App.tsx) is the connected entry. [MockApp.tsx](../MockApp.tsx)
+is test-only. The [TSX adapter](bridge.ts) sends calls through NSH to the
+[Rust bridge](../native/src/bridge.rs), which binds one native root to one
+window and enqueues work on the existing NativeHost worker. Root, service
+and authority selection stay native. Coalesced `day.changed` messages
+invalidate views; they carry no data or authority.
 
 Launch parameters expose only:
 
 ```json
-{"day":{"version":1,"window":"opaque native window ID"}}
+{ "day": { "version": 1, "window": "opaque native window ID" } }
 ```
 
 Every call uses `{version:1, window, args}` with exact fields. The window ID
@@ -63,71 +29,30 @@ Responses are discriminated envelopes:
 
 ```ts
 type Reply<T> =
-  | { version: 1; value: { snapshot: T; outcome: IntentOutcome | null } }
-  | { version: 1; error:
-      "identity" | "offline" | "unavailable" | "invalid" | "stale" |
-      "storage" | "unknown" | "closed" | "busy" | "capacity" };
+	| { version: 1; value: { snapshot: T; outcome: IntentOutcome | null } }
+	| {
+			version: 1;
+			error:
+				| "identity"
+				| "offline"
+				| "unavailable"
+				| "invalid"
+				| "stale"
+				| "storage"
+				| "unknown"
+				| "closed"
+				| "busy"
+				| "capacity";
+	  };
 ```
 
-Each name in `bridge::METHODS` is a separate capability. Never grant
-`day.*`, a generic `request`, HTTP, shell or file capabilities. `host.post`
-does not execute these methods. Arguments use the existing exact native
-intent types, not daemon request envelopes:
+Each name in [`METHODS`](../native/src/bridge.rs) is a separate capability.
+Use the Rust decoder and the feature's TSX source adapter for arguments and
+replies. Do not grant a wildcard, generic request, HTTP, shell or file access.
+`host.post` does not execute these methods.
 
-| Name | Args | Snapshot |
-| --- | --- | --- |
-| `day.projects.read` | `{}` | complete canonical project inventory and saved standalone operations |
-| `day.chat.select` | `{projectId,contextDigest,mode}` | passive `ChatChoice`; no session starts |
-| `day.chat.create` | `{choice:ChatChoice,message}` | null; exact creation outcome and operation ID |
-| `day.chat.check` | `{operationId}` | null; exact receipt lookup, never creation |
-| `day.chat.read` | `{sessionId,older}` | read-only chat (state, title, `ChatRow` rows); opens it and reads its newest rows or the page before; passive, re-read on daemon changes while open |
-| `day.chat.snapshot` | `{sessionId}` | the open chat as last read, or null; no I/O |
-| `day.chat.close` | `{sessionId}` | null; stops reading and keeping the chat; local only |
-| `day.today.read` | `{}` | `Today` |
-| `day.window.read` | `{}` | exact-source `SavedView` or null when no capture exists; no update ACK |
-| `day.mission.read` | `MissionRef` | `MissionPage` or null |
-| `day.mission.pause` | `PauseIntent` | null; inspect outcome, then read |
-| `day.mission.resume` | `ResumeIntent` | null; inspect outcome, then read |
-| `day.mission.check` | `MissionRef` | null; exact saved lookup only |
-| `day.plan.read` | `MissionRef` | `PlanPage` |
-| `day.plan.snapshot` | `MissionRef` | cached `PlanPage`, with freshness |
-| `day.plan.source` | `{missionId,planRevision,area,recordId,kind,id}` | passive canonical source detail; unavailable/changed scope rejects without content |
-| `day.plan.inventory` | `{}` | complete passive `Planning` inventory; failures reject, never imply empty |
-| `day.plan.inventorySnapshot` | `{}` | cached `Planning` inventory, using the same `PlanRow` identities and availability |
-| `day.plan.prepare` | `{}` | `Setup` or null; lookup only |
-| `day.plan.create` | `NewIntent` | `{missionId,page}` or null |
-| `day.plan.save` | `{missionId,intent:AnswerIntent}` | `PlanPage` |
-| `day.plan.submit` | `{missionId,intent:SubmitIntent}` | `PlanPage` |
-| `day.plan.check` | `{missionId,intent:InterviewRef}` | `PlanPage` or null; host selects exact saved operation |
-| `day.plan.checkNew` | `{}` | `{missionId,page}` or null; host selects saved enrollment |
-| `day.plan.chat` | `{missionId,older}` | `PlanChat`; opens and reads the planning chat, newest rows or the page before; passive |
-| `day.plan.chatSnapshot` | `MissionRef` | cached `PlanChat` or null when closed; no I/O |
-| `day.plan.leave` | `{missionId,chatOnly}` | null; closes the chat, or stops reading the page on activity notices; local only |
-| `day.attention.read` | `{}` | `Today` |
-| `day.attention.reply` | `ReplyIntent` | `Today` |
-| `day.attention.ask` | `AskIntent` | `Today`; one tool-free clarification of the shown question; the question stays open |
-| `day.attention.action` | `{action:ActionRef,ask:ActionAsk,text}` | `Today` |
-| `day.attention.check` | `{id,action:boolean}` | `Today`; `id` is a decision, an action, or a lost clarification's operation |
-| `day.attention.draft` | `DraftIntent` | `Today` |
-| `day.update.read` | `{}` | `ServiceView` |
-| `day.update.prepare` | `PrepareIntent` | `ServiceView`, including one opaque confirmation |
-| `day.update.confirm` | `ConfirmIntent` | `ServiceView`; durable capture request, not native entry |
-| `day.update.cancel` | `UpdateRef` | `ServiceView`; cancels only a prepared confirmation |
-| `day.update.check` | `{}` | `ServiceView`; lookup only, never a retry |
-| `day.update.restored` | `UpdateRef` | `ServiceView`; display ACK only, no execution authority |
-| `day.flush.ack` | `{generation,view?:SavedView}` | `{generation}`; an update capture requires the final view |
-| `day.ritual.read` | `{}` | `RitualSnapshot`; samples the root's clock, writes nothing |
-| `day.ritual.snapshot` | `{}` | cached `RitualSnapshot`, `outcome: null`; no clock sample, I/O or notice |
-| `day.ritual.results` | `{}` | `RitualSnapshot` with kept-change results or results unavailable |
-| `day.ritual.visit` | `RitualVisit` | `RitualSnapshot`; exact context and revision |
-| `day.ritual.save` | `RitualWrite` | `RitualSnapshot`; one explicit step, Done or Skip |
-
-Mutation delivery and returned view freshness are separate. A timeout,
-aborted consumer, disconnected engine or lost reply is not a refusal and
-does not cancel an entered effect. Do not replay it. Retained host operations
-remain Unknown and use exact lookup. Reads do not enroll, submit, start,
-approve, pause or resume anything. Starting work, budget grants, attention
-continuation, help and navigation remain unavailable through this bridge.
+A lost reply is Unknown, not a refusal or a cancellation. Look up the exact
+receipt and never replay an entered effect. Reads do not grant write authority.
 
 Use `day.plan.inventory` on open or explicit Read again to refresh the native
 inventory. Use `day.plan.inventorySnapshot` on `day.changed`: it only projects
@@ -204,13 +129,12 @@ production update/quit lifecycle until an app-owned AppView/window delegate
 implements this pre-disposal protocol. That integration needs native input
 and lifecycle acceptance, not an invented upstream hook or a Drop flush.
 
-`native/src/macos_host.rs` is the actual public wiring, behind the opt-in
+`native/src/window/macos_host.rs` is the actual public wiring, behind the opt-in
 `macos-host` feature, not a default executable. `options()` supplies the
 root's channel through `AppOptions.host`; `run_qualification()` uses the
 release's `run_app(AppSource::Bundle, options)` and then awaits root close.
 The native grant intersects the bundle's declared capabilities and does
-not widen them. In particular, the current deny-all mock bundle stays
-denied. This function reports only shutdown, not successful load or native
+not widen them. A bundle without the exact capability stays denied. This function reports only shutdown, not successful load or native
 capture. No default entry calls it, and hidden tests never open its window.
 The feature gates only this module. `nsh-platform-macos` is a plain
 macOS-only dependency: the NSH CLI resolves every nsh crate's source from

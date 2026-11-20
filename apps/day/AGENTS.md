@@ -12,7 +12,7 @@
   acceptance.
 - Use `./nsh.sh` and `scripts/cargo` for NSH and Rust commands.
   `./nsh.sh check` is Day's TypeScript check. `scripts/typecheck.sh` covers only the workspace
-  packages, not `apps/day`. Do not use `pnpm day`.
+  packages, not `apps/day`.
 - Use the verified NSH 0.6.1 (`2f51d86`) distribution (`NSH_DAY_CLI` can select a local copy). Keep NSH dependencies
   on the pinned release and preserve Cargo locks. Do not rebuild or patch NSH,
   edit shared dependency caches, or install tools to work around a setup failure.

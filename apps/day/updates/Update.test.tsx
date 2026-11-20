@@ -11,6 +11,10 @@ const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 
 type App = Awaited<ReturnType<typeof open>>;
 
+function openService(scenario: "absent" | "denied" | "offline" | "newer") {
+	return open("../UpdateServiceFixture.tsx", { ...desktop, host: { params: { scenario } } });
+}
+
 /** Prepares the offer shown, checks what it says it will do, and confirms it, as a user does. */
 async function confirm(app: App, question: string, lines: string[] = []) {
 	await app.press("id:update-prepare");
@@ -180,7 +184,7 @@ test("a failed save and an unproven job exit stop the update before anything is 
 });
 
 test("registering is explicit; a lost answer is only looked up", async () => {
-	const app = await open("../ServiceAbsent.tsx", desktop);
+	const app = await openService("absent");
 	await app.waitFor("Pilot's service is not registered");
 	expect(app.shows("This app 0.9.2 · Service unknown")).toBe(true);
 	await confirm(app, "Register Pilot's service?", ["macOS may ask you to allow it in Login Items."]);
@@ -198,7 +202,7 @@ test("registering is explicit; a lost answer is only looked up", async () => {
 });
 
 test("a registration macOS refuses says what to do, and the next one goes through", async () => {
-	const app = await open("../ServiceDenied.tsx", desktop);
+	const app = await openService("denied");
 	await confirm(app, "Register Pilot's service?");
 	await app.waitFor("Not registered");
 	expect(app.shows("macOS did not allow Pilot's service to run in the background. Nothing was registered.")).toBe(
@@ -212,7 +216,7 @@ test("a registration macOS refuses says what to do, and the next one goes throug
 });
 
 test("an offline service holds updates, and Check again only reads", async () => {
-	const app = await open("../ServiceOffline.tsx", desktop);
+	const app = await openService("offline");
 	await app.waitFor("Pilot's service is not answering");
 	expect(app.enabled("id:update-prepare")).toBe(false);
 	expect(app.shows("Pilot's service is not answering, so it cannot update now.")).toBe(true);
@@ -222,7 +226,7 @@ test("an offline service holds updates, and Check again only reads", async () =>
 });
 
 test("an app-only update pauses working chats and preserves earlier holds", async () => {
-	const app = await open("../ServiceNewer.tsx", desktop);
+	const app = await openService("newer");
 	await app.waitFor("Pilot's service does not match this app");
 	expect(app.shows("This app 0.9.2 · Service 0.12.0")).toBe(true);
 	await confirm(app, "Update from 0.9.2 to 0.12.0?", ["Pauses two agents at a safe point, then resumes only them."]);
