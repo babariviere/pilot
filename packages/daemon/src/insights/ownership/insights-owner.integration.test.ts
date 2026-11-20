@@ -520,7 +520,10 @@ test("Day proposes from current evidence without prior reads and refuses duplica
 	await seedSource(f, undefined, "CURRENT_REVIEW_EVIDENCE");
 	assert.equal((await f.runDay(await f.intent("run"))).state, "accepted");
 	const backlog = (request: unknown) => f.sessions.insightsOwnerBacklog(f.owner.reportSessionId, request);
-	const context = (await backlog({ action: "review_context" })) as { limitations: string; evidence: unknown };
+	const context = (await backlog({ action: "review_context" })) as {
+		limitations: string;
+		evidence: { sessionId: string; receipt: import("@pilot/protocol").DiagnosticContextResponse };
+	};
 	assert.match(JSON.stringify(context.evidence), /CURRENT_REVIEW_EVIDENCE/);
 	assert.doesNotMatch(context.limitations, /Page prior findings/);
 	assert.match(context.limitations, /Propose from current evidence/i);
@@ -540,7 +543,17 @@ test("Day proposes from current evidence without prior reads and refuses duplica
 			targets: [],
 			implementationLinks: [],
 		},
-		evidence: [],
+		evidence: [
+			{
+				key: randomUUID(),
+				sessionId: context.evidence.sessionId,
+				ref: (context.evidence.receipt.data as unknown as import("@pilot/protocol").DiagnosticHistoryPage)
+					.entries[0]!.ref,
+				observedAt: context.evidence.receipt.collectedAt,
+				classification: "observed",
+				summary: "A source excerpt records a correction.",
+			},
+		],
 	};
 	await backlog(proposal);
 	assert.deepEqual(await backlog({ action: "list", kind: "finding" }), {
@@ -1772,6 +1785,7 @@ for (const freshDay of [false, true])
 			let firstSawMarker = false;
 			let dayProposalInstructions = false;
 			let dayPriorReadInstructions = false;
+			let sawRetro = false;
 			const storagePaths: string[] = [];
 			const workers: SessionWorker[] = [];
 			const factory: SessionFactories["worker"] = (spec, onPacket, onExit) => {
@@ -1941,6 +1955,7 @@ for (const freshDay of [false, true])
 				const respond = (payload: import("@earendil-works/pi-ai").TranscriptContext) => {
 					if (freshDay) {
 						const serialized = JSON.stringify(payload);
+						sawRetro ||= serialized.includes("# /retro");
 						dayProposalInstructions ||= /Use insights_backlog propose for supported findings from this run/i.test(
 							serialized,
 						);
@@ -2036,6 +2051,7 @@ for (const freshDay of [false, true])
 				assert.equal(new Set(storagePaths).size, 2);
 				assert.ok(firstSawMarker);
 				assert.ok(dayProposalInstructions, "The Day provider must receive actionable proposal instructions");
+				assert.ok(sawRetro, "The Day provider must receive the retrospective skill");
 				assert.equal(dayPriorReadInstructions, false, "The Day provider must not be told to read hidden findings");
 				assert.equal(
 					Number(f.missions["one"]("SELECT COUNT(*) n FROM day_insights_allowance")!.n),

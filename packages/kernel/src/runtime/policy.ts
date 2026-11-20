@@ -1,5 +1,6 @@
 /** Pilot's rules for agents: where they work, how they deliver, and what they may not do on GitHub. */
 
+import { readFile } from "node:fs/promises";
 import type { Context } from "@earendil-works/chord/context";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
 import type { DiagnosticTargetReference, MissionDecision, MissionRole, OperationHost } from "@pilot/protocol";
@@ -523,6 +524,11 @@ export function withPilotPolicy(
 	prepareTurn?: (input: PromptInput, context: Context) => Promise<void>,
 	projectContext?: () => Promise<unknown>,
 ): Extension {
+	const retro =
+		context.role === "insights" && context.freshDayReport
+			? new URL("../../skills/insights/retro/SKILL.md", import.meta.url)
+			: undefined;
+	let retroText: Promise<string> | undefined;
 	return {
 		...extension,
 		sections: [
@@ -538,7 +544,10 @@ export function withPilotPolicy(
 			section("pilot", async (input, requestContext) => {
 				await prepareTurn?.(input, requestContext);
 				const current = mission();
-				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
+				const policy = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
+				const prompt = retro
+					? `${policy}\n\n${await (retroText ??= readFile(retro, "utf8").then((text) => text.replace(/^---\n[\s\S]*?\n---\n/u, "").trim()))}`
+					: policy;
 				return current && context.role !== "diagnostics"
 					? `${prompt}\n${missionPrompt(current, context.ghStack, context.executionPermission?.level === "investigate", context.requirePullRequest !== false, !context.ask)}`
 					: prompt;

@@ -167,6 +167,13 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 		assert.ok(prompt.includes(requirement), requirement);
 });
 
+test("Day Insights declares the required finding evidence fields", () => {
+	const tool = createInsightsBacklogTool(async () => null, true);
+	const evidence = tool.parameters.properties.evidence.items;
+	assert.deepEqual(evidence.required, ["key", "sessionId", "ref", "observedAt", "classification", "summary"]);
+	assert.equal(evidence.additionalProperties, false, "A raw excerpt is not a valid evidence field");
+});
+
 test("Insights rejects malformed start envelopes before opening storage", async () => {
 	const id = "01234567-89ab-4cde-8fab-0123456789ab";
 	const binding: InsightsBinding = {

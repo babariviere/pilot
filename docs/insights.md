@@ -11,6 +11,8 @@ settings while paused does not resume reports.
 **Reports** shows samples, gaps and evidence links. All active chats in the
 chosen projects are eligible unless excluded. Archived chats qualify for 24
 hours after archive; earlier messages in an eligible chat may still be read.
+Day uses a bundled version of `/retro` to look for changes that could help
+future agents. It uses only the report's sampled chat excerpts.
 The selected model provider processes sanitized excerpts, which can still
 contain private project text. The two limits use catalog estimates, not bills:
 each request must fit both the report budget and the shared UTC calendar-month
