@@ -7,7 +7,7 @@ import { canonicalFundingQuote } from "./funding-requests.ts";
 import { deriveInsightsWorkspaceAuthority } from "./insights-workspace.ts";
 import type { InsightsWorkspaceAuthority, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
 import type { ModelCatalog } from "./models.ts";
-import { canonicalJSON, OperationRejected } from "./operation-journal.ts";
+import { canonicalJSON, OperationConflict, OperationRejected } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -42,6 +42,40 @@ export interface DayInsightsExecutionAdapter {
 	): Promise<DayInsightsStatus>;
 }
 const same = (a: unknown, b: unknown) => canonicalJSON(a) === canonicalJSON(b);
+
+// Preflight is an HTTP boundary. Other services can throw conflicts with private details.
+const reviewConflictReasons = new Set([
+	"day_insights_invalid_fields",
+	"day_insights_invalid_review",
+	"day_insights_invalid_source_ids",
+	"day_insights_invalid_model",
+	"day_insights_source_project_required",
+	"day_insights_invalid_weekly",
+	"day_insights_invalid_timezone",
+	"day_insights_invalid_allowance",
+	"day_insights_unexpected_settings",
+	"day_insights_stale_revision",
+	"day_insights_owner_changed",
+	"day_insights_operation_uncertain",
+	"day_insights_initial_apply_must_be_manual",
+	"day_insights_execution_adapter_unavailable",
+	"day_insights_exact_model_unavailable",
+	"day_insights_changed_during_review",
+	"day_insights_not_configured",
+	"day_insights_paused",
+	"day_insights_existing_execution_requires_recovery",
+	"legacy_execution_not_proven_quiescent",
+	"legacy_execution_or_transfer_uncertain",
+	"legacy_executor_not_quiescent_or_grant_not_revoked",
+	"legacy_schedule_not_quiescent",
+	"schedule_inventory_unavailable",
+]);
+
+const legacyJournalReviewReasons = new Set([
+	"legacy_journal_busy_or_unavailable",
+	"legacy_execution_not_proven_quiescent",
+]);
+
 /** Passive configuration service. Execution remains unavailable until its distinct adapter is installed. */
 export class DayInsights {
 	private readonly deps: Dependencies;
@@ -315,10 +349,17 @@ export class DayInsights {
 			await this.deps.runtime?.preview(a, payload, status);
 			return { schemaVersion: 1, state: "ready", reason: null, payload };
 		} catch (error) {
+			const knownJournalRefusal =
+				error instanceof OperationConflict && legacyJournalReviewReasons.has(error.message);
+			const knownRefusal =
+				knownJournalRefusal || (error instanceof Conflict && reviewConflictReasons.has(error.message));
 			return {
 				schemaVersion: 1,
-				state: error instanceof Conflict || error instanceof NotFound ? "blocked" : "unavailable",
-				reason: error instanceof Conflict || error instanceof NotFound ? error.message : "day_insights_unavailable",
+				state:
+					knownJournalRefusal || error instanceof Conflict || error instanceof NotFound
+						? "blocked"
+						: "unavailable",
+				reason: knownRefusal ? error.message : "day_insights_unavailable",
 				payload: null,
 			};
 		}

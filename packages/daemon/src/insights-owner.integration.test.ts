@@ -209,8 +209,9 @@ async function seedSource(f: Awaited<ReturnType<typeof fixture>>, archivedAt?: s
 	return { sourceId, dir, sourceBytes };
 }
 
-async function dayRuntimeFixture(t: TestContext) {
+async function dayRuntimeFixture(t: TestContext, seed?: (home: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
 	const f = await fixture(t);
+	await seed?.(f);
 	const settings: import("@pilot/protocol").DayInsightsSettings = {
 		model: model.id,
 		thinking: "high",
@@ -255,6 +256,50 @@ async function dayRuntimeFixture(t: TestContext) {
 	const run = (op: DurableOperation) => f.journal.execute(op, (op, entry) => day.admit(op, entry.firstEntry));
 	assert.equal((await run(await intent("apply", settings))).state, "accepted");
 	return { ...f, day, settings, intent, runDay: run };
+}
+
+async function seedGoneInsights(f: Awaited<ReturnType<typeof fixture>>, report: string, revision?: number) {
+	const create = f.operation(
+		"insights-create",
+		{
+			projectId: f.project.id,
+			missionId: randomUUID(),
+			model: model.id,
+			disclosure: "insights-history-v1",
+		},
+		report,
+	);
+	assert.equal((await f.journal.execute(create, async () => ({ sessionId: report }))).state, "accepted");
+	if (revision !== undefined) {
+		const revoke = f.operation("insights-revoke", { expectedRevision: 1 }, report);
+		assert.equal((await f.journal.execute(revoke, async () => ({ sessionId: report, revision }))).state, "accepted");
+	}
+}
+
+test("Day setup accepts an exact revoked legacy chat that no longer exists", async (t) => {
+	const report = randomUUID();
+	const f = await dayRuntimeFixture(t, (f) => seedGoneInsights(f, report, 2));
+	assert.equal((await f.day.status()).executionSupported, true);
+	assert.equal((await f.day.status()).running, false);
+	assert.equal(f.sessions.get(report), undefined);
+	assert.equal((await f.journal.targetReceipts("insights-revoke", report)).length, 1);
+});
+
+for (const problem of ["missing-revoke", "wrong-revision", "remaining-storage"] as const) {
+	test(`Day setup refuses a missing legacy chat with ${problem}`, async (t) => {
+		await assert.rejects(
+			dayRuntimeFixture(t, async (f) => {
+				const report = randomUUID();
+				await seedGoneInsights(
+					f,
+					report,
+					problem === "missing-revoke" ? undefined : problem === "wrong-revision" ? 3 : 2,
+				);
+				if (problem === "remaining-storage") await mkdir(join(f.home, "sessions", report));
+			}),
+			/legacy_execution_not_proven_quiescent/,
+		);
+	});
 }
 
 test("Day Pause fences an older Apply across awaits and its generation cannot reactivate", async (t) => {

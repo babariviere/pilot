@@ -2381,6 +2381,37 @@ export class SessionManager {
 			bindingHash: payloadHash(canonicalJSON(grant)),
 		};
 	}
+	/** Journal recovery only: the revoked report has no session or storage to reopen. */
+	async proveRevokedInsightsChatAbsent(id: string): Promise<() => void> {
+		const unavailable = () => new Conflict("legacy_execution_not_proven_quiescent");
+		if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(id)) throw unavailable();
+		const guard = () => {
+			if (
+				!this.sessionInventoryQualified ||
+				this.closing ||
+				[...this.metas.keys()].some((saved) => saved.toLowerCase() === id) ||
+				this.workers.has(id) ||
+				this.starting.has(id) ||
+				this.parking.has(id) ||
+				this.saving.has(id) ||
+				this.sending.has(id) ||
+				this.changingModels.has(id) ||
+				this.durableCreateAdmissions.has(id) ||
+				this.newSessionAdmissions.has(id)
+			)
+				throw unavailable();
+		};
+		guard();
+		if ((await realpath(this.sessionsDir).catch(() => null)) !== this.sessionsDir) throw unavailable();
+		try {
+			await lstat(this.dir(id));
+			throw unavailable();
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw unavailable();
+		}
+		guard();
+		return guard;
+	}
 	/** Transfer requires an exited executor and drained admissions, not merely a Stop response. */
 	insightsLegacyStorageDirectory(id: string, projectId: string, missionId: string): string {
 		this.insightsLegacyQuiescence(id, projectId, missionId);

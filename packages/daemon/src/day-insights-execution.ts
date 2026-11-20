@@ -62,7 +62,9 @@ export class DayInsightsExecution {
 				);
 				leases.push(await legacyInsightsWriterLease(directory, guard));
 			}
-			const journal = await new InsightsJournal(this.deps.journal).freshDayExecutionGuard(known);
+			const journal = await new InsightsJournal(this.deps.journal).freshDayExecutionGuard(known, (reportId) =>
+				this.deps.sessions.proveRevokedInsightsChatAbsent(reportId),
+			);
 			const guard = () => {
 				this.deps.owners.assertLegacyDayRunsQuiescent();
 				journal();

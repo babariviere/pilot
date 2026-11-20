@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DayInsightsAction, DayInsightsSettings } from "@pilot/protocol";
+import { DayInsights } from "./day-insights.ts";
 import { dayInsightsSourceAllowed, validateDayInsightsSettings } from "./day-insights-policy.ts";
+import { Conflict } from "./errors.ts";
+import { InsightsJournal } from "./insights-journal.ts";
+import { payloadHash } from "./operation-journal.ts";
 import { createDayInsightsFixture, seedDayInsightsTracking, startDayInsightsFixture } from "./testing/day-insights.ts";
 
 test("passive review freezes submitted configuration; Save is optional and Apply stays manual", async (t) => {
@@ -60,6 +64,63 @@ test("saved-only scheduled draft cannot turn initial Apply into an automatic rep
 		).state,
 		"ready",
 	);
+});
+
+test("preflight identifies retained legacy execution but never exposes unlisted error text", async (t) => {
+	const f = await createDayInsightsFixture();
+	t.after(f.close);
+	const journal = new InsightsJournal(f.journal);
+	const service = new DayInsights({
+		home: f.home,
+		host: f.host,
+		admissionEpoch: "synthetic-day-epoch",
+		projects: f.projects,
+		models: f.models,
+		store: f.store.dayInsights,
+		workspace: f.store.insightsWorkspace,
+		runtime: {
+			nextAt: () => null,
+			preview: async () => (await journal.freshDayExecutionGuard([]))(),
+			execute: async () => assert.fail("Review must not execute"),
+		},
+	});
+	for (const [index, kind] of (["insights-create", "insights-revoke"] as const).entries()) {
+		const payload = "{}";
+		const receipt = await f.journal.execute(
+			{
+				schemaVersion: 1,
+				operationId: `synthetic-legacy-${index}`,
+				producerId: "synthetic-legacy",
+				sequence: index + 1,
+				origin: f.host,
+				destination: f.host,
+				kind,
+				targetId: `synthetic-retired-report-${index}`,
+				payload,
+				payloadHash: payloadHash(payload),
+			},
+			async () => ({ fixture: true }),
+		);
+		assert.equal(receipt.state, "accepted");
+	}
+	const request = { action: "apply", expectedRevision: 0, projectId: f.project.id, settings: f.settings };
+	assert.deepEqual(await service.preflight(request), {
+		schemaVersion: 1,
+		state: "blocked",
+		reason: "legacy_execution_not_proven_quiescent",
+		payload: null,
+	});
+	t.mock.method(f.models, "list", async () => {
+		throw new Conflict("legacy_unlisted_backend_detail /synthetic/private.json");
+	});
+	assert.deepEqual(await service.preflight(request), {
+		schemaVersion: 1,
+		state: "blocked",
+		reason: "day_insights_unavailable",
+		payload: null,
+	});
+	assert.equal((await service.status()).revision, 0);
+	assert.equal((await service.status()).owner, null);
 });
 
 test("lost configuration ACK recovers only the exact receipt without another catalog lookup", async (t) => {

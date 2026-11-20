@@ -69,6 +69,10 @@ The Day service requires a trusted owner lease and passive quiescence proof.
 Passive old tracking rows alone do not refuse fresh setup. Old grants, pending
 operations, unknown entered effects, active rules or unproven executor/storage
 quiescence do refuse fresh execution. Do not transfer or delete legacy rows.
+If a legacy report chat is gone, an exact accepted create and later revoke
+from the same producer can still prove it was revoked. Pilot also verifies the
+report's session and storage are absent. Other non-rejected operations for the
+report, open admissions, or existing storage still block setup.
 Legacy passive routes remain available with their explicit original selector.
 
 `GET /api/insights/day/legacy?cursor=OPAQUE` discovers old report identities and

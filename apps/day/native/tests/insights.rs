@@ -1,13 +1,13 @@
 //! Released native bridge against a disposable daemon with no worker or provider.
 include!("support/intake_fixture.rs");
 
-fn insights_fixture() -> Fixture {
+fn insights_fixture(mode: &str) -> Fixture {
     let mut command = Command::new("node");
     command.current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../packages/daemon"));
     let entry =
         std::env::temp_dir().join(format!("day-insights-entry-{}.mjs", uuid::Uuid::new_v4()));
     std::fs::write(&entry, r#"
-        import { writeFile } from "node:fs/promises";
+        import { mkdir, writeFile } from "node:fs/promises";
         import { join } from "node:path";
         import { createInterface } from "node:readline";
         import { once } from "node:events";
@@ -16,10 +16,13 @@ fn insights_fixture() -> Fixture {
             await import(pathToFileURL(join(process.cwd(), "src/testing/day-insights.ts")).href);
         const { createDaemonServer } =
             await import(pathToFileURL(join(process.cwd(), "src/server.ts")).href);
+        const fresh = process.argv[2] === "fresh";
         const f = await startDayInsightsFixture();
         let server;
+        let schedules;
+        let scheduleStore;
         try {
-            const { workspace } = await seedDayInsightsTracking(f);
+            const tracking = fresh ? undefined : await seedDayInsightsTracking(f);
             const { daemonId, lineageId } = f.host;
             const token = "a".repeat(64);
             const authority = f.server.services.dependencies.nativeAuthority;
@@ -29,8 +32,109 @@ fn insights_fixture() -> Fixture {
             await writeFile(join(f.home, "storage-lineage"), lineageId);
             await writeFile(join(f.home, "github-app-capability"),
                 JSON.stringify({ daemonId, lineageId, token }), { mode: 0o600 });
-            // Compose the existing workspace handler without an executor or scheduler.
-            const services = f.server.services;
+            let services = f.server.services;
+            if (fresh) {
+                const fromDaemon = (name) => import(pathToFileURL(join(process.cwd(), "src", name + ".ts")).href);
+                const { ModelCatalog } = await fromDaemon("models");
+                const { ScheduleService } = await fromDaemon("schedules");
+                const { ScheduleStore } = await fromDaemon("schedule-store");
+                const { DayInsights } = await fromDaemon("day-insights");
+                const { DayInsightsExecution } = await fromDaemon("day-insights-execution");
+                const { InsightsWorkspace } = await fromDaemon("insights-workspace");
+                const { ModelRuntime } = await import(import.meta.resolve("@earendil-works/pi-coding-agent",
+                    pathToFileURL(join(process.cwd(), "package.json")).href));
+                const { requiredAuthRegistration } = await fromDaemon("testing/required-auth");
+                const secondPath = join(f.root, "terra-project");
+                const agentDir = join(f.root, "catalog");
+                await mkdir(join(secondPath, ".pi"), { recursive: true });
+                await mkdir(agentDir);
+                await f.projects.create({ path: secondPath, name: "Z synthetic report project" });
+                await writeFile(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["synthetic/source"] }));
+                await writeFile(join(secondPath, ".pi", "settings.json"),
+                    JSON.stringify({ enabledModels: ["openai-codex/gpt-6.1-terra:high"] }));
+                const runtime = await ModelRuntime.create({
+                    authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false,
+                });
+                const terra = runtime.getModel("openai-codex", "gpt-6.1-terra");
+                if (!terra) throw new Error("Missing pinned Terra model");
+                let available = [terra, { ...terra, id: "source", provider: "synthetic" }];
+                ModelRuntime.create = async () => ({
+                    ...requiredAuthRegistration,
+                    getAvailable: async () => available,
+                });
+                scheduleStore = new ScheduleStore(join(f.home, "fixture-schedules.sqlite"));
+                schedules = new ScheduleService(scheduleStore, {
+                    sessions: f.sessions, projects: f.projects, missions: f.store, home: f.host,
+                    automationsEnabled: () => false,
+                });
+                await schedules.load();
+                const models = new ModelCatalog(agentDir);
+                const journal = services.journal;
+                const owners = f.store.insightsOwner;
+                const store = f.store.dayInsights;
+                const workspace = f.store.insightsWorkspace;
+                const day = new DayInsights({
+                    home: f.home, host: f.host, projects: f.projects, models, store, owners, workspace,
+                    sessions: f.sessions, allowance: f.store.dayInsightsAllowance,
+                    admissionEpoch: f.sessions.insightsAdmissionEpoch,
+                    runtime: new DayInsightsExecution({ sessions: f.sessions, owners, store, schedules, journal, models }),
+                });
+                services = {
+                    ...services,
+                    dependencies: { ...services.dependencies, models, schedules },
+                    insightsWorkspace: new InsightsWorkspace({
+                        home: f.home, host: f.host, projects: f.projects, models, store: workspace, journal,
+                        legacyGuard: () => {
+                            f.sessions.assertNoLegacyInsights();
+                            schedules.assertNoLegacyInsights(f.host);
+                        },
+                    }),
+                    dayInsights: day,
+                };
+                const original = services.dayInsights.preflight.bind(services.dayInsights);
+                let badReply;
+                services.dayInsights.preflight = async (...args) => {
+                    if (badReply) return badReply;
+                    const result = await original(...args);
+                    return result;
+                };
+                const legacySchedule = {
+                    id: "synthetic-legacy-rule", revision: 1, title: "Synthetic old rule", projectId: f.project.id,
+                    trigger: "recurring", at: 3600000,
+                    recurrence: { every: "week", weekday: 1, time: "01:00", timeZone: "UTC" },
+                    target: { kind: "message", sessionId: "synthetic-retired-report", message: "Fixture only" },
+                    insightsDestination: { sessionId: "synthetic-retired-report", projectId: f.project.id, missionId: "synthetic-mission" },
+                    state: "pending", createdAt: 0, updatedAt: 0,
+                };
+                services.insightsFixture = async (action) => {
+                    if (action === "zero") available[0] = { ...terra, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+                    if (action === "omitted") available[0] = { ...terra, cost: undefined };
+                    if (action === "signed-out") available = available.slice(1);
+                    if (["zero", "omitted", "signed-out"].includes(action))
+                        await writeFile(join(agentDir, "auth.json"), JSON.stringify({ unavailableFixtureMarker: action }));
+                    if (action === "legacy-schedule") await scheduleStore.create(legacySchedule);
+                    if (action === "cancel-legacy-schedule")
+                        await scheduleStore.replace(legacySchedule, { ...legacySchedule, revision: 2, state: "cancelled" });
+                    if (action === "unlisted-refusal" || action === "refusal-with-payload")
+                        badReply = { schemaVersion: 1, state: "blocked",
+                            reason: action === "unlisted-refusal" ? "legacy_unlisted_backend_detail /synthetic/private.json" : "legacy_schedule_not_quiescent",
+                            payload: action === "unlisted-refusal" ? null : {},
+                        };
+                    if (action === "legacy-journal") {
+                        const { payloadHash } = await fromDaemon("operation-journal");
+                        for (const [index, kind] of ["insights-create", "insights-revoke"].entries()) {
+                            const op = {
+                                schemaVersion: 1, operationId: "synthetic-legacy-" + index,
+                                producerId: "synthetic-legacy-producer", sequence: index + 1,
+                                origin: f.host, destination: f.host, kind, targetId: "synthetic-retired-report-" + index,
+                                payload: "{}", payloadHash: payloadHash("{}"),
+                            };
+                            const receipt = await services.journal.execute(op, async () => ({ fixture: true }));
+                            if (receipt.state !== "accepted") throw new Error("Fixture journal seed refused");
+                        }
+                    }
+                };
+            }
             let withholdSave = false;
             let uncertain;
             const day = services.dayInsights;
@@ -49,9 +153,9 @@ fn insights_fixture() -> Fixture {
             });
             server = createDaemonServer({
                 ...services,
-                insightsWorkspace: workspace,
+                insightsWorkspace: tracking?.workspace ?? services.insightsWorkspace,
                 admitOperation: (op, ...args) => op.kind === "insights-workspace-lifecycle"
-                    ? workspace.admit(op) : services.admitOperation(op, ...args),
+                    ? tracking.workspace.admit(op) : services.admitOperation(op, ...args),
             });
             server.listen(0, "127.0.0.1");
             await once(server, "listening");
@@ -63,6 +167,7 @@ fn insights_fixture() -> Fixture {
                 const { action } = JSON.parse(line);
                 if (action === "quit") break;
                 if (action === "withhold-save") withholdSave = true;
+                await services.insightsFixture?.(action);
                 console.log(JSON.stringify({ starts: f.starts() }));
             }
         } finally {
@@ -71,10 +176,15 @@ fn insights_fixture() -> Fixture {
                 server.closeAllConnections();
                 await new Promise(resolve => server.close(resolve));
             }
+            await schedules?.stop();
+            await scheduleStore?.close();
             await f.close();
         }
     "#).unwrap();
-    command.arg(&entry);
+    command
+        .arg("--experimental-import-meta-resolve")
+        .arg(&entry)
+        .arg(mode);
     let fixture = Fixture::with_command(command);
     std::fs::remove_file(entry).unwrap();
     fixture
@@ -104,8 +214,110 @@ fn confirm(f: &Fixture, bridge: &Bridge, token: &Value) -> Value {
 }
 
 #[test]
+fn connected_insights_fresh_two_project_review_uses_exact_catalog_choice() {
+    let mut f = insights_fixture("fresh");
+    let bridge = Bridge::new(DayRoot::new(
+        NativeHost::open(
+            serde_json::from_value(f.info["source"].clone()).unwrap(),
+            PathBuf::from(f.info["ledger"].as_str().unwrap()),
+        )
+        .unwrap(),
+    ));
+    let initial = snapshot(&f, &bridge);
+    assert_eq!(initial["state"], "off");
+    assert!(initial["executionProjectId"].is_null());
+    assert_eq!(initial["projects"].as_array().unwrap().len(), 2);
+    let first = &initial["projects"][0]["id"];
+    let second = &initial["projects"][1]["id"];
+    let catalog = |project| {
+        f.call(
+            &bridge,
+            "day.insights.models",
+            json!({"binding":initial["binding"],"projectId":project}),
+        )
+    };
+    assert_eq!(
+        catalog(first)["value"]["snapshot"]["models"][0]["id"],
+        "synthetic/source"
+    );
+    let model = catalog(second)["value"]["snapshot"]["models"][0].clone();
+    assert_eq!(
+        model,
+        json!({"id":"openai-codex/gpt-6.1-terra","name":"GPT-6.1 Terra","provider":"openai-codex"})
+    );
+    let intent = json!({"action":"setup","settings":{"projectId":second,"model":model["id"],
+        "sourceProjectIds":[first,second],"excludeSessionIds":[],"perReportUsd":5,"monthlyUsd":50,"schedule":null}});
+    let review = |f: &Fixture, scope: &Value| {
+        f.call(
+            &bridge,
+            "day.insights.prepare",
+            json!({"binding":scope["binding"],"intent":intent}),
+        )
+    };
+    let refused = |f: &Fixture, scope: &Value, reason| {
+        assert_eq!(
+            review(f, scope),
+            json!({"version":1,"value":{"snapshot":null,"outcome":null,"reason":reason}})
+        );
+    };
+    for mode in ["stats", "zero", "omitted"] {
+        assert_eq!(f.stats(mode)["starts"], 0);
+        let reply = review(&f, &initial);
+        assert!(
+            reply["value"]["snapshot"]["token"].is_string(),
+            "{mode}: {reply}"
+        );
+        assert_eq!(reply["value"]["snapshot"]["intent"], intent);
+    }
+    assert!(snapshot(&f, &bridge)["applied"].is_null());
+    let earlier_token = review(&f, &initial)["value"]["snapshot"]["token"].clone();
+    f.stats("legacy-schedule");
+    let current = snapshot(&f, &bridge);
+    assert_eq!(current["state"], "off");
+    refused(
+        &f,
+        &current,
+        "An earlier Insights schedule still blocks setup. Check Schedules for the earlier rule. Nothing changed.",
+    );
+    assert_eq!(
+        f.call(
+            &bridge,
+            "day.insights.confirm",
+            json!({"token":earlier_token})
+        )["error"],
+        "stale"
+    );
+    f.stats("cancel-legacy-schedule");
+    let current = snapshot(&f, &bridge);
+    assert!(review(&f, &current)["value"]["snapshot"]["token"].is_string());
+    f.stats("legacy-journal");
+    refused(
+        &f,
+        &snapshot(&f, &bridge),
+        "Pilot can’t verify that earlier Insights work has stopped. Check the earlier setup before trying again. Nothing changed.",
+    );
+    f.stats("signed-out");
+    let current = snapshot(&f, &bridge);
+    refused(
+        &f,
+        &current,
+        "This model is no longer available for the report project. Choose another model and review again. Nothing changed.",
+    );
+    f.stats("unlisted-refusal");
+    assert_eq!(
+        review(&f, &current),
+        json!({"version":1,"error":"unavailable"})
+    );
+    f.stats("refusal-with-payload");
+    assert_eq!(review(&f, &current), json!({"version":1,"error":"invalid"}));
+    assert!(snapshot(&f, &bridge)["applied"].is_null());
+    assert_eq!(f.stats("stats")["starts"], 0);
+    close(bridge);
+}
+
+#[test]
 fn connected_insights_pause_allows_one_safety_stop_during_an_uncertain_save() {
-    let mut f = insights_fixture();
+    let mut f = insights_fixture("tracking");
     let bridge = Bridge::new(DayRoot::new(
         NativeHost::open(
             serde_json::from_value(f.info["source"].clone()).unwrap(),
@@ -167,7 +379,7 @@ fn connected_insights_pause_allows_one_safety_stop_during_an_uncertain_save() {
 
 #[test]
 fn connected_insights_applies_exact_settings_without_resuming_and_verifies_only_after_shipping() {
-    let mut f = insights_fixture();
+    let mut f = insights_fixture("tracking");
     let bridge = Bridge::new(DayRoot::new(
         NativeHost::open(
             serde_json::from_value(f.info["source"].clone()).unwrap(),

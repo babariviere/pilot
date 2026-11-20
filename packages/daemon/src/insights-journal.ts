@@ -1,6 +1,36 @@
-import { type JournalObservation, OperationConflict, type OperationJournal, payloadHash } from "./operation-journal.ts";
+import {
+	canonicalJSON,
+	type JournalObservation,
+	OperationConflict,
+	type OperationJournal,
+	payloadHash,
+} from "./operation-journal.ts";
 
 const isLegacyOperation = (kind: string) => kind.startsWith("insights-") && !kind.startsWith("insights-workspace-");
+
+/** An absent chat needs affirmative retirement evidence. No other legacy operation may have entered. */
+function revokedMissingChat(entries: JournalObservation[]): boolean {
+	if (entries.length !== 2) return false;
+	const create = entries.find((r) => r.operation.kind === "insights-create");
+	const revoke = entries.find((r) => r.operation.kind === "insights-revoke");
+	if (!create || !revoke) return false;
+	const a = create.operation;
+	const b = revoke.operation;
+	if (a.producerId !== b.producerId || canonicalJSON(a.origin) !== canonicalJSON(b.origin) || a.sequence >= b.sequence)
+		return false;
+	try {
+		const { expectedRevision } = JSON.parse(b.payload);
+		return (
+			Number.isSafeInteger(expectedRevision) &&
+			expectedRevision >= 1 &&
+			canonicalJSON(create.receipt.result) === canonicalJSON({ sessionId: a.targetId }) &&
+			canonicalJSON(revoke.receipt.result) ===
+				canonicalJSON({ sessionId: b.targetId, revision: expectedRevision + 1 })
+		);
+	} catch {
+		return false;
+	}
+}
 
 /** Insights migration policy over the journal's serialized records and synchronous reservation fence. */
 export class InsightsJournal {
@@ -114,16 +144,39 @@ export class InsightsJournal {
 		});
 	}
 	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
-	async freshDayExecutionGuard(knownReports: string[]) {
-		return this.journal.openReader(({ records, failed, pendingKinds }) => {
+	async freshDayExecutionGuard(knownReports: string[], proveAbsent?: (id: string) => Promise<() => void>) {
+		const read = await this.journal.openReader(({ records, failed, pendingKinds }) => {
 			if (failed || [...pendingKinds].some(isLegacyOperation))
 				throw new OperationConflict("legacy_journal_busy_or_unavailable");
-			for (const { operation: op, receipt } of records) {
+			const missing = new Map<string, JournalObservation[]>();
+			for (const entry of records) {
+				const { operation: op, receipt } = entry;
 				if (!isLegacyOperation(op.kind) || receipt.state === "rejected") continue;
-				if (receipt.state === "pending" || !knownReports.includes(op.targetId))
-					throw new OperationConflict("legacy_execution_not_proven_quiescent");
+				if (receipt.state === "pending") throw new OperationConflict("legacy_execution_not_proven_quiescent");
+				if (knownReports.includes(op.targetId)) continue;
+				const group = missing.get(op.targetId) ?? [];
+				group.push(entry);
+				missing.set(op.targetId, group);
 			}
+			if (missing.size > 64 || (missing.size && !proveAbsent))
+				throw new OperationConflict("legacy_execution_not_proven_quiescent");
+			for (const entries of missing.values())
+				if (!revokedMissingChat(entries)) throw new OperationConflict("legacy_execution_not_proven_quiescent");
+			return missing;
 		});
+		const original = read();
+		const guards = new Map<string, () => void>();
+		for (const id of original.keys()) guards.set(id, await proveAbsent!(id));
+		return () => {
+			const current = read();
+			if (original.size !== current.size) throw new OperationConflict("legacy_execution_not_proven_quiescent");
+			for (const [id, entries] of original) {
+				const now = current.get(id);
+				if (!now || entries.some((entry) => !now.some((r) => r.original() === entry.original())))
+					throw new OperationConflict("legacy_execution_not_proven_quiescent");
+				guards.get(id)!();
+			}
+		};
 	}
 	async legacyInsightsGuard(): Promise<() => void> {
 		// Check live reservations synchronously again at the owner transaction boundary.

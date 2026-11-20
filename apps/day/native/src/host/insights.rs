@@ -716,12 +716,48 @@ async fn checked_workspace(t: &Transport, scope: &Scope) -> Result<Value, Error>
     Ok(hello)
 }
 
+struct PreparedReview {
+    record: Record,
+    label: &'static str,
+    lines: Vec<String>,
+}
+
+enum ReviewPreparation {
+    Ready(PreparedReview),
+    Refused(&'static str),
+}
+
+// Render only fixed local copy. Never show a reason supplied by the daemon verbatim.
+fn review_refusal(reason: &Value) -> Option<&'static str> {
+    Some(match reason.as_str()? {
+        "legacy_schedule_not_quiescent" => {
+            "An earlier Insights schedule still blocks setup. Check Schedules for the earlier rule. Nothing changed."
+        }
+        "legacy_execution_not_proven_quiescent"
+        | "legacy_execution_or_transfer_uncertain"
+        | "legacy_executor_not_quiescent_or_grant_not_revoked"
+        | "day_insights_existing_execution_requires_recovery" => {
+            "Pilot can’t verify that earlier Insights work has stopped. Check the earlier setup before trying again. Nothing changed."
+        }
+        "schedule_inventory_unavailable" => {
+            "Pilot can’t check earlier schedules right now. Try reviewing setup again. Nothing changed."
+        }
+        "legacy_journal_busy_or_unavailable" => {
+            "Pilot can’t check earlier Insights changes right now. Try reviewing setup again. Nothing changed."
+        }
+        "day_insights_exact_model_unavailable" => {
+            "This model is no longer available for the report project. Choose another model and review again. Nothing changed."
+        }
+        _ => return None,
+    })
+}
+
 async fn prepare(
     t: &Transport,
     scope: &Scope,
     intent: &Intent,
     writes: &PendingWrites,
-) -> Result<(Record, &'static str, Vec<String>), Error> {
+) -> Result<ReviewPreparation, Error> {
     if let Intent::Ship { key, revision } | Intent::Verify { key, revision } = intent {
         let hello = checked_workspace(t, scope).await?;
         let owner = &scope.workspace.workspace()?.owner;
@@ -764,17 +800,17 @@ async fn prepare(
                 "schemaVersion":2,"owner":owner,"key":key,"expectedRevision":revision,"lifecycle":lifecycle,
             }),
         )?;
-        return Ok((
+        return Ok(ReviewPreparation::Ready(PreparedReview {
             record,
             label,
-            vec![
+            lines: vec![
                 detail.value["title"]
                     .as_str()
                     .unwrap_or("Finding")
                     .to_owned(),
                 description.into(),
             ],
-        ));
+        }));
     }
     day_hello(t).await?;
     let current = status(t).await?;
@@ -819,7 +855,13 @@ async fn prepare(
     })).await?;
     match (preview["schemaVersion"].as_u64(), preview["state"].as_str()) {
         (Some(1), Some("ready")) if preview.get("reason") == Some(&Value::Null) => (),
-        (Some(1), Some("blocked" | "unavailable")) => return Err(Error::Unavailable),
+        (Some(1), Some("blocked" | "unavailable"))
+            if preview.get("payload") == Some(&Value::Null) =>
+        {
+            return review_refusal(&preview["reason"])
+                .map(ReviewPreparation::Refused)
+                .ok_or(Error::Unavailable);
+        }
         _ => return Err(Error::Invalid),
     }
     let payload = &preview["payload"];
@@ -849,11 +891,11 @@ async fn prepare(
         }
         .into(),
     );
-    Ok((
-        Record::new(&t.source, DAY_OPERATION, &owner, payload.clone())?,
+    Ok(ReviewPreparation::Ready(PreparedReview {
+        record: Record::new(&t.source, DAY_OPERATION, &owner, payload.clone())?,
         label,
         lines,
-    ))
+    }))
 }
 
 fn settle(journal: &mut Journal, record: &mut Record, receipt: Value) -> Result<(), Error> {
@@ -989,8 +1031,18 @@ pub(super) async fn handle(
                 .review = None;
             let writes = PendingWrites::read(&t.source, journal);
             writes.admit(&scope.status, intent.into())?;
-            let (record, label, lines) = prepare(t, &scope, intent, &writes).await?;
+            let prepared = prepare(t, &scope, intent, &writes).await?;
             admit(shared, call)?;
+            let PreparedReview {
+                record,
+                label,
+                lines,
+            } = match prepared {
+                ReviewPreparation::Ready(review) => review,
+                ReviewPreparation::Refused(reason) => {
+                    return Ok(json!({"snapshot":null,"outcome":null,"reason":reason}));
+                }
+            };
             let token = Uuid::new_v4().to_string();
             shared
                 .insights
