@@ -3,6 +3,18 @@
 Short guides for the desktop app. Start with [installation and setup](getting-started.md).
 
 The upcoming interface can be prepared locally as a [connected candidate](technical/day-connected-candidate.md).
+
+In Day, each page is one panel, with tabs on its top edge where the page has parts. The top bar is a path:
+**Pilot** goes to Today, the part before the last goes back one level (as Escape does), and the last part
+opens a menu of places. **Search** (Command+K) sits at its right with Changes, Feedback, Artifacts, Settings
+and New. Today's tabs filter the page: Overview, Needs you, New, Working and Missions.
+Settings has tabs for AI, Project, Local projects, Tool connections, Allowances and Diagnostics & privacy;
+a tab this window cannot reach is hidden. A plan's page has Questions and Plan tabs, and Activity when
+Pilot can read the planning chat. A mission's **Rename** opens as a question at the top of its page:
+**Save** sends the new title once, **Cancel** keeps the old one. A result's page leads with **Your check**.
+A kept change in Changes has Diff and History tabs. The Artifacts page lists artifacts as rows; opening a
+row shows the artifact under it.
+
 Connected Day keeps earlier reads marked as older while it refreshes. An
 unavailable attention read never means that nothing needs you. Read again only
 reads; it does not resend an answer or start work.
@@ -91,7 +103,7 @@ Each screen task gets a prototype you choose during planning, and its worker bui
 without one starts with a mockup in its chat, and the worker builds only after you agree.
 When a change you can see lands, its chat captures the real app before and after the change. The result page shows
 each screen under Screens, with Before and After tabs, or the chat's reason for having no captures.
-The Artifacts page and the mission overview show each such screen as one Before/After card.
+The Artifacts page and the mission overview show each such screen as one row that opens Before and After.
 On a mission page, a done task folds its report until Show report, and each task links its own chat.
 A Slack request (Change, then Plan a mission…) or a Linear issue (Prefill mission draft on the Linear page)
 can also become a mission: it opens New with its title and link. Your Plan takes it off Today and links it to

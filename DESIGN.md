@@ -2,9 +2,15 @@
 
 Pilot's app should be calm and beautiful. It runs agents in the background so the user does not have to watch
 them. The interface reports what matters, stays out of the way, and is a pleasure to look at.
-[AGENTS.md](AGENTS.md) holds the working rules. The current GPUI design system is indexed in
-`apps/desktop/docs/design-system.md`; Day uses its native shared tokens. This file records the intent.
-Swift-specific sections below are historical design context. The obsolete Swift GUI is removed.
+[AGENTS.md](AGENTS.md) holds the working rules. This file records the intent. It covers three apps:
+
+- **Pilot Day** (`apps/day`), the upcoming app. [Pilot Day](#pilot-day) is its current design. Where an older line
+  below names a different look, that section wins for Day. Its parts live in `apps/day/ui`
+  ([guide](apps/day/ui/README.md)).
+- **Pilot Next** (`apps/desktop`, GPUI), the shipping app. Lines marked "Pilot Next" apply to it, and its
+  components are indexed in `apps/desktop/docs/design-system.md`.
+- The Swift app is removed. Sections and lines that name Swift files or types are historical design context.
+  Pilot Next and Day keep Swift's intent, not its looks.
 
 ## Calm
 
@@ -26,16 +32,19 @@ Swift-specific sections below are historical design context. The obsolete Swift 
 
 Calm is not plain. The app should look sleek and feel pleasant to the eye, like a well-made native Mac app.
 
-- **Restraint is the style.** Generous whitespace, a clear type hierarchy, one accent color and a small, soft
-  palette. Let spacing and alignment do the work that borders, boxes and decoration usually do.
+- **Restraint is the style.** Even spacing, a clear type hierarchy, one accent color and a small, soft
+  palette. Let spacing, alignment and hairlines do the work that boxes and decoration usually do.
 - **Polish in the details.** Consistent corner radii, optical alignment, crisp icons from one family, smooth
   hover and focus states. Small imperfections add up to a restless app.
-- **Native first.** Use system materials, SF Symbols, system fonts and platform conventions. The app should look
-  at home on macOS and at any window size, in light and dark. Pilot follows the macOS appearance unless
-  Settings → Appearance pins one.
-- **One theme, two appearances.** Every colour comes from `Theme` tokens, which resolve per appearance
-  (`Color(light:dark:)`); never use literal, system or `.secondary`-style colours in views, and add a missing token
-  centrally. Dark keeps the light hierarchy: a darker sidebar beside the page, lifted cards and trays, light primary
+- **Native first.** Follow platform conventions. The app should look at home on macOS and at any window size, in
+  light and dark. Swift (historical) used system materials, SF Symbols and system fonts, and followed the macOS
+  appearance unless Settings → Appearance pinned one. Day draws native views with its own type (Geist and Geist
+  Mono, bundled) and one line-icon family, and follows the macOS appearance.
+- **One theme, two appearances.** Every colour comes from theme tokens, which resolve per appearance. Never use
+  literal or system colours in views, and add a missing token centrally. In Day the tokens are in
+  `apps/day/theme.json`, and screens reach them only through `apps/day/ui`.
+  Swift (historical): tokens came from `Theme` (`Color(light:dark:)`), never `.secondary`-style colours. Dark kept
+  the light hierarchy: a darker sidebar beside the page, lifted cards and trays, light primary
   buttons with `onPrimary` text, text-weight colours lightened for contrast. Dithered scenes dim to dusk; status
   corners keep one translucent tint set. Home instead uses separate daytime clouds and evening sea pictures, preserving
   their own colours. Artifacts are light documents and keep a light page in both. Native visuals are the exception:
@@ -49,11 +58,11 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).
   They explain a change, never decorate it.
 - **Dithered gradients are Pilot's signature.** Prefer ordered (Bayer) dithering with hard square pixels over smooth
-  gradients, glows and blurs: the Home sky and the empty Inbox's coast (`DitherScene`, bundled pictures softened
-  and dithered, with the procedural `DitherSky` as fallback) set the tone. Dither is atmosphere, with a soft
-  palette and quiet motion, and keeps text readable over it. In Pilot Next it is atmosphere only: rows show state
-  with still marks and words (see State vocabulary), never dither. The Swift app keeps its status corners
-  (`DitherCorner`) unchanged until it retires.
+  gradients, glows and blurs. Dither is atmosphere, with a soft palette, and keeps text readable over it. In Day it
+  is the one decoration: the sky shown when nothing needs the user (see [Pilot Day](#decoration)). In Pilot Next it
+  is atmosphere only: rows show state with still marks and words (see State vocabulary), never dither.
+  Swift (historical): the Home sky and the empty Inbox's coast (`DitherScene`, with the procedural `DitherSky` as
+  fallback) set the tone, and chat rows had status corners (`DitherCorner`).
 - **Review in the native app.** Inspect the result at the size users will see it, with real and
   long content. Try the changed interactions before calling the change done.
 
@@ -79,7 +88,84 @@ by urgency: failed, question, scheduled failure, unread, then the rest.
 - **Waiting is working.** An idle agent whose background jobs still run is Working: no done outcome, notification or
   Needs you entry, and it never wakes a mission coordinator. Only a job past one hour asks for the user.
 
+## Pilot Day
+
+Pilot Day's design was chosen over four rounds of mockups (`apps/day/fixtures/prototype-components`; round 4 is
+the reference). The parts, their props and their exact sizes are in the [library guide](apps/day/ui/README.md).
+
+### One library sets the look
+
+- `apps/day/ui` is the only place that sets a look. Screens compose its parts: they pick roles, kinds and tones,
+  and write no look classes (no colour, size, weight, font, border, radius, fill or padding). Plain layout classes
+  such as `flex-row`, `gap-2` and `flex-1` are allowed.
+- A missing part or variant goes into the library, with its rule, never into one screen.
+- NSH artifacts import the same library from `pilot-day/ui`, so a mockup looks like Pilot.
+- The Wayfinder chart is the one exception: it draws on its own paper with the `map-*` tokens.
+
+### Layout
+
+- **One panel per page.** A page is a head (title, the page's state, one or two sentences, its commands), one framed
+  panel, and at most one quiet line under it. The page is centred, at most 1088 points wide (840 for forms such as
+  Settings).
+- **Hairlines, not boxes.** Hairlines split the panel into columns and sections. A section never gets its own box.
+  With two columns, what needs the user goes in the main (left) column. Under 880 points the columns stack.
+- **Tabs attach to the panel.** They sit on its top edge and are the page's sub-pages, or on Today its filters.
+  A tab's count is the same number its section shows.
+- **One question at a time.** The thing that waits for an answer leads its section. The others queue under it as rows.
+- **One row for every list:** mark, title, meta, state and trailing, each slot filled or empty, never restyled.
+  A section shows at most five rows, then Show all or a tab.
+- One primary button per page. A problem is one notice beside what it affects, with one way out.
+
+### Skin, density and type
+
+- **Forge.** A canvas with a faint 32-point grid, one panel surface and hairlines. One violet accent (`primary`)
+  marks the one commit, links and the keyboard focus ring. Amber, red and green mean only Needs you, Failed and
+  Ready to merge.
+- **Compact** is the only density: controls 26 points high, rows 30 points with one line. Radius 8 for controls and
+  tabs, 10 for the panel.
+- **Geist with Geist Mono.** Text is Geist. Numbers (times, counts, ids) are Geist Mono. Both are bundled under the
+  SIL Open Font License (`apps/day/fonts/OFL.txt`). A screen picks a text role (Display, Title, Heading, Body,
+  Caption, Number), never a size, weight or family.
+- **One quiet motion.** A short fade and lift when something arrives. Reduce Motion turns it off.
+
+### Navigation
+
+- **A path, not a sidebar.** The top bar starts with a path such as "Pilot / Today ▾". Pilot always goes to Today.
+  The part before the last goes back one level, as Escape does. The last part is where you are; it opens a menu of
+  the places every screen can reach.
+- At the right of the bar: quiet icons for Changes, Feedback, Artifacts and Settings, Search with its key, and New.
+  The bar stays put while the screens under it change.
+- **Command+K** opens the palette over any screen. It only goes to places. It never sends, saves or starts work.
+
+### States
+
+One mark and one word per state, the same on every screen. Marks are built from squares and never animate. The
+word and the accessible name always carry the state, so colour is never the only signal.
+
+| State | Mark | Meaning | Asks for the user |
+| --- | --- | --- | --- |
+| Needs you | Filled amber square | A question, an unreviewed result, a sign-in (see Attention budget) | Yes |
+| Failed | Broken red square | Work stopped on an error | Yes |
+| Ready to merge | Green square with a tick | An open pull request that nothing blocks | No, it waits |
+| Working | Hollow square | An agent, or its background jobs, runs | No |
+| Paused | Two bars | Held on purpose: a Pause, or set aside with Later | No |
+| New | Small square | It came in and nobody started it | Slack requests queue in Needs you |
+| Done | A tick | Finished and reviewed | No |
+| Unconfirmed | Being added | Pilot could not read or confirm it, such as a lost answer | Not by itself |
+
+- A screen may use a more exact word for the same state ("Did not confirm", "Pausing"), never a new mark or colour.
+- Unconfirmed never looks empty or done. It is not Needs you and does not ask for the user by itself.
+- Progress is a row of squares and a mono count ("■■■□□ 2/5"): done squares dark, stopped ones red, the rest faint.
+
+### Decoration
+
+When nothing needs the user, Today's Needs you says so in one line under Pilot's dithered sky: ordered (Bayer)
+dither with 3-point square pixels, accent ink and a low amber sun. It is the only decoration in Day. It draws once
+per size and appearance and does not move.
+
 ## Views
+
+Swift and Pilot Next. Day has no sidebar or Inbox; see [Pilot Day](#navigation).
 
 Each top-level view has one role. Keep new content in the view whose role it serves.
 
@@ -100,8 +186,9 @@ Each top-level view has one role. Keep new content in the view whose role it ser
 
 ## State vocabulary
 
-Each state has one label and one icon and color token in `Theme`, used the same way in the sidebar, Home and
-the project page. Do not restyle a state for a single screen. Linear tickets and mission tasks share one status
+Each state has one label, one mark and one colour token, used the same way on every screen of an app. Do not
+restyle a state for a single screen. Day's marks and words are in [Pilot Day](#states); the rest of this section is
+Swift (historical) and Pilot Next. There, Linear tickets and mission tasks share one status
 ladder: empty circle to do, one-third filled in progress, two-thirds filled in review, then done.
 The progress pies fill clockwise from 12 o'clock.
 
@@ -113,9 +200,10 @@ The progress pies fill clockwise from 12 o'clock.
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |
 
-In the sidebar, a chat's state is its dithered corner (`DitherCorner`), not an icon column: an ordered dither
-growing from the row's bottom-right corner in the state's tint. Working is a soft indigo ripple, needs you an amber
-breath, failed a steady dense red, ready to merge a steady light green. Done and other quiet chats draw nothing.
+Swift (historical): in the sidebar, a chat's state was its dithered corner (`DitherCorner`), not an icon column:
+an ordered dither growing from the row's bottom-right corner in the state's tint. Working is a soft indigo ripple,
+needs you an amber breath, failed a steady dense red, ready to merge a steady light green. Done and other quiet
+chats draw nothing.
 Density and motion differ per state, so color is never the only signal, and VoiceOver reads the state. Changes
 dissolve cell by cell. Under the pointer the corner recedes toward the trailing edge (fewer cells, same pixels) and
 the row's revealed buttons use the space it frees: rows with a corner draw no hover fill and nothing cuts holes in
@@ -149,6 +237,8 @@ Stop, Force work and the daemon's existing reset/fresh-reading resume policy rem
 usage alone never establishes this state.
 
 ## Sidebar
+
+Swift (historical), then Pilot Next. Day has no sidebar.
 
 The sidebar answers "what needs me" before "where is it". From the top: Home (with compose), the Inbox (with the
 attention badge), then the project selector ("All projects" or one project) heading the scoped list, and a focused
@@ -233,6 +323,9 @@ sections whenever an agent changes state are hard to find again. The Swift sideb
 
 ## Consistency
 
+The rules hold for every app. The named components are Swift's (historical); Pilot Next's are indexed in
+`apps/desktop/docs/design-system.md` and Day's in [apps/day/ui/README.md](apps/day/ui/README.md).
+
 - Reuse shared components and `Theme` tokens (color, type, spacing, radius, motion). Add missing tokens or
   components centrally instead of styling a screen on its own.
 - Icons come from `PilotIcon` (`PilotIcon.swift`): one SF Symbol per concept, sized by its context (row,
@@ -246,12 +339,15 @@ sections whenever an agent changes state are hard to find again. The Swift sideb
   Sidebar chat selection stays neutral grey whether or not the list has focus, keeping the normal text and
   status colours. Focus never adds a blue ring: rows keep their neutral selection, text controls keep their caret,
   and native focus effects are disabled at every scene root with `quietFocus()`. Keyboard navigation stays enabled.
+  Day differs: keyboard focus shows a faint ring in the violet accent.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
 - Settings pages use the same reading column: `SettingsSection` (heading, explanation above the rows) and
   `SettingsRow` hairline rows with native controls trailing (`Settings.swift`), never grouped forms. Selection is
   soft grey, never system blue. Pages that need an explicit Save show it (with Revert) only once something changed,
   and destructive actions such as Remove Project sit at the end as a red outline button with one explaining line.
+  In Day, Settings is one form-width panel with tabs. Its sections hold the same rows as every list, with the
+  control in the row's trailing slot, and no section gets its own box.
 - Pages, sheets and panes share their chrome (`PageComponents.swift`): `PageHeader` for page titles,
   `InspectorPaneHeader` for inspector panes (no per-pane close button), `EmptyStateView` for empty or failed
   panes, `DisclosureChevron`, `ListToggle` ("Show all N" / "Show fewer") and `MetaText` for quiet metadata
@@ -325,16 +421,21 @@ holds every other link, so a ticket appears once. Its Linear update line is mute
 Resume when paused for review and an `InlineProblem` with Retry when an update failed. A canceled ticket's tasks read
 Dropped, never done.
 
-Progress bars (`SegmentedProgressBar`) are one plain 6 pt capsule with no gaps, dither or animation. Task bars use the
-row colours: green done, amber in review, indigo in progress, red blocked, and the faint track for to do. Where there is
-room (a mission's Overview, Tasks and inspector) a legend of counts with matching dots follows (`ProgressLegend`,
-zero counts omitted); compact rows keep the bar plus "9 of 18".
+Swift (historical): progress bars (`SegmentedProgressBar`) are one plain 6 pt capsule with no gaps, dither or
+animation. Task bars use the row colours: green done, amber in review, indigo in progress, red blocked, and the
+faint track for to do. Where there is room (a mission's Overview, Tasks and inspector) a legend of counts with
+matching dots follows (`ProgressLegend`, zero counts omitted); compact rows keep the bar plus "9 of 18".
+Day draws progress as squares (see [States](#states)).
 
 ## UI review checklist
 
 - Looks calm and polished, checked by eye (attach an NSH mockup artifact for new layouts).
+- Day: built only from `apps/day/ui` parts, with no look classes in the screen. One panel and one primary button
+  per page. States use the words and marks in [States](#states).
+- Day: captured on the macOS host with a `*Visual.test.tsx` test in light and dark, at 1100 and 480 points wide,
+  and compared with Today.
 - Long content, and loading, empty, error and disabled states.
-- Narrow and wide windows.
+- Narrow and wide windows (Day stacks its columns under 880 points).
 - Light and dark appearances.
 - Keyboard access, readable contrast, reduced motion, and VoiceOver labels (color is never the only signal).
 - No layout shift from live updates, and nothing slows scrolling or typing.

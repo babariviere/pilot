@@ -22,7 +22,7 @@ approve a finding, grant access or change spending limits.
 Project coordinators can record small explicit user choices with a cited user note.
 These choices belong only to that project. They are not wiki facts, global defaults
 or permissions. Changes keep their source and revision history; stale edits fail
-instead of replacing newer choices. In Pilot Day, open Settings (⌘,) to read, edit,
+instead of replacing newer choices. In Pilot Day, open Settings (⌘,) → **Project** to read, edit,
 add or remove this project's preferences; nothing is saved until you press Save.
 
 Mission records hold current agreement and work. Knowledge holds sourced project

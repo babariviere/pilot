@@ -187,6 +187,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 
 - [Desktop implementation contracts](../../apps/desktop/docs/design-system.md)
 - [Pilot Day, the upcoming Native Shell TSX app](../../apps/day/README.md)
+- [Day design system](day-design-system.md): tokens, the `apps/day/ui` library, screens, and the library in artifacts.
 - [Day authenticated native host and control journal](day-native-host.md)
 - [Day Native Shell release qualification](day-nsh-release.md)
 - [Day released public JSON bridge and lifecycle limits](day-public-bridge.md)

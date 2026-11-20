@@ -22,14 +22,14 @@ while it is scrolled out of view and starts again from the same revision when
 it shows. Interactions change only that preview's local state; hiding or
 pausing it resets them. **Reset** starts it again without changing the saved version.
 Failed native previews keep readable source and **Retry preview**. **Inspect source** remains available. Day's
-**Artifacts** page shows what the project's chats saved as a gallery, newest
-first, and each mission's overview shows its linked artifacts by task. Cards
-show the kind, title and revision; opening one shows its preview, image or source.
+**Artifacts** page lists what the project's chats saved as rows, newest
+first, and each mission's overview lists its linked artifacts by task. Rows
+show the title, kind and revision; opening one shows its preview, image or source under it.
 Search loaded outputs by title, kind or linked task. Compare a previous version
-in the gallery, or use **Compare outputs** beside a result's Outputs heading to
+in the list, or use **Compare outputs** beside a result's Outputs heading to
 choose Before and After from its pinned outputs. Before and After are tabs over
 one pane, After first; switching reads nothing again.
-A screen a chat captured before and after a change is one card in the gallery and the
+A screen a chat captured before and after a change is one row in the list and the
 mission overview, not two images. It opens with Before and After tabs, After first. An open
 artifact fades in below its row, fades out before it closes, and the rows below glide.
 Each viewer's header has a share icon and a full-window icon for the pane shown.

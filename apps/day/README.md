@@ -75,6 +75,19 @@ apps/day/nsh.sh test App.test.tsx
 
 Run the matching `*.test.tsx` file for the feature you change. Headless tests
 check behavior, not native appearance, keyboard input or IME support.
+`nsh check` is Day's TypeScript check. `scripts/typecheck.sh` checks the
+workspace packages only, not `apps/day`.
+
+### Screen captures
+
+`*Visual.test.tsx` files capture screens on the macOS host.
+`TodayVisual.test.tsx` is the model: it opens a mock-data entry in light and
+dark, at 1100 and 480 points wide, and saves PNGs under `output/`.
+Headless runs draw nothing:
+
+```sh
+apps/day/nsh.sh test TodayVisual.test.tsx --target macos
+```
 
 ### Before and after captures
 
@@ -95,5 +108,13 @@ For a new screen with no Before, use `--new-screen` to avoid building an unused 
 
 - [AGENTS.md](AGENTS.md) has the shared development rules.
 - `native/` owns read models, rules and native service access.
-- TSX files hold the screens; `theme.json` holds shared theme tokens.
+- TSX files hold the screens. They compose parts from the design library in
+  `ui/` ([guide](ui/README.md)) and write no look classes.
+  [DESIGN.md](../../DESIGN.md#pilot-day) has the design intent.
+- `theme.json` holds the colour, radius and font tokens for light and dark.
+  Screens reach them through `ui/` parts.
+- `fonts/` bundles Geist and Geist Mono under the SIL Open Font License
+  (`fonts/OFL.txt`). `ui/fonts.ts` registers them.
+- NSH artifacts import the same library from `pilot-day/ui`
+  ([Day design system](../../docs/technical/day-design-system.md)).
 - `fixtures/` contains optional comparisons and design prototypes, not app code.

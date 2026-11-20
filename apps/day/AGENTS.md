@@ -10,13 +10,19 @@
 - Do not enable live profiles or treat test coverage as production or packaging
   acceptance.
 - Use `./nsh.sh` and `scripts/cargo` for NSH and Rust commands.
-  Use `scripts/typecheck.sh` for the workspace TypeScript check, not `pnpm day`.
+  `./nsh.sh check` is Day's TypeScript check. `scripts/typecheck.sh` covers only the workspace
+  packages, not `apps/day`. Do not use `pnpm day`.
 - Use the verified NSH 0.5.0 (`f4d68f7`) distribution (`NSH_DAY_CLI` can select a local copy). Keep NSH dependencies
   on the pinned release and preserve Cargo locks. Do not rebuild or patch NSH,
   edit shared dependency caches, or install tools to work around a setup failure.
 - Build screens from the component library in `ui/` (`ui/README.md` is the guide). Screens do not import
   `nsh/base` or restyle a control: add a variant to the library instead. Only single-use overlays
   (the palette, the full-window artifact) assemble `nsh/base` themselves.
+- `ui/` is the only place that sets a look. Screens write no look classes (colour, size, weight, font,
+  border, radius, fill, padding), only layout ones. [DESIGN.md](../../DESIGN.md#pilot-day) has the intent.
+- Artifacts embed `ui/` as it is: its files import only `nsh`, `nsh/base`, `nsh/base/plot`, each other,
+  `../icons` and `../fonts`, never Day's feeds, views or `pilot-day/native`.
+- `fonts/` holds Geist and Geist Mono under the SIL Open Font License; keep `fonts/OFL.txt` with them.
 - Follow "Live data in the UI" in [CODING_STANDARDS.md](../../CODING_STANDARDS.md) for every read, refresh and write.
 - Keep entries beside `nsh.json`, which supplies their theme and capabilities.
   Keep the default entry's capabilities deny-all.
@@ -51,3 +57,5 @@
   `shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,typecheck.sh}`.
 - Headless tests do not prove native appearance, focus, scrolling or IME.
   State what was not checked; do not claim visual acceptance from them.
+- For a visible change, run the screen's `*Visual.test.tsx` with `--target macos` (see README) and look
+  at light and dark, wide and narrow.

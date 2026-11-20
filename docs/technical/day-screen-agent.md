@@ -54,16 +54,21 @@ The palette and the full-window artifact, which assemble `nsh/base` themselves, 
 
 | Control | `component` | State | Actions |
 | --- | --- | --- | --- |
-| `Action`, `InlineAction`, `LinkAction`, `RowLink`, `Pressable` | `button` | `disabled`, `pending` | `press` |
-| `ToggleChip` | `toggle` | `pressed` | `setPressed`, `toggle` |
+| `Button`, `Link`, a pressable `Row`, `PathSegment`, `SearchButton`, `Pressable` | `button` | `disabled`, `selected` | `press` |
+| `Chip` | `toggle` | `pressed` | `setPressed`, `toggle` |
 | `TextField`, `Field` | `input` | `value` (hidden when `masked`) | `setValue`, `clear` |
-| `Picker` | `select` | `value`, `items`, `open` | `setValue` (closed list) |
-| `Menu` + `MenuItem` | `menu` | `open`, `buttons` | `press` with a item's text |
-| `RadioList` + `RadioRow` | `radiogroup` | `value`, `items` | `setValue` |
-| `CheckboxRow`, `ToggleRow` | `checkbox` / `switch` | `checked` | `setChecked` |
+| `Switch` | `switch` | `checked` | `setChecked`, `toggle` |
+| `Checkbox`, `Option multiple` | `checkbox` | `checked` | `setChecked`, `toggle` |
+| `Option` | `radio` | `checked` | `select` |
+| `Tab` | `tab` | `selected` | `select` |
+| `Picker` | `select` | `value`, `items` | `setValue` (closed list) |
+| `Menu`, `MenuItem` | `menu`, `menuitem` | `open` | `setOpen`; `press` |
 | `Disclosure`, `ExpandableRow` | `disclosure` | `open` | `setOpen`, `toggle` |
-| `TabRow` + `TabItem` | `tabs` | `value`, `items` | `setValue` |
-| `Notice`, `Mark` lines | `status` | `text` | none |
+| `Notice` | `status` | `text` | none |
+
+The deprecated parts kept while screens move register too: `Action`, `InlineAction`, `LinkAction` and `RowLink` as
+`button`, `ToggleChip` and `ToggleRow` as `toggle`, `RadioRow` as `radio`, `CheckboxRow` as `checkbox` and
+`TabItem` as `tab`.
 
 ### Snapshot
 

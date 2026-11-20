@@ -6,7 +6,7 @@ Tracking never sends Slack messages or replies.
 
 ## Native Pilot intake
 
-In Day, open **Settings → Slack intake** for the displayed project. Enter chosen
+In Day, open **Settings → Tool connections → Slack intake** for the displayed project. Enter chosen
 channel names or IDs, choose **All messages** or **Mentions only** for each,
 and save tracking. Optional group handles extend mention filtering. Clearing the
 channels stops tracking, not saved messages.

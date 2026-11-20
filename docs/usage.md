@@ -23,7 +23,7 @@ provider enforcement. **Pause at limit** restores the guard early.
 
 ## Native allowances
 
-In Day, Settings → AI → Allowances shows catalog-value funding, including
+In Day, Settings → Allowances shows catalog-value funding, including
 uncertain charges. Configure project defaults for new missions and quick fixes,
 and a daily background allowance. New work shows its amount before starting.
 Mission funding lasts for the whole mission; quick-fix funding follows handoffs.

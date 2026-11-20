@@ -53,3 +53,10 @@ Chosen over four rounds. This is feedback on a mockup, not approval to build.
 - Rejected: B as drawn (too compact with a sidebar), a sidebar, an off-centre two-column page.
 
 Open: whether NSH can bundle Geist was not checked.
+
+## Outcome
+
+The direction was built. Day's design library in `apps/day/ui` ([guide](../../ui/README.md)) draws the Panel layout,
+the Forge skin, Compact density and Path navigation with Command+K, and every screen now uses it. NSH bundles Geist
+and Geist Mono from `apps/day/fonts`. NSH artifacts import the same library from `pilot-day/ui`.
+[DESIGN.md](../../../../DESIGN.md#pilot-day) records the design.
