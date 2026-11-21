@@ -60,7 +60,7 @@ nsh-base = "=0.6.1"
 nsh-bundler = { version = "=0.6.1", default-features = false }
 # Runs an artifact once headless before the artifact tool publishes it (artifact_check.rs).
 nsh-testing = { version = "=0.6.1", default-features = false }
-oxc = { version = "=0.153.0", features = ["ast_visit"] }
+oxc = { version = "=0.159.0", features = ["ast_visit"] }
 nsh-updater = "=0.6.1"
 # The daemon's v1 Day contracts, read in Rust only. Same versions NSH locks.
 serde = { version = "1", features = ["derive"] }
@@ -72,8 +72,8 @@ futures-util = { version = "0.3", features = ["sink"] }
 async-channel = "2"
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
-sha2 = "0.10"
-base64 = "0.22"
+sha2 = "0.11"
+base64 = "0.23"
 # NSH reports uncaught JS errors through the `log` facade; day_log forwards them to day.log.
 log = "0.4"
 
