@@ -101,11 +101,12 @@ test("other project interview saves without submitting and reopens the saved ans
 	await app.press("Open shared draft");
 	await app.press("id:own-outcome");
 	await app.type("id:answer-outcome", "Keep the fast path unchanged.");
-	await app.keyboard.press("escape");
 	await app.waitFor("Saved edits: 1");
+	await app.press("Leave interview");
 	expect(app.shows("Submissions: 0")).toBe(true);
-	await app.press("Open shared draft");
+	await app.press("Open Today's draft");
 	await app.waitFor("id:answer-outcome");
+	expect(app.shows("Other project")).toBe(false);
 	expect(app.value("id:answer-outcome")).toBe("Keep the fast path unchanged.");
 	await app.press("id:next");
 	await app.press("id:own-authority");
@@ -124,7 +125,7 @@ test("another window's save leaves this editor's focus and text intact", async (
 	expect(app.value("id:answer-outcome")).toBe("My unsaved words.");
 	await app.keyboard.press("backspace");
 	expect(app.value("id:answer-outcome")).toBe("My unsaved words");
-	await app.keyboard.press("escape");
+	await app.press("Leave interview");
 	await app.waitFor("Submissions: 0");
 	expect(app.shows("Saved edits: 0")).toBe(true);
 	await app.press("Open shared draft");

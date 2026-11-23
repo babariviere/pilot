@@ -43,10 +43,10 @@ Show planning chat opens its conversation, read only.
 When a planner needs interview answers, Today shows a card in Needs you.
 **Answer interview** opens that mission's current questions without submitting or starting work.
 Back returns to the same Today scope. Saved drafts stay in the interview until you submit.
-For an interview opened from another project, saved answers are shared across windows.
+Saved standalone interview answers are shared across windows.
 If another window saves first, Pilot keeps your edits here without overwriting its draft.
 To use the other draft, copy any edits you want to keep, then discard your local copy under
-**Unsent answers from other projects** in Settings and reopen the interview.
+**Unsent answers** in Settings and reopen the interview.
 Choose Search or press Command+K to find missions, chats, results, saved outputs,
 Knowledge and app destinations. Work is labeled by project. The search filter does not
 change Today's filter. Open an item in the same window, then use Back to return to your

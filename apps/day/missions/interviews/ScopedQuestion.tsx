@@ -1,4 +1,4 @@
-import { cleanup, keymap, Scroll, signal } from "nsh";
+import { cleanup, keymap, Scroll, signal, type ViewRef } from "nsh";
 import type { Decision, IntentOutcome } from "pilot-day/native";
 import { call, windowId } from "../../sources/bridge";
 import {
@@ -93,7 +93,7 @@ export function ScopedAnswerDrafts() {
 	};
 	return (
 		<If when={drafts().length > 0}>
-			<Section title="Unsent answers from other projects" count={drafts().length}>
+			<Section title="Unsent answers" count={drafts().length}>
 				<Rows>
 					<Each of={drafts()} key={(draft) => draft.target.pin}>
 						{(draft) => (
@@ -124,6 +124,14 @@ export function ScopedQuestion(props: {
 	place: Selector & { projectName: string };
 	onBack: () => void;
 	onAnswered: () => void;
+	/** Today already supplies the page, keyboard scope and Later action. */
+	inline?: {
+		keyboardActive: boolean;
+		anchor: (node: ViewRef) => void;
+		onFocus: () => void;
+		legacyDraftText?: string;
+		onLater?: () => void;
+	};
 	/** The connected window uses the native bridge. Fixtures can supply an isolated source. */
 	request?: (command: Command) => Promise<Reply | null>;
 }) {
@@ -192,7 +200,10 @@ export function ScopedQuestion(props: {
 		switch (reply?.state) {
 			case "ready": {
 				const d = reply.decision.draft;
-				const saved = { picks: d.pick ? [d.pick] : d.picks, text: d.text };
+				const saved = {
+					picks: d.pick ? [d.pick] : d.picks,
+					text: d.text || (reply.draftRevision === undefined ? (props.inline?.legacyDraftText ?? "") : ""),
+				};
 				let local = kept.get(reply.target.pin);
 				revision = reply.draftRevision;
 				if (revision != null && local?.answer.text === saved.text) {
@@ -225,7 +236,7 @@ export function ScopedQuestion(props: {
 				message.set("Pilot could not confirm your answer. Check only. It will not send again.");
 				break;
 			case "accepted":
-				if (card()) kept.delete(card()!.target.pin);
+				if (card() && kept.delete(card()!.target.pin)) draftVersion.update((v) => v + 1);
 				card.set(null);
 				unresolved.set("");
 				checking.set(false);
@@ -287,9 +298,154 @@ export function ScopedQuestion(props: {
 			void run({ kind: "send", target: current.target, answer: answer() });
 	};
 	const commitKeys = keymap.label("mod+enter");
-	keymap.bind("mod+enter", send, { when: "always" });
-	keymap.bind("escape", () => void back(), { when: "always" });
+	const inline = props.inline !== undefined;
+	if (!inline) {
+		keymap.bind("mod+enter", send, { when: "always" });
+		keymap.bind("escape", () => void back(), { when: "always" });
+	}
 	read();
+	const content = (
+		<>
+			<If when={selector.interviewRoundId && card() && !checking()}>
+				<Each of={card() ? [card()!] : []} key={(row) => row.target.pin}>
+					{(row) => (
+						<ScopedInterviewCard
+							decision={row().decision}
+							identity={row().target.pin}
+							draftText={answer().text}
+							keyboardActive={!busy() && (props.inline?.keyboardActive ?? true)}
+							anchor={props.inline?.anchor}
+							onFocus={props.inline?.onFocus}
+							onLater={
+								props.inline?.onLater
+									? () => {
+											void flush();
+											props.inline?.onLater?.();
+										}
+									: undefined
+							}
+							draftMessage={draftMessage()}
+							onSave={(text) => edit({ picks: [], text })}
+							onSubmit={async (text): Promise<IntentOutcome> => {
+								if (revision !== undefined) {
+									if (answer().text !== text || (revision === null && !kept.has(row().target.pin)))
+										stage(row().target, { picks: [], text });
+									if (!(await flush()) || !active || revision === null) {
+										return {
+											status: "rejected",
+											revision: row().decision.revision,
+											message: draftMessage() || DRAFT_UNCONFIRMED,
+										};
+									}
+								}
+								const reply = await run({
+									kind: "send",
+									target: row().target,
+									answer: { picks: [], text },
+									draftRevision: revision,
+								});
+								if (
+									active &&
+									revision !== undefined &&
+									(reply?.state === "rejected" || reply?.state === "not-sent")
+								) {
+									// A save in another window may have raced the explicit Submit.
+									stage(row().target, { picks: [], text });
+									failed = kept.get(row().target.pin);
+								}
+								return {
+									status: reply?.state === "accepted" ? "accepted" : checking() ? "unknown" : "rejected",
+									revision: row().decision.revision,
+									message: message(),
+								};
+							}}
+							onCheck={() => void run({ kind: "recover", target: row().target })}
+						/>
+					)}
+				</Each>
+			</If>
+			<If when={!selector.interviewRoundId && card() && !checking()}>
+				<Question
+					title="Your answer"
+					foot={
+						<>
+							<Button
+								kind="primary"
+								label="Send answer"
+								shortcut={commitKeys}
+								disabled={busy() || (!answer().picks.length && !answer().text.trim())}
+								onPress={send}
+							/>
+							<Spacer />
+							<KeyHints hints={[[commitKeys, "Send answer"]]} />
+						</>
+					}
+				>
+					<Options multiple={card()?.decision.multiple === true}>
+						<Each of={card()?.decision.options ?? []} key={(option) => option.id}>
+							{(option) => {
+								const id = () => option().id;
+								const picked = () => answer().picks.includes(id());
+								const choose = () =>
+									edit({
+										...answer(),
+										picks: card()?.decision.multiple
+											? picked()
+												? answer().picks.filter((i) => i !== id())
+												: [...answer().picks, id()]
+											: [id()],
+									});
+								return (
+									<Option
+										multiple={card()?.decision.multiple === true}
+										title={option().label}
+										checked={picked()}
+										disabled={busy()}
+										onChange={choose}
+									/>
+								);
+							}}
+						</Each>
+					</Options>
+					<TextField
+						accessibilityLabel="Your answer"
+						placeholder="Answer in your own words"
+						multiline
+						rows={3}
+						value={answer().text}
+						disabled={busy()}
+						onChange={({ value }) => edit({ ...answer(), text: value })}
+					/>
+				</Question>
+			</If>
+			<If when={message() || busy() || checking() || (!card() && !busy() && message() !== "Answer sent.")}>
+				<Block>
+					<If when={message() || busy()}>
+						<Body tone="muted">{busy() ? "Working…" : message()}</Body>
+					</If>
+					<If when={checking()}>
+						<Buttons>
+							<Button
+								label="Check answer"
+								disabled={busy()}
+								onPress={() =>
+									unresolved()
+										? void run({ kind: "check", selector, operationId: unresolved() })
+										: card()
+											? void run({ kind: "recover", target: card()!.target })
+											: read()
+								}
+							/>
+						</Buttons>
+					</If>
+					<If when={!card() && !checking() && !busy() && message() !== "Answer sent."}>
+						<Link label="Read again" onPress={read} />
+					</If>
+				</Block>
+			</If>
+		</>
+	);
+	if (inline) return content;
 	return (
 		<Scroll class="flex-1">
 			<Page>
@@ -300,142 +456,7 @@ export function ScopedQuestion(props: {
 				/>
 				<Panel>
 					<Column>
-						<Section title="Needs you">
-							<If when={selector.interviewRoundId && card() && !checking()}>
-								<Each of={card() ? [card()!] : []} key={(row) => row.target.pin}>
-									{(row) => (
-										<ScopedInterviewCard
-											decision={row().decision}
-											identity={row().target.pin}
-											draftText={answer().text}
-											keyboardActive={!busy()}
-											draftMessage={draftMessage()}
-											onSave={(text) => edit({ picks: [], text })}
-											onSubmit={async (text): Promise<IntentOutcome> => {
-												if (revision !== undefined) {
-													if (answer().text !== text || (revision === null && !kept.has(row().target.pin)))
-														stage(row().target, { picks: [], text });
-													if (!(await flush()) || !active || revision === null) {
-														return {
-															status: "rejected",
-															revision: row().decision.revision,
-															message: draftMessage() || DRAFT_UNCONFIRMED,
-														};
-													}
-												}
-												const reply = await run({
-													kind: "send",
-													target: row().target,
-													answer: { picks: [], text },
-													draftRevision: revision,
-												});
-												if (
-													active &&
-													revision !== undefined &&
-													(reply?.state === "rejected" || reply?.state === "not-sent")
-												) {
-													// A save in another window may have raced the explicit Submit.
-													stage(row().target, { picks: [], text });
-													failed = kept.get(row().target.pin);
-												}
-												return {
-													status:
-														reply?.state === "accepted"
-															? "accepted"
-															: checking()
-																? "unknown"
-																: "rejected",
-													revision: row().decision.revision,
-													message: message(),
-												};
-											}}
-											onCheck={() => void run({ kind: "recover", target: row().target })}
-										/>
-									)}
-								</Each>
-							</If>
-							<If when={!selector.interviewRoundId && card() && !checking()}>
-								<Question
-									title="Your answer"
-									foot={
-										<>
-											<Button
-												kind="primary"
-												label="Send answer"
-												shortcut={commitKeys}
-												disabled={busy() || (!answer().picks.length && !answer().text.trim())}
-												onPress={send}
-											/>
-											<Spacer />
-											<KeyHints hints={[[commitKeys, "Send answer"]]} />
-										</>
-									}
-								>
-									<Options multiple={card()?.decision.multiple === true}>
-										<Each of={card()?.decision.options ?? []} key={(option) => option.id}>
-											{(option) => {
-												const id = () => option().id;
-												const picked = () => answer().picks.includes(id());
-												const choose = () =>
-													edit({
-														...answer(),
-														picks: card()?.decision.multiple
-															? picked()
-																? answer().picks.filter((i) => i !== id())
-																: [...answer().picks, id()]
-															: [id()],
-													});
-												return (
-													<Option
-														multiple={card()?.decision.multiple === true}
-														title={option().label}
-														checked={picked()}
-														disabled={busy()}
-														onChange={choose}
-													/>
-												);
-											}}
-										</Each>
-									</Options>
-									<TextField
-										accessibilityLabel="Your answer"
-										placeholder="Answer in your own words"
-										multiline
-										rows={3}
-										value={answer().text}
-										disabled={busy()}
-										onChange={({ value }) => edit({ ...answer(), text: value })}
-									/>
-								</Question>
-							</If>
-							<If
-								when={message() || busy() || checking() || (!card() && !busy() && message() !== "Answer sent.")}
-							>
-								<Block>
-									<If when={message() || busy()}>
-										<Body tone="muted">{busy() ? "Working…" : message()}</Body>
-									</If>
-									<If when={checking()}>
-										<Buttons>
-											<Button
-												label="Check answer"
-												disabled={busy()}
-												onPress={() =>
-													unresolved()
-														? void run({ kind: "check", selector, operationId: unresolved() })
-														: card()
-															? void run({ kind: "recover", target: card()!.target })
-															: read()
-												}
-											/>
-										</Buttons>
-									</If>
-									<If when={!card() && !checking() && !busy() && message() !== "Answer sent."}>
-										<Link label="Read again" onPress={read} />
-									</If>
-								</Block>
-							</If>
-						</Section>
+						<Section title="Needs you">{content}</Section>
 					</Column>
 				</Panel>
 			</Page>

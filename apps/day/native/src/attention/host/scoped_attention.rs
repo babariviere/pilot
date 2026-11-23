@@ -538,6 +538,7 @@ fn opened(
 ) -> Result<Value, Error> {
     let q = question(read, selector)?;
     let pin = question_target(&t.source, selector, q)?;
+    let card_key = cards::question_key(q).ok_or(Error::Invalid)?;
     let (value, revision) = match remote {
         Some(saved) if !saved.is_null() => {
             let revision = positive_revision(&saved["revision"]).ok_or(Error::Invalid)?;
@@ -545,12 +546,24 @@ fn opened(
                 .ok_or(Error::Invalid)?;
             (interview_draft_value(&text), Some(json!(revision)))
         }
-        other => (
-            draft(journal, &t.source, scoped_key(q, &pin)?).value,
-            other, // Only explicit daemon null allows the legacy draft as a seed.
-        ),
+        other => {
+            let local = draft(journal, &t.source, scoped_key(q, &pin)?).value;
+            // Only a confirmed empty daemon draft can import words from the old Today editor.
+            // Keep an existing scoped draft ahead of that seed. Do not move the window's Later.
+            let value = if other == Some(Value::Null) && local.is_null() {
+                let today = draft(journal, &t.source, card_key.clone());
+                today.value["text"]
+                    .as_str()
+                    .filter(|text| {
+                        attention_interview::matches_draft(&q["question"]["interview"], text)
+                    })
+                    .map_or(Value::Null, interview_draft_value)
+            } else {
+                local
+            };
+            (value, other)
+        }
     };
-    let card_key = cards::question_key(q).ok_or(Error::Invalid)?;
     // Project this card with the existing form and draft contract. The direct
     // route does not offer clarification, artifact opens, or chat navigation.
     let read = json!({"current":true,"questions":[q]});
@@ -972,6 +985,37 @@ mod tests {
         read["questions"][0]["question"]["interview"]["roundId"] = json!("round-2");
         assert_eq!(question(&read, &selector), Err(Error::Stale));
         assert_eq!(question(&read, &self::selector()), Err(Error::Unavailable));
+        drop(journal);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn an_empty_daemon_draft_can_seed_answers_saved_on_today() {
+        let (selector, read, answer) = interview();
+        let path = std::env::temp_dir().join(format!("today-interview-{}", uuid::Uuid::new_v4()));
+        let t = Transport::new(source()).unwrap();
+        let q = question(&read, &selector).unwrap();
+        let mut journal = Journal::open(path.clone()).unwrap();
+        let mut local = draft(&journal, &t.source, cards::question_key(q).unwrap());
+        local.value = interview_draft_value(&answer.text);
+        local.value["later"] = json!(true);
+        journal.save_attention_draft(local.clone()).unwrap();
+
+        let before_capability = opened(&t, &journal, &selector, &read, None).unwrap();
+        assert_eq!(
+            before_capability["decision"]["interviewQuestions"][1]["text"],
+            ""
+        );
+        let seeded = opened(&t, &journal, &selector, &read, Some(Value::Null)).unwrap();
+        assert_eq!(seeded["draftRevision"], Value::Null);
+        assert_eq!(seeded["decision"]["draft"]["text"], answer.text);
+        assert_eq!(seeded["decision"]["draft"]["later"], false);
+        let saved = json!({"revision":1,"roundId":selector.interview_round_id,"answers":[]});
+        let daemon = opened(&t, &journal, &selector, &read, Some(saved)).unwrap();
+        assert_eq!(daemon["decision"]["interviewQuestions"][1]["text"], "");
+        assert!(journal.attention.is_empty());
+        assert_eq!(journal.attention_drafts.len(), 1);
+        assert_eq!(journal.attention_drafts[&local.id()].value, local.value);
         drop(journal);
         std::fs::remove_file(path).unwrap();
     }

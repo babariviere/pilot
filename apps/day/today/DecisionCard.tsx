@@ -33,7 +33,7 @@ import {
 	setFor,
 } from "../app/view";
 import type { ArtifactSource } from "../artifacts/artifactReads";
-import { InterviewCard } from "../missions/interviews/InterviewCard";
+import { TodayInterview } from "../missions/interviews/TodayInterviewCard";
 import { QuestionArtifacts } from "../missions/interviews/QuestionArtifacts";
 import { openChat } from "../sessions/chatView";
 import {
@@ -561,7 +561,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 		<Each of={[props.decision]} key={(d) => `${d.id}:${d.interviewRoundId ?? "ordinary"}`}>
 			{(d) => (
 				<If when={d().interviewRoundId} else={<OrdinaryDecisionCard {...props} decision={d()} />}>
-					<InterviewCard
+					<TodayInterview
 						{...props}
 						decision={d()}
 						keyboardActive={

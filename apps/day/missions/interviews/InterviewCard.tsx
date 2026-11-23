@@ -110,6 +110,9 @@ export function ScopedInterviewCard(props: {
 	/** Optional window draft for this exact pin, read only on mount. */
 	draftText?: string;
 	draftMessage?: string;
+	anchor?: (node: ViewRef) => void;
+	onFocus?: () => void;
+	onLater?: () => void;
 	onSave: (text: string) => void;
 	onSubmit: (text: string) => Promise<IntentOutcome>;
 	onCheck: () => void;
@@ -121,6 +124,9 @@ export function ScopedInterviewCard(props: {
 			keyboardActive={props.keyboardActive}
 			draftText={props.draftText}
 			draftMessage={props.draftMessage}
+			anchor={props.anchor}
+			onFocus={props.onFocus}
+			onLater={props.onLater}
 			onSave={props.onSave}
 			onSubmit={props.onSubmit}
 			onCheck={props.onCheck}

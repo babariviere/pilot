@@ -44,6 +44,7 @@ const visible = signal(true);
 const second = signal(false);
 const scoped = signal(false);
 const openDraftEditor = signal(false);
+const inlineDraftEditor = signal(false);
 const saved = signal("");
 const saves = signal(0);
 const sends = signal(0);
@@ -125,8 +126,17 @@ mount(() => (
 				place={{ ...selector, projectName: "Other project" }}
 				onBack={() => openDraftEditor.set(false)}
 				onAnswered={() => openDraftEditor.set(false)}
+				inline={
+					inlineDraftEditor()
+						? { keyboardActive: true, anchor() {}, onFocus() {}, onLater: () => openDraftEditor.set(false) }
+						: undefined
+				}
 				request={serveDraft}
 			/>
+			<Block>
+				<Button label="Leave interview" onPress={() => openDraftEditor.set(false)} />
+				<Caption>{`Saved edits: ${saves()}`}</Caption>
+			</Block>
 		</If>
 	</WindowCanvas>
 ));
@@ -219,11 +229,25 @@ function CardFixtures() {
 							}}
 						/>
 						<Button label="Open other project's round" onPress={() => scoped.set(true)} />
-						<Button label="Open shared draft" onPress={() => openDraftEditor.set(true)} />
+						<Button
+							label="Open shared draft"
+							onPress={() => {
+								inlineDraftEditor.set(false);
+								openDraftEditor.set(true);
+							}}
+						/>
+						<Button
+							label="Open Today's draft"
+							onPress={() => {
+								inlineDraftEditor.set(true);
+								openDraftEditor.set(true);
+							}}
+						/>
 						<Button
 							label="Save in another window on next edit"
 							onPress={() => {
 								conflictNextSave = true;
+								inlineDraftEditor.set(false);
 								openDraftEditor.set(true);
 							}}
 						/>
