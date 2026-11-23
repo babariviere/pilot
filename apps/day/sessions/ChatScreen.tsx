@@ -337,7 +337,12 @@ export function ContinueRow(props: {
 }
 
 /** The chat page. Opening it only reads. */
-export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?: () => boolean }) {
+export function ChatScreen(props: {
+	day: Day;
+	sessionId: string;
+	onBackFromJump?: () => boolean;
+	onCheckResult?: (projectId: string, title: string) => void;
+}) {
 	const mirror = props.day.chat as SessionChatMirror;
 	void mirror.source.open(props.sessionId);
 	cleanup(() => mirror.source.close(props.sessionId));
@@ -390,6 +395,26 @@ export function ChatScreen(props: { day: Day; sessionId: string; onBackFromJump?
 				}
 				actions={
 					<If when={state()}>
+						<If
+							when={
+								props.onCheckResult && chat()?.canCheckResult && chat()?.projectId === props.day.today().project
+							}
+						>
+							<Button
+								kind="primary"
+								label="Check the result"
+								testID="chat-result"
+								onPress={() => {
+									const current = chat();
+									if (
+										current?.canCheckResult &&
+										current.projectId &&
+										current.projectId === props.day.today().project
+									)
+										props.onCheckResult?.(current.projectId, current.title);
+								}}
+							/>
+						</If>
 						<If when={chat()?.continuedTo}>
 							<Button
 								label="Open linked chat"

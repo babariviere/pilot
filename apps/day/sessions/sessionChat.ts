@@ -46,6 +46,7 @@ export type SessionChat = {
 	/** The service says Continue can move it: stopped, or failed with a safe retry. */
 	canContinue?: boolean;
 	canReply?: boolean;
+	canCheckResult?: boolean;
 	reply?: ContinueResult | null;
 	/** Its question no longer needs the user: the plan settled it. */
 	questionSettled?: boolean;
@@ -179,6 +180,7 @@ function chatOf(x: unknown, sessionId: string): SessionChat | null {
 		queue: queueOf(c.queue),
 		canContinue: c.canContinue === true,
 		canReply: c.canReply === true,
+		canCheckResult: c.canCheckResult === true,
 		reply: c.reply ? continueOutcome(c.reply, REPLY_UNKNOWN) : null,
 		questionSettled: c.questionSettled === true,
 		specialist: c.specialist === true,

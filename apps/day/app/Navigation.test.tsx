@@ -56,6 +56,19 @@ test("Escape goes up the same single level as Back", async () => {
 	await app.waitFor(TODAY);
 });
 
+test("checking a standalone Build result returns to the same chat draft without sending", async () => {
+	const app = await open("../BuildResultFixture.tsx", desktop);
+	await app.waitFor("id:chat-result");
+	await app.type("id:chat-composer", "Keep my unsent follow-up");
+	await app.press("id:chat-result");
+	await app.waitFor("Your check");
+	expect(app.shows("id:chat-composer")).toBe(false);
+	await app.press("role:button[Back to Chat]");
+	await app.waitFor("id:chat-composer");
+	expect(app.value("id:chat-composer")).toBe("Keep my unsent follow-up");
+	expect(app.shows("Chat sends: 0 · Result writes: 0")).toBe(true);
+});
+
 test("Pilot at the top left goes to Today from any depth", async () => {
 	const app = await open("../MockApp.tsx", desktop);
 	await openSearchPlan(app);

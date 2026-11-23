@@ -13,7 +13,7 @@ import { FeedbackScreen } from "../feedback/FeedbackScreen";
 import { InsightsScreen } from "../insights/InsightsScreen";
 import { canDraftInsight, hasOtherDraft, openFindingDraft } from "../insights/insightsWork";
 import { DeliveryScreen } from "../missions/delivery/DeliveryScreen";
-import { type DeliveryPlace, deliveryRoute } from "../missions/delivery/deliveryView";
+import { type DeliveryPlace, deliveryRoute, openDelivery } from "../missions/delivery/deliveryView";
 import { NewScreen } from "../missions/intake/NewScreen";
 import { ScopedQuestion, scopedQuestion } from "../missions/interviews/ScopedQuestion";
 import { MissionScreen } from "../missions/MissionScreen";
@@ -23,7 +23,7 @@ import { planRoute } from "../missions/planning/planView";
 import { SearchDetailScreen } from "../search/SearchDetailScreen";
 import { type DetailHit, searchDetail, type WorkSearchSource } from "../search/workSearch";
 import { ChatScreen } from "../sessions/ChatScreen";
-import { chatRoute, openChat } from "../sessions/chatView";
+import { chatRoute, closeChat, openChat } from "../sessions/chatView";
 import { ThreadScreen } from "../sessions/ThreadScreen";
 import { threadRoute } from "../sessions/threadView";
 import { SettingsScreen } from "../settings/SettingsScreen";
@@ -42,6 +42,7 @@ import { AppHeader } from "./Chrome";
 import type { Day } from "./day";
 import {
 	animatePlanningList,
+	jump,
 	jumpBack,
 	navigationError,
 	navigationRestoring,
@@ -230,7 +231,20 @@ function MainScreens(props: { at: Shown; day: Day; rituals: Rituals; plans?: Pla
 			<Each of={chatRoute() ? [chatRoute()?.sessionId as string] : []} key={(id) => id}>
 				{(id) => (
 					<Arrive class="flex-1">
-						<ChatScreen day={props.day} sessionId={id()} onBackFromJump={backFromJump(props)} />
+						<ChatScreen
+							day={props.day}
+							sessionId={id()}
+							onBackFromJump={backFromJump(props)}
+							onCheckResult={
+								props.day.delivery
+									? (projectId, title) =>
+											jump(props, () => {
+												closeChat();
+												openDelivery({ kind: "chat", projectId, sessionId: id() }, title);
+											})
+									: undefined
+							}
+						/>
 					</Arrive>
 				)}
 			</Each>

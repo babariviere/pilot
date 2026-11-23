@@ -68,6 +68,8 @@ an incomplete read never means all clear. Request rows show up to two title line
 When Linear is connected, its own Today tab shows Pilot's saved copy of your issues.
 **Finished today** lists completed chat runs in your local day. Finishing a run does not mark its result reviewed
 or merged. Results that need your review still wait in Needs you.
+In a finished standalone Build chat, **Check the result** opens the same review page as a mission result.
+Back returns to the chat without sending your draft.
 On a Decide card, the Mission and Chat links below the question open its source.
 Standalone questions show only Chat. Back returns to the pending question and keeps your draft.
 Opening either link sends no answer and starts no work.

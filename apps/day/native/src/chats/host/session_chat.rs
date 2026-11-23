@@ -101,6 +101,7 @@ pub(crate) struct ChatState {
     pub question_settled: bool,
     pub specialist: bool,
     pub archived: bool,
+    pub can_check_result: bool,
     pub workspace_kept: bool,
     pub restart_only: bool,
     pub recovery_blocked: String,
@@ -130,7 +131,7 @@ impl ChatState {
             "reading":self.reading,"reason":self.reason});
         let chat = crate::plan_activity::chat(&rows);
         json!({"sessionId":self.session,"projectId":self.project.as_ref().map(|p| &p["projectId"]),"title":self.title,"state":self.state,
-            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,"canReply":self.can_reply,"reply":self.reply,"questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
+            "stateReason":self.state_reason,"queue":self.queue,"canContinue":self.can_continue,"canReply":self.can_reply,"reply":self.reply,"questionSettled":self.question_settled,"specialist":self.specialist,"archived":self.archived,"canCheckResult":self.can_check_result,"workspaceKept":self.workspace_kept,"restartOnly":self.restart_only,"rows":chat.rows,"more":chat.more,
             "reading":chat.reading,"reason":chat.reason,"sourcePath":self.source_path,"sourceLabel":self.source_label,"pendingRecovery":self.pending_recovery,"recoveryBlocked":self.recovery_blocked,
             "fixHandoff":self.fix_handoff,"continuationOf":self.continuation_of,"continuedTo":self.continued_to,"liveChangesKey":self.live_workspace.as_ref().map(|(key, _)| key.to_string())})
     }
@@ -612,7 +613,11 @@ async fn read_chat(
                     state.restart_only = read.session["canRetryStartup"] == true;
                     state.fix_handoff = read.session["fixHandoff"].clone();
                     if state.fix_handoff.is_object() {
-                        state.fix_handoff["projectName"] = read.project.as_ref().map(|p| p["name"].clone()).unwrap_or(Value::Null);
+                        state.fix_handoff["projectName"] = read
+                            .project
+                            .as_ref()
+                            .map(|p| p["name"].clone())
+                            .unwrap_or(Value::Null);
                     }
                     state.continuation_of = read.session["continuationOf"].clone();
                     state.continued_to = read.session["continuedTo"].clone();
@@ -635,6 +640,14 @@ async fn read_chat(
                     }
                     .into();
                     (state.state, state.state_reason) = status(&read.session);
+                    state.can_check_result = state.state == "done"
+                        && read.session["mode"] == "build"
+                        && read.session["outcomeAt"].is_u64()
+                        && read.session["working"] != true
+                        && read.session["state"] != "working"
+                        && read.session["role"].is_null()
+                        && read.session["missionId"].is_null()
+                        && read.session["continuedTo"].is_null();
                     state.queue = queue(&read.session);
                     state.can_continue = read.session["canContinue"] == true;
                     state.can_reply = read.session["canReply"] == true;
@@ -648,6 +661,7 @@ async fn read_chat(
                 }
                 Err(_) => {
                     state.live_workspace = None;
+                    state.can_check_result = false;
                     state.reason = if state.pages.rows.is_empty() {
                         "Pilot could not read this chat. Nothing was sent.".into()
                     } else {
@@ -855,8 +869,13 @@ async fn fetch(
     {
         return Err(Error::Identity);
     }
-    if current["mode"] == "build" && matches!(current["outcome"].as_str(), Some("failed" | "stopped")) {
-        current["fixHandoff"] = t.get(&format!("{path}/fix-handoff")).await.unwrap_or(Value::Null);
+    if current["mode"] == "build"
+        && matches!(current["outcome"].as_str(), Some("failed" | "stopped"))
+    {
+        current["fixHandoff"] = t
+            .get(&format!("{path}/fix-handoff"))
+            .await
+            .unwrap_or(Value::Null);
     }
     Ok(Read {
         session: current,
@@ -952,7 +971,8 @@ mod tests {
 
     #[test]
     fn entries_become_messages_and_compact_steps() {
-        let note = "Opus 5.5 blocked this turn as cyber work. Pilot sent it again with Cyber (Opus 5).";
+        let note =
+            "Opus 5.5 blocked this turn as cyber work. Pilot sent it again with Cyber (Opus 5).";
         let entries = vec![
             json!({"id":5,"kind":"pilot.activity","model":[],
                 "data":{"text":note,"event":{"kind":"cyber_retry","text":note}}}),

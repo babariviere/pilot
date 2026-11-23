@@ -10,10 +10,13 @@ import { Worker } from "node:worker_threads";
 import { MissionService } from "../../missions/mission-service.ts";
 import { MissionStore } from "../../missions/missions.ts";
 import { ModelCatalog } from "../../models/models.ts";
+import { ResultReviews } from "../../result-reviews.ts";
 import type { SessionManager } from "../../sessions/sessions.ts";
 import { TerminalManager } from "../../sessions/terminals/terminals.ts";
 import { createDaemonFixtureServer as createDaemonServer } from "../../testing/daemon-server.ts";
 import { fixture, jj } from "../../testing/session-workspace.ts";
+import { OperationJournal } from "../../transport/operations/operation-journal.ts";
+import { UserVerifications } from "../../user-verification.ts";
 
 async function serve(
 	t: TestContext,
@@ -124,6 +127,62 @@ test("new standalone Build creation retains exact committed changes and revision
 		"first retained\n",
 	);
 	await f.assertSourceUnchanged();
+});
+
+test("a standalone Build result never borrows an unlinked saved comparison", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const subject = { kind: "chat" as const, projectId: f.project.id, sessionId: chat.id };
+	const store = new MissionStore(join(f.home, "missions.sqlite"));
+	f.beforeRemove(() => store.close());
+	const journal = new OperationJournal(join(f.home, "operations"), {
+		hostId: "daemon",
+		daemonId: "standalone-result-fixture",
+		lineageId: "standalone-result-fixture",
+	});
+	const services = (sessions: SessionManager) => {
+		const deliveries = new UserVerifications({ store, journal, projects: f.projects, sessions });
+		const reviews = new ResultReviews({
+			store,
+			deliveries,
+			reader: ({ sessionId, projectId }) => sessions.nativeReviewReader(sessionId, undefined, projectId, () => {}),
+		});
+		return { deliveries, reviews };
+	};
+	const meta = f.sessions["metas"].get(chat.id)!;
+	const worker = f.sessions["workers"].get(chat.id)!;
+	await writeFile(join(chat.cwd, "tracked.txt"), "saved when the chat finishes\n");
+	jj(chat.cwd, "commit", "-m", "Finished Build");
+	f.sessions["onPacket"](meta, worker, {
+		type: "working",
+		working: false,
+		completion: { outcome: "done", outcomeAt: Date.now() },
+	});
+	await f.sessions["workerReviewDelivery"]["tail"];
+
+	const { deliveries, reviews } = services(f.sessions);
+	const result = await deliveries.read(subject);
+	assert.ok(result.deliveryId, "the chat has a finished result");
+	const inventory = f.sessions.nativeReviewReader(chat.id, undefined, f.project.id, () => {});
+	assert.equal((await inventory.list(0)).comparisons.length, 1, "one saved comparison is not proof of a link");
+	assert.deepEqual((await reviews.read(subject)).snapshots, []);
+
+	await writeFile(join(chat.cwd, "tracked.txt"), "saved after the result\n");
+	jj(chat.cwd, "commit", "-m", "Later workspace change");
+	f.sessions["onPacket"](meta, worker, { type: "ready", model: "test/model", working: false, usage: {} });
+	await f.sessions["workerReviewDelivery"]["tail"];
+	await f.sessions.shutdown();
+
+	const reopened = await f.manager();
+	const reopenedInventory = reopened.nativeReviewReader(chat.id, undefined, f.project.id, () => {});
+	const { comparisons } = await reopenedInventory.list(0);
+	assert.equal(comparisons.length, 2, "the later checkpoint saved another comparison, not a new result");
+	const reopenedReviews = services(reopened).reviews;
+	const reviewed = await reopenedReviews.read(subject);
+	assert.equal(reviewed.deliveryId, result.deliveryId);
+	assert.deepEqual(reviewed.snapshots, []);
+	for (const { snapshotId } of comparisons)
+		await assert.rejects(reopenedReviews.diff(subject, snapshotId), /not linked/);
 });
 
 test("existing standalone workspace and pending creation recipes are never silently enrolled", async (t) => {
