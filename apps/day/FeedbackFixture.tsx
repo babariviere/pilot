@@ -6,6 +6,7 @@
 // the newest item's triage with a scripted proposal; "Next step …" picks
 // what the next step does. "Triage asks" leaves it waiting on a question; an
 // answer puts it back to work, and "Answer:" shows the last words sent.
+// "Fix asks" leaves the newest item's fix waiting on a question.
 // A triage or fix chat opens as a scripted read-only chat: a triage chat
 // works, a fix chat is done and has an earlier page.
 // "Triage prototype" proposes a prototype; "Prototype asks" leaves the
@@ -375,6 +376,23 @@ class ScriptedFeedback implements FeedbackSource {
 		this.#saved = [{ ...item, work: item.work.map((x, i) => (i === t ? next : x)) }, ...this.#saved.slice(1)];
 		this.#publish();
 	}
+	askInFix() {
+		const item = this.#saved[0];
+		const fix = item?.work.findLast((w) => w.kind === "fix");
+		if (!fix) return;
+		const work = item.work.map(
+			(w): UserFeedbackWorkView =>
+				w === fix
+					? {
+							...fix,
+							chat: { title: "Fix", state: "question" },
+							question: { id: 10, question: "Should completed rows show the assignee too?", options: [] },
+						}
+					: w,
+		);
+		this.#saved = [{ ...item, work }, ...this.#saved.slice(1)];
+		this.#publish();
+	}
 	dispose() {
 		this.#listeners.clear();
 	}
@@ -552,6 +570,7 @@ mount(() => (
 				<Caption testID="goal-draft">{`New goal: [${goalDraft().split("\n")[0]}]`}</Caption>
 				<Caption testID="answer-sent">{`Answer: [${feedback.answer()}]`}</Caption>
 				<Button small label="Fix stops" onPress={() => scriptedChat.stopped.set(true)} />
+				<Button small label="Fix asks" onPress={() => feedback.askInFix()} />
 				<Caption testID="continues">{`Continues: ${scriptedChat.continues()}`}</Caption>
 			</Buttons>
 		</Block>

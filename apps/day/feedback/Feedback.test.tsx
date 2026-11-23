@@ -365,6 +365,32 @@ test("finished triage joins Needs you; opening and saved Later start nothing", a
 	expect(steps(app)).toBe("Steps: [triage]");
 });
 
+test("a working fix leaves Needs you until it asks a question", async () => {
+	const app = await feedback();
+	await chooseProject(app);
+	await sendWords(app, "Show who works on each plan row");
+	await app.press("Triage fix");
+	await app.waitFor("id:feedback-proposal-f1");
+	await app.keyboard.press("escape");
+	await app.press("id:today-tab-needs");
+	await app.press("id:feedback-new-f1");
+	await app.waitFor("id:feedback-proposal-f1");
+	expect(app.shows("id:today-tab-needs >> text:4")).toBe(true);
+	await app.press("id:feedback-fix-f1");
+	await app.waitUntil(() => !app.shows("id:feedback-item-f1") && !app.shows("id:feedback-new-f1"));
+	expect(app.shows("id:today-tab-needs >> text:3")).toBe(true);
+
+	await app.press("id:feedback-open");
+	await app.waitFor("id:feedback-item-f1");
+	await app.waitFor("id:feedback-fixing-f1");
+	expect(app.shows("A fix is in progress.")).toBe(true);
+	await app.keyboard.press("escape");
+	await app.press("Fix asks");
+	await app.waitFor("id:feedback-question-f1");
+	expect(app.shows("id:today-tab-needs >> text:4")).toBe(true);
+	expect(app.shows("Should completed rows show the assignee too?")).toBe(true);
+});
+
 test("a triage question joins Needs you and a later proposal returns after deferral", async () => {
 	const app = await feedback();
 	await chooseProject(app);

@@ -179,7 +179,8 @@ Remove deletes one item and its steps after you confirm. Its chats and missions 
 Today's Needs you shows one question at a time. Other feedback waits under Up next; selecting it
 keeps the current question unanswered. Later keeps feedback aside across reopening this window;
 Bring back restores it with its draft. A new question or finished investigation returns.
-Routine investigation progress stays in Feedback. Reading or deferring starts no work and approves nothing.
+Routine investigation and fix progress stays in Feedback. An unanswered question from the fix returns to Needs you.
+Reading or deferring starts no work and approves nothing.
 An unusable suggestion keeps the agent's explanation and offers Correct the investigation.
 Corrections go only to that investigation. Uncertain answers and corrections keep their words;
 Check again only looks up the exact send and never repeats it.

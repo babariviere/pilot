@@ -17,6 +17,9 @@ export function feedbackAttention(item: FeedbackItem): string | null {
 	if (s.resolved || !s.triage) return null;
 	const asking = askingOf(s);
 	if (asking) return `${item.id}/${asking.step.operationId}/${asking.question.id}`;
+	// A fix in progress does not need attention for the earlier proposal.
+	const fixState = s.fix?.chat?.state;
+	if (fixState === "starting" || fixState === "working") return null;
 	// After a prototype starts, its result needs the user, not the triage's proposal.
 	const lead = s.prototype ?? s.triage;
 	const digest = lead.proposal?.digest;
