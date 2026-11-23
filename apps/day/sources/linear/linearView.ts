@@ -9,6 +9,7 @@ import type {
 	SavedLinearRead,
 	TrackedItem,
 } from "../../../../packages/protocol/src/sources/tracking.ts";
+import type { IntakeRow } from "../../missions/intake/intakeFeed";
 import { glide } from "../../ui";
 
 /** Whether the Linear page is open over Today. */
@@ -112,6 +113,22 @@ export function groupOf(item: TrackedItem): GroupKey {
 		default:
 			return "other";
 	}
+}
+
+/** Why this saved issue cannot enter planning, even if an older intake read still lists it. */
+export function planningBlock(item: TrackedItem): string {
+	if (item.missionId || item.sessionId || item.missionIds?.length || item.sessionIds?.length) {
+		return "This issue is already linked to work in Pilot.";
+	}
+	if (groupOf(item) === "done" || groupOf(item) === "closed") return "This issue is closed in Linear.";
+	if (item.triageState === "later") return "This issue is set aside with Later.";
+	if (item.triageState === "discarded") return "This issue was discarded in Pilot.";
+	return "";
+}
+
+/** Both reads must describe the same Linear issue at the same revision. */
+export function matchesLinearRequest(item: TrackedItem, row: IntakeRow): boolean {
+	return row.request.source === "linear" && row.request.id === item.id && row.revision === item.revision;
 }
 
 /** The issue's key, such as "BIL-231", or "" when Pilot did not save one. */

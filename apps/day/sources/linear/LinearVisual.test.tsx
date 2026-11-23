@@ -11,6 +11,25 @@ const SIZES = [
 	["dark", 480],
 ] as const;
 
+for (const [colorScheme, width] of SIZES) {
+	test(`Prefill a Linear draft from Needs you and Linear (${colorScheme}, ${width})`, async () => {
+		const app = await open("../../LinearFixture.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.waitFor("id:today-tab-linear");
+		await app.press("id:today-tab-needs");
+		// The Before view has no planning card to bring forward.
+		if (app.shows("id:queued-request:ln-240")) await app.press("id:queued-request:ln-240");
+		await app.wait(500);
+		await app.screenshot(`output/linear-planning-needs-${colorScheme}-${width}.png`);
+		await app.press("id:today-tab-linear");
+		await app.waitFor("id:linear-issue-ln-240");
+		await app.press("id:linear-issue-ln-240");
+		await app.waitFor("id:linear-detail-ln-240");
+		await app.scroll("id:today-page", 500);
+		await app.wait(500);
+		await app.screenshot(`output/linear-planning-issue-${colorScheme}-${width}.png`);
+	});
+}
+
 test("Today's Linear tab: the saved issues and one open issue, in light and dark, wide and narrow", async () => {
 	for (const [colorScheme, width] of SIZES) {
 		const app = await open("../../LinearFixture.tsx", { platform: "macos", width, height: 900, colorScheme });

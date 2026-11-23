@@ -28,7 +28,11 @@ approvals. Mission workflows are unchanged.
 
 See [shared interviews](../packages/daemon/src/missions/interviews/shared-interviews.md) for durability and recovery.
 
-In Day, open an issue to start linked work or prefill a mission draft. **Manage
+In Day, open an issue to start linked work or prefill a mission draft. An eligible
+issue marked **Needs planning** also offers **Prefill mission draft** in Today →
+**Needs you**. Prefilling opens an editable draft without replacing an unrelated
+draft, starting work, or changing Linear. If Pilot's saved reads disagree, refresh
+planning availability from the issue in the Linear view. **Manage
 status** is off unless you turn it on. A reference keeps the link without
 changing Linear. Size advice uses the shared background AI allowance and never
 chooses or starts a route. Issue text is context, not permission.

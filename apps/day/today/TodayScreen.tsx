@@ -54,9 +54,9 @@ import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayActions, DayDate, DayNotes, visitToday } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import { FinishedToday } from "./FinishedToday";
-import { RequestNotes, requestChecks, requestLine, todayRequests } from "./Incoming";
+import { RequestNotes, requestChecks, requestLine, slackRequests, todayRequests } from "./Incoming";
 import { Problems } from "./Problems";
-import { RequestCard } from "./RequestCard";
+import { LinearPlanningCard, RequestCard } from "./RequestCard";
 import { ResultCard } from "./ResultCard";
 import type { Rituals } from "./rituals/ritualFeed";
 import {
@@ -96,7 +96,7 @@ function countWord(n: number): string {
 
 /**
  * The cards Needs you queues that Rust's headline and summary do not count:
- * results to check and new Slack requests.
+ * results to check, Slack requests and Linear issues that need planning.
  */
 function waiting(day: Day): { results: number; requests: number } {
 	return { results: todayResults(day).length, requests: todayRequests(day).length };
@@ -128,15 +128,17 @@ function headline(day: Day, additional: number, interviewsKnown: boolean): strin
 	return `${countWord(rest)} things left.`;
 }
 
-/** The coordinators' summary, then the results and Slack requests it does not count. */
+/** The coordinators' summary, then the other things waiting in Needs you. */
 function summary(day: Day, interviews: number): string {
 	const today = day.today();
 	const w = waiting(day);
+	const slack = slackRequests(day).length;
 	const some = (n: number, one: string, many: string) =>
 		n > 0 ? `${countWord(n).toLowerCase()} ${n === 1 ? one : many}` : "";
 	const parts = [
 		some(w.results, "result to check", "results to check"),
-		some(w.requests, "Slack request", "Slack requests"),
+		some(slack, "Slack request", "Slack requests"),
+		some(w.requests - slack, "Linear issue that needs planning", "Linear issues that need planning"),
 		some(interviews, "planner interview", "planner interviews"),
 	].filter(Boolean);
 	if (parts.length === 0) return today.summary;
@@ -203,9 +205,14 @@ function itemTitle(day: Day, item: Item): string {
 	return item.kind === "decision" ? item.decision.title : item.action.title;
 }
 
+function isPlanningRequest(item: Item): boolean {
+	return item.kind === "request" && item.row.request.source === "linear";
+}
+
 /** The words before a queued item's title. */
 function upNext(item: Item): string {
 	if (item.kind === "result") return "Up next, result to check: ";
+	if (isPlanningRequest(item)) return "Up next, needs planning: ";
 	if (item.kind === "request") return `Up next, ${item.row.request.sourceLabel} request: `;
 	return item.kind === "decision" ? "Up next: " : "Up next, action for you: ";
 }
@@ -228,6 +235,8 @@ function feedbackTurn(day: Day): boolean {
 /** One card of Needs you, drawn for its kind. */
 function QueueCard(props: { day: Day; item: Item; index: number; count: number; later: boolean }) {
 	const item = () => props.item;
+	const request = () => (item() as Extract<Item, { kind: "request" }>).row;
+	const intake = props.day.intake as NonNullable<Day["intake"]>;
 	return (
 		<If
 			when={item().kind === "decision"}
@@ -246,13 +255,20 @@ function QueueCard(props: { day: Day; item: Item; index: number; count: number; 
 								/>
 							}
 						>
-							<RequestCard
-								day={props.day}
-								mirror={props.day.intake as NonNullable<Day["intake"]>}
-								row={(item() as Extract<Item, { kind: "request" }>).row}
-								index={props.index}
-								count={props.count}
-							/>
+							<If
+								when={request().request.source === "linear"}
+								else={
+									<RequestCard
+										day={props.day}
+										mirror={intake}
+										row={request()}
+										index={props.index}
+										count={props.count}
+									/>
+								}
+							>
+								<LinearPlanningCard mirror={intake} row={request()} index={props.index} count={props.count} />
+							</If>
 						</If>
 					}
 				>
@@ -287,7 +303,7 @@ function needsCount(day: Day, ctx: TodayScope, interviews: PlannerInterviews): n
 function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerInterviews }) {
 	// Results to check queue behind the questions and actions, as cards of their own.
 	const results = () => todayResults(props.day);
-	// New Slack requests queue last: decisions, actions and results to check come first.
+	// Slack requests and Linear issues that need planning queue after decisions, actions and results.
 	const requests = () => todayRequests(props.day);
 	const items = () => queue(props.day.today(), results(), requests());
 	const first = () => (feedbackTurn(props.day) ? undefined : front(props.day.today(), results(), requests()));
@@ -374,10 +390,19 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
 				<Each of={rest()} key={(item) => item.id}>
 					{(item) => (
 						<Row
+							testID={isPlanningRequest(item()) ? `queued-${item().id}` : undefined}
+							onPress={
+								isPlanningRequest(item())
+									? () => {
+											focused.set(item().id);
+											focusFront.set(true);
+										}
+									: undefined
+							}
 							mark={
 								item().kind === "decision"
 									? decisionMark((item() as Extract<Item, { kind: "decision" }>).decision)
-									: item().kind === "request"
+									: item().kind === "request" && !isPlanningRequest(item())
 										? "new"
 										: "needs"
 							}
@@ -404,8 +429,8 @@ function NeedsYou(props: { day: Day; ctx: TodayScope; interviews: PlannerIntervi
  * New Slack requests also wait in Needs you, as cards in its queue. A press brings one forward there.
  */
 function New(props: { day: Day; filtered: boolean }) {
-	const requests = () => (props.filtered ? todayRequests(props.day) : []);
-	const waiting = () => todayRequests(props.day).length;
+	const requests = () => (props.filtered ? slackRequests(props.day) : []);
+	const waiting = () => slackRequests(props.day).length;
 	const live = () => props.day.intake?.view().availability === "live";
 	return (
 		<If when={props.filtered || props.day.intake}>
@@ -986,7 +1011,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 									<Tab
 										testID="today-tab-new"
 										label="New"
-										count={todayRequests(props.day).length}
+										count={slackRequests(props.day).length}
 										selected={tab() === "new"}
 										onPress={() => todayTab.set("new")}
 									/>

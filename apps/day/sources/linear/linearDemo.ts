@@ -38,6 +38,7 @@ function issue(
 
 const ISSUES: TrackedItem[] = [
 	issue("ln-219", "BIL-219", "Retry failed webhooks with backoff", "In Progress", "started", {
+		linearSize: "needs_planning",
 		missionId: "search",
 		sessionId: "chat-219",
 		missionIds: ["old-mission", "search"],
@@ -50,9 +51,10 @@ const ISSUES: TrackedItem[] = [
 	}),
 	issue("ln-226", "BIL-226", "Show tax ID on credit notes", "Backlog", "backlog", { triageState: "later" }),
 	// Same title as a mission on Today, but no saved link: never shown as part of it.
-	issue("ln-240", "BIL-240", "Faster search", "Todo", "unstarted"),
+	issue("ln-240", "BIL-240", "Faster search", "Todo", "unstarted", { linearSize: "needs_planning" }),
 	issue("ln-227", "BIL-227", "Refund webhook is missing the currency", "Done", "completed", { missionId: "archived" }),
 	issue("ln-230", "BIL-230", "Old invoice importer", "Canceled", "canceled", {
+		linearSize: "needs_planning",
 		linearParent: { id: "p-200", identifier: "BIL-200", title: "Billing cleanup", url: "https://linear.app/mock" },
 	}),
 ];

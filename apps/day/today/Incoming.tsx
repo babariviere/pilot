@@ -1,13 +1,12 @@
 // Requests nobody started in Pilot yet, and their one set of writes. Today
-// shows each new Slack request as a card in Needs you (RequestCard.tsx),
-// after decisions, actions and results to check. Linear requests wait in
-// the Linear list instead. Choosing where work
+// shows new Slack requests and Linear issues that need planning in Needs you
+// (RequestCard.tsx), after decisions, actions and results to check. Choosing where work
 // goes, opening a request or reading again records and starts nothing; only
 // Start, Later, Discard, Bring back and Undo send, each once, naming the
 // exact request and revision shown. A write whose answer is lost stays "not
 // confirmed" until Check reads its saved receipt. The words come from
 // outside Pilot and show as text only.
-import { effect, signal, View, type ViewRef } from "nsh";
+import { effect, keymap, signal, View, type ViewRef } from "nsh";
 import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "../app/day";
 import { focused, focusFront, releaseFront } from "../app/view";
@@ -21,6 +20,7 @@ import type {
 	Triage,
 } from "../missions/intake/intakeFeed";
 import { goalDraft, linkedMission, openNew, replacesDraft, requestDraft } from "../missions/planning/planView";
+import { matchesLinearRequest, planningBlock } from "../sources/linear/linearView";
 import {
 	Block,
 	Body,
@@ -85,13 +85,40 @@ export function openMissions(today: Today): MissionRow[] {
 	);
 }
 
-/**
- * New Slack requests for this window's project. They wait in Needs you as cards.
- */
-export function todayRequests(day: Day): IntakeRow[] {
+/** New Slack requests for this window's project. */
+export function slackRequests(day: Day): IntakeRow[] {
 	const v = day.intake?.view();
 	if (v?.availability !== "live") return [];
 	return v.fresh.filter((r) => r.request.source === "slack");
+}
+
+/** Needs you includes Linear issues only when the project's two reads agree. */
+export function todayRequests(day: Day): IntakeRow[] {
+	const slack = slackRequests(day);
+	const intake = day.intake?.view();
+	const saved = day.linear?.view().read;
+	const project = day.today().project;
+	if (
+		intake?.availability !== "live" ||
+		!saved?.configurationCurrent ||
+		saved.projectId !== intake.projectId ||
+		(project && saved.projectId !== project)
+	) {
+		return slack;
+	}
+	const items = new Map(saved.items.map((item) => [item.id, item]));
+	return [
+		...slack,
+		...intake.fresh.filter((row) => {
+			const item = items.get(row.request.id);
+			return (
+				item?.linearSize === "needs_planning" &&
+				item.projectId === saved.projectId &&
+				matchesLinearRequest(item, row) &&
+				!planningBlock(item)
+			);
+		}),
+	];
 }
 
 /** Whether a write about request `id` is on its way or not confirmed. */
@@ -351,14 +378,20 @@ export function ConfirmStart(props: {
 /**
  * Opens New with a goal written from the request, linked to it. Moves only:
  * the user edits the words, and only their Plan takes the request out of
- * the waiting list. The request's words replace whatever New holds, as the
- * user asked.
+ * the waiting list. A Linear prefill never replaces an unrelated draft.
  */
 function planFrom(row: IntakeRow, manageStatus = false) {
 	const r = row.request;
 	// A linked draft from Feedback keeps New, and the other draft it holds aside: nothing replaces either.
 	if (linkedMission() || findingWork()) return false;
-	if (r.source === "linear" && goalDraft().trim() && requestDraft()?.itemId !== r.id) return false;
+	if (r.source === "linear") {
+		const existing = requestDraft();
+		if (existing?.itemId === r.id && existing.revision === row.revision && existing.source === r.sourceLabel) {
+			openNew();
+			return true;
+		}
+		if (goalDraft() || existing || replacesDraft()) return false;
+	}
 	const where = r.place ? ` (${r.place})` : "";
 	const link = r.link ? `\n${r.link}` : "";
 	glide();
@@ -378,9 +411,23 @@ function planFrom(row: IntakeRow, manageStatus = false) {
 }
 
 /** Opens New with a mission goal from the request. It sends nothing. */
-export function PlanAction(props: { row: IntakeRow; busy: boolean; manageStatus?: boolean; onOpened?: () => void }) {
+export function PlanAction(props: {
+	row: IntakeRow;
+	busy: boolean;
+	manageStatus?: boolean;
+	onOpened?: () => void;
+	anchor?: (node: ViewRef) => void;
+	front?: boolean;
+}) {
 	const linear = () => props.row.request.source === "linear";
 	const conflict = signal(false);
+	const prefill = () => {
+		if (props.busy) return;
+		const opened = planFrom(props.row, props.manageStatus ?? false);
+		conflict.set(!opened);
+		if (opened) props.onOpened?.();
+	};
+	if (props.front) keymap.bind("mod+enter", prefill);
 	return (
 		<View class="gap-2">
 			<Buttons>
@@ -388,11 +435,9 @@ export function PlanAction(props: { row: IntakeRow; busy: boolean; manageStatus?
 					label={linear() ? "Prefill mission draft" : "Plan a mission…"}
 					testID={`plan-${props.row.request.id}`}
 					disabled={props.busy}
-					onPress={() => {
-						const opened = planFrom(props.row, props.manageStatus ?? false);
-						conflict.set(!opened);
-						if (opened) props.onOpened?.();
-					}}
+					anchor={props.anchor}
+					shortcut={props.front ? "⌘↩" : undefined}
+					onPress={prefill}
 				/>
 			</Buttons>
 			<If when={conflict()}>
@@ -625,7 +670,7 @@ function LiveNotes(props: { day: Day; mirror: IntakeMirror }) {
 			reading.set(false);
 		}
 	};
-	const more = () => (v().intake.more && todayRequests(props.day).length > 0 ? v().intake.more : "");
+	const more = () => (v().intake.more && slackRequests(props.day).length > 0 ? v().intake.more : "");
 	const any = () =>
 		!!v().reason ||
 		v().intake.trouble.length > 0 ||

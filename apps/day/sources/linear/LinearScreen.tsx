@@ -53,11 +53,13 @@ import {
 	identifierOf,
 	linearProject,
 	linearTitle,
+	matchesLinearRequest,
 	openIssue,
 	type Place,
 	placeOf,
 	placeSentence,
 	placeWord,
+	planningBlock,
 	progressLine,
 	savedLine,
 	troubleLine,
@@ -165,10 +167,33 @@ function Issue(props: {
 	const open = () => props.list.open() === i().id;
 	const key = () => identifierOf(i());
 	const intake = props.day.intake;
-	const request = () =>
-		intake?.view().projectId === props.project
-			? intake?.view().fresh.find((row) => row.request.id === i().id && row.revision === i().revision)
+	const intakeHere = () => {
+		const v = intake?.view();
+		return v?.availability === "live" && v.projectId === props.project && i().projectId === props.project
+			? v
 			: undefined;
+	};
+	const needsPlanning = () => i().linearSize === "needs_planning";
+	const blocked = () => (needsPlanning() ? planningBlock(i()) : "");
+	const request = () => (blocked() ? undefined : intakeHere()?.fresh.find((row) => matchesLinearRequest(i(), row)));
+	const refreshing = signal(false);
+	const refresh = async () => {
+		if (refreshing() || !intake || !props.day.linear) return;
+		refreshing.set(true);
+		try {
+			await Promise.all([intake.source.read(), props.day.linear.source.read()]);
+		} finally {
+			refreshing.set(false);
+		}
+	};
+	const planningReason = () => {
+		if (blocked()) return blocked();
+		if (!intakeHere()) return "Pilot could not read the request list for this project.";
+		if (intakeHere()?.fresh.some((row) => row.request.source === "linear" && row.request.id === i().id)) {
+			return "Pilot’s saved issue and request list show different versions.";
+		}
+		return "This issue is not on Pilot’s list of requests ready for planning.";
+	};
 	const size = () =>
 		i().linearSize === "quick_fix" ? "Quick fix" : i().linearSize === "needs_planning" ? "Needs planning" : "";
 	const management = () => i().linearManagement;
@@ -226,6 +251,23 @@ function Issue(props: {
 					<Caption tone="faint">{i().url}</Caption>
 					<If when={size()}>
 						<Body tone="muted">{`Suggested size: ${size()}. You choose how to start.`}</Body>
+					</If>
+					<If when={needsPlanning() && !request()}>
+						<Notice
+							testID={`linear-planning-unavailable-${i().id}`}
+							text="Planning is unavailable"
+							detail={planningReason()}
+							action={
+								<If when={!blocked() && intake && props.day.linear}>
+									<Link
+										label="Refresh planning availability"
+										testID={`linear-planning-refresh-${i().id}`}
+										disabled={refreshing()}
+										onPress={() => void refresh()}
+									/>
+								</If>
+							}
+						/>
 					</If>
 					<If when={sync()}>
 						<Body tone="muted">

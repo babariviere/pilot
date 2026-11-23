@@ -295,7 +295,8 @@ export function commit(day: Day, item: Item | undefined) {
 	}
 	if (item.kind === "request") {
 		// The first press asks to start; the press after it sends the Start the card shows.
-		if (day.intake) startRequest(day.intake, item.row, openMissions(day.today()));
+		if (day.intake && item.row.request.source === "slack")
+			startRequest(day.intake, item.row, openMissions(day.today()));
 		return;
 	}
 	if (item.kind === "decision") {
@@ -312,7 +313,7 @@ export function later(day: Day, item: Item | undefined) {
 	if (!item) return;
 	if (item.kind === "result") laterResult(item.entry.key);
 	else if (item.kind === "request") {
-		if (day.intake) void triageCard(day.intake, item.row, "later");
+		if (day.intake && item.row.request.source === "slack") void triageCard(day.intake, item.row, "later");
 	} else if (item.kind === "decision") laterDecision(day, item.decision);
 	else if (item.action.delivery === "idle") void laterAction(day, item.action);
 }

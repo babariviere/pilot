@@ -31,6 +31,43 @@ const START_KEY = "⌘↩";
 /** The request whose routing choice is open, by ID. Opening it sends nothing. */
 const changing = signal<string | null>(null);
 
+/** A Linear issue in Needs you offers planning, not a Start or a Slack triage write. */
+export function LinearPlanningCard(props: { mirror: IntakeMirror; row: IntakeRow; index: number; count: number }) {
+	const r = () => props.row.request;
+	const id = `request:${r().id}`;
+	const anchor = signal<ViewRef | undefined>(undefined);
+	anchors.set(id, anchor);
+	cleanup(() => anchors.delete(id));
+	effect(() => {
+		const node = anchor();
+		if (focusFront() && node) {
+			focusFront.set(false);
+			node.focus();
+		}
+	});
+	return (
+		<Question
+			testID="linear-planning-request"
+			title={r().title}
+			position={props.count > 1 ? `${props.index + 1} of ${props.count}` : undefined}
+			meta={
+				<>
+					<State kind="needs" label="Needs planning" plain />
+					<Caption>{`· ${r().sourceLabel} · ${r().place}`}</Caption>
+				</>
+			}
+		>
+			<Body tone="muted">Edit the draft in New. This does not start work or change Linear.</Body>
+			<PlanAction
+				front
+				row={props.row}
+				busy={requestBusy(props.mirror, r().id)}
+				anchor={(node) => anchor.set(node)}
+			/>
+		</Question>
+	);
+}
+
 /** Request `props.row`, `props.index` of `props.count` waiting. */
 export function RequestCard(props: { day: Day; mirror: IntakeMirror; row: IntakeRow; index: number; count: number }) {
 	const r = () => props.row.request;

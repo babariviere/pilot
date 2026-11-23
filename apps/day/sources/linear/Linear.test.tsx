@@ -239,6 +239,76 @@ test("an open issue offers size advice and reference-only start by default", asy
 	await app.waitFor("Pilot links the issue and manages progress and review only. You mark it complete in Linear.");
 });
 
+test("Needs planning opens the same editable draft from Today and Linear", async () => {
+	let goal: string | null = null;
+	for (const view of ["today", "linear"]) {
+		const app = await open("../../LinearFixture.tsx", desktop);
+		await app.waitFor("id:today-tab-linear");
+		if (view === "today") {
+			await app.press("id:today-tab-needs");
+			await app.press("id:queued-request:ln-240");
+			await app.waitFor("Needs planning");
+			expect(app.shows("id:start-ln-240")).toBe(false);
+			await app.keyboard.press("l");
+			await app.keyboard.press("mod+enter");
+		} else {
+			await openPage(app);
+			await app.press("id:linear-issue-ln-240");
+			await app.press("id:plan-ln-240");
+		}
+		await app.waitFor("id:goal");
+		await app.waitFor("Draft: ln-240@1 · Faster search");
+		await app.waitFor("Manage status: Off. Reference only.");
+		const value = app.value("id:goal");
+		expect(value?.includes("https://linear.app/mock/issue/BIL-240")).toBe(true);
+		if (goal !== null) expect(value).toBe(goal);
+		goal = value;
+		await app.type("id:goal", "Edit the mission goal");
+		expect(app.value("id:goal")).toContain("Edit the mission goal");
+		expect(app.shows("Writes: 0")).toBe(true);
+	}
+});
+
+test("Linear explains a revision mismatch and can refresh planning availability", async () => {
+	const app = await page();
+	await app.press("Mismatched intake revision");
+	await app.press("id:linear-issue-ln-240");
+	await app.waitFor("id:linear-planning-unavailable-ln-240");
+	expect(app.shows("id:plan-ln-240")).toBe(false);
+	await app.press("id:linear-planning-refresh-ln-240");
+	await app.waitFor("id:linear-detail-ln-240 >> id:plan-ln-240");
+	expect(app.shows("id:linear-planning-unavailable-ln-240")).toBe(false);
+	expect(app.shows("Writes: 0")).toBe(true);
+});
+
+test("linked and closed issues do not offer a new mission draft", async () => {
+	const app = await page();
+	for (const id of ["ln-219", "ln-230"]) {
+		await app.press(`id:linear-issue-${id}`);
+		await app.waitFor(`id:linear-planning-unavailable-${id}`);
+		expect(app.shows(`id:plan-${id}`)).toBe(false);
+		expect(app.shows(`id:linear-planning-refresh-${id}`)).toBe(false);
+	}
+});
+
+test("prefilling from either view leaves an unrelated draft untouched", async () => {
+	const conflict = "You already have a mission draft. Open New to finish or clear it before prefilling another.";
+	const app = await open("../../LinearFixture.tsx", desktop);
+	await app.waitFor("id:today-tab-linear");
+	await app.press("Keep another draft");
+	await app.press("id:today-tab-needs");
+	await app.press("id:queued-request:ln-240");
+	await app.press("id:plan-ln-240");
+	await app.waitFor(conflict);
+	await openPage(app);
+	await app.press("id:linear-issue-ln-240");
+	await app.press("id:plan-ln-240");
+	await app.waitFor(conflict);
+	expect(app.shows("Draft: none@0 · Unrelated mission draft")).toBe(true);
+	expect(app.shows("id:goal")).toBe(false);
+	expect(app.shows("Writes: 0")).toBe(true);
+});
+
 test("a restored issue that is no longer shown says so and opens nothing else", async () => {
 	const app = await page();
 	await app.press("id:linear-issue-ln-231");
