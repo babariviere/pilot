@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { request } from "node:http";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const help = `Usage: pilot <command> [--json]
@@ -19,7 +22,8 @@ Options:
   --limit     Request 1 to 50 chat entries (chats read only)
   -h, --help  Show this help without connecting to Pilot
 
-Read access is limited to your current chat and its attached mission.
+In a regular terminal, reads use your local Pilot profile.
+In an agent session, reads stay limited to its chat and attached mission.
 `;
 
 const options = {
@@ -72,6 +76,7 @@ function pageInteger(flag: "before" | "limit", value: string): string {
 async function readPilot(path: string, query: URLSearchParams): Promise<unknown> {
 	const port = process.env.PILOT_CLI_PORT;
 	const token = process.env.PILOT_CLI_TOKEN;
+	if (port === undefined && token === undefined) return readTerminal(path, query);
 	if (!port || !token) {
 		throw new Error("Pilot CLI access is not available. Run from a Pilot session with CLI access.");
 	}
@@ -119,6 +124,59 @@ async function readPilot(path: string, query: URLSearchParams): Promise<unknown>
 	} catch {
 		throw new Error(signal.aborted ? timeoutMessage : "The Pilot daemon did not return valid JSON.");
 	}
+}
+
+async function readTerminal(path: string, query: URLSearchParams): Promise<unknown> {
+	// Match pilotd's profile discovery; the installer copies this file on its own.
+	const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+	const profile = resolve(process.env.PILOT_HOME || join(dataHome, "pilot"));
+	const socketPath = join(profile, "cli", "s");
+	if (Buffer.byteLength(socketPath) >= 104) throw new Error("Pilot profile path is too long for the terminal CLI.");
+	const signal = AbortSignal.timeout(5_000);
+	return new Promise((resolveRead, reject) => {
+		const unavailable = () =>
+			reject(
+				new Error(
+					signal.aborted
+						? "The Pilot daemon did not finish the request within 5 seconds."
+						: "Could not reach the terminal CLI. Open an updated Pilot Day and check PILOT_HOME for a custom profile.",
+				),
+			);
+		const req = request(
+			{
+				socketPath,
+				path: `/api/agent-cli/v1/${path}?${query}`,
+				method: "GET",
+				headers: { Accept: "application/json" },
+				signal,
+				agent: false,
+			},
+			async (res) => {
+				if (res.statusCode !== 200) {
+					res.destroy();
+					reject(
+						new Error(
+							res.statusCode === 404
+								? "Not found in this Pilot profile (HTTP 404). Use 'pilot chats list' or 'pilot missions list' to find an ID."
+								: `Pilot daemon returned HTTP ${res.statusCode}.`,
+						),
+					);
+					return;
+				}
+				try {
+					res.setEncoding("utf8");
+					let body = "";
+					for await (const chunk of res) body += chunk;
+					resolveRead(JSON.parse(body));
+				} catch {
+					if (signal.aborted) unavailable();
+					else reject(new Error("The Pilot daemon did not return valid JSON."));
+				}
+			},
+		);
+		req.on("error", unavailable);
+		req.end();
+	});
 }
 
 async function main(args: string[]): Promise<void> {

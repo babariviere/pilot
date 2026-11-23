@@ -1,14 +1,14 @@
 /** Real headless entry + kernel, isolated credentials and a faux provider. No remote host/account needed. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import type { DaemonHello, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 
@@ -23,7 +23,8 @@ async function until(check: () => Promise<boolean>, detail: () => string): Promi
 test("headless daemon runs native tools after clients disconnect and keeps identity/state on restart", {
 	timeout: 60_000,
 }, async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pilot-headless-"));
+	// A short path fits both the macOS and Linux Unix socket limits.
+	const root = await mkdtemp("/tmp/pilot-headless-");
 	const stops: Array<() => Promise<void>> = [];
 	t.after(async () => {
 		try {
@@ -170,6 +171,18 @@ export default pi => {
 	});
 	assert.equal(spawned.status, 201, await spawned.clone().text());
 	const session = (await spawned.json()) as SessionSummary;
+	const cli = fileURLToPath(new URL("../../cli/cli.ts", import.meta.url));
+	const terminalPilot = async (...args: string[]) => {
+		const { stdout } = await promisify(execFile)(process.execPath, [cli, ...args], {
+			cwd: "/",
+			env: { PILOT_HOME: home },
+			timeout: 7_000,
+		});
+		return JSON.parse(stdout);
+	};
+	assert.deepEqual(await terminalPilot("chats", "list", "--json"), {
+		chats: [{ id: session.id, title: "Offline smoke" }],
+	});
 	await until(
 		async () => {
 			if (await access(join(cwd, "cli-failed")).then(() => true, () => false))
@@ -215,6 +228,8 @@ export default pi => {
 	assert.equal(restarted.daemonVersion, hello.daemonVersion);
 	const sessions = (await (await fetch(`${base}/sessions`)).json()) as SessionSummary[];
 	assert.ok(sessions.some((saved) => saved.id === session.id && saved.title === "Offline smoke"));
+	const history = await terminalPilot("chats", "read", session.id, "--json");
+	assert.ok(history.messages.some((message: { text: string }) => message.text === "Headless execution complete"));
 	assert.ok(!first.log().includes("Energy helper unavailable"));
 	await second.stop();
 });

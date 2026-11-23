@@ -953,6 +953,18 @@ export class SessionManager {
 		const meta = this.metas.get(scope.sessionId);
 		return meta ? [{ id: meta.id, title: meta.title }] : [];
 	}
+
+	terminalCliCanReadChat(id: string): boolean {
+		const meta = this.metas.get(id);
+		return !this.closing && !!meta && !meta.control && !meta.role && !meta.planning && !this.isDayInsightsReport(id);
+	}
+
+	terminalCliChats() {
+		return [...this.metas.values()]
+			.filter(({ id }) => this.terminalCliCanReadChat(id))
+			.sort((a, b) => b.updatedAt - a.updatedAt)
+			.map(({ id, title, projectId, archivedAt }) => ({ id, title, projectId, archivedAt }));
+	}
 	private planningBridge?: {
 		assert(binding: import("@pilot/kernel").PlanningWorkerBinding): void;
 		held(binding: import("@pilot/kernel").PlanningWorkerBinding): boolean;

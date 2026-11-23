@@ -26,14 +26,20 @@ Update your checkout and run the same command to update both together.
 The launcher uses Pilot Day's bundled Node if present, otherwise the Node
 that ran the installer. Pass a runtime directory to install its bundled CLI,
 skill, and Node instead of the checkout's files.
-The installer does not update or restart Pilot Day. Reading data requires a
-Pilot runtime that supports the CLI and an eligible Pilot agent session.
+The installer does not update or restart Pilot Day. Reading data requires
+a running Pilot Day daemon that supports terminal access.
 
 Add `$HOME/.local/bin` to your shell's `PATH` if needed, then run `pilot --help`.
 Use `command -v pilot` to check which command your shell finds. You can also
 run `"$HOME/.local/bin/pilot" --help` directly.
 
-Only eligible Pilot agents can read data. In Build, Pilot provides the bundled
+From any directory in your regular terminal, run `pilot missions list` or
+`pilot chats list` to find IDs, then use `pilot missions brief <id>` or
+`pilot chats read <id>`. For a custom daemon profile, set `PILOT_HOME` to its
+absolute path. Terminal access uses a private Unix socket. Programs running
+as your OS account can use it; other accounts and network clients cannot.
+
+In Build, Pilot provides the bundled
 `pilot` command on `PATH`. In Ask, the `pilot_cli` tool takes the same arguments
 without running a shell. The bundled `pilot-cli` skill shows how to use both.
 An agent can read its own chat and attached mission, including the Brief and

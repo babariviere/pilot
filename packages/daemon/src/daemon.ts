@@ -13,6 +13,7 @@ import { BackgroundSubscription } from "./models/background/background-subscript
 import { BackgroundUsage } from "./models/background/background-usage.ts";
 import { ChatSettingsService } from "./day/chat/chat-settings.ts";
 import { loadConfig } from "./config.ts";
+import { openTerminalCli } from "./cli/terminal-cli.ts";
 import { ConnectivityService } from "./setup/connectivity.ts";
 import { CredentialBroker } from "./setup/credential-broker.ts";
 import { createDaemonServices } from "./daemon-services.ts";
@@ -426,12 +427,21 @@ void trackedItems
 	.catch((error: unknown) => console.warn(`pilotd: could not mark job chats: ${error}`));
 power?.refresh();
 if (!server.runtimeFrozen()) await resumeRuntime();
+const closeTerminalCli = await openTerminalCli(config.home, sessions.agentCli, {
+	chats: () => sessions.terminalCliChats(),
+	canReadChat: (id) => sessions.terminalCliCanReadChat(id),
+	history: (id, before, limit) => sessions.history(id, before, limit),
+	missions: missionStore,
+}).catch((error: unknown) => {
+	console.warn(`pilotd: terminal CLI unavailable: ${error instanceof Error ? error.message : String(error)}`);
+});
 runtimeOwner.ready(hello);
 console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
 
 async function stop(): Promise<void> {
 	if (stopping) return;
 	stopping = true;
+	closeTerminalCli?.();
 	console.log("pilotd: pausing sessions");
 	// A worker that is starting while this daemon goes away must not leave its chat broken.
 	sessions.beginClosing();

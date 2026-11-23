@@ -1,13 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { SessionHistoryPage } from "@pilot/protocol";
+import type { Mission, SessionHistoryPage } from "@pilot/protocol";
 import type { MissionStore } from "../missions/missions.ts";
 
 export type CliScope = { sessionId: string; projectId: string | null; missionId: string | null };
-type Reads = {
+export type AgentCliReads = {
 	chats(scope: CliScope): Array<{ id: string; title?: string }>;
 	history(id: string, before: number, limit: number): Promise<SessionHistoryPage>;
 	missions?: MissionStore;
+};
+export type TerminalCliReads = Omit<AgentCliReads, "chats"> & {
+	chats(): Array<{ id: string; title?: string; projectId?: string; archivedAt?: number }>;
+	canReadChat(id: string): boolean;
 };
 
 export class AgentCliError extends Error {
@@ -42,43 +46,85 @@ export class AgentCli {
 		};
 	}
 
-	async read(method: string | undefined, authorization: string | undefined, url: URL, reads: Reads) {
-		if (method !== "GET") throw new AgentCliError(405, "Pilot CLI supports only reads");
+	async read(method: string | undefined, authorization: string | undefined, url: URL, reads: AgentCliReads) {
+		readMethod(method);
 		const token = /^Bearer ([a-f0-9]{64})$/.exec(authorization ?? "")?.[1];
 		const current = token ? this.grants.get(token) : undefined;
 		const scope = current?.();
 		if (!scope) throw new AgentCliError(401, "Use this command in an active Pilot agent session");
+		return this.readScoped(url, {
+			context: scope,
+			chats: () => reads.chats(scope),
+			chatAllowed: (id) => id === scope.sessionId,
+			history: reads.history,
+			missions: () => (scope.missionId ? [scopedMission(reads.missions, scope)] : []),
+			mission: (id) => (id === scope.missionId ? scopedMission(reads.missions, scope) : undefined),
+			store: reads.missions,
+			recheck: () => !!token && this.grants.get(token) === current && !!current?.(),
+		});
+	}
+
+	readTerminal(method: string | undefined, url: URL, reads: TerminalCliReads) {
+		readMethod(method);
+		return this.readScoped(url, {
+			context: { mode: "terminal", sessionId: null, projectId: null, missionId: null },
+			chats: reads.chats,
+			chatAllowed: reads.canReadChat,
+			history: reads.history,
+			missions: () => reads.missions?.list() ?? [],
+			mission: (id) => reads.missions?.get(id),
+			store: reads.missions,
+			recheck: reads.canReadChat,
+		});
+	}
+
+	private async readScoped(
+		url: URL,
+		reads: {
+			context: CliScope | { mode: "terminal"; sessionId: null; projectId: null; missionId: null };
+			chats: () => unknown[];
+			chatAllowed: (id: string) => boolean;
+			history: AgentCliReads["history"];
+			missions: () => Mission[];
+			mission: (id: string) => Mission | undefined;
+			store?: MissionStore;
+			recheck: (id: string) => boolean;
+		},
+	) {
+		if (!url.pathname.startsWith("/api/agent-cli/v1/")) throw notFound();
 		const parts = url.pathname.split("/").slice(4);
 		const historyRoute = parts.length === 2 && parts[0] === "chats";
 		if ([...url.searchParams.keys()].some((key) => !historyRoute || (key !== "before" && key !== "limit")))
 			throw new AgentCliError(400, "Unexpected Pilot CLI query option");
 		if (parts.length === 1) {
-			if (parts[0] === "context") return scope;
-			if (parts[0] === "chats") return { chats: reads.chats(scope) };
-			if (parts[0] === "missions") return { missions: scope.missionId ? [mission(reads.missions, scope)] : [] };
+			if (parts[0] === "context") return reads.context;
+			if (parts[0] === "chats") return { chats: reads.chats() };
+			if (parts[0] === "missions") return { missions: reads.missions().map(missionSummary) };
 		}
-		if (historyRoute && parts[1] === scope.sessionId) {
+		const id = parts[1];
+		if (!id || !/^[A-Za-z0-9_-]{1,128}$/.test(id)) throw notFound();
+		if (historyRoute && reads.chatAllowed(id)) {
 			const before = integer(url, "before", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
 			const limit = integer(url, "limit", 20, 50);
 			// The shared cold-history reader also serves Day. Don't let CLI requests fill its queue.
 			if (this.histories >= 4) throw new AgentCliError(429, "Four CLI chat reads are already running; try again");
 			this.histories++;
 			try {
-				const page = await reads.history(scope.sessionId, before, limit);
-				if (!token || this.grants.get(token) !== current || !current?.())
-					throw new AgentCliError(401, "This Pilot agent session is no longer active");
+				const page = await reads.history(id, before, limit);
+				if (!reads.recheck(id)) throw new AgentCliError(401, "Pilot CLI access changed during the read");
 				return transcript(page);
 			} finally {
 				this.histories--;
 			}
 		}
-		if (parts[0] === "missions" && parts[1] && parts[1] === scope.missionId) {
-			const store = reads.missions;
-			const detail = mission(store, scope);
-			if (parts.length === 2) return detail;
-			if (parts.length === 3 && parts[2] === "brief") return { brief: store?.brief(detail.id)?.markdown ?? null };
+		if (parts[0] === "missions" && parts.length <= 3) {
+			const store = reads.store;
+			const detail = reads.mission(id);
+			if (!detail || !store) throw notFound();
+			if (parts.length === 2) return missionSummary(detail);
+			if (parts.length === 3 && parts[2] === "brief") return { brief: store.brief(detail.id)?.markdown ?? null };
 			if (parts.length === 3 && parts[2] === "tasks") {
-				const tasks = store!.tasks(detail.id).map(({ id, number, title, body, status, dependsOn, sessionId }) => ({
+				const tasks = store.tasks(detail.id).map(({ id, number, title, body, status, dependsOn, sessionId }) => ({
 					id,
 					number,
 					title,
@@ -94,9 +140,17 @@ export class AgentCli {
 	}
 }
 
-function mission(store: MissionStore | undefined, scope: CliScope) {
+function readMethod(method: string | undefined) {
+	if (method !== "GET") throw new AgentCliError(405, "Pilot CLI supports only reads");
+}
+
+function scopedMission(store: MissionStore | undefined, scope: CliScope) {
 	const detail = scope.missionId ? store?.get(scope.missionId) : undefined;
 	if (!detail || detail.projectId !== scope.projectId) throw notFound();
+	return detail;
+}
+
+function missionSummary(detail: Mission) {
 	const { id, projectId, title, goal, status, briefRevision, tasksDone, tasksTotal } = detail;
 	return { id, projectId, title, goal, status, briefRevision, tasksDone, tasksTotal };
 }
