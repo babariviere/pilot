@@ -140,7 +140,8 @@ access. Each row names its project and current task, or says the purpose is unav
 exact chat without sending anything; Back keeps your Today draft and place. Show all reveals rows beyond four.
 Waiting, held and finished chats stay out of this list. Chats waiting for a coding slot show under it in Waiting,
 with their place in line and the chats using the slots; the chat page, feedback and task results say the same.
-Earlier or unavailable reads never claim live work.
+Earlier or unavailable reads never claim live work. During a turn, the dots above the chat composer
+and next to active Screen Agent steps move in sequence. With Reduce Motion on, they stay still.
 A mission's overview leads with its work: Now shows current work (working, in review, held or waiting
 for you), Next lists the plan's queue in order, and Blockers shows tasks that wait for earlier work,
 a Pause and decisions for you. Queued in plan is not a start: Pilot still checks permission, limits and holds.

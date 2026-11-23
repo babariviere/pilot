@@ -1,7 +1,7 @@
 // Chat pieces: a chat reads as a conversation, not a log. The user's bubble, the agent's reply, a folded turn's
 // steps (fold them with `Disclosure`), one-line events, a scheduled bubble, the tray of tasks and subagents, the
 // working line above the composer, and the composer. A quote or code block is a `Quote`.
-import { type JSX, Text, View } from "nsh";
+import { cleanup, createAnimatedValue, type JSX, reduceMotion, Text, token, View } from "nsh";
 import { Pressable } from "./button";
 import { Icon } from "./icon";
 import { Mark } from "./state";
@@ -108,17 +108,50 @@ export function Tray(props: {
 	);
 }
 
+function WorkingDot(props: { delay: number }) {
+	const lift = createAnimatedValue(0);
+	void lift.keyframes([0, { offset: 0.15, value: 1 }, { offset: 0.3, value: 0 }, 0], {
+		duration: 1200,
+		delay: props.delay,
+		easing: "easeInOut",
+		iterations: "infinite",
+		frameRate: 30,
+	});
+	cleanup(() => lift.set(0));
+	const translateY = lift.mul(-2);
+	return (
+		<View
+			class="size-1 rounded-full"
+			style={{
+				transform: [{ translateY }],
+				backgroundColor: lift.interpolate({ inputRange: [0, 1], outputRange: [token("faint"), token("progress")] }),
+			}}
+		/>
+	);
+}
+
 /**
- * Live work, directly above the composer: three still dots and its words ("Working… · 1 job"). `background` makes
+ * Live work, directly above the composer: three pulsing dots and its words ("Working… · 1 job"). `background` makes
  * it fainter, for an agent that waits on background jobs.
  */
 export function WorkingLine(props: { text: string; background?: boolean; testID?: string }) {
 	return (
 		<View testID={props.testID} class={`flex-row items-center gap-2 ${props.background ? "opacity-60" : ""}`}>
 			<View class="flex-row items-center gap-0.75">
-				<View class="size-1 rounded-full bg-faint" />
-				<View class="size-1 -translate-y-0.5 rounded-full bg-progress" />
-				<View class="size-1 rounded-full bg-faint" />
+				<If
+					when={!reduceMotion()}
+					else={
+						<>
+							<View class="size-1 rounded-full bg-faint" />
+							<View class="size-1 -translate-y-0.5 rounded-full bg-progress" />
+							<View class="size-1 rounded-full bg-faint" />
+						</>
+					}
+				>
+					<WorkingDot delay={0} />
+					<WorkingDot delay={150} />
+					<WorkingDot delay={300} />
+				</If>
 			</View>
 			<Text class="text-muted-foreground" style={TYPE.caption}>
 				{props.text}
