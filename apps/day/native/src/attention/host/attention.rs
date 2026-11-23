@@ -807,6 +807,9 @@ fn bind_answer(source: &Source, id: &str, request: &mut Value) -> Result<(), Err
     let mut payload = json!({"projectId":source.project()?.project_id,"scope":request["scope"]});
     if let Some(interview) = request.get("interview") {
         payload["interview"] = interview.clone();
+        if let Some(revision) = request.get("draftRevision") {
+            payload["draftRevision"] = revision.clone();
+        }
     } else {
         payload["message"] = request["message"].clone();
         if request["clarification"] == true {

@@ -21,3 +21,19 @@ test("standalone interview mock in light and dark", async () => {
 		await app.screenshot(`output/interview-review-${colorScheme}.png`);
 	}
 });
+
+test("other project interview draft conflict", async () => {
+	for (const [colorScheme, width] of [
+		["light", 1100],
+		["dark", 1100],
+		["light", 480],
+		["dark", 480],
+	] as const) {
+		const app = await open("../../InterviewCardFixture.tsx", { platform: "macos", width, height: 850, colorScheme });
+		await app.press("Save in another window on next edit");
+		await app.press("id:own-outcome");
+		await app.type("id:answer-outcome", "Keep my edits while I check the saved answers.");
+		await app.waitFor("Not saved. Another window saved this draft. Your edits are kept here.");
+		await app.screenshot(`output/interview-draft-conflict-${colorScheme}-${width}.png`);
+	}
+});

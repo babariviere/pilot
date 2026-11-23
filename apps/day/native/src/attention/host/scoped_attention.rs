@@ -6,7 +6,7 @@ use crate::{
     host::{Error, Journal, Shared, Source, Transport, new_chat, valid_id},
     model::OutcomeStatus,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::Ordering;
@@ -73,10 +73,14 @@ pub(crate) enum Command {
     Save {
         target: Target,
         answer: Answer,
+        #[serde(default, deserialize_with = "present_revision")]
+        draft_revision: Option<Option<u64>>,
     },
     Send {
         target: Target,
         answer: Answer,
+        #[serde(default, deserialize_with = "present_revision")]
+        draft_revision: Option<Option<u64>>,
     },
     Check {
         selector: Selector,
@@ -85,6 +89,11 @@ pub(crate) enum Command {
     Recover {
         target: Target,
     },
+}
+
+// Omitted is the legacy command; explicitly null is a create-only CAS.
+fn present_revision<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<u64>>, D::Error> {
+    Option::<u64>::deserialize(d).map(Some)
 }
 
 impl Command {
@@ -105,7 +114,16 @@ impl Command {
                 }
                 Ok(())
             }
-            Self::Save { target, answer } | Self::Send { target, answer } => {
+            Self::Save {
+                target,
+                answer,
+                draft_revision,
+            }
+            | Self::Send {
+                target,
+                answer,
+                draft_revision,
+            } => {
                 target.selector.validate()?;
                 let interview = target.selector.interview_round_id.is_some();
                 let malformed = if interview {
@@ -119,6 +137,8 @@ impl Command {
                     || answer.picks.len() > 128
                     || answer.picks.iter().any(|p| !valid_id(p))
                     || malformed
+                    || !interview && draft_revision.is_some()
+                    || draft_revision.flatten().is_some_and(|n| !valid_revision(n))
                     || matches!(self, Self::Send { .. }) && answer.later
                 {
                     return Err(Error::Invalid);
@@ -135,6 +155,14 @@ fn hash(bytes: &str) -> String {
 
 fn safe_number(n: u64) -> bool {
     n <= 9_007_199_254_740_991
+}
+
+fn valid_revision(n: u64) -> bool {
+    n > 0 && safe_number(n)
+}
+
+fn positive_revision(value: &Value) -> Option<u64> {
+    value.as_u64().filter(|n| valid_revision(*n))
 }
 
 fn generation(value: &Value) -> Result<u64, Error> {
@@ -204,7 +232,14 @@ pub(super) fn validate_record(record: &Record) -> Result<(), Error> {
             return Err(Error::Invalid);
         }
         body["interview"] = request["interview"].clone();
+        if let Some(revision) = request.get("draftRevision") {
+            positive_revision(revision).ok_or(Error::Invalid)?;
+            body["draftRevision"] = revision.clone();
+        }
     } else {
+        if request.get("draftRevision").is_some() {
+            return Err(Error::Invalid);
+        }
         let message = request["message"].as_str().ok_or(Error::Invalid)?;
         if message.trim().is_empty() || message.encode_utf16().count() > cards::REPLY_LIMIT {
             return Err(Error::Invalid);
@@ -386,8 +421,7 @@ fn draft_answer(
         if !attention_interview::matches_draft(&q["question"]["interview"], &answer.text) {
             return Err(Error::Invalid);
         }
-        draft.value =
-            json!({"pick":null,"picks":[],"text":answer.text,"question":"","later":false});
+        draft.value = interview_draft_value(&answer.text);
         return Ok(draft);
     }
     let n = q["question"]["options"].as_array().map_or(0, Vec::len);
@@ -411,15 +445,111 @@ fn draft_answer(
     Ok(draft)
 }
 
+fn interview_draft_value(text: &str) -> Value {
+    json!({"pick":null,"picks":[],"text":text,"question":"","later":false})
+}
+
+fn supports_drafts(read: &Value, selector: &Selector) -> bool {
+    selector.interview_round_id.is_some() && read["capabilities"]["interviewDrafts"] == 1
+}
+
+fn draft_request(t: &Transport, q: &Value, kind: &str) -> Value {
+    json!({"version":1,"home":home(&t.source),"projectId":q["scope"]["projectId"],
+        "kind":kind,"scope":q["scope"]})
+}
+
+async fn read_draft(t: &Transport, q: &Value, lookup: bool) -> Result<Value, Error> {
+    let mut request = draft_request(t, q, "interview-draft");
+    request["roundId"] = q["question"]["interview"]["roundId"].clone();
+    let mut reply = t.attention_call(&request, lookup).await?;
+    match reply["ok"].as_bool() {
+        Some(true) => reply
+            .as_object_mut()
+            .and_then(|r| r.remove("value"))
+            .ok_or(Error::Invalid),
+        Some(false) if reply["error"]["code"] == "stale" => Err(Error::Stale),
+        _ => Err(Error::Unavailable),
+    }
+}
+
+fn draft_not_saved() -> Value {
+    json!({"state":"draft-not-saved"})
+}
+
+async fn save_draft(
+    t: &Transport,
+    q: &Value,
+    text: &str,
+    expected_revision: Option<Option<u64>>,
+    live: impl Fn() -> Result<(), Error>,
+) -> Result<Value, Error> {
+    let Some(expected) = expected_revision else {
+        return Ok(draft_not_saved());
+    };
+    let next = expected.unwrap_or(0) + 1;
+    let Some(draft) = attention_interview::partial_answer(&q["question"]["interview"], text)
+        .filter(|_| valid_revision(next))
+    else {
+        return Ok(draft_not_saved());
+    };
+    let mut request = draft_request(t, q, "interview-draft-save");
+    request["expectedRevision"] = json!(expected);
+    request["draft"] = draft;
+    let confirms = |value: &Value| {
+        positive_revision(&value["revision"]) == Some(next)
+            && value["roundId"] == request["draft"]["roundId"]
+            && value["answers"] == request["draft"]["answers"]
+    };
+    live()?;
+    let reply = t.attention_call(&request, false).await;
+    live()?;
+    match reply {
+        Ok(reply) if reply["ok"] == true && confirms(&reply["value"]) => {}
+        Ok(reply) if reply["ok"] == false && reply["error"]["code"] == "conflict" => {
+            return Ok(json!({"state":"draft-conflict"}));
+        }
+        Ok(reply)
+            if reply["ok"] == false
+                && reply["error"]["code"]
+                    .as_str()
+                    .is_some_and(|code| code != "unknown") =>
+        {
+            return Ok(draft_not_saved());
+        }
+        Err(Error::Identity) => return Ok(draft_not_saved()),
+        _ => {
+            // A lost reply may have committed. Read once, never repeat the save.
+            let saved = read_draft(t, q, true).await;
+            live()?;
+            if !saved.is_ok_and(|value| confirms(&value)) {
+                return Ok(draft_not_saved());
+            }
+        }
+    }
+    Ok(json!({"state":"saved","draftRevision":next}))
+}
+
 fn opened(
     t: &Transport,
     journal: &Journal,
     selector: &Selector,
     read: &Value,
+    remote: Option<Value>,
 ) -> Result<Value, Error> {
     let q = question(read, selector)?;
     let pin = question_target(&t.source, selector, q)?;
-    let draft = draft(journal, &t.source, scoped_key(q, &pin)?);
+    let (value, revision) = match remote {
+        Some(saved) if !saved.is_null() => {
+            let revision = positive_revision(&saved["revision"]).ok_or(Error::Invalid)?;
+            let text = attention_interview::saved_text(&q["question"]["interview"], &saved)
+                .ok_or(Error::Invalid)?;
+            (interview_draft_value(&text), Some(json!(revision)))
+        }
+        other => (
+            draft(journal, &t.source, scoped_key(q, &pin)?).value,
+            other, // Only explicit daemon null allows the legacy draft as a seed.
+        ),
+    };
     let card_key = cards::question_key(q).ok_or(Error::Invalid)?;
     // Project this card with the existing form and draft contract. The direct
     // route does not offer clarification, artifact opens, or chat navigation.
@@ -427,14 +557,18 @@ fn opened(
     let mut view = cards::project(
         Some(&read),
         &[],
-        &[(card_key, draft.value)],
+        &[(card_key, value)],
         &[],
         &cards::Local::default(),
     );
     let decision = view.decisions.first_mut().ok_or(Error::Invalid)?;
     decision.artifacts.clear();
     decision.request_session_id.clear();
-    Ok(json!({"state":"ready","target":pin,"decision":decision}))
+    let mut result = json!({"state":"ready","target":pin,"decision":decision});
+    if let Some(revision) = revision {
+        result["draftRevision"] = revision;
+    }
+    Ok(result)
 }
 
 fn exact_receipt(record: &Record, reply: &Value) -> Result<(), Error> {
@@ -497,6 +631,8 @@ pub(in crate::host) async fn handle(
     admit()?;
     shared.open()?;
     let t = project(root, selector).await?;
+    admit()?;
+    shared.open()?;
     let pending = || {
         journal
             .attention
@@ -514,7 +650,14 @@ pub(in crate::host) async fn handle(
             live()?;
             let read = snapshot(&t).await?;
             live()?;
-            opened(&t, journal, selector, &read)
+            let remote = if supports_drafts(&read, selector) {
+                let result = read_draft(&t, question(&read, selector)?, false).await;
+                live()?;
+                Some(result?)
+            } else {
+                None
+            };
+            opened(&t, journal, selector, &read, remote)
         }
         Command::Check { .. } | Command::Recover { .. } => {
             let pin = match command {
@@ -550,7 +693,16 @@ pub(in crate::host) async fn handle(
             }
             Ok(answer_state(&record))
         }
-        Command::Save { target, answer } | Command::Send { target, answer } => {
+        Command::Save {
+            target,
+            answer,
+            draft_revision,
+        }
+        | Command::Send {
+            target,
+            answer,
+            draft_revision,
+        } => {
             if let Some(record) = pending() {
                 return Ok(answer_state(record));
             }
@@ -558,11 +710,28 @@ pub(in crate::host) async fn handle(
             let read = snapshot(&t).await?;
             let q = exact_question(&t.source, &read, target)?;
             live()?;
-            let draft = draft_answer(journal, q, &t.source, target, answer)?;
-            journal.save_attention_draft(draft)?;
-            if matches!(command, Command::Save { .. }) {
-                return Ok(json!({"state":"saved"}));
+            let saving = matches!(command, Command::Save { .. });
+            let daemon_drafts = supports_drafts(&read, selector);
+            if daemon_drafts && saving {
+                return save_draft(&t, q, &answer.text, *draft_revision, live).await;
             }
+            let revision = if daemon_drafts {
+                let Some(revision) = draft_revision.flatten() else {
+                    return Ok(draft_not_saved());
+                };
+                Some(revision)
+            } else {
+                if draft_revision.is_some() {
+                    // A daemon that no longer offers drafts cannot honor this CAS or send.
+                    return Ok(draft_not_saved());
+                }
+                let draft = draft_answer(journal, q, &t.source, target, answer)?;
+                journal.save_attention_draft(draft)?;
+                if saving {
+                    return Ok(json!({"state":"saved"}));
+                }
+                None
+            };
             let mut request = cards::answer_request(
                 &json!({"questions":[q]}),
                 &selector.decision_id,
@@ -593,6 +762,9 @@ pub(in crate::host) async fn handle(
             request["projectId"] = json!(selector.project_id);
             request["scopedTarget"] = json!(target);
             request["scopedInputGeneration"] = q["session"]["inputGeneration"].clone();
+            if let Some(revision) = revision {
+                request["draftRevision"] = json!(revision);
+            }
             bind_answer(&t.source, &id, &mut request)?;
             let mut record = Record {
                 attention_version: 1,
@@ -612,6 +784,9 @@ pub(in crate::host) async fn handle(
                 }
                 let fresh = snapshot(&current).await?;
                 exact_question(&current.source, &fresh, target)?;
+                if supports_drafts(&fresh, selector) != daemon_drafts {
+                    return Err(Error::Stale);
+                }
                 live()?;
                 Ok(())
             }
@@ -635,6 +810,13 @@ pub(in crate::host) async fn handle(
 mod tests {
     use super::*;
     use crate::{contract::Home, host::Project};
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::{TcpListener, TcpStream},
+        os::unix::fs::OpenOptionsExt,
+        path::PathBuf,
+        time::Duration,
+    };
 
     fn source() -> Source {
         Source {
@@ -732,7 +914,8 @@ mod tests {
         let path = std::env::temp_dir().join(format!("scoped-interview-{}", uuid::Uuid::new_v4()));
         let t = Transport::new(source()).unwrap();
         let mut journal = Journal::open(path.clone()).unwrap();
-        let opened_round = opened(&t, &journal, &selector, &read).unwrap();
+        let opened_round = opened(&t, &journal, &selector, &read, None).unwrap();
+        assert!(opened_round.get("draftRevision").is_none());
         let decision = &opened_round["decision"];
         assert_eq!(decision["interviewRoundId"], "round-1");
         assert_eq!(
@@ -747,7 +930,7 @@ mod tests {
 
         let journal = Journal::open(path.clone()).unwrap();
         assert!(journal.attention.is_empty());
-        let restored = opened(&t, &journal, &selector, &read).unwrap();
+        let restored = opened(&t, &journal, &selector, &read, None).unwrap();
         assert_eq!(
             restored["decision"]["interviewQuestions"][0]["selectedOptionId"],
             "keep"
@@ -755,6 +938,34 @@ mod tests {
         assert_eq!(
             restored["decision"]["interviewQuestions"][1]["text"],
             "  中文\n  "
+        );
+        let seeded = opened(&t, &journal, &selector, &read, Some(Value::Null)).unwrap();
+        assert_eq!(seeded["decision"], restored["decision"]);
+        assert_eq!(seeded.get("draftRevision"), Some(&Value::Null));
+
+        let round = &q["question"]["interview"];
+        let mut saved = attention_interview::partial_answer(round, &answer.text).unwrap();
+        saved["revision"] = json!(2);
+        saved["answers"].as_array_mut().unwrap().remove(0);
+        saved["answers"][0]["text"] = json!("  Daemon's newer words\n");
+        let opened = opened(&t, &journal, &selector, &read, Some(saved)).unwrap();
+        assert_eq!(opened["draftRevision"], 2);
+        assert!(opened["decision"]["interviewQuestions"][0]["selectedOptionId"].is_null());
+        assert_eq!(
+            opened["decision"]["interviewQuestions"][1]["text"],
+            "  Daemon's newer words\n"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(opened["decision"]["draft"]["text"].as_str().unwrap())
+                .unwrap(),
+            json!({"roundId":"round-1","answers":[
+                {"questionId":"detail","selectedOptionId":null,"text":"  Daemon's newer words\n"}
+            ]})
+        );
+        assert_eq!(
+            journal.attention_drafts.len(),
+            1,
+            "daemon open never rewrites the local draft"
         );
         read["questions"][0]["session"]["inputGeneration"] = json!(4);
         assert_eq!(exact_question(&t.source, &read, &pin), Err(Error::Stale));
@@ -832,7 +1043,7 @@ mod tests {
         let mut journal = Journal::open(path.clone()).unwrap();
         let read = read();
         let q = question(&read, &selector).unwrap();
-        let open = opened(&transport, &journal, &selector, &read).unwrap();
+        let open = opened(&transport, &journal, &selector, &read, None).unwrap();
         assert_eq!(
             open["decision"]["draft"]["pick"],
             Value::Null,
@@ -857,14 +1068,14 @@ mod tests {
         let mut journal = Journal::open(path.clone()).unwrap();
         assert_eq!(journal.attention[&record.id], record);
         assert_eq!(answer_state(&record)["state"], "unknown");
-        let open = opened(&transport, &journal, &selector, &read).unwrap();
+        let open = opened(&transport, &journal, &selector, &read, None).unwrap();
         assert_eq!(open["decision"]["draft"]["text"], "  draft\n");
         assert_eq!(open["decision"]["draft"]["picks"], json!(["option-2"]));
         assert_eq!(open["decision"]["draft"]["later"], true);
         let mut changed = read.clone();
         changed["questions"][0]["scope"]["authorityDigest"] = json!("e".repeat(64));
         assert_eq!(
-            opened(&transport, &journal, &selector, &changed).unwrap()["decision"]["draft"]["text"],
+            opened(&transport, &journal, &selector, &changed, None).unwrap()["decision"]["draft"]["text"],
             ""
         );
         let mut wrong = source();
@@ -905,11 +1116,23 @@ mod tests {
         check_saved_receipt(record, selector, read).await;
     }
 
-    async fn check_saved_receipt(mut record: Record, selector: Selector, read: Value) {
-        use std::{
-            io::{BufRead, BufReader, Read, Write},
-            os::unix::fs::OpenOptionsExt,
-        };
+    #[tokio::test]
+    async fn reopened_revision_bound_interview_uses_only_the_saved_receipt_route() {
+        let (selector, read, answer) = interview();
+        let mut record = answer_record(&read, &selector, &answer.picks, &answer.text);
+        record.request["draftRevision"] = json!(2);
+        bind_answer(&record.source, &record.id, &mut record.request).unwrap();
+        record.validate().unwrap();
+        let payload: Value =
+            serde_json::from_str(record.request["operation"]["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["draftRevision"], 2);
+        let mut tampered = record.clone();
+        tampered.request["draftRevision"] = json!(3);
+        assert_eq!(tampered.validate(), Err(Error::Invalid));
+        check_saved_receipt(record, selector, read).await;
+    }
+
+    fn attention_peer(source: &mut Source) -> (PathBuf, TcpListener) {
         let dir = std::env::temp_dir().join(format!("scoped-check-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         std::fs::write(dir.join("daemon-id"), "daemon").unwrap();
@@ -926,9 +1149,138 @@ mod tests {
             json!({"daemonId":"daemon","lineageId":"lineage","token":"a".repeat(64)})
         )
         .unwrap();
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        record.source.profile = dir.clone();
-        record.source.port = listener.local_addr().unwrap().port();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        source.profile = dir.clone();
+        source.port = listener.local_addr().unwrap().port();
+        (dir, listener)
+    }
+
+    fn post(listener: &TcpListener, path: &str) -> (TcpStream, Value) {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        assert!(first.starts_with(&format!("POST {path} ")), "{first}");
+        let mut size = 0;
+        let mut authenticated = false;
+        loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+            let line = line.to_ascii_lowercase();
+            if let Some(value) = line.strip_prefix("content-length:") {
+                size = value.trim().parse().unwrap();
+            }
+            if let Some(value) = line.strip_prefix("x-pilot-github-capability:") {
+                assert_eq!(value.trim(), "a".repeat(64));
+                authenticated = true;
+            }
+        }
+        assert!(authenticated);
+        let mut bytes = vec![0; size];
+        reader.read_exact(&mut bytes).unwrap();
+        (stream, serde_json::from_slice::<Value>(&bytes).unwrap())
+    }
+
+    fn respond(mut stream: TcpStream, body: Value) {
+        let body = body.to_string();
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn draft_save_cas_and_ambiguous_readback_use_the_exact_round() {
+        let (selector, read, _) = interview();
+        let q = question(&read, &selector).unwrap();
+        let mut src = source();
+        let (dir, listener) = attention_peer(&mut src);
+        let t = Transport::new(src.clone()).unwrap();
+        let read_request = json!({"version":1,"home":home(&src),"projectId":"other",
+            "scope":q["scope"],"kind":"interview-draft","roundId":"round-1"});
+        let text = json!({"roundId":"round-1","answers":[
+            {"questionId":"detail","selectedOptionId":null,"text":"  中文\n  "}
+        ]})
+        .to_string();
+        let payload = json!({"roundId":"round-1","answers":[
+            {"questionId":"detail","questionDigest":"digest-2","selectedOption":null,"text":"  中文\n  "}
+        ]});
+        let save_request = json!({"version":1,"home":home(&src),"projectId":"other",
+            "scope":q["scope"],"kind":"interview-draft-save","expectedRevision":null,"draft":payload});
+        let pending = listener.try_clone().unwrap();
+        let peer = std::thread::spawn(move || {
+            let (stream, body) = post(&listener, "/api/native-attention");
+            assert_eq!(body, read_request);
+            respond(stream, json!({"ok":true,"value":null}));
+
+            let mut saved = payload;
+            saved["revision"] = json!(1);
+            let (stream, body) = post(&listener, "/api/native-attention");
+            assert_eq!(body, save_request);
+            respond(stream, json!({"ok":true,"value":saved}));
+
+            let mut update = save_request;
+            update["expectedRevision"] = json!(1);
+            let (stream, body) = post(&listener, "/api/native-attention");
+            assert_eq!(body, update);
+            respond(stream, json!({"ok":false,"error":{"code":"conflict"}}));
+
+            for (revision, answers_match) in [(2, true), (3, true), (2, false)] {
+                let (stream, body) = post(&listener, "/api/native-attention");
+                assert_eq!(body, update);
+                drop(stream); // The save reply was lost.
+                let (stream, body) = post(&listener, "/api/native-attention/receipt");
+                assert_eq!(body, read_request);
+                let mut ack = saved.clone();
+                ack["revision"] = json!(revision);
+                if !answers_match {
+                    ack["answers"][0]["text"] = json!("Other words");
+                }
+                respond(stream, json!({"ok":true,"value":ack}));
+            }
+        });
+        let live = || Ok(());
+        assert!(read_draft(&t, q, false).await.unwrap().is_null());
+        assert_eq!(
+            save_draft(&t, q, &text, None, live).await.unwrap(),
+            draft_not_saved()
+        );
+        assert_eq!(
+            save_draft(&t, q, "", Some(None), live).await.unwrap(),
+            draft_not_saved()
+        );
+        assert_eq!(
+            save_draft(&t, q, &text, Some(None), live).await.unwrap(),
+            json!({"state":"saved","draftRevision":1})
+        );
+        assert_eq!(
+            save_draft(&t, q, &text, Some(Some(1)), live).await.unwrap(),
+            json!({"state":"draft-conflict"})
+        );
+        assert_eq!(
+            save_draft(&t, q, &text, Some(Some(1)), live).await.unwrap(),
+            json!({"state":"saved","draftRevision":2})
+        );
+        for _ in 0..2 {
+            assert_eq!(
+                save_draft(&t, q, &text, Some(Some(1)), live).await.unwrap(),
+                draft_not_saved()
+            );
+        }
+        peer.join().unwrap();
+        pending.set_nonblocking(true).unwrap();
+        assert_eq!(
+            pending.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    async fn check_saved_receipt(mut record: Record, selector: Selector, read: Value) {
+        let (dir, listener) = attention_peer(&mut record.source);
         record.request["scopedTarget"] = json!(
             question_target(
                 &record.source,
@@ -947,32 +1299,14 @@ mod tests {
         let transport = Transport::new(record.source.clone()).unwrap();
 
         let peer = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-                .unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut first = String::new();
-            reader.read_line(&mut first).unwrap();
-            assert!(first.starts_with("POST /api/operations/receipt "));
-            let mut size = 0;
-            loop {
-                let mut line = String::new();
-                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    size = value.trim().parse().unwrap();
-                }
-            }
-            let mut bytes = vec![0; size];
-            reader.read_exact(&mut bytes).unwrap();
-            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), operation);
-            let body = json!({"operationId":operation["operationId"],"payloadHash":operation["payloadHash"],
+            let (stream, body) = post(&listener, "/api/operations/receipt");
+            assert_eq!(body, operation);
+            respond(
+                stream,
+                json!({"operationId":operation["operationId"],"payloadHash":operation["payloadHash"],
                 "destination":operation["destination"],"targetId":operation["targetId"],
-                "state":"accepted","result":{"sessionId":"chat"}}).to_string();
-            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                "state":"accepted","result":{"sessionId":"chat"}}),
+            );
         });
         assert_eq!(answer_state(&record)["state"], "unknown");
         receipt(&transport, &mut journal, &mut record, true)
@@ -1004,5 +1338,40 @@ mod tests {
         let mut value = value;
         value["message"] = json!("never replay");
         assert!(serde_json::from_value::<Command>(value).is_err());
+    }
+
+    #[test]
+    fn revision_is_optional_but_null_is_not_omission() {
+        let (selector, mut read, answer) = interview();
+        assert!(!supports_drafts(&read, &selector));
+        read["capabilities"]["interviewDrafts"] = json!(1);
+        assert!(supports_drafts(&read, &selector));
+        assert!(!supports_drafts(&read, &self::selector()));
+        let pin =
+            question_target(&source(), &selector, question(&read, &selector).unwrap()).unwrap();
+        let mut command =
+            json!({"kind":"save","target":pin,"answer":{"picks":[],"text":answer.text}});
+        for (revision, expected) in [
+            (None, None),
+            (Some(Value::Null), Some(None)),
+            (Some(json!(2)), Some(Some(2))),
+        ] {
+            if let Some(revision) = revision {
+                command["draftRevision"] = revision;
+            }
+            let parsed: Command = serde_json::from_value(command.clone()).unwrap();
+            assert!(parsed.validate().is_ok());
+            assert!(
+                matches!(parsed, Command::Save { draft_revision, .. } if draft_revision == expected)
+            );
+        }
+        command["kind"] = json!("send");
+        command["draftRevision"] = json!(0);
+        assert_eq!(
+            serde_json::from_value::<Command>(command)
+                .unwrap()
+                .validate(),
+            Err(Error::Invalid)
+        );
     }
 }

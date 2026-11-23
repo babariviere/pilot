@@ -3,6 +3,7 @@ import { effect, mount, Scroll, signal, View } from "nsh";
 import type { Decision, DraftIntent, ReplyIntent } from "pilot-day/native";
 import { openDay } from "./app/testing/mockFeeds";
 import { ScopedInterviewCard } from "./missions/interviews/InterviewCard";
+import { ScopedQuestion } from "./missions/interviews/ScopedQuestion";
 import { DecisionCard } from "./today/DecisionCard";
 import { Block, Button, Buttons, Caption, Column, Page, PageHead, Panel, Section, WindowCanvas } from "./ui";
 
@@ -42,10 +43,42 @@ effect(() => day.today.set({ ...snapshot, decisions: [decision()] }));
 const visible = signal(true);
 const second = signal(false);
 const scoped = signal(false);
+const openDraftEditor = signal(false);
 const saved = signal("");
 const saves = signal(0);
 const sends = signal(0);
 const checks = signal(0);
+const selector = { projectId: "other-project", decisionId: "question-chat-1", interviewRoundId: "round-1" };
+const target = { selector, pin: "a".repeat(64) };
+let sharedDraft: { text: string; revision: number } | null = null;
+let conflictNextSave = false;
+async function serveDraft(command: Parameters<NonNullable<Parameters<typeof ScopedQuestion>[0]["request"]>>[0]) {
+	switch (command.kind) {
+		case "open":
+			return {
+				state: "ready" as const,
+				target,
+				decision: { ...original, draft: { ...original.draft, text: sharedDraft?.text ?? "" } },
+				draftRevision: sharedDraft?.revision ?? null,
+			};
+		case "save":
+			if (conflictNextSave) {
+				conflictNextSave = false;
+				sharedDraft = { text: "", revision: (sharedDraft?.revision ?? 0) + 1 };
+			}
+			if (command.draftRevision !== (sharedDraft?.revision ?? null)) return { state: "draft-conflict" as const };
+			sharedDraft = { text: command.answer.text, revision: (sharedDraft?.revision ?? 0) + 1 };
+			saves.update((n) => n + 1);
+			return { state: "saved" as const, draftRevision: sharedDraft.revision };
+		case "send":
+			if (command.draftRevision !== sharedDraft?.revision || command.answer.text !== sharedDraft?.text)
+				return { state: "rejected" as const, operationId: "answer" };
+			sends.update((n) => n + 1);
+			return { state: "accepted" as const, operationId: "answer" };
+		default:
+			return null;
+	}
+}
 day.feed = Object.assign(Object.create(Object.getPrototypeOf(day.feed)), day.feed, {
 	saveDraft(intent: DraftIntent) {
 		saved.set(intent.text);
@@ -87,6 +120,19 @@ function reopen() {
 
 mount(() => (
 	<WindowCanvas>
+		<If when={openDraftEditor()} else={<CardFixtures />}>
+			<ScopedQuestion
+				place={{ ...selector, projectName: "Other project" }}
+				onBack={() => openDraftEditor.set(false)}
+				onAnswered={() => openDraftEditor.set(false)}
+				request={serveDraft}
+			/>
+		</If>
+	</WindowCanvas>
+));
+
+function CardFixtures() {
+	return (
 		<Scroll testID="interview-scroll" class="flex-1">
 			<Page>
 				<PageHead pre={<Caption>Mock data. Standalone interview</Caption>} title="Interview" />
@@ -173,6 +219,14 @@ mount(() => (
 							}}
 						/>
 						<Button label="Open other project's round" onPress={() => scoped.set(true)} />
+						<Button label="Open shared draft" onPress={() => openDraftEditor.set(true)} />
+						<Button
+							label="Save in another window on next edit"
+							onPress={() => {
+								conflictNextSave = true;
+								openDraftEditor.set(true);
+							}}
+						/>
 					</Buttons>
 					<Caption>{`Saved edits: ${saves()}`}</Caption>
 					<Caption>{`Submissions: ${sends()}`}</Caption>
@@ -180,5 +234,5 @@ mount(() => (
 				</Block>
 			</Page>
 		</Scroll>
-	</WindowCanvas>
-));
+	);
+}

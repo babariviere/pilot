@@ -28,18 +28,23 @@ type Selector = { projectId: string; decisionId: string; interviewRoundId?: stri
 type Target = { selector: Selector; pin: string };
 type Answer = { picks: string[]; text: string };
 type Reply =
-	| { state: "ready"; target: Target; decision: Decision }
+	| { state: "ready"; target: Target; decision: Decision; draftRevision?: number | null }
 	| { state: "unknown" | "accepted" | "not-sent" | "rejected"; operationId: string }
-	| { state: "saved" };
+	| { state: "saved"; draftRevision?: number }
+	| { state: "draft-conflict" | "draft-not-saved" };
 type Command =
 	| { kind: "open"; selector: Selector }
-	| { kind: "save" | "send"; target: Target; answer: Answer }
+	| { kind: "save" | "send"; target: Target; answer: Answer; draftRevision?: number | null }
 	| { kind: "recover"; target: Target }
 	| { kind: "check"; selector: Selector; operationId: string };
 
 export const scopedQuestion = signal<(Selector & { projectName: string }) | null>(null);
-const kept = new Map<string, { target: Target; answer: Answer }>();
+type RecoveryDraft = { target: Target; answer: Answer; draftRevision?: number | null };
+const kept = new Map<string, RecoveryDraft>();
 const draftVersion = signal(0);
+const DRAFT_SAVE_DELAY = 700;
+const DRAFT_CONFLICT = "Not saved. Another window saved this draft. Your edits are kept here.";
+const DRAFT_UNCONFIRMED = "Not saved to Pilot. Your edits are kept in this window.";
 
 async function request(args: Command): Promise<Reply | null> {
 	const window = windowId();
@@ -68,8 +73,11 @@ export function restoreScopedDrafts(drafts: string[] = []) {
 				typeof answer?.text === "string" &&
 				Array.isArray(answer.picks) &&
 				answer.picks.every((id: unknown) => typeof id === "string")
-			)
-				kept.set(target.pin, { target, answer });
+			) {
+				const revision = draft.draftRevision;
+				const draftRevision = Number.isSafeInteger(revision) && revision > 0 ? revision : undefined;
+				kept.set(target.pin, { target, answer, draftRevision });
+			}
 		} catch {
 			/* Earlier or unreadable drafts do not identify a question. */
 		}
@@ -116,6 +124,8 @@ export function ScopedQuestion(props: {
 	place: Selector & { projectName: string };
 	onBack: () => void;
 	onAnswered: () => void;
+	/** The connected window uses the native bridge. Fixtures can supply an isolated source. */
+	request?: (command: Command) => Promise<Reply | null>;
 }) {
 	const selector = {
 		projectId: props.place.projectId,
@@ -128,17 +138,83 @@ export function ScopedQuestion(props: {
 	const checking = signal(false);
 	const busy = signal(false);
 	const message = signal("");
+	const draftMessage = signal("");
+	const sendCommand = props.request ?? request;
+	let revision: number | null | undefined;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let saving: Promise<boolean> | undefined;
+	let failed: RecoveryDraft | undefined;
 	let active = true;
 	cleanup(() => {
 		active = false;
+		clearTimeout(timer);
 	});
+
+	function stage(target: Target, next: Answer) {
+		kept.set(target.pin, { target, answer: next, draftRevision: revision });
+		draftVersion.update((v) => v + 1);
+	}
+
+	async function flush(): Promise<boolean> {
+		clearTimeout(timer);
+		timer = undefined;
+		while (saving) await saving;
+		if (!active) return false;
+		const current = card();
+		if (revision === undefined || !current) return true;
+		const draft = kept.get(current.target.pin);
+		if (!draft) return true;
+		if (draft === failed || draftMessage() === DRAFT_CONFLICT || draft.draftRevision !== revision) return false;
+		const save = async () => {
+			const reply = await sendCommand({ kind: "save", ...draft });
+			if (reply?.state !== "saved" || reply.draftRevision === undefined) {
+				failed = draft;
+				if (active) draftMessage.set(reply?.state === "draft-conflict" ? DRAFT_CONFLICT : DRAFT_UNCONFIRMED);
+				return false;
+			}
+			revision = reply.draftRevision;
+			const latest = kept.get(draft.target.pin);
+			if (latest === draft) kept.delete(draft.target.pin);
+			else if (latest && latest.draftRevision === draft.draftRevision)
+				kept.set(draft.target.pin, { ...latest, draftRevision: revision });
+			draftVersion.update((v) => v + 1);
+			if (active) draftMessage.set("");
+			return true;
+		};
+		saving = save().finally(() => {
+			saving = undefined;
+		});
+		return saving;
+	}
+
 	const enter = (reply: Reply | null) => {
 		if (!active) return;
 		switch (reply?.state) {
 			case "ready": {
-				card.set(reply);
 				const d = reply.decision.draft;
-				answer.set(kept.get(reply.target.pin)?.answer ?? { picks: d.pick ? [d.pick] : d.picks, text: d.text });
+				const saved = { picks: d.pick ? [d.pick] : d.picks, text: d.text };
+				let local = kept.get(reply.target.pin);
+				revision = reply.draftRevision;
+				if (revision != null && local?.answer.text === saved.text) {
+					kept.delete(reply.target.pin);
+					draftVersion.update((v) => v + 1);
+					local = undefined;
+				}
+				if (revision !== undefined && local) {
+					if ((local.draftRevision ?? null) !== revision) {
+						draftMessage.set(DRAFT_CONFLICT);
+					}
+					// Keep the original edit base; opening never adopts another window's revision.
+					revision = local.draftRevision ?? null;
+					const recovered = { ...local, draftRevision: revision };
+					kept.set(reply.target.pin, recovered);
+					if (draftMessage()) failed = recovered;
+				} else if (revision === null && saved.text) {
+					// A native journal draft predates daemon storage. Keep its words until saved.
+					stage(reply.target, saved);
+				}
+				answer.set(local?.answer ?? saved);
+				card.set(reply);
 				checking.set(false);
 				message.set("");
 				break;
@@ -169,7 +245,7 @@ export function ScopedQuestion(props: {
 	async function run(command: Command) {
 		if (busy()) return null;
 		busy.set(true);
-		const reply = await request(command);
+		const reply = await sendCommand(command);
 		if (!active) return null;
 		busy.set(false);
 		if (!reply && (command.kind === "send" || command.kind === "check" || command.kind === "recover")) {
@@ -185,9 +261,25 @@ export function ScopedQuestion(props: {
 	const edit = (next: Answer) => {
 		const current = card();
 		if (!current || checking()) return;
+		if (revision !== undefined && next.text === answer().text) return;
 		answer.set(next);
+		if (revision !== undefined) {
+			stage(current.target, next);
+			if (draftMessage() === DRAFT_CONFLICT) {
+				failed = kept.get(current.target.pin);
+				return;
+			}
+			clearTimeout(timer);
+			timer = setTimeout(() => void flush(), DRAFT_SAVE_DELAY);
+			return;
+		}
 		if (next.text || next.picks.length) kept.set(current.target.pin, { target: current.target, answer: next });
 		else kept.delete(current.target.pin);
+	};
+	const back = async () => {
+		if (busy()) return;
+		await flush();
+		if (active && !busy()) props.onBack();
 	};
 	const send = () => {
 		const current = card();
@@ -196,13 +288,7 @@ export function ScopedQuestion(props: {
 	};
 	const commitKeys = keymap.label("mod+enter");
 	keymap.bind("mod+enter", send, { when: "always" });
-	keymap.bind(
-		"escape",
-		() => {
-			if (!busy()) props.onBack();
-		},
-		{ when: "always" },
-	);
+	keymap.bind("escape", () => void back(), { when: "always" });
 	read();
 	return (
 		<Scroll class="flex-1">
@@ -223,14 +309,35 @@ export function ScopedQuestion(props: {
 											identity={row().target.pin}
 											draftText={answer().text}
 											keyboardActive={!busy()}
-											draftMessage={message()}
+											draftMessage={draftMessage()}
 											onSave={(text) => edit({ picks: [], text })}
 											onSubmit={async (text): Promise<IntentOutcome> => {
+												if (revision !== undefined) {
+													if (answer().text !== text || (revision === null && !kept.has(row().target.pin)))
+														stage(row().target, { picks: [], text });
+													if (!(await flush()) || !active || revision === null) {
+														return {
+															status: "rejected",
+															revision: row().decision.revision,
+															message: draftMessage() || DRAFT_UNCONFIRMED,
+														};
+													}
+												}
 												const reply = await run({
 													kind: "send",
 													target: row().target,
 													answer: { picks: [], text },
+													draftRevision: revision,
 												});
+												if (
+													active &&
+													revision !== undefined &&
+													(reply?.state === "rejected" || reply?.state === "not-sent")
+												) {
+													// A save in another window may have raced the explicit Submit.
+													stage(row().target, { picks: [], text });
+													failed = kept.get(row().target.pin);
+												}
 												return {
 													status:
 														reply?.state === "accepted"
