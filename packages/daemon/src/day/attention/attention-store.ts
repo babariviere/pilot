@@ -1,4 +1,11 @@
-import type { AssistanceRecord, AssistanceRequest, HumanActionCommand, HumanActionRecord } from "@pilot/protocol";
+import type {
+	AssistanceRecord,
+	AssistanceRequest,
+	HumanActionCommand,
+	HumanActionRecord,
+	StandaloneInterviewDraft,
+	StandaloneInterviewReply,
+} from "@pilot/protocol";
 import { canonicalJSON, payloadHash } from "../../transport/operations/operation-journal.ts";
 import type { MissionDbPort } from "../../missions/mission-database.ts";
 
@@ -13,6 +20,9 @@ CREATE TABLE IF NOT EXISTS human_actions (
 CREATE TABLE IF NOT EXISTS human_action_operations (
  operation_id TEXT PRIMARY KEY, command TEXT NOT NULL, record TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS standalone_interview_drafts (
+ target TEXT PRIMARY KEY, record TEXT NOT NULL
+);
 `;
 
 /** Only accessed by AttentionService, which checks authority and validates inputs. No work dispatch. */
@@ -24,6 +34,28 @@ export class AttentionStore {
 	}
 	durable(): Promise<void> {
 		return this.port.durable();
+	}
+	interviewDraft(target: string): StandaloneInterviewDraft | null {
+		const row = this.port.one("SELECT record FROM standalone_interview_drafts WHERE target=?", target);
+		return row ? JSON.parse(String(row.record)) : null;
+	}
+	/** Only the latest draft for this exact question is stored. A conflict does not change it. */
+	saveInterviewDraft(
+		target: string,
+		expectedRevision: number | null,
+		draft: StandaloneInterviewReply,
+	): StandaloneInterviewDraft | null {
+		return this.port.transaction(() => {
+			const previous = this.interviewDraft(target);
+			if ((previous?.revision ?? null) !== expectedRevision) return null;
+			const record = { ...draft, revision: (expectedRevision ?? 0) + 1 };
+			this.port.run(
+				"INSERT INTO standalone_interview_drafts VALUES(?,?) ON CONFLICT(target) DO UPDATE SET record=excluded.record",
+				target,
+				JSON.stringify(record),
+			);
+			return record;
+		});
 	}
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);

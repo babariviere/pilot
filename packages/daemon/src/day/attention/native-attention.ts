@@ -24,7 +24,12 @@ import { AttentionError, AttentionService } from "./attention-service.ts";
 import { attentionDigest } from "./attention-store.ts";
 import type { MissionStore } from "../../missions/missions.ts";
 import { asksUser } from "./needs-you-reason.ts";
-import { canonicalJSON, type OperationJournal, OperationRejected, sameHost } from "../../transport/operations/operation-journal.ts";
+import {
+	canonicalJSON,
+	type OperationJournal,
+	OperationRejected,
+	sameHost,
+} from "../../transport/operations/operation-journal.ts";
 import type { ProjectStore } from "../../projects/projects.ts";
 import type { SessionManager } from "../../sessions/sessions.ts";
 
@@ -41,6 +46,10 @@ const equal = (a: unknown, b: unknown) => canonicalJSON(a) === canonicalJSON(b);
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(v);
 function fail(code: "invalid" | "forbidden" | "stale" | "unknown" | "unavailable", message: string): never {
 	throw new AttentionError(code, message);
+}
+function interviewDraftTarget({ scope }: NativeAttentionQuestion): string {
+	// Authority is checked on each request. A harmless authority change does not erase saved words.
+	return attentionDigest([scope.projectId, scope.subject, scope.eventId, scope.contentDigest]);
 }
 function keys(v: unknown, required: string[]) {
 	if (
@@ -403,6 +412,7 @@ export class NativeAttention {
 			actions,
 			capabilities: {
 				clarification: 1,
+				interviewDrafts: 1,
 				help:
 					this.deps.executor instanceof ReadOnlyAttentionExecutor && this.deps.executor.available(projectId)
 						? 1
@@ -410,6 +420,50 @@ export class NativeAttention {
 				continuation: "unavailable",
 			},
 		};
+	}
+	private async interviewDraft(
+		input: Extract<NativeAttentionRequest, { kind: "interview-draft" | "interview-draft-save" }>,
+		lookup: boolean,
+		base: string[],
+	) {
+		const saving = input.kind === "interview-draft-save";
+		keys(input, [...base, "scope", ...(saving ? ["draft", "expectedRevision"] : ["roundId"])]);
+		if (saving) {
+			if (lookup) fail("invalid", "Draft lookup cannot save a draft");
+			keys(input.draft, ["roundId", "answers"]);
+			if (
+				input.expectedRevision !== null &&
+				(!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)
+			)
+				fail("invalid", "Expected the saved draft revision or null");
+		}
+		if (input.scope?.subject?.kind !== "question" || !id(input.scope.subject.sessionId))
+			fail("invalid", "Expected the shown interview question");
+		const q = await this.currentQuestion(input.projectId, input.scope.subject);
+		const round = q?.question.interview;
+		if (
+			!q ||
+			!round ||
+			!equal(input.scope, q.scope) ||
+			round.roundId !== (saving ? input.draft.roundId : input.roundId)
+		)
+			fail("stale", "That interview round changed");
+		const target = interviewDraftTarget(q);
+		const store = this.deps.store.attention;
+		if (!saving) {
+			const saved = store.interviewDraft(target);
+			await store.durable();
+			return saved;
+		}
+		try {
+			validateAnswers(input.draft.answers, round.questions);
+		} catch (error) {
+			fail("invalid", error instanceof Error ? error.message : "Invalid interview draft");
+		}
+		const saved = store.saveInterviewDraft(target, input.expectedRevision, input.draft);
+		if (!saved) throw new AttentionError("conflict", "Another window saved this interview draft");
+		await store.durable();
+		return saved;
 	}
 	/** Receipt mode is lookup-only, including a request that never reached the daemon. */
 	dispatch(input: NativeAttentionRequest, lookup = false): Promise<AttentionResult<unknown>> {
@@ -428,6 +482,8 @@ export class NativeAttention {
 				keys(input, base);
 				return this.read(input.projectId);
 			}
+			if (input.kind === "interview-draft" || input.kind === "interview-draft-save")
+				return this.interviewDraft(input, lookup, base);
 			if (input.kind === "action") {
 				keys(input, [...base, "authorityDigest", "command"]);
 				const cmd = input.command,
@@ -492,6 +548,7 @@ export class NativeAttention {
 			message?: string;
 			clarification?: true;
 			interview?: import("@pilot/protocol").StandaloneInterviewReply;
+			draftRevision?: number;
 		};
 		const interview = Object.hasOwn(payload, "interview");
 		keys(payload, [
@@ -499,7 +556,13 @@ export class NativeAttention {
 			"scope",
 			interview ? "interview" : "message",
 			...(Object.hasOwn(payload, "clarification") ? ["clarification"] : []),
+			...(Object.hasOwn(payload, "draftRevision") ? ["draftRevision"] : []),
 		]);
+		if (
+			payload.draftRevision !== undefined &&
+			(!interview || !Number.isSafeInteger(payload.draftRevision) || payload.draftRevision < 1)
+		)
+			throw new OperationRejected("Expected an exact saved interview draft revision");
 		if (Object.hasOwn(payload, "clarification") && (payload.clarification !== true || interview))
 			throw new OperationRejected("Clarification requires an ordinary question");
 		if (this.session(payload.projectId, op.targetId).session.mode === "ask" && !interview)
@@ -556,6 +619,11 @@ export class NativeAttention {
 				completeAnswers({ questions: q.question.interview.questions, answers: p.interview.answers });
 			} catch (error) {
 				throw new OperationRejected(error instanceof Error ? error.message : "Invalid interview answers");
+			}
+			if (p.draftRevision !== undefined) {
+				const saved = this.deps.store.attention.interviewDraft(interviewDraftTarget(q));
+				if (saved?.revision !== p.draftRevision || !equal(saved.answers, p.interview.answers))
+					throw new OperationRejected("The saved interview draft changed");
 			}
 		} else if (p.interview) throw new OperationRejected("That question is not an interview round");
 		const session = this.session(p.projectId, op.targetId).session;
