@@ -44,6 +44,7 @@ const macosCoverage = new Set([
 	"packages/daemon/src/sessions/terminals/workspace-terminal-server.test.ts",
 	"packages/kernel/src/runtime/bundled-extensions.integration.test.ts",
 	"packages/kernel/src/runtime/runtime-environment.test.ts",
+	"scripts/install-pilot-cli.fast.test.ts",
 ]);
 
 /** Known subprocess-heavy files start first to avoid a long serial tail. Concurrency stays limited. */

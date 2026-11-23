@@ -6,6 +6,7 @@ import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, writeFile 
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { AgentCli, type CliScope } from "../cli/agent-cli.ts";
 import type { JsonValue } from "@earendil-works/chord/json";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
@@ -925,6 +926,33 @@ const lifecycleHeld = (meta: SessionMeta): boolean =>
 	!!meta.lifecycleCheckpoint && meta.lifecycleCheckpoint.phase !== "resume-acknowledged";
 
 export class SessionManager {
+	readonly agentCli = new AgentCli();
+
+	private agentCliScope(meta: SessionMeta): CliScope | undefined {
+		// Specialist, planning and background workers keep their narrower, dedicated ports.
+		if (
+			this.closing ||
+			meta.role ||
+			meta.control ||
+			meta.planning ||
+			meta.fundingBackground ||
+			meta.automation ||
+			meta.archivedAt !== undefined ||
+			meta.continuedTo ||
+			this.isRetainedHistory(meta) ||
+			this.repairDiagnosticSubject(meta) ||
+			(meta.createOperationId && this.feedbackMetricsScope?.(meta.createOperationId, meta.id)) ||
+			(meta.projectId && !this.projects.get(meta.projectId))
+		)
+			return;
+		const member = this.missions?.membership(meta.id);
+		return { sessionId: meta.id, projectId: meta.projectId ?? null, missionId: member?.missionId ?? null };
+	}
+
+	agentCliChats(scope: CliScope) {
+		const meta = this.metas.get(scope.sessionId);
+		return meta ? [{ id: meta.id, title: meta.title }] : [];
+	}
 	private planningBridge?: {
 		assert(binding: import("@pilot/kernel").PlanningWorkerBinding): void;
 		held(binding: import("@pilot/kernel").PlanningWorkerBinding): boolean;
@@ -14049,6 +14077,7 @@ ${run.excerpt}`,
 				);
 				if (spec.credentials && this.dayInsights?.owns(spec.sessionId)) spec.credentials.insightsMetered = true;
 				const view = spec.pilot?.coordinatorView;
+				let cliGrant: ReturnType<AgentCli["grant"]>;
 				try {
 					if (view && process.platform === "linux")
 						spec.projectTrusted = await coordinatorTrust(
@@ -14078,10 +14107,22 @@ ${run.excerpt}`,
 					}
 					if (meta.pending?.[0]?.type === "abort") spec.stopOnOpen = true;
 					if (meta.inputsPaused) spec.pauseInputsOnOpen = meta.inputControlRevision;
-					const worker = new Worker(
+					let worker: Worker | undefined;
+					const cliScope = !spec.configurationOnly && !spec.stopOnOpen && this.agentCliScope(meta);
+					if (cliScope) {
+						cliGrant = this.agentCli.grant(() => {
+							if (!worker || this.workers.get(id) !== worker || this.parked.has(worker)) return;
+							const current = this.agentCliScope(this.require(id));
+							if (current?.projectId === cliScope.projectId && current.missionId === cliScope.missionId)
+								return current;
+						});
+						if (cliGrant) spec.agentCli = cliGrant.endpoint;
+					}
+					worker = new Worker(
 						spec,
 						onPacket,
 						(worker, code, signal) => {
+							cliGrant?.revoke();
 							if (spec.credentials) this.credentials?.revoke(spec.credentials);
 							onExit(worker, code, signal);
 						},
@@ -14090,6 +14131,7 @@ ${run.excerpt}`,
 					);
 					return worker;
 				} catch (error) {
+					cliGrant?.revoke();
 					if (spec.credentials) this.credentials?.revoke(spec.credentials);
 					throw error;
 				}

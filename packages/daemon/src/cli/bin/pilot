@@ -1,0 +1,3 @@
+#!/bin/sh
+# Pilot workers point this launcher at the same Node runtime as pilotd.
+exec "${PILOT_CLI_NODE:-node}" "${0%/*}/../cli.ts" "$@"

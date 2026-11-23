@@ -32,8 +32,10 @@ MANIFEST = "Contents/Resources/bundled-runtime.json"
 REQUIRED = [
     "node/bin/node", "node/LICENSE", "package.json", "pnpm-lock.yaml",
     "packages/daemon/src/main.ts", "packages/daemon/src/runtime-launch.ts",
+    "packages/daemon/src/cli/cli.ts", "packages/daemon/src/cli/bin/pilot",
     "packages/daemon/src/runtime-owner.ts", "packages/kernel/src/worker-entry.ts",
     "packages/kernel/skills/pilot-artifacts/SKILL.md",
+    "packages/kernel/skills/pilot-cli/SKILL.md",
     "node_modules/@earendil-works/pi-coding-agent/package.json",
     "node_modules/@earendil-works/pi-durable/package.json",
     "node_modules/node-pty/package.json", "node_modules/ws/package.json",

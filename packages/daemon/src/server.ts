@@ -107,6 +107,7 @@ import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome } 
 import { PTY_INPUT_CHUNK } from "./sessions/terminals/pty-input.ts";
 import { ResultReviews } from "./result-reviews.ts";
 import { RuntimeResources } from "./runtime/lifecycle/runtime-admission.ts";
+import { AgentCliError } from "./cli/agent-cli.ts";
 import { projectScreenPairs } from "./screen/screen-pairs.ts";
 import { SetupError } from "./setup/setup-error.ts";
 import { parseSlackMessageLink } from "./sources/slack/slack-format.ts";
@@ -445,6 +446,22 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "agent-cli") {
+			res.setHeader("cache-control", "no-store");
+			if (parts[2] !== "v1") throw new HttpError(404, "Not found");
+			if (req.socket.remoteAddress !== "127.0.0.1") throw new HttpError(403, "Pilot CLI requires loopback");
+			try {
+				const reply = await sessions.agentCli.read(req.method, req.headers.authorization, url, {
+					chats: (scope) => sessions.agentCliChats(scope),
+					history: (id, before, limit) => sessions.history(id, before, limit),
+					missions: missions?.store,
+				});
+				return json(res, 200, reply);
+			} catch (error) {
+				if (error instanceof AgentCliError) throw new HttpError(error.status, error.message);
+				throw new HttpError(503, "Pilot CLI could not read the saved data");
+			}
+		}
 		if (parts[1] === "native-attention" && req.method === "POST" && parts.length <= 3) {
 			res.setHeader("cache-control", "no-store");
 			if (!nativeAuthority || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
@@ -3580,7 +3597,8 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		const done = operations.begin(`${req.method} ${(req.url ?? "/").split("?")[0]}`);
 		res.once("close", done);
 		let receiptLookup = false;
-		if (missions && req.method !== "GET" && req.method !== "HEAD")
+		const agentCliRequest = (req.url ?? "").startsWith("/api/agent-cli/");
+		if (!agentCliRequest && missions && req.method !== "GET" && req.method !== "HEAD")
 			acknowledgeWhenDurable(res, missions.store, () => receiptLookup);
 		let release: (() => void) | undefined;
 		const run = async () => {
@@ -3591,7 +3609,7 @@ export function createDaemonServer(services: DaemonServices): Server & {
 			const update = parts[0] === "api" && parts[1] === "runtime-update";
 			const control =
 				/\/(stop|cancel)$/.test(path) || (req.method === "DELETE" && path.startsWith("/api/setup/runs/"));
-			if (!update && req.method !== "GET" && req.method !== "HEAD" && !control)
+			if (!agentCliRequest && !update && req.method !== "GET" && req.method !== "HEAD" && !control)
 				release = mutations.begin({ kind: "request", id: path.slice(0, 180) });
 			else if (
 				(req.method === "GET" || req.method === "HEAD") &&
@@ -3637,6 +3655,11 @@ export function createDaemonServer(services: DaemonServices): Server & {
 		});
 	};
 	const server = bootstrap ? (bootstrap.install(handleRequest), bootstrap.server) : createServer(handleRequest);
+	if (sessions.agentCli)
+		sessions.agentCli.port = () => {
+			const address = server.address();
+			return address && typeof address !== "string" ? address.port : undefined;
+		};
 	const closeHandlers: (() => void)[] = [];
 	const onClose = (close: () => void) => closeHandlers.push(close);
 	server.once("close", () => {

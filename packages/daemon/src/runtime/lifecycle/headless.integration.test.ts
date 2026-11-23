@@ -43,7 +43,8 @@ test("headless daemon runs native tools after clients disconnect and keeps ident
 	const release = join(cwd, "release");
 	const started = join(cwd, "started");
 	const completed = join(cwd, "completed");
-	const command = `printf started > started; while [ ! -f release ]; do sleep 0.05; done; printf headless-tool-ok > completed`;
+	const command = `(pilot context --json > cli-context && pilot chats list --json > cli-chats) 2> cli-error || { touch cli-failed; exit 1; }
+printf started > started; while [ ! -f release ]; do sleep 0.05; done; printf headless-tool-ok > completed`;
 	await writeFile(
 		provider,
 		`
@@ -70,10 +71,13 @@ export default pi => {
 	const offline = join(root, "offline.mjs");
 	await writeFile(
 		offline,
-		`globalThis.fetch = async (url, options) => {
+		`const fetchLoopback = globalThis.fetch;
+		globalThis.fetch = async (url, options) => {
 			// Simulate reachability for the host-owned admission gate, never contact the network.
 			if (url === 'https://www.gstatic.com/generate_204' && options?.method === 'HEAD')
 				return new Response(null, { status: 204 });
+			if (url instanceof URL && url.origin === 'http://127.0.0.1:' + process.env.PILOT_PORT)
+				return fetchLoopback(url, options);
 			throw new Error('Headless smoke must stay offline');
 		};\n`,
 	);
@@ -167,13 +171,24 @@ export default pi => {
 	assert.equal(spawned.status, 201, await spawned.clone().text());
 	const session = (await spawned.json()) as SessionSummary;
 	await until(
-		() =>
-			access(started).then(
+		async () => {
+			if (await access(join(cwd, "cli-failed")).then(() => true, () => false))
+				throw new Error((await readFile(join(cwd, "cli-error"), "utf8")) + first.log());
+			return access(started).then(
 				() => true,
 				() => false,
-			),
+			);
+		},
 		first.log,
 	);
+	assert.deepEqual(JSON.parse(await readFile(join(cwd, "cli-context"), "utf8")), {
+		sessionId: session.id,
+		projectId: session.projectId ?? null,
+		missionId: null,
+	});
+	assert.deepEqual(JSON.parse(await readFile(join(cwd, "cli-chats"), "utf8")), {
+		chats: [{ id: session.id, title: "Offline smoke" }],
+	});
 	ws.close();
 	await once(ws, "close");
 	// No client remains connected when the shell and model complete.

@@ -474,6 +474,10 @@ export function runKernelWorker(): void {
 				// Do not inherit another worker's accounting epoch in tests or delegated launches.
 				delete process.env.PILOT_USAGE_HISTORY;
 				delete process.env.PILOT_USAGE_PARENT;
+				// CLI authority comes from IPC, never from a process that happened to launch this worker.
+				delete process.env.PILOT_CLI_PORT;
+				delete process.env.PILOT_CLI_TOKEN;
+				delete process.env.PILOT_CLI_NODE;
 				if (command.spec.telemetry) configureTelemetry(command.spec.telemetry);
 				const { credentialEnvironment } = await import("../credentials/credential-client.ts");
 				for (const [key, value] of Object.entries(credentialEnvironment(command.spec.credentials))) {

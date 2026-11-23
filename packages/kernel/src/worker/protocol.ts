@@ -39,7 +39,17 @@ export interface KernelSubagent extends SessionSubagent {
 	conversationId?: string;
 }
 
+/** Daemon-issued worker capability. Never saved or inherited by descendants. */
+export interface AgentCliCapability {
+	port: number;
+	token: string;
+	entry: string;
+	bin: string;
+}
+
 export interface KernelSpec {
+	/** Only ordinary Build and Ask workers receive this grant. */
+	agentCli?: AgentCliCapability;
 	/** Declares a protected host tool, not a metrics grant. Daemon checks each read. */
 	scopedMetrics?: boolean;
 	/** Protected target-only log reads backed by an exact saved feedback admission. */

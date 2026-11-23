@@ -683,7 +683,23 @@ export class KernelSession {
 				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
 				: spec.diagnosticScope;
 			const historyRecall = !spec.pilot?.ask && !spec.role;
+			const agentCli =
+				!spec.configurationOnly &&
+				!pilot.role &&
+				!pilot.coordinatorView &&
+				!spec.planning &&
+				spec.mission?.coordinator !== "self" &&
+				spec.mission?.role !== "explorer" &&
+				spec.mission?.role !== "reviewer" &&
+				!spec.mission?.thread &&
+				!pilot.job &&
+				!spec.repairDiagnostics &&
+				!pilot.ask?.feedbackDeniedPaths &&
+				(pilot.ask || pilot.executionPermission?.level !== "investigate")
+					? spec.agentCli
+					: undefined;
 			adapter = await NativeAdapter.open({
+				agentCli,
 				...(spec.planning
 					? {
 							missionInterview: true,

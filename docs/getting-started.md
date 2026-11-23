@@ -13,6 +13,38 @@ change profiles, history, workspaces, or drafts. Day can use the existing
 profile, but does not import Pilot Next's private window drafts. Keep those
 files.
 
+## Install and update the read-only CLI
+
+From a trusted Pilot checkout, run this with Node 24 or later:
+
+```sh
+node scripts/install-pilot-cli.ts
+```
+
+This installs `~/.local/bin/pilot` and `~/.agents/skills/pilot-cli/SKILL.md`.
+Update your checkout and run the same command to update both together.
+The launcher uses Pilot Day's bundled Node if present, otherwise the Node
+that ran the installer. Pass a runtime directory to install its bundled CLI,
+skill, and Node instead of the checkout's files.
+The installer does not update or restart Pilot Day. Reading data requires a
+Pilot runtime that supports the CLI and an eligible Pilot agent session.
+
+Add `$HOME/.local/bin` to your shell's `PATH` if needed, then run `pilot --help`.
+Use `command -v pilot` to check which command your shell finds. You can also
+run `"$HOME/.local/bin/pilot" --help` directly.
+
+Only eligible Pilot agents can read data. In Build, Pilot provides the bundled
+`pilot` command on `PATH`. In Ask, the `pilot_cli` tool takes the same arguments
+without running a shell. The bundled `pilot-cli` skill shows how to use both.
+An agent can read its own chat and attached mission, including the Brief and
+tasks. The CLI cannot send messages, edit work, or start agents.
+
+If either destination belongs to another install, the installer refuses to
+replace it. To switch from a legacy launcher, inspect it with
+`ls -ld "$HOME/.local/bin/pilot"`, then move it to an unused name such as
+`pilot.legacy` in the same directory. Move the symlink itself, not its target.
+Rerun the installer.
+
 ## Connect your tools
 
 1. Set up a provider in [pi](https://github.com/earendil-works/pi).

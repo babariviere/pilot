@@ -1,6 +1,7 @@
 # Using Pilot
 
 Guides for Pilot Day on Apple Silicon macOS. Start with [private installation and setup](getting-started.md).
+For terminal use, see [install and update the read-only CLI](getting-started.md#install-and-update-the-read-only-cli).
 Linux desktop is deferred. For a development build that does not replace an app, see the
 [connected candidate](../apps/day/scripts/day-connected-candidate.md).
 
