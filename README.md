@@ -1,5 +1,8 @@
 # Pilot
 
+> **This project is archived.** It is no longer developed or maintained, and it
+> will not receive updates or support. The code stays here for reference.
+
 Background coding agents, durable chats, and a native desktop app.
 
 Pilot runs [pi](https://github.com/earendil-works/pi) agents in isolated workspaces.
